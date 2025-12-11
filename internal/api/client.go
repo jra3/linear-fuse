@@ -222,6 +222,60 @@ func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, err
 	return result.Team.States.Nodes, nil
 }
 
+// GetUsers fetches all users in the workspace
+func (c *Client) GetUsers(ctx context.Context) ([]User, error) {
+	var result struct {
+		Users struct {
+			Nodes []User `json:"nodes"`
+		} `json:"users"`
+	}
+
+	err := c.query(ctx, queryUsers, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Users.Nodes, nil
+}
+
+// GetUserIssues fetches issues assigned to a specific user
+func (c *Client) GetUserIssues(ctx context.Context, userID string) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			User struct {
+				AssignedIssues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"assignedIssues"`
+			} `json:"user"`
+		}
+
+		vars := map[string]any{
+			"userId": userID,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryUserIssues, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.User.AssignedIssues.Nodes...)
+
+		if !result.User.AssignedIssues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.User.AssignedIssues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
 // CreateIssue creates a new issue
 func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue, error) {
 	var result struct {

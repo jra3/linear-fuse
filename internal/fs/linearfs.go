@@ -15,12 +15,14 @@ import (
 )
 
 type LinearFS struct {
-	client       *api.Client
-	teamCache    *cache.Cache[[]api.Team]
-	issueCache   *cache.Cache[[]api.Issue]
-	stateCache   *cache.Cache[[]api.State]
-	myIssueCache *cache.Cache[[]api.Issue]
-	debug        bool
+	client         *api.Client
+	teamCache      *cache.Cache[[]api.Team]
+	issueCache     *cache.Cache[[]api.Issue]
+	stateCache     *cache.Cache[[]api.State]
+	myIssueCache   *cache.Cache[[]api.Issue]
+	userCache      *cache.Cache[[]api.User]
+	userIssueCache *cache.Cache[[]api.Issue]
+	debug          bool
 }
 
 func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
@@ -29,12 +31,14 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	return &LinearFS{
-		client:       api.NewClient(cfg.APIKey),
-		teamCache:    cache.New[[]api.Team](cfg.Cache.TTL),
-		issueCache:   cache.New[[]api.Issue](cfg.Cache.TTL),
-		stateCache:   cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
-		myIssueCache: cache.New[[]api.Issue](cfg.Cache.TTL),
-		debug:        debug,
+		client:         api.NewClient(cfg.APIKey),
+		teamCache:      cache.New[[]api.Team](cfg.Cache.TTL),
+		issueCache:     cache.New[[]api.Issue](cfg.Cache.TTL),
+		stateCache:     cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
+		myIssueCache:   cache.New[[]api.Issue](cfg.Cache.TTL),
+		userCache:      cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
+		userIssueCache: cache.New[[]api.Issue](cfg.Cache.TTL),
+		debug:          debug,
 	}, nil
 }
 
@@ -98,6 +102,86 @@ func (lfs *LinearFS) GetTeamStates(ctx context.Context, teamID string) ([]api.St
 
 	lfs.stateCache.Set(cacheKey, states)
 	return states, nil
+}
+
+func (lfs *LinearFS) GetUsers(ctx context.Context) ([]api.User, error) {
+	if users, ok := lfs.userCache.Get("users"); ok {
+		return users, nil
+	}
+
+	users, err := lfs.client.GetUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to active users only
+	active := make([]api.User, 0, len(users))
+	for _, u := range users {
+		if u.Active {
+			active = append(active, u)
+		}
+	}
+
+	lfs.userCache.Set("users", active)
+	return active, nil
+}
+
+func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
+	cacheKey := "user-issues:" + userID
+	if issues, ok := lfs.userIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	issues, err := lfs.client.GetUserIssues(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.userIssueCache.Set(cacheKey, issues)
+	return issues, nil
+}
+
+func (lfs *LinearFS) InvalidateUserIssues(userID string) {
+	lfs.userIssueCache.Delete("user-issues:" + userID)
+}
+
+// ResolveUserID converts an email or name to a user ID
+func (lfs *LinearFS) ResolveUserID(ctx context.Context, identifier string) (string, error) {
+	users, err := lfs.GetUsers(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Try exact email match first
+	for _, user := range users {
+		if user.Email == identifier {
+			return user.ID, nil
+		}
+	}
+
+	// Try case-insensitive email match
+	lowerID := strings.ToLower(identifier)
+	for _, user := range users {
+		if strings.ToLower(user.Email) == lowerID {
+			return user.ID, nil
+		}
+	}
+
+	// Try name match
+	for _, user := range users {
+		if user.Name == identifier || user.DisplayName == identifier {
+			return user.ID, nil
+		}
+	}
+
+	// Try case-insensitive name match
+	for _, user := range users {
+		if strings.ToLower(user.Name) == lowerID || strings.ToLower(user.DisplayName) == lowerID {
+			return user.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("unknown user: %s", identifier)
 }
 
 // ResolveStateID converts a state name to its ID for a given team

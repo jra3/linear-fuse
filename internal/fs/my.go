@@ -3,11 +3,9 @@ package fs
 import (
 	"context"
 	"syscall"
-	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // MyNode represents the /my directory (personal views)
@@ -55,7 +53,7 @@ func (m *MyAssignedNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	for i, issue := range issues {
 		entries[i] = fuse.DirEntry{
 			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFREG,
+			Mode: syscall.S_IFLNK, // Symlink
 		}
 	}
 
@@ -70,27 +68,17 @@ func (m *MyAssignedNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 
 	for _, issue := range issues {
 		if issue.Identifier+".md" == name {
-			// Pre-generate content so Getattr returns correct size
-			content, err := marshal.IssueToMarkdown(&issue)
-			if err != nil {
-				return nil, syscall.EIO
+			// Create symlink to team directory
+			teamKey := ""
+			if issue.Team != nil {
+				teamKey = issue.Team.Key
 			}
-			node := &IssueNode{
-				lfs:          m.lfs,
-				issue:        issue,
-				content:      content,
-				contentReady: true,
+			node := &IssueSymlink{
+				teamKey:    teamKey,
+				identifier: issue.Identifier,
 			}
-			// Set attributes on EntryOut so ls shows correct size/times
-			out.Attr.Mode = 0644 | syscall.S_IFREG
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return m.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  issueIno(issue.ID),
-			}), 0
+			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
 

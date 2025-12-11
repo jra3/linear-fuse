@@ -162,6 +162,71 @@ query TeamStates($teamId: String!) {
 }
 `
 
+const queryUsers = `
+query Users {
+  users {
+    nodes {
+      id
+      name
+      email
+      displayName
+      active
+    }
+  }
+}
+`
+
+const queryUserIssues = `
+query UserIssues($userId: String!, $after: String) {
+  user(id: $userId) {
+    assignedIssues(first: 100, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
 const mutationUpdateIssue = `
 mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
   issueUpdate(id: $id, input: $input) {

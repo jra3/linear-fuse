@@ -20,6 +20,7 @@ var _ fs.NodeLookuper = (*RootNode)(nil)
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "teams", Mode: syscall.S_IFDIR},
+		{Name: "users", Mode: syscall.S_IFDIR},
 		{Name: "my", Mode: syscall.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
@@ -29,6 +30,10 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	switch name {
 	case "teams":
 		node := &TeamsNode{lfs: r.lfs}
+		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+
+	case "users":
+		node := &UsersNode{lfs: r.lfs}
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "my":

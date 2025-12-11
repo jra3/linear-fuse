@@ -191,6 +191,16 @@ func (i *IssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 		updates["stateId"] = stateID
 	}
 
+	// Resolve assignee email/name to user ID if needed
+	if assigneeID, ok := updates["assigneeId"].(string); ok {
+		userID, err := i.lfs.ResolveUserID(ctx, assigneeID)
+		if err != nil {
+			log.Printf("Failed to resolve assignee '%s': %v", assigneeID, err)
+			return syscall.EIO
+		}
+		updates["assigneeId"] = userID
+	}
+
 	// Call Linear API to update
 	if err := i.lfs.client.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
