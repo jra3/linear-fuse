@@ -101,6 +101,41 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 		}
 	}
 
+	// Check due date
+	if due, ok := doc.Frontmatter["due"].(string); ok {
+		origDue := ""
+		if original.DueDate != nil {
+			origDue = *original.DueDate
+		}
+		if due != origDue {
+			update["dueDate"] = due
+		}
+	} else if _, exists := doc.Frontmatter["due"]; !exists && original.DueDate != nil {
+		// Due date was removed - set to null
+		update["dueDate"] = nil
+	}
+
+	// Check estimate - YAML may parse as int or float64
+	if estimate, ok := doc.Frontmatter["estimate"]; ok {
+		var newEstimate float64
+		switch v := estimate.(type) {
+		case int:
+			newEstimate = float64(v)
+		case float64:
+			newEstimate = v
+		}
+		origEstimate := float64(0)
+		if original.Estimate != nil {
+			origEstimate = *original.Estimate
+		}
+		if newEstimate != origEstimate {
+			update["estimate"] = int(newEstimate)
+		}
+	} else if _, exists := doc.Frontmatter["estimate"]; !exists && original.Estimate != nil {
+		// Estimate was removed - set to null
+		update["estimate"] = nil
+	}
+
 	// Check description (body)
 	if doc.Body != original.Description {
 		update["description"] = doc.Body
