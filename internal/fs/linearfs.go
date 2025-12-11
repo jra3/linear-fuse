@@ -15,14 +15,18 @@ import (
 )
 
 type LinearFS struct {
-	client         *api.Client
-	teamCache      *cache.Cache[[]api.Team]
-	issueCache     *cache.Cache[[]api.Issue]
-	stateCache     *cache.Cache[[]api.State]
-	myIssueCache   *cache.Cache[[]api.Issue]
-	userCache      *cache.Cache[[]api.User]
-	userIssueCache *cache.Cache[[]api.Issue]
-	debug          bool
+	client            *api.Client
+	teamCache         *cache.Cache[[]api.Team]
+	issueCache        *cache.Cache[[]api.Issue]
+	stateCache        *cache.Cache[[]api.State]
+	labelCache        *cache.Cache[[]api.Label]
+	cycleCache        *cache.Cache[[]api.Cycle]
+	projectCache      *cache.Cache[[]api.Project]
+	projectIssueCache *cache.Cache[[]api.ProjectIssue]
+	myIssueCache      *cache.Cache[[]api.Issue]
+	userCache         *cache.Cache[[]api.User]
+	userIssueCache    *cache.Cache[[]api.Issue]
+	debug             bool
 }
 
 func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
@@ -31,14 +35,18 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	return &LinearFS{
-		client:         api.NewClient(cfg.APIKey),
-		teamCache:      cache.New[[]api.Team](cfg.Cache.TTL),
-		issueCache:     cache.New[[]api.Issue](cfg.Cache.TTL),
-		stateCache:     cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
-		myIssueCache:   cache.New[[]api.Issue](cfg.Cache.TTL),
-		userCache:      cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
-		userIssueCache: cache.New[[]api.Issue](cfg.Cache.TTL),
-		debug:          debug,
+		client:            api.NewClient(cfg.APIKey),
+		teamCache:         cache.New[[]api.Team](cfg.Cache.TTL),
+		issueCache:        cache.New[[]api.Issue](cfg.Cache.TTL),
+		stateCache:        cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
+		labelCache:        cache.New[[]api.Label](cfg.Cache.TTL * 10), // Labels change rarely
+		cycleCache:        cache.New[[]api.Cycle](cfg.Cache.TTL),      // Cycles change with issues
+		projectCache:      cache.New[[]api.Project](cfg.Cache.TTL),
+		projectIssueCache: cache.New[[]api.ProjectIssue](cfg.Cache.TTL),
+		myIssueCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
+		userCache:         cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
+		userIssueCache:    cache.New[[]api.Issue](cfg.Cache.TTL),
+		debug:             debug,
 	}, nil
 }
 
@@ -106,6 +114,66 @@ func (lfs *LinearFS) GetTeamStates(ctx context.Context, teamID string) ([]api.St
 
 	lfs.stateCache.Set(cacheKey, states)
 	return states, nil
+}
+
+func (lfs *LinearFS) GetTeamLabels(ctx context.Context, teamID string) ([]api.Label, error) {
+	cacheKey := "labels:" + teamID
+	if labels, ok := lfs.labelCache.Get(cacheKey); ok {
+		return labels, nil
+	}
+
+	labels, err := lfs.client.GetTeamLabels(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.labelCache.Set(cacheKey, labels)
+	return labels, nil
+}
+
+func (lfs *LinearFS) GetTeamCycles(ctx context.Context, teamID string) ([]api.Cycle, error) {
+	cacheKey := "cycles:" + teamID
+	if cycles, ok := lfs.cycleCache.Get(cacheKey); ok {
+		return cycles, nil
+	}
+
+	cycles, err := lfs.client.GetTeamCycles(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.cycleCache.Set(cacheKey, cycles)
+	return cycles, nil
+}
+
+func (lfs *LinearFS) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {
+	cacheKey := "projects:" + teamID
+	if projects, ok := lfs.projectCache.Get(cacheKey); ok {
+		return projects, nil
+	}
+
+	projects, err := lfs.client.GetTeamProjects(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.projectCache.Set(cacheKey, projects)
+	return projects, nil
+}
+
+func (lfs *LinearFS) GetProjectIssues(ctx context.Context, projectID string) ([]api.ProjectIssue, error) {
+	cacheKey := "project-issues:" + projectID
+	if issues, ok := lfs.projectIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	issues, err := lfs.client.GetProjectIssues(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.projectIssueCache.Set(cacheKey, issues)
+	return issues, nil
 }
 
 func (lfs *LinearFS) GetUsers(ctx context.Context) ([]api.User, error) {

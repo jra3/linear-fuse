@@ -7,6 +7,9 @@ query Teams {
       id
       key
       name
+      icon
+      createdAt
+      updatedAt
     }
   }
 }
@@ -40,6 +43,8 @@ query TeamIssues($teamId: String!, $after: String) {
           nodes {
             id
             name
+            color
+            description
           }
         }
         dueDate
@@ -80,6 +85,8 @@ query Issue($id: String!) {
       nodes {
         id
         name
+        color
+        description
       }
     }
     dueDate
@@ -125,6 +132,8 @@ query MyIssues {
           nodes {
             id
             name
+            color
+            description
           }
         }
         dueDate
@@ -156,6 +165,99 @@ query TeamStates($teamId: String!) {
         id
         name
         type
+      }
+    }
+  }
+}
+`
+
+const queryTeamLabels = `
+query TeamLabels($teamId: String!) {
+  team(id: $teamId) {
+    labels {
+      nodes {
+        id
+        name
+        color
+        description
+      }
+    }
+  }
+  issueLabels {
+    nodes {
+      id
+      name
+      color
+      description
+    }
+  }
+}
+`
+
+const queryTeamCycles = `
+query TeamCycles($teamId: String!) {
+  team(id: $teamId) {
+    cycles {
+      nodes {
+        id
+        number
+        name
+        startsAt
+        endsAt
+        completedIssueCountHistory
+        issueCountHistory
+      }
+    }
+  }
+}
+`
+
+const queryTeamProjects = `
+query TeamProjects($teamId: String!) {
+  team(id: $teamId) {
+    projects {
+      nodes {
+        id
+        name
+        slugId
+        description
+        url
+        state
+        startDate
+        targetDate
+        createdAt
+        updatedAt
+        lead {
+          id
+          name
+          email
+        }
+        status {
+          id
+          name
+        }
+      }
+    }
+  }
+}
+`
+
+const queryProjectIssues = `
+query ProjectIssues($projectId: String!, $after: String) {
+  project(id: $projectId) {
+    issues(first: 100, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        team {
+          id
+          key
+        }
       }
     }
   }
@@ -204,6 +306,8 @@ query UserIssues($userId: String!, $after: String) {
           nodes {
             id
             name
+            color
+            description
           }
         }
         dueDate
@@ -263,6 +367,8 @@ mutation CreateIssue($input: IssueCreateInput!) {
         nodes {
           id
           name
+          color
+          description
         }
       }
       createdAt

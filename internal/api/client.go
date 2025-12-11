@@ -222,6 +222,129 @@ func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, err
 	return result.Team.States.Nodes, nil
 }
 
+// GetTeamProjects fetches projects for a team
+func (c *Client) GetTeamProjects(ctx context.Context, teamID string) ([]Project, error) {
+	var result struct {
+		Team struct {
+			Projects struct {
+				Nodes []Project `json:"nodes"`
+			} `json:"projects"`
+		} `json:"team"`
+	}
+
+	vars := map[string]any{
+		"teamId": teamID,
+	}
+
+	err := c.query(ctx, queryTeamProjects, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Team.Projects.Nodes, nil
+}
+
+// GetProjectIssues fetches issues for a project
+func (c *Client) GetProjectIssues(ctx context.Context, projectID string) ([]ProjectIssue, error) {
+	var allIssues []ProjectIssue
+	var cursor *string
+
+	for {
+		var result struct {
+			Project struct {
+				Issues struct {
+					PageInfo PageInfo       `json:"pageInfo"`
+					Nodes    []ProjectIssue `json:"nodes"`
+				} `json:"issues"`
+			} `json:"project"`
+		}
+
+		vars := map[string]any{
+			"projectId": projectID,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryProjectIssues, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Project.Issues.Nodes...)
+
+		if !result.Project.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Project.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
+// GetTeamCycles fetches cycles for a team
+func (c *Client) GetTeamCycles(ctx context.Context, teamID string) ([]Cycle, error) {
+	var result struct {
+		Team struct {
+			Cycles struct {
+				Nodes []Cycle `json:"nodes"`
+			} `json:"cycles"`
+		} `json:"team"`
+	}
+
+	vars := map[string]any{
+		"teamId": teamID,
+	}
+
+	err := c.query(ctx, queryTeamCycles, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Team.Cycles.Nodes, nil
+}
+
+// GetTeamLabels fetches labels for a team (team + workspace labels)
+func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, error) {
+	var result struct {
+		Team struct {
+			Labels struct {
+				Nodes []Label `json:"nodes"`
+			} `json:"labels"`
+		} `json:"team"`
+		IssueLabels struct {
+			Nodes []Label `json:"nodes"`
+		} `json:"issueLabels"`
+	}
+
+	vars := map[string]any{
+		"teamId": teamID,
+	}
+
+	err := c.query(ctx, queryTeamLabels, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// Combine team labels and workspace labels, deduplicating by ID
+	seen := make(map[string]bool)
+	var labels []Label
+	for _, l := range result.Team.Labels.Nodes {
+		if !seen[l.ID] {
+			seen[l.ID] = true
+			labels = append(labels, l)
+		}
+	}
+	for _, l := range result.IssueLabels.Nodes {
+		if !seen[l.ID] {
+			seen[l.ID] = true
+			labels = append(labels, l)
+		}
+	}
+
+	return labels, nil
+}
+
 // GetUsers fetches all users in the workspace
 func (c *Client) GetUsers(ctx context.Context) ([]User, error) {
 	var result struct {

@@ -3,9 +3,12 @@ package api
 import "time"
 
 type Team struct {
-	ID   string `json:"id"`
-	Key  string `json:"key"`
-	Name string `json:"name"`
+	ID        string    `json:"id"`
+	Key       string    `json:"key"`
+	Name      string    `json:"name"`
+	Icon      string    `json:"icon"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type Issue struct {
@@ -45,19 +48,53 @@ type Labels struct {
 }
 
 type Label struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
 }
 
 type Project struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Slug        string     `json:"slugId"`
+	Description string     `json:"description"`
+	URL         string     `json:"url"`
+	State       string     `json:"state"`
+	StartDate   *string    `json:"startDate"`
+	TargetDate  *string    `json:"targetDate"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+	Lead        *User      `json:"lead"`
+	Status      *Status    `json:"status"`
+}
+
+type Status struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Slug string `json:"slugId"`
 }
 
 type PageInfo struct {
 	HasNextPage bool   `json:"hasNextPage"`
 	EndCursor   string `json:"endCursor"`
+}
+
+// ProjectIssue is a minimal issue representation for project listings
+type ProjectIssue struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+	Team       *Team  `json:"team"`
+}
+
+type Cycle struct {
+	ID                         string    `json:"id"`
+	Number                     int       `json:"number"`
+	Name                       string    `json:"name"`
+	StartsAt                   time.Time `json:"startsAt"`
+	EndsAt                     time.Time `json:"endsAt"`
+	CompletedIssueCountHistory []int     `json:"completedIssueCountHistory"`
+	IssueCountHistory          []int     `json:"issueCountHistory"`
 }
 
 // PriorityName converts numeric priority to string
