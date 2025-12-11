@@ -81,9 +81,14 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, len(issues))
+	// +1 for .user.md
+	entries := make([]fuse.DirEntry, len(issues)+1)
+	entries[0] = fuse.DirEntry{
+		Name: ".user.md",
+		Mode: syscall.S_IFREG,
+	}
 	for i, issue := range issues {
-		entries[i] = fuse.DirEntry{
+		entries[i+1] = fuse.DirEntry{
 			Name: issue.Identifier + ".md",
 			Mode: syscall.S_IFLNK, // Symlink
 		}
@@ -93,6 +98,15 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// Handle .user.md metadata file
+	if name == ".user.md" {
+		node := &UserInfoNode{user: u.user}
+		content := node.generateContent()
+		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Size = uint64(len(content))
+		return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
+
 	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)
 	if err != nil {
 		return nil, syscall.EIO
@@ -138,4 +152,70 @@ func (s *IssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	target := fmt.Sprintf("../../teams/%s/%s.md", s.teamKey, s.identifier)
 	out.Size = uint64(len(target))
 	return 0
+}
+
+// UserInfoNode is a virtual file containing user metadata
+type UserInfoNode struct {
+	fs.Inode
+	user api.User
+}
+
+var _ fs.NodeGetattrer = (*UserInfoNode)(nil)
+var _ fs.NodeOpener = (*UserInfoNode)(nil)
+var _ fs.NodeReader = (*UserInfoNode)(nil)
+
+func (u *UserInfoNode) generateContent() []byte {
+	status := "active"
+	if !u.user.Active {
+		status = "inactive"
+	}
+
+	content := fmt.Sprintf(`---
+id: %s
+name: %s
+email: %s
+displayName: %s
+status: %s
+---
+
+# %s
+
+- **Email:** %s
+- **ID:** %s
+- **Status:** %s
+`,
+		u.user.ID,
+		u.user.Name,
+		u.user.Email,
+		u.user.DisplayName,
+		status,
+		u.user.Name,
+		u.user.Email,
+		u.user.ID,
+		status,
+	)
+	return []byte(content)
+}
+
+func (u *UserInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	content := u.generateContent()
+	out.Mode = 0444 | syscall.S_IFREG
+	out.Size = uint64(len(content))
+	return 0
+}
+
+func (u *UserInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	return nil, fuse.FOPEN_KEEP_CACHE, 0
+}
+
+func (u *UserInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	content := u.generateContent()
+	if off >= int64(len(content)) {
+		return fuse.ReadResultData(nil), 0
+	}
+	end := off + int64(len(dest))
+	if end > int64(len(content)) {
+		end = int64(len(content))
+	}
+	return fuse.ReadResultData(content[off:end]), 0
 }
