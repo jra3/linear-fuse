@@ -95,3 +95,43 @@ func parseMarkdownToIssue(content string) (map[string]interface{}, error) {
 
 	return updates, nil
 }
+
+// parseMarkdownToNewIssue parses markdown with frontmatter for creating a new issue
+func parseMarkdownToNewIssue(content string) (map[string]interface{}, error) {
+	// Split frontmatter and description
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid markdown format: missing frontmatter")
+	}
+
+	// Parse frontmatter
+	var fm FrontMatter
+	if err := yaml.Unmarshal([]byte(parts[1]), &fm); err != nil {
+		return nil, fmt.Errorf("failed to parse frontmatter: %w", err)
+	}
+
+	// Extract description (everything after second ---)
+	description := strings.TrimSpace(parts[2])
+
+	// Build create input
+	input := make(map[string]interface{})
+
+	// Title is required
+	if fm.Title == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+	input["title"] = fm.Title
+
+	if description != "" {
+		input["description"] = description
+	}
+
+	if fm.Priority > 0 {
+		input["priority"] = fm.Priority
+	}
+
+	// Team is typically required, but we'll let the API handle validation
+	// Users can specify it in the frontmatter if needed
+
+	return input, nil
+}

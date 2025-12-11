@@ -178,6 +178,18 @@ func (c *Client) UpdateIssue(id string, input map[string]interface{}) (*Issue, e
 
 // CreateIssue creates a new issue in Linear
 func (c *Client) CreateIssue(input map[string]interface{}) (*Issue, error) {
+	// If no team is specified, get the first team from the user's teams
+	if _, hasTeam := input["teamId"]; !hasTeam {
+		teams, err := c.GetTeams()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get teams: %w", err)
+		}
+		if len(teams) == 0 {
+			return nil, fmt.Errorf("no teams available")
+		}
+		input["teamId"] = teams[0].ID
+	}
+
 	query := `
 		mutation($input: IssueCreateInput!) {
 			issueCreate(input: $input) {
@@ -235,4 +247,31 @@ func (c *Client) CreateIssue(input map[string]interface{}) (*Issue, error) {
 	}
 
 	return &resp.IssueCreate.Issue, nil
+}
+
+// GetTeams retrieves all teams from Linear
+func (c *Client) GetTeams() ([]Team, error) {
+	query := `
+		query {
+			teams {
+				nodes {
+					id
+					key
+					name
+				}
+			}
+		}
+	`
+
+	var resp struct {
+		Teams struct {
+			Nodes []Team `json:"nodes"`
+		} `json:"teams"`
+	}
+
+	if err := c.Query(query, nil, &resp); err != nil {
+		return nil, fmt.Errorf("failed to get teams: %w", err)
+	}
+
+	return resp.Teams.Nodes, nil
 }

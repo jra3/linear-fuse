@@ -19,8 +19,11 @@ linear-fuse is a FUSE (Filesystem in Userspace) module that mounts Linear.app is
 - ✅ Edit frontmatter to update issues
 - ✅ Update issue title, description, and priority
 
-### Phase 3-5: Future Enhancements
-- [ ] Create new issues by creating files
+### Phase 3: Issue Creation ✅
+- ✅ Create new issues by creating files
+- ✅ Parse file content to extract issue details
+
+### Phase 4-5: Future Enhancements
 - [ ] Full directory structure (projects, teams, views)
 - [ ] Comprehensive error handling
 - [ ] Advanced filtering and views
@@ -129,6 +132,39 @@ You can edit the following fields:
 
 Changes are automatically synced to Linear when you save the file.
 
+### Creating New Issues
+
+Create a new issue by creating a new markdown file:
+
+```bash
+# Create a simple issue with just title and description
+cat > ~/linear/NEW-ISSUE.md << EOF
+Fix login bug
+
+Users are experiencing errors when logging in with social accounts.
+EOF
+```
+
+Or with full frontmatter:
+
+```bash
+cat > ~/linear/NEW-ISSUE.md << EOF
+---
+title: Implement dark mode
+priority: 2
+---
+
+Add dark mode support across the application.
+
+## Requirements
+- Toggle in settings
+- Persist user preference
+- Update all components
+EOF
+```
+
+The issue will be created in Linear when you save the file. The filename can be anything ending in `.md` - Linear will assign the actual identifier (e.g., `ENG-123`).
+
 ### Unmount
 
 Press `Ctrl+C` in the terminal where linear-fuse is running, or:
@@ -193,11 +229,12 @@ The implementation follows a phased approach:
 
 ## Limitations
 
-- Currently supports basic issue operations (read, update)
-- Issue creation not yet implemented
+- Currently supports basic issue operations (read, update, create)
 - No support for comments, attachments, or sub-issues
+- New issues are created in the first available team
 - Cache TTL is fixed at 5 minutes
 - No offline mode
+- No support for deleting issues
 
 ## Contributing
 

@@ -96,6 +96,9 @@ func (lfs *LinearFS) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 // Ensure LinearFS implements the NodeLookuper interface
 var _ = (fs.NodeLookuper)((*LinearFS)(nil))
 
+// Ensure LinearFS implements the NodeCreater interface
+var _ = (fs.NodeCreater)((*LinearFS)(nil))
+
 // Lookup looks up a file in the directory
 func (lfs *LinearFS) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if lfs.debug {
@@ -151,6 +154,31 @@ func (lfs *LinearFS) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	return child, fs.OK
 }
 
+// Create creates a new file (issue)
+func (lfs *LinearFS) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (node *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
+	if lfs.debug {
+		log.Printf("Create called for: %s", name)
+	}
+
+	// Validate filename
+	if !isValidFilename(name) {
+		log.Printf("Invalid filename: %s", name)
+		return nil, nil, 0, syscall.EINVAL
+	}
+
+	// Create a new issue node (uninitialized, will be created on write)
+	node = lfs.NewInode(ctx, &NewIssueFileNode{
+		filename: name,
+		client:   lfs.client,
+		cache:    lfs.cache,
+		debug:    lfs.debug,
+	}, fs.StableAttr{
+		Mode: fuse.S_IFREG,
+	})
+
+	return node, nil, fuse.FOPEN_DIRECT_IO, fs.OK
+}
+
 // parseFilename extracts the issue identifier from a filename
 func parseFilename(filename string) string {
 	// Remove .md extension
@@ -158,4 +186,10 @@ func parseFilename(filename string) string {
 		return filename[:len(filename)-3]
 	}
 	return ""
+}
+
+// isValidFilename checks if a filename is valid for issue creation
+func isValidFilename(filename string) bool {
+	// Must end with .md
+	return len(filename) > 3 && filename[len(filename)-3:] == ".md"
 }
