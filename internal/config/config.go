@@ -1,0 +1,78 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Config struct {
+	APIKey string      `yaml:"api_key"`
+	Cache  CacheConfig `yaml:"cache"`
+	Mount  MountConfig `yaml:"mount"`
+	Log    LogConfig   `yaml:"log"`
+}
+
+type CacheConfig struct {
+	TTL        time.Duration `yaml:"ttl"`
+	MaxEntries int           `yaml:"max_entries"`
+}
+
+type MountConfig struct {
+	DefaultPath string `yaml:"default_path"`
+	AllowOther  bool   `yaml:"allow_other"`
+}
+
+type LogConfig struct {
+	Level string `yaml:"level"`
+	File  string `yaml:"file"`
+}
+
+func DefaultConfig() *Config {
+	return &Config{
+		Cache: CacheConfig{
+			TTL:        60 * time.Second,
+			MaxEntries: 10000,
+		},
+		Mount: MountConfig{
+			DefaultPath: "",
+			AllowOther:  false,
+		},
+		Log: LogConfig{
+			Level: "info",
+		},
+	}
+}
+
+func Load() (*Config, error) {
+	cfg := DefaultConfig()
+
+	// Try to load from config file
+	configPath := getConfigPath()
+	if data, err := os.ReadFile(configPath); err == nil {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+	}
+
+	// Environment variables override config file
+	if apiKey := os.Getenv("LINEAR_API_KEY"); apiKey != "" {
+		cfg.APIKey = apiKey
+	}
+
+	return cfg, nil
+}
+
+func getConfigPath() string {
+	// Check XDG_CONFIG_HOME first
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		return filepath.Join(xdgConfig, "linearfs", "config.yaml")
+	}
+
+	// Fall back to ~/.config
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "linearfs", "config.yaml")
+}
