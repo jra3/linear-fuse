@@ -2,6 +2,7 @@ package linear
 
 import (
 	"fmt"
+	"sort"
 )
 
 // ListIssues retrieves all issues from Linear
@@ -178,7 +179,7 @@ func (c *Client) UpdateIssue(id string, input map[string]interface{}) (*Issue, e
 
 // CreateIssue creates a new issue in Linear
 func (c *Client) CreateIssue(input map[string]interface{}) (*Issue, error) {
-	// If no team is specified, get the first team from the user's teams
+	// If no team is specified, get the first team from the user's teams (sorted by key)
 	if _, hasTeam := input["teamId"]; !hasTeam {
 		teams, err := c.GetTeams()
 		if err != nil {
@@ -187,7 +188,13 @@ func (c *Client) CreateIssue(input map[string]interface{}) (*Issue, error) {
 		if len(teams) == 0 {
 			return nil, fmt.Errorf("no teams available")
 		}
-		input["teamId"] = teams[0].ID
+		// Sort teams by key for consistent behavior
+		sortedTeams := make([]Team, len(teams))
+		copy(sortedTeams, teams)
+		sort.Slice(sortedTeams, func(i, j int) bool {
+			return sortedTeams[i].Key < sortedTeams[j].Key
+		})
+		input["teamId"] = sortedTeams[0].ID
 	}
 
 	query := `

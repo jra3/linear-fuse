@@ -87,9 +87,13 @@ func parseMarkdownToIssue(content string) (map[string]interface{}, error) {
 	// Build update input
 	updates := make(map[string]interface{})
 
-	// Only include fields that can be updated
-	// Note: Some fields like ID, identifier, creator are immutable
-	updates["title"] = fm.Title
+	// Include editable fields
+	// Note: We include all fields as we don't track which ones changed.
+	// The Linear API handles updates efficiently by only changing modified fields.
+	// Some fields like ID, identifier, creator are immutable and ignored by the API.
+	if fm.Title != "" {
+		updates["title"] = fm.Title
+	}
 	updates["description"] = description
 	updates["priority"] = fm.Priority
 

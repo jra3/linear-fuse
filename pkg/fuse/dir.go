@@ -55,7 +55,7 @@ func (n *StateDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 	// Filter by state
 	var filteredIssues []linear.Issue
 	for _, issue := range issues {
-		if issue.State.Name == n.state || (n.state == "all" || n.state == "") {
+		if issue.State.Name == n.state {
 			filteredIssues = append(filteredIssues, issue)
 		}
 	}
@@ -100,12 +100,9 @@ func (n *StateDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 	if cached {
 		for _, id := range issueIDs {
 			if cachedIssue, ok := n.cache.Get(id); ok {
-				if cachedIssue.Identifier == identifier {
-					// Check if it matches the state filter
-					if n.state == "all" || n.state == "" || cachedIssue.State.Name == n.state {
-						issue = cachedIssue
-						break
-					}
+				if cachedIssue.Identifier == identifier && cachedIssue.State.Name == n.state {
+					issue = cachedIssue
+					break
 				}
 			}
 		}
