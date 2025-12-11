@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Project binary
+linear-fuse
+
 # Test binary, built with `go test -c`
 *.test
 

@@ -1,0 +1,9 @@
+# Linear FUSE Configuration Example
+# Copy this file to ~/.linear-fuse.yaml and update with your settings
+
+# Linear API key (required)
+# Get your API key from: https://linear.app/settings/api
+api-key: "your-linear-api-key-here"
+
+# Enable debug logging (optional, default: false)
+# debug: false
