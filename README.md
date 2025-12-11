@@ -33,6 +33,10 @@ linear-fuse is a FUSE (Filesystem in Userspace) module that mounts Linear.app is
 - [ ] Add tests
 - [ ] Improve reliability and edge cases
 
+## Quick Start
+
+New to linear-fuse? Check out the [Quick Start Guide](docs/QUICKSTART.md) to get up and running in 5 minutes!
+
 ## Installation
 
 ### Prerequisites
@@ -47,7 +51,7 @@ linear-fuse is a FUSE (Filesystem in Userspace) module that mounts Linear.app is
 ```bash
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
-go build -o linear-fuse ./cmd/linear-fuse
+make build
 ```
 
 ## Configuration
@@ -269,7 +273,7 @@ The implementation follows a phased approach:
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) to get started.
 
 ## License
 
