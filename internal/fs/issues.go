@@ -211,9 +211,13 @@ func (i *IssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 		log.Printf("Flush: %s updated successfully", i.issue.Identifier)
 	}
 
-	// Invalidate cache so next read gets fresh data
+	// Invalidate caches so next read gets fresh data
 	if i.issue.Team != nil {
 		i.lfs.InvalidateTeamIssues(i.issue.Team.ID)
+	}
+	i.lfs.InvalidateMyIssues()
+	if i.issue.Assignee != nil {
+		i.lfs.InvalidateUserIssues(i.issue.Assignee.ID)
 	}
 
 	i.dirty = false

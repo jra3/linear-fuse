@@ -75,6 +75,10 @@ func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
 	lfs.issueCache.Delete("issues:" + teamID)
 }
 
+func (lfs *LinearFS) InvalidateMyIssues() {
+	lfs.myIssueCache.Delete("my")
+}
+
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
 	if issues, ok := lfs.myIssueCache.Get("my"); ok {
 		return issues, nil
