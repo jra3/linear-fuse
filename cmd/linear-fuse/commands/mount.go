@@ -25,7 +25,9 @@ Each issue will be represented as a markdown file with YAML frontmatter.`,
 func init() {
 	rootCmd.AddCommand(mountCmd)
 	mountCmd.Flags().Bool("debug", false, "Enable debug logging")
+	mountCmd.Flags().String("layout", "flat", "Directory layout: flat, by-state, or by-team")
 	viper.BindPFlag("debug", mountCmd.Flags().Lookup("debug"))
+	viper.BindPFlag("layout", mountCmd.Flags().Lookup("layout"))
 }
 
 func runMount(cmd *cobra.Command, args []string) error {
@@ -37,12 +39,13 @@ func runMount(cmd *cobra.Command, args []string) error {
 	}
 
 	debug := viper.GetBool("debug")
+	layout := viper.GetString("layout")
 
 	// Create Linear API client
 	client := linear.NewClient(apiKey)
 
 	// Create FUSE filesystem
-	fs, err := fuse.NewLinearFS(client, debug)
+	fs, err := fuse.NewLinearFS(client, debug, layout)
 	if err != nil {
 		return fmt.Errorf("failed to create filesystem: %w", err)
 	}

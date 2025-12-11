@@ -19,14 +19,19 @@ type LinearFS struct {
 	client *linear.Client
 	cache  *cache.Cache
 	debug  bool
+	layout string
 }
 
 // NewLinearFS creates a new Linear FUSE filesystem
-func NewLinearFS(client *linear.Client, debug bool) (*LinearFS, error) {
+func NewLinearFS(client *linear.Client, debug bool, layout string) (*LinearFS, error) {
+	if layout == "" {
+		layout = "flat"
+	}
 	return &LinearFS{
 		client: client,
 		cache:  cache.New(5 * time.Minute),
 		debug:  debug,
+		layout: layout,
 	}, nil
 }
 
@@ -54,9 +59,20 @@ var _ = (fs.NodeReaddirer)((*LinearFS)(nil))
 // Readdir reads the directory contents (list of issues)
 func (lfs *LinearFS) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	if lfs.debug {
-		log.Printf("Readdir called on root")
+		log.Printf("Readdir called on root with layout: %s", lfs.layout)
 	}
 
+	// If layout is structured, show directories
+	if lfs.layout == "by-state" || lfs.layout == "by-team" {
+		return lfs.readdirStructured(ctx)
+	}
+
+	// Flat layout: show all issues as files
+	return lfs.readdirFlat(ctx)
+}
+
+// readdirFlat returns all issues as files in the root directory
+func (lfs *LinearFS) readdirFlat(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Try to get from cache
 	issueIDs, cached := lfs.cache.GetList()
 	var issues []linear.Issue
@@ -93,6 +109,58 @@ func (lfs *LinearFS) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	return fs.NewListDirStream(entries), fs.OK
 }
 
+// readdirStructured returns directories for states or teams
+func (lfs *LinearFS) readdirStructured(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	// Get all issues to determine available states/teams
+	issueIDs, cached := lfs.cache.GetList()
+	var issues []linear.Issue
+
+	if !cached {
+		var err error
+		issues, err = lfs.client.ListIssues()
+		if err != nil {
+			log.Printf("Failed to list issues: %v", err)
+			return nil, syscall.EIO
+		}
+		lfs.cache.SetList(issues)
+	} else {
+		issues = make([]linear.Issue, 0, len(issueIDs))
+		for _, id := range issueIDs {
+			if issue, ok := lfs.cache.Get(id); ok {
+				issues = append(issues, *issue)
+			}
+		}
+	}
+
+	// Build list of unique states or teams
+	seen := make(map[string]bool)
+	var entries []fuse.DirEntry
+
+	if lfs.layout == "by-state" {
+		for _, issue := range issues {
+			if !seen[issue.State.Name] {
+				seen[issue.State.Name] = true
+				entries = append(entries, fuse.DirEntry{
+					Name: issue.State.Name,
+					Mode: fuse.S_IFDIR,
+				})
+			}
+		}
+	} else if lfs.layout == "by-team" {
+		for _, issue := range issues {
+			if !seen[issue.Team.Key] {
+				seen[issue.Team.Key] = true
+				entries = append(entries, fuse.DirEntry{
+					Name: issue.Team.Key,
+					Mode: fuse.S_IFDIR,
+				})
+			}
+		}
+	}
+
+	return fs.NewListDirStream(entries), fs.OK
+}
+
 // Ensure LinearFS implements the NodeLookuper interface
 var _ = (fs.NodeLookuper)((*LinearFS)(nil))
 
@@ -102,9 +170,83 @@ var _ = (fs.NodeCreater)((*LinearFS)(nil))
 // Lookup looks up a file in the directory
 func (lfs *LinearFS) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if lfs.debug {
-		log.Printf("Lookup called for: %s", name)
+		log.Printf("Lookup called for: %s with layout: %s", name, lfs.layout)
 	}
 
+	// If layout is structured, check if looking up a directory
+	if lfs.layout == "by-state" || lfs.layout == "by-team" {
+		// Check if this is a directory lookup
+		identifier := parseFilename(name)
+		if identifier == "" {
+			// Not a .md file, might be a directory
+			return lfs.lookupDirectory(ctx, name)
+		}
+	}
+
+	// Otherwise, lookup a file
+	return lfs.lookupFile(ctx, name)
+}
+
+// lookupDirectory looks up a state or team directory
+func (lfs *LinearFS) lookupDirectory(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+	// Get all issues to verify this directory exists
+	issueIDs, cached := lfs.cache.GetList()
+	if !cached {
+		issues, err := lfs.client.ListIssues()
+		if err != nil {
+			log.Printf("Failed to list issues: %v", err)
+			return nil, syscall.EIO
+		}
+		lfs.cache.SetList(issues)
+	}
+
+	// Check if this state or team exists
+	var found bool
+	if cached {
+		for _, id := range issueIDs {
+			if issue, ok := lfs.cache.Get(id); ok {
+				if lfs.layout == "by-state" && issue.State.Name == name {
+					found = true
+					break
+				} else if lfs.layout == "by-team" && issue.Team.Key == name {
+					found = true
+					break
+				}
+			}
+		}
+	}
+
+	if !found {
+		return nil, syscall.ENOENT
+	}
+
+	// Create the appropriate directory node
+	var node fs.InodeEmbedder
+	if lfs.layout == "by-state" {
+		node = &StateDirectoryNode{
+			state:  name,
+			client: lfs.client,
+			cache:  lfs.cache,
+			debug:  lfs.debug,
+		}
+	} else {
+		node = &TeamDirectoryNode{
+			team:   name,
+			client: lfs.client,
+			cache:  lfs.cache,
+			debug:  lfs.debug,
+		}
+	}
+
+	child := lfs.NewInode(ctx, node, fs.StableAttr{
+		Mode: fuse.S_IFDIR,
+	})
+
+	return child, fs.OK
+}
+
+// lookupFile looks up an issue file
+func (lfs *LinearFS) lookupFile(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
 	// Parse filename to get issue identifier
 	identifier := parseFilename(name)
 	if identifier == "" {

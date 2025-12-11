@@ -23,10 +23,15 @@ linear-fuse is a FUSE (Filesystem in Userspace) module that mounts Linear.app is
 - ✅ Create new issues by creating files
 - ✅ Parse file content to extract issue details
 
-### Phase 4-5: Future Enhancements
-- [ ] Full directory structure (projects, teams, views)
+### Phase 4: Projects & Views ✅
+- ✅ Directory layouts (flat, by-state, by-team)
+- ✅ Filtered views by state
+- ✅ Filtered views by team
+
+### Phase 5: Polish
 - [ ] Comprehensive error handling
-- [ ] Advanced filtering and views
+- [ ] Add tests
+- [ ] Improve reliability and edge cases
 
 ## Installation
 
@@ -77,12 +82,25 @@ linear-fuse mount --api-key="your-api-key-here" /path/to/mountpoint
 # Create a mountpoint directory
 mkdir ~/linear
 
-# Mount Linear issues
+# Mount Linear issues (flat layout - all issues in root)
 linear-fuse mount ~/linear
+
+# Mount with issues organized by state
+linear-fuse mount --layout=by-state ~/linear
+
+# Mount with issues organized by team
+linear-fuse mount --layout=by-team ~/linear
 ```
+
+#### Layout Options
+
+- **flat** (default): All issues appear as files in the root directory
+- **by-state**: Issues are organized in subdirectories by state (e.g., `Todo/`, `In Progress/`, `Done/`)
+- **by-team**: Issues are organized in subdirectories by team (e.g., `ENG/`, `DESIGN/`, `PRODUCT/`)
 
 ### Browse Issues
 
+#### Flat Layout
 ```bash
 # List all issues
 ls ~/linear/
@@ -92,6 +110,19 @@ cat ~/linear/ENG-123.md
 
 # Edit an issue with your favorite editor
 vim ~/linear/ENG-123.md
+```
+
+#### Structured Layouts
+```bash
+# With by-state layout
+ls ~/linear/                    # Shows: Todo/, In Progress/, Done/, etc.
+ls ~/linear/Todo/               # Shows all issues in Todo state
+cat ~/linear/Todo/ENG-123.md   # View a specific issue
+
+# With by-team layout
+ls ~/linear/                    # Shows: ENG/, DESIGN/, PRODUCT/, etc.
+ls ~/linear/ENG/                # Shows all issues for ENG team
+cat ~/linear/ENG/ENG-123.md    # View a specific issue
 ```
 
 ### Issue File Format
