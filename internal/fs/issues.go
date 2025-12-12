@@ -4,8 +4,10 @@ import (
 	"context"
 	"hash/fnv"
 	"log"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -18,6 +20,88 @@ func issueIno(issueID string) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte(issueID))
 	return h.Sum64()
+}
+
+// IssuesNode represents the /teams/{KEY}/issues directory
+type IssuesNode struct {
+	fs.Inode
+	lfs  *LinearFS
+	team api.Team
+}
+
+var _ fs.NodeReaddirer = (*IssuesNode)(nil)
+var _ fs.NodeLookuper = (*IssuesNode)(nil)
+var _ fs.NodeCreater = (*IssuesNode)(nil)
+
+func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	entries := make([]fuse.DirEntry, len(issues))
+	for i, issue := range issues {
+		entries[i] = fuse.DirEntry{
+			Name: issue.Identifier + ".md",
+			Mode: syscall.S_IFREG,
+		}
+	}
+
+	return fs.NewListDirStream(entries), 0
+}
+
+func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	for _, issue := range issues {
+		if issue.Identifier+".md" == name {
+			content, err := marshal.IssueToMarkdown(&issue)
+			if err != nil {
+				return nil, syscall.EIO
+			}
+			node := &IssueNode{
+				lfs:          n.lfs,
+				issue:        issue,
+				content:      content,
+				contentReady: true,
+			}
+			out.Attr.Mode = 0644 | syscall.S_IFREG
+			out.Attr.Size = uint64(len(content))
+			out.SetAttrTimeout(30 * time.Second)
+			out.SetEntryTimeout(30 * time.Second)
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
+			return n.NewInode(ctx, node, fs.StableAttr{
+				Mode: syscall.S_IFREG,
+				Ino:  issueIno(issue.ID),
+			}), 0
+		}
+	}
+
+	return nil, syscall.ENOENT
+}
+
+func (n *IssuesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if n.lfs.debug {
+		log.Printf("Create: %s in team %s", name, n.team.Key)
+	}
+
+	title := strings.TrimSuffix(name, ".md")
+	if title == name {
+		name = name + ".md"
+	}
+
+	node := &NewIssueNode{
+		lfs:    n.lfs,
+		teamID: n.team.ID,
+		title:  title,
+	}
+
+	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
+
+	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // IssueNode represents an issue file (e.g., ENG-123.md)

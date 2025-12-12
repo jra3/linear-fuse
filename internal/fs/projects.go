@@ -139,7 +139,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	return nil, syscall.ENOENT
 }
 
-// ProjectIssueSymlink is a symlink pointing to an issue in /teams/<KEY>/<identifier>.md
+// ProjectIssueSymlink is a symlink pointing to an issue in /teams/<KEY>/issues/<identifier>.md
 type ProjectIssueSymlink struct {
 	fs.Inode
 	teamKey    string
@@ -150,14 +150,14 @@ var _ fs.NodeReadlinker = (*ProjectIssueSymlink)(nil)
 var _ fs.NodeGetattrer = (*ProjectIssueSymlink)(nil)
 
 func (s *ProjectIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// Return relative path to team directory: ../../<identifier>.md
-	target := fmt.Sprintf("../../%s.md", s.identifier)
+	// Return relative path to issues directory: ../../issues/<identifier>.md
+	target := fmt.Sprintf("../../issues/%s.md", s.identifier)
 	return []byte(target), 0
 }
 
 func (s *ProjectIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0777 | syscall.S_IFLNK
-	target := fmt.Sprintf("../../%s.md", s.identifier)
+	target := fmt.Sprintf("../../issues/%s.md", s.identifier)
 	out.Size = uint64(len(target))
 	return 0
 }

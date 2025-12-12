@@ -3,15 +3,12 @@ package fs
 import (
 	"context"
 	"fmt"
-	"log"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
-	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // TeamsNode represents the /teams directory
@@ -65,144 +62,59 @@ type TeamNode struct {
 
 var _ fs.NodeReaddirer = (*TeamNode)(nil)
 var _ fs.NodeLookuper = (*TeamNode)(nil)
-var _ fs.NodeCreater = (*TeamNode)(nil)
 
 func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := t.lfs.GetTeamIssues(ctx, t.team.ID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	// +5 for .team.md, .states.md, .labels.md, cycles/, projects/
-	entries := make([]fuse.DirEntry, len(issues)+5)
-	entries[0] = fuse.DirEntry{
-		Name: ".team.md",
-		Mode: syscall.S_IFREG,
-	}
-	entries[1] = fuse.DirEntry{
-		Name: ".states.md",
-		Mode: syscall.S_IFREG,
-	}
-	entries[2] = fuse.DirEntry{
-		Name: ".labels.md",
-		Mode: syscall.S_IFREG,
-	}
-	entries[3] = fuse.DirEntry{
-		Name: "cycles",
-		Mode: syscall.S_IFDIR,
-	}
-	entries[4] = fuse.DirEntry{
-		Name: "projects",
-		Mode: syscall.S_IFDIR,
-	}
-	for i, issue := range issues {
-		entries[i+5] = fuse.DirEntry{
-			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFREG,
-		}
+	// 6 entries: .team.md, .states.md, .labels.md, cycles/, projects/, issues/
+	entries := []fuse.DirEntry{
+		{Name: ".team.md", Mode: syscall.S_IFREG},
+		{Name: ".states.md", Mode: syscall.S_IFREG},
+		{Name: ".labels.md", Mode: syscall.S_IFREG},
+		{Name: "cycles", Mode: syscall.S_IFDIR},
+		{Name: "projects", Mode: syscall.S_IFDIR},
+		{Name: "issues", Mode: syscall.S_IFDIR},
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
 func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle .team.md metadata file
-	if name == ".team.md" {
+	switch name {
+	case ".team.md":
 		node := &TeamInfoNode{team: t.team}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
 
-	// Handle .states.md metadata file
-	if name == ".states.md" {
+	case ".states.md":
 		node := &StatesInfoNode{lfs: t.lfs, team: t.team}
 		content := node.generateContent(context.Background())
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
 
-	// Handle .labels.md metadata file
-	if name == ".labels.md" {
+	case ".labels.md":
 		node := &LabelsInfoNode{lfs: t.lfs, team: t.team}
 		content := node.generateContent(context.Background())
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
 
-	// Handle cycles directory
-	if name == "cycles" {
+	case "cycles":
 		node := &CyclesNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
-	}
 
-	// Handle projects directory
-	if name == "projects" {
+	case "projects":
 		node := &ProjectsNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
-	}
 
-	issues, err := t.lfs.GetTeamIssues(ctx, t.team.ID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	for _, issue := range issues {
-		if issue.Identifier+".md" == name {
-			// Pre-generate content so Getattr returns correct size
-			content, err := marshal.IssueToMarkdown(&issue)
-			if err != nil {
-				return nil, syscall.EIO
-			}
-			node := &IssueNode{
-				lfs:          t.lfs,
-				issue:        issue,
-				content:      content,
-				contentReady: true,
-			}
-			// Set attributes on EntryOut so ls shows correct size/times
-			out.Attr.Mode = 0644 | syscall.S_IFREG
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return t.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  issueIno(issue.ID),
-			}), 0
-		}
+	case "issues":
+		node := &IssuesNode{lfs: t.lfs, team: t.team}
+		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
 	return nil, syscall.ENOENT
-}
-
-// Create creates a new issue file
-func (t *TeamNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	if t.lfs.debug {
-		log.Printf("Create: %s in team %s", name, t.team.Key)
-	}
-
-	// Extract title from filename (remove .md extension)
-	title := strings.TrimSuffix(name, ".md")
-	if title == name {
-		// No .md extension, add it
-		name = name + ".md"
-	}
-
-	// Create a new issue node that will be written to
-	node := &NewIssueNode{
-		lfs:    t.lfs,
-		teamID: t.team.ID,
-		title:  title,
-	}
-
-	inode := t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
-
-	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // TeamInfoNode is a virtual file containing team metadata
