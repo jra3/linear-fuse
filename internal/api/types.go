@@ -97,6 +97,15 @@ type Cycle struct {
 	IssueCountHistory          []int     `json:"issueCountHistory"`
 }
 
+type Comment struct {
+	ID        string     `json:"id"`
+	Body      string     `json:"body"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
+	EditedAt  *time.Time `json:"editedAt"`
+	User      *User      `json:"user"`
+}
+
 // PriorityName converts numeric priority to string
 func PriorityName(p int) string {
 	switch p {

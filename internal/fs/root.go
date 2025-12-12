@@ -104,7 +104,11 @@ This is a FUSE filesystem that exposes Linear issues as markdown files.
 │       ├── .states.md     # Workflow states with IDs (read-only)
 │       ├── .labels.md     # Available labels with IDs (read-only)
 │       ├── issues/        # Team issues
-│       │   └── {ID}.md    # Issue files (e.g., ENG-123.md)
+│       │   └── {ID}/      # Issue directory (e.g., ENG-123/)
+│       │       ├── issue.md     # Issue content (read/write)
+│       │       └── comments/    # Issue comments
+│       │           ├── 001-2025-01-10T14-30.md  # Comments (read-only)
+│       │           └── new.md   # Write here to create comments
 │       ├── cycles/        # Sprint cycles
 │       │   └── {num}.md   # Cycle files (e.g., 70.md)
 │       └── projects/      # Team projects
@@ -167,20 +171,45 @@ The description (content after frontmatter) is also editable.
 These fields are informational and changes will be ignored:
 - id, identifier, url, created, updated, labels, project
 
-## Creating Issues
+## Comments
 
-Create a new issue by creating a file in a team's issues directory:
+Each issue has a comments/ subdirectory containing:
+
+- Numbered comment files (001-timestamp.md, 002-timestamp.md, etc.)
+- Comments are read-only and include author/timestamp in frontmatter
+
+### Reading Comments
 
 ` + "```" + `bash
-echo "Issue description here" > /teams/ENG/issues/new-issue-title.md
+ls /teams/ENG/issues/ENG-123/comments/
+cat /teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
 ` + "```" + `
 
-The filename becomes the issue title (.md extension is optional).
+### Creating Comments
+
+Write to new.md (or any new .md file) in the comments directory:
+
+` + "```" + `bash
+echo "My comment here" > /teams/ENG/issues/ENG-123/comments/new.md
+` + "```" + `
+
+The file is consumed: comment is created via API, and the new numbered
+comment file will appear on the next directory listing.
+
+## Creating Issues
+
+Create a new issue by making a directory in a team's issues directory:
+
+` + "```" + `bash
+mkdir /teams/ENG/issues/"New issue title"
+` + "```" + `
+
+The directory name becomes the issue title.
 
 ## Symlinks
 
 Files in /users/, /my/, and /projects/ are symlinks pointing to the
-canonical issue files in /teams/{KEY}/issues/. This means:
+canonical issue files in /teams/{KEY}/issues/{ID}/issue.md. This means:
 
 - Edits made anywhere affect the same underlying issue
 - All views stay in sync automatically
@@ -199,6 +228,7 @@ contain YAML frontmatter with IDs. Use these to look up valid values:
 1. Read .states.md before changing issue status to get valid state names
 2. Use the frontmatter 'id' field when you need to reference entities via API
 3. The 'identifier' (e.g., ENG-123) is the human-readable issue key
-4. Symlinks in /my/ and /users/ resolve to /teams/{KEY}/issues/
+4. Symlinks in /my/ and /users/ resolve to /teams/{KEY}/issues/{ID}/issue.md
 5. Filter views: /my/active/ shows only non-completed assigned issues
+6. To add a comment, write to comments/new.md in an issue directory
 `

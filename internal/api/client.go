@@ -495,3 +495,101 @@ func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue,
 
 	return &result.IssueCreate.Issue, nil
 }
+
+// GetIssueComments fetches comments for an issue
+func (c *Client) GetIssueComments(ctx context.Context, issueID string) ([]Comment, error) {
+	var result struct {
+		Issue struct {
+			Comments struct {
+				Nodes []Comment `json:"nodes"`
+			} `json:"comments"`
+		} `json:"issue"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+	}
+
+	err := c.query(ctx, queryIssueComments, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Issue.Comments.Nodes, nil
+}
+
+// CreateComment creates a new comment on an issue
+func (c *Client) CreateComment(ctx context.Context, issueID string, body string) (*Comment, error) {
+	var result struct {
+		CommentCreate struct {
+			Success bool    `json:"success"`
+			Comment Comment `json:"comment"`
+		} `json:"commentCreate"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+		"body":    body,
+	}
+
+	err := c.query(ctx, mutationCreateComment, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.CommentCreate.Success {
+		return nil, fmt.Errorf("comment creation failed")
+	}
+
+	return &result.CommentCreate.Comment, nil
+}
+
+// UpdateComment updates an existing comment
+func (c *Client) UpdateComment(ctx context.Context, commentID string, body string) (*Comment, error) {
+	var result struct {
+		CommentUpdate struct {
+			Success bool    `json:"success"`
+			Comment Comment `json:"comment"`
+		} `json:"commentUpdate"`
+	}
+
+	vars := map[string]any{
+		"id":   commentID,
+		"body": body,
+	}
+
+	err := c.query(ctx, mutationUpdateComment, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.CommentUpdate.Success {
+		return nil, fmt.Errorf("comment update failed")
+	}
+
+	return &result.CommentUpdate.Comment, nil
+}
+
+// DeleteComment deletes a comment
+func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
+	var result struct {
+		CommentDelete struct {
+			Success bool `json:"success"`
+		} `json:"commentDelete"`
+	}
+
+	vars := map[string]any{
+		"id": commentID,
+	}
+
+	err := c.query(ctx, mutationDeleteComment, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.CommentDelete.Success {
+		return fmt.Errorf("comment deletion failed")
+	}
+
+	return nil
+}

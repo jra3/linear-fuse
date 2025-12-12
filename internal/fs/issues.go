@@ -4,7 +4,6 @@ import (
 	"context"
 	"hash/fnv"
 	"log"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -22,6 +21,13 @@ func issueIno(issueID string) uint64 {
 	return h.Sum64()
 }
 
+// issueDirIno generates a stable inode number for an issue directory
+func issueDirIno(issueID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("dir:" + issueID))
+	return h.Sum64()
+}
+
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
 	fs.Inode
@@ -31,7 +37,7 @@ type IssuesNode struct {
 
 var _ fs.NodeReaddirer = (*IssuesNode)(nil)
 var _ fs.NodeLookuper = (*IssuesNode)(nil)
-var _ fs.NodeCreater = (*IssuesNode)(nil)
+var _ fs.NodeMkdirer = (*IssuesNode)(nil)
 
 func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
@@ -42,8 +48,8 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	entries := make([]fuse.DirEntry, len(issues))
 	for i, issue := range issues {
 		entries[i] = fuse.DirEntry{
-			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFREG,
+			Name: issue.Identifier,
+			Mode: syscall.S_IFDIR,
 		}
 	}
 
@@ -57,25 +63,18 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	for _, issue := range issues {
-		if issue.Identifier+".md" == name {
-			content, err := marshal.IssueToMarkdown(&issue)
-			if err != nil {
-				return nil, syscall.EIO
+		if issue.Identifier == name {
+			node := &IssueDirectoryNode{
+				lfs:   n.lfs,
+				issue: issue,
 			}
-			node := &IssueNode{
-				lfs:          n.lfs,
-				issue:        issue,
-				content:      content,
-				contentReady: true,
-			}
-			out.Attr.Mode = 0644 | syscall.S_IFREG
-			out.Attr.Size = uint64(len(content))
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
 			out.SetAttrTimeout(30 * time.Second)
 			out.SetEntryTimeout(30 * time.Second)
 			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  issueIno(issue.ID),
+				Mode: syscall.S_IFDIR,
+				Ino:  issueDirIno(issue.ID),
 			}), 0
 		}
 	}
@@ -83,29 +82,105 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	return nil, syscall.ENOENT
 }
 
-func (n *IssuesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+// Mkdir creates a new issue from a directory name
+func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if n.lfs.debug {
-		log.Printf("Create: %s in team %s", name, n.team.Key)
+		log.Printf("Mkdir: %s in team %s (creating issue)", name, n.team.Key)
 	}
 
-	title := strings.TrimSuffix(name, ".md")
-	if title == name {
-		name = name + ".md"
+	// Create a new issue with the directory name as title
+	input := map[string]any{
+		"teamId": n.team.ID,
+		"title":  name,
 	}
 
-	node := &NewIssueNode{
-		lfs:    n.lfs,
-		teamID: n.team.ID,
-		title:  title,
+	issue, err := n.lfs.client.CreateIssue(ctx, input)
+	if err != nil {
+		log.Printf("Failed to create issue: %v", err)
+		return nil, syscall.EIO
 	}
 
-	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
+	// Invalidate cache
+	n.lfs.InvalidateTeamIssues(n.team.ID)
+	n.lfs.InvalidateMyIssues()
 
-	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
+	node := &IssueDirectoryNode{
+		lfs:   n.lfs,
+		issue: *issue,
+	}
+
+	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.SetAttrTimeout(30 * time.Second)
+	out.SetEntryTimeout(30 * time.Second)
+	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
+
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+		Ino:  issueDirIno(issue.ID),
+	}), 0
 }
 
-// IssueNode represents an issue file (e.g., ENG-123.md)
-type IssueNode struct {
+// IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory
+type IssueDirectoryNode struct {
+	fs.Inode
+	lfs   *LinearFS
+	issue api.Issue
+}
+
+var _ fs.NodeReaddirer = (*IssueDirectoryNode)(nil)
+var _ fs.NodeLookuper = (*IssueDirectoryNode)(nil)
+
+func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	entries := []fuse.DirEntry{
+		{Name: "issue.md", Mode: syscall.S_IFREG},
+		{Name: "comments", Mode: syscall.S_IFDIR},
+	}
+	return fs.NewListDirStream(entries), 0
+}
+
+func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	switch name {
+	case "issue.md":
+		content, err := marshal.IssueToMarkdown(&n.issue)
+		if err != nil {
+			return nil, syscall.EIO
+		}
+		node := &IssueFileNode{
+			lfs:          n.lfs,
+			issue:        n.issue,
+			content:      content,
+			contentReady: true,
+		}
+		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Size = uint64(len(content))
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFREG,
+			Ino:  issueIno(n.issue.ID),
+		}), 0
+
+	case "comments":
+		node := &CommentsNode{
+			lfs:     n.lfs,
+			issueID: n.issue.ID,
+			teamID:  n.issue.Team.ID,
+		}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  commentsDirIno(n.issue.ID),
+		}), 0
+	}
+
+	return nil, syscall.ENOENT
+}
+
+// IssueFileNode represents an issue.md file inside /teams/{KEY}/issues/{ID}/
+type IssueFileNode struct {
 	fs.Inode
 	lfs   *LinearFS
 	issue api.Issue
@@ -117,15 +192,15 @@ type IssueNode struct {
 	dirty        bool
 }
 
-var _ fs.NodeGetattrer = (*IssueNode)(nil)
-var _ fs.NodeOpener = (*IssueNode)(nil)
-var _ fs.NodeReader = (*IssueNode)(nil)
-var _ fs.NodeWriter = (*IssueNode)(nil)
-var _ fs.NodeFlusher = (*IssueNode)(nil)
-var _ fs.NodeSetattrer = (*IssueNode)(nil)
+var _ fs.NodeGetattrer = (*IssueFileNode)(nil)
+var _ fs.NodeOpener = (*IssueFileNode)(nil)
+var _ fs.NodeReader = (*IssueFileNode)(nil)
+var _ fs.NodeWriter = (*IssueFileNode)(nil)
+var _ fs.NodeFlusher = (*IssueFileNode)(nil)
+var _ fs.NodeSetattrer = (*IssueFileNode)(nil)
 
 // ensureContent generates markdown content if not already cached
-func (i *IssueNode) ensureContent() error {
+func (i *IssueFileNode) ensureContent() error {
 	if i.contentReady {
 		return nil
 	}
@@ -138,7 +213,7 @@ func (i *IssueNode) ensureContent() error {
 	return nil
 }
 
-func (i *IssueNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (i *IssueFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -153,12 +228,12 @@ func (i *IssueNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Attr
 	return 0
 }
 
-func (i *IssueNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+func (i *IssueFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	// Use kernel caching for better performance
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }
 
-func (i *IssueNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (i *IssueFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -178,7 +253,7 @@ func (i *IssueNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off 
 	return fuse.ReadResultData(i.content[off:end]), 0
 }
 
-func (i *IssueNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+func (i *IssueFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -206,7 +281,7 @@ func (i *IssueNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off
 	return uint32(len(data)), 0
 }
 
-func (i *IssueNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (i *IssueFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
@@ -238,7 +313,7 @@ func (i *IssueNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAt
 	return 0
 }
 
-func (i *IssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
+func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 

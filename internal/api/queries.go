@@ -536,3 +536,72 @@ mutation CreateIssue($input: IssueCreateInput!) {
   }
 }
 `
+
+const queryIssueComments = `
+query IssueComments($issueId: String!) {
+  issue(id: $issueId) {
+    comments(first: 100) {
+      nodes {
+        id
+        body
+        createdAt
+        updatedAt
+        editedAt
+        user {
+          id
+          name
+          email
+        }
+      }
+    }
+  }
+}
+`
+
+const mutationCreateComment = `
+mutation CreateComment($issueId: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
+    comment {
+      id
+      body
+      createdAt
+      updatedAt
+      editedAt
+      user {
+        id
+        name
+        email
+      }
+    }
+  }
+}
+`
+
+const mutationUpdateComment = `
+mutation UpdateComment($id: String!, $body: String!) {
+  commentUpdate(id: $id, input: { body: $body }) {
+    success
+    comment {
+      id
+      body
+      createdAt
+      updatedAt
+      editedAt
+      user {
+        id
+        name
+        email
+      }
+    }
+  }
+}
+`
+
+const mutationDeleteComment = `
+mutation DeleteComment($id: String!) {
+  commentDelete(id: $id) {
+    success
+  }
+}
+`

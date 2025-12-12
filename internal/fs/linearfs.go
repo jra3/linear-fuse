@@ -28,6 +28,7 @@ type LinearFS struct {
 	myActiveCache      *cache.Cache[[]api.Issue]
 	userCache          *cache.Cache[[]api.User]
 	userIssueCache     *cache.Cache[[]api.Issue]
+	commentCache       *cache.Cache[[]api.Comment]
 	debug              bool
 }
 
@@ -50,6 +51,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		myActiveCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
 		userCache:          cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
 		userIssueCache:     cache.New[[]api.Issue](cfg.Cache.TTL),
+		commentCache:       cache.New[[]api.Comment](cfg.Cache.TTL),
 		debug:              debug,
 	}, nil
 }
@@ -247,6 +249,56 @@ func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Is
 
 func (lfs *LinearFS) InvalidateUserIssues(userID string) {
 	lfs.userIssueCache.Delete("user-issues:" + userID)
+}
+
+func (lfs *LinearFS) GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error) {
+	cacheKey := "comments:" + issueID
+	if comments, ok := lfs.commentCache.Get(cacheKey); ok {
+		return comments, nil
+	}
+
+	comments, err := lfs.client.GetIssueComments(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.commentCache.Set(cacheKey, comments)
+	return comments, nil
+}
+
+func (lfs *LinearFS) InvalidateIssueComments(issueID string) {
+	lfs.commentCache.Delete("comments:" + issueID)
+}
+
+func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body string) (*api.Comment, error) {
+	comment, err := lfs.client.CreateComment(ctx, issueID, body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Invalidate cache so next read shows the new comment
+	lfs.InvalidateIssueComments(issueID)
+	return comment, nil
+}
+
+func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentID string, body string) (*api.Comment, error) {
+	comment, err := lfs.client.UpdateComment(ctx, commentID, body)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.InvalidateIssueComments(issueID)
+	return comment, nil
+}
+
+func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
+	err := lfs.client.DeleteComment(ctx, commentID)
+	if err != nil {
+		return err
+	}
+
+	lfs.InvalidateIssueComments(issueID)
+	return nil
 }
 
 // ResolveUserID converts an email or name to a user ID

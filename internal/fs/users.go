@@ -143,13 +143,13 @@ var _ fs.NodeGetattrer = (*IssueSymlink)(nil)
 
 func (s *IssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	// Return relative path to team issues directory
-	target := fmt.Sprintf("../../teams/%s/issues/%s.md", s.teamKey, s.identifier)
+	target := fmt.Sprintf("../../teams/%s/issues/%s/issue.md", s.teamKey, s.identifier)
 	return []byte(target), 0
 }
 
 func (s *IssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0777 | syscall.S_IFLNK
-	target := fmt.Sprintf("../../teams/%s/issues/%s.md", s.teamKey, s.identifier)
+	target := fmt.Sprintf("../../teams/%s/issues/%s/issue.md", s.teamKey, s.identifier)
 	out.Size = uint64(len(target))
 	return 0
 }

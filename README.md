@@ -7,7 +7,8 @@ Mount your Linear workspace as a FUSE filesystem. Browse and edit issues as mark
 - Browse teams and issues as directories/files
 - Issues rendered as markdown with YAML frontmatter
 - Edit frontmatter to update issue status, assignee, priority
-- Link issues using `[ENG-XXX]` syntax in content
+- Read and create comments on issues
+- Multiple views: by team, by user, personal (assigned/created/active)
 
 ## Installation
 
@@ -35,8 +36,15 @@ linearfs mount /mnt/linear
 
 # Browse your issues
 ls /mnt/linear/teams/
-ls /mnt/linear/teams/ENG/
-cat /mnt/linear/teams/ENG/ENG-123.md
+ls /mnt/linear/teams/ENG/issues/
+cat /mnt/linear/teams/ENG/issues/ENG-123/issue.md
+
+# View comments on an issue
+ls /mnt/linear/teams/ENG/issues/ENG-123/comments/
+cat /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
+
+# Add a comment
+echo "My comment" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
 
 # View your assigned issues
 ls /mnt/linear/my/assigned/
@@ -50,11 +58,26 @@ fusermount -u /mnt/linear
 
 ```
 /mnt/linear/
+├── README.md                    # In-filesystem documentation
 ├── teams/
-│   └── <team-key>/          # e.g., ENG, DES
-│       └── <identifier>.md  # e.g., ENG-123.md
+│   └── <team-key>/              # e.g., ENG, DES
+│       ├── .team.md             # Team metadata
+│       ├── .states.md           # Workflow states
+│       ├── .labels.md           # Available labels
+│       ├── issues/
+│       │   └── <identifier>/    # e.g., ENG-123/
+│       │       ├── issue.md     # Issue content (read/write)
+│       │       └── comments/    # Issue comments
+│       │           ├── 001-*.md # Numbered comments (read-only)
+│       │           └── new.md   # Write here to create comment
+│       ├── cycles/              # Sprint cycles
+│       └── projects/            # Team projects
+├── users/
+│   └── <username>/              # Issues by assignee (symlinks)
 └── my/
-    └── assigned/            # Issues assigned to you
+    ├── assigned/                # Issues assigned to you
+    ├── created/                 # Issues you created
+    └── active/                  # Non-completed assigned issues
 ```
 
 ## Issue File Format
@@ -76,8 +99,38 @@ labels:
 ---
 
 The login flow fails when users attempt to authenticate with SSO.
+```
 
-See also [ENG-100] for related work.
+### Editable Fields
+
+- `title` - Issue title
+- `status` - Workflow state name (check .states.md for valid values)
+- `assignee` - User email or name
+- `priority` - none/low/medium/high/urgent
+- `dueDate` - Due date (ISO format)
+- `estimate` - Point estimate
+- Description (content after frontmatter)
+
+## Creating Issues
+
+Create a new issue by making a directory:
+
+```bash
+mkdir /mnt/linear/teams/ENG/issues/"New issue title"
+```
+
+## Comments
+
+Read comments from the `comments/` subdirectory of any issue:
+
+```bash
+cat /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
+```
+
+Create a comment by writing to `new.md`:
+
+```bash
+echo "This is my comment" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
 ```
 
 ## Configuration
