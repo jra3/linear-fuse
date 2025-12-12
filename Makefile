@@ -1,4 +1,4 @@
-.PHONY: build install clean test run
+.PHONY: build install clean test integration-test run
 
 BINARY=linearfs
 VERSION?=dev
@@ -16,6 +16,10 @@ clean:
 
 test:
 	go test ./...
+
+integration-test:
+	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
+	LINEARFS_INTEGRATION=1 go test -v -timeout 20m ./internal/integration/...
 
 run: build
 	./bin/$(BINARY) mount /tmp/linear
