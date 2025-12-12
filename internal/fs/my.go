@@ -6,6 +6,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/jra3/linear-fuse/internal/api"
 )
 
 // MyNode represents the /my directory (personal views)
@@ -20,6 +21,8 @@ var _ fs.NodeLookuper = (*MyNode)(nil)
 func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "assigned", Mode: syscall.S_IFDIR},
+		{Name: "created", Mode: syscall.S_IFDIR},
+		{Name: "active", Mode: syscall.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
 }
@@ -27,24 +30,42 @@ func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "assigned":
-		node := &MyAssignedNode{lfs: m.lfs}
+		node := &MyIssuesNode{lfs: m.lfs, issueType: "assigned"}
+		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	case "created":
+		node := &MyIssuesNode{lfs: m.lfs, issueType: "created"}
+		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	case "active":
+		node := &MyIssuesNode{lfs: m.lfs, issueType: "active"}
 		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	default:
 		return nil, syscall.ENOENT
 	}
 }
 
-// MyAssignedNode represents /my/assigned directory
-type MyAssignedNode struct {
+// MyIssuesNode represents /my/{assigned,created,active} directories
+type MyIssuesNode struct {
 	fs.Inode
-	lfs *LinearFS
+	lfs       *LinearFS
+	issueType string // "assigned", "created", or "active"
 }
 
-var _ fs.NodeReaddirer = (*MyAssignedNode)(nil)
-var _ fs.NodeLookuper = (*MyAssignedNode)(nil)
+var _ fs.NodeReaddirer = (*MyIssuesNode)(nil)
+var _ fs.NodeLookuper = (*MyIssuesNode)(nil)
 
-func (m *MyAssignedNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := m.lfs.GetMyIssues(ctx)
+func (m *MyIssuesNode) getIssues(ctx context.Context) ([]api.Issue, error) {
+	switch m.issueType {
+	case "created":
+		return m.lfs.GetMyCreatedIssues(ctx)
+	case "active":
+		return m.lfs.GetMyActiveIssues(ctx)
+	default:
+		return m.lfs.GetMyIssues(ctx)
+	}
+}
+
+func (m *MyIssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	issues, err := m.getIssues(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -60,15 +81,14 @@ func (m *MyAssignedNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	return fs.NewListDirStream(entries), 0
 }
 
-func (m *MyAssignedNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	issues, err := m.lfs.GetMyIssues(ctx)
+func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	issues, err := m.getIssues(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
 
 	for _, issue := range issues {
 		if issue.Identifier+".md" == name {
-			// Create symlink to team directory
 			teamKey := ""
 			if issue.Team != nil {
 				teamKey = issue.Team.Key

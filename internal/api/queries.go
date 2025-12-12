@@ -108,10 +108,163 @@ query Issue($id: String!) {
 }
 `
 
+const issueFields = `
+  id
+  identifier
+  title
+  description
+  state {
+    id
+    name
+    type
+  }
+  assignee {
+    id
+    name
+    email
+  }
+  priority
+  labels {
+    nodes {
+      id
+      name
+      color
+      description
+    }
+  }
+  dueDate
+  estimate
+  createdAt
+  updatedAt
+  url
+  team {
+    id
+    key
+    name
+  }
+  project {
+    id
+    name
+    slugId
+  }
+`
+
 const queryMyIssues = `
 query MyIssues {
   viewer {
     assignedIssues(first: 100) {
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+            color
+            description
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
+const queryMyCreatedIssues = `
+query MyCreatedIssues($after: String) {
+  viewer {
+    createdIssues(first: 100, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+            color
+            description
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
+const queryMyActiveIssues = `
+query MyActiveIssues($after: String) {
+  viewer {
+    assignedIssues(
+      first: 100
+      after: $after
+      filter: {
+        state: { type: { nin: ["completed", "canceled"] } }
+      }
+    ) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes {
         id
         identifier

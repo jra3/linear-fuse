@@ -175,6 +175,78 @@ func (c *Client) GetMyIssues(ctx context.Context) ([]Issue, error) {
 	return result.Viewer.AssignedIssues.Nodes, nil
 }
 
+// GetMyCreatedIssues fetches issues created by the current user
+func (c *Client) GetMyCreatedIssues(ctx context.Context) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Viewer struct {
+				CreatedIssues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"createdIssues"`
+			} `json:"viewer"`
+		}
+
+		vars := map[string]any{}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryMyCreatedIssues, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Viewer.CreatedIssues.Nodes...)
+
+		if !result.Viewer.CreatedIssues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Viewer.CreatedIssues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
+// GetMyActiveIssues fetches active (not completed/canceled) issues assigned to the current user
+func (c *Client) GetMyActiveIssues(ctx context.Context) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Viewer struct {
+				AssignedIssues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"assignedIssues"`
+			} `json:"viewer"`
+		}
+
+		vars := map[string]any{}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryMyActiveIssues, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Viewer.AssignedIssues.Nodes...)
+
+		if !result.Viewer.AssignedIssues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Viewer.AssignedIssues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
 // UpdateIssue updates an existing issue
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[string]any) error {
 	var result struct {
