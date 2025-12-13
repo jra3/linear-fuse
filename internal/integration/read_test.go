@@ -451,7 +451,6 @@ func TestMyAssignedAccessible(t *testing.T) {
 }
 
 func TestMyCreatedAccessible(t *testing.T) {
-	t.Skip("TODO: /my/created returning I/O error - filesystem bug")
 	_, err := os.ReadDir(myCreatedPath())
 	if err != nil {
 		t.Fatalf("Failed to read my/created directory: %v", err)

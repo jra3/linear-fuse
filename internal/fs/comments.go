@@ -56,11 +56,19 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
 	})
 
-	entries := make([]fuse.DirEntry, len(comments))
+	// +1 for new.md
+	entries := make([]fuse.DirEntry, len(comments)+1)
+
+	// Always include new.md for creating comments
+	entries[0] = fuse.DirEntry{
+		Name: "new.md",
+		Mode: syscall.S_IFREG,
+	}
+
 	for i, comment := range comments {
 		// Format: 001-2025-01-10T14:30.md
 		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		entries[i] = fuse.DirEntry{
+		entries[i+1] = fuse.DirEntry{
 			Name: fmt.Sprintf("%03d-%s.md", i+1, timestamp),
 			Mode: syscall.S_IFREG,
 		}

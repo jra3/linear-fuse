@@ -7,7 +7,6 @@ import (
 )
 
 func TestCommentsDirectoryListing(t *testing.T) {
-	t.Skip("TODO: new.md not appearing in comments directory - filesystem bug")
 	// Create issue with a comment
 	issue, cleanup, err := createTestIssue("Comments Listing Test")
 	if err != nil {
@@ -245,7 +244,6 @@ func TestDeleteComment(t *testing.T) {
 }
 
 func TestNewMdAlwaysExists(t *testing.T) {
-	t.Skip("TODO: new.md not appearing in comments directory - filesystem bug")
 	issue, cleanup, err := createTestIssue("new.md Exists Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
