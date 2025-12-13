@@ -52,6 +52,11 @@ query TeamIssues($teamId: String!, $after: String) {
         createdAt
         updatedAt
         url
+        team {
+          id
+          key
+          name
+        }
         project {
           id
           name

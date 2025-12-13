@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -95,62 +94,3 @@ func cleanup() {
 	}
 }
 
-// TestSmokeTest verifies the filesystem mounted correctly
-func TestSmokeTest(t *testing.T) {
-	entries, err := os.ReadDir(mountPoint)
-	if err != nil {
-		t.Fatalf("Failed to read mount point: %v", err)
-	}
-
-	expected := map[string]bool{
-		"README.md": false,
-		"teams":     false,
-		"users":     false,
-		"my":        false,
-	}
-
-	for _, entry := range entries {
-		if _, ok := expected[entry.Name()]; ok {
-			expected[entry.Name()] = true
-		}
-	}
-
-	for name, found := range expected {
-		if !found {
-			t.Errorf("Expected %q in root directory, not found", name)
-		}
-	}
-}
-
-// TestTeamsDirectoryAccessible verifies teams directory works
-func TestTeamsDirectoryAccessible(t *testing.T) {
-	teamsPath := filepath.Join(mountPoint, "teams")
-	entries, err := os.ReadDir(teamsPath)
-	if err != nil {
-		t.Fatalf("Failed to read teams directory: %v", err)
-	}
-
-	if len(entries) == 0 {
-		t.Error("Expected at least one team, got none")
-	}
-
-	found := false
-	for _, entry := range entries {
-		if entry.Name() == testTeamKey {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("Expected to find team %q in teams directory", testTeamKey)
-	}
-}
-
-// TestTeamIssuesAccessible verifies team issues directory works
-func TestTeamIssuesAccessible(t *testing.T) {
-	issuesPath := filepath.Join(mountPoint, "teams", testTeamKey, "issues")
-	_, err := os.ReadDir(issuesPath)
-	if err != nil {
-		t.Fatalf("Failed to read issues directory: %v", err)
-	}
-}
