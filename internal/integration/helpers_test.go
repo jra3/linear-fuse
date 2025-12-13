@@ -246,6 +246,15 @@ func removeFrontmatterField(content []byte, field string) ([]byte, error) {
 	return []byte(fmt.Sprintf("---\n%s---\n%s", string(yamlBytes), doc.Body)), nil
 }
 
+func formatWithFrontmatter(doc *Document) ([]byte, error) {
+	yamlBytes, err := yaml.Marshal(doc.Frontmatter)
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(fmt.Sprintf("---\n%s---\n%s", string(yamlBytes), doc.Body)), nil
+}
+
 // Directory listing helpers
 
 func listDirNames(path string) ([]string, error) {
