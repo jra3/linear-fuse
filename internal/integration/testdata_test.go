@@ -164,3 +164,34 @@ func findFirstActiveUser() (*api.User, error) {
 
 	return nil, fmt.Errorf("no active users found")
 }
+
+// updateTestIssueTitle updates just the title of an issue
+func updateTestIssueTitle(issueID, newTitle string) error {
+	return updateTestIssue(issueID, map[string]any{"title": newTitle})
+}
+
+// deleteTestIssue archives/cancels a test issue (Linear doesn't have hard delete)
+func deleteTestIssue(issueID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Find canceled state for the team
+	states, err := apiClient.GetTeamStates(ctx, testTeamID)
+	if err != nil {
+		return err
+	}
+
+	var canceledID string
+	for _, s := range states {
+		if s.Type == "canceled" {
+			canceledID = s.ID
+			break
+		}
+	}
+
+	if canceledID != "" {
+		return apiClient.UpdateIssue(ctx, issueID, map[string]any{"stateId": canceledID})
+	}
+
+	return nil
+}
