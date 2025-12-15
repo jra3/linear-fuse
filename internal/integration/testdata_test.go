@@ -3,10 +3,30 @@ package integration
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
+
+// Rate limiting for API operations to avoid hitting Linear's usage limits
+var (
+	rateLimitMu   sync.Mutex
+	lastAPICall   time.Time
+	apiCallDelay  = 1 * time.Second // Minimum delay between API write operations
+)
+
+// rateLimitWait ensures we don't make API calls too quickly
+func rateLimitWait() {
+	rateLimitMu.Lock()
+	defer rateLimitMu.Unlock()
+
+	elapsed := time.Since(lastAPICall)
+	if elapsed < apiCallDelay {
+		time.Sleep(apiCallDelay - elapsed)
+	}
+	lastAPICall = time.Now()
+}
 
 // TestIssue wraps an API issue with test metadata
 type TestIssue struct {
@@ -56,6 +76,8 @@ func WithStateID(stateID string) IssueOption {
 // The title is prefixed with [TEST] and a timestamp.
 // Returns the issue and a cleanup function (currently no-op since Linear doesn't have delete).
 func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), error) {
+	rateLimitWait() // Prevent API rate limiting
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -84,6 +106,8 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 
 // createTestComment creates a comment on an issue for testing.
 func createTestComment(issueID, body string) (*api.Comment, func(), error) {
+	rateLimitWait() // Prevent API rate limiting
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -111,6 +135,8 @@ func getTestIssue(issueID string) (*api.Issue, error) {
 
 // updateTestIssue updates an issue via API
 func updateTestIssue(issueID string, updates map[string]any) error {
+	rateLimitWait() // Prevent API rate limiting
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
