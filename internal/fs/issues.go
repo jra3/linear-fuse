@@ -197,6 +197,7 @@ var _ fs.NodeOpener = (*IssueFileNode)(nil)
 var _ fs.NodeReader = (*IssueFileNode)(nil)
 var _ fs.NodeWriter = (*IssueFileNode)(nil)
 var _ fs.NodeFlusher = (*IssueFileNode)(nil)
+var _ fs.NodeFsyncer = (*IssueFileNode)(nil)
 var _ fs.NodeSetattrer = (*IssueFileNode)(nil)
 
 // ensureContent generates markdown content if not already cached
@@ -386,5 +387,10 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 
+	return 0
+}
+
+func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	// Fsync is a no-op; actual persistence happens in Flush
 	return 0
 }

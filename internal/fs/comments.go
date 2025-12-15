@@ -373,6 +373,7 @@ var _ fs.NodeOpener = (*NewCommentNode)(nil)
 var _ fs.NodeReader = (*NewCommentNode)(nil)
 var _ fs.NodeWriter = (*NewCommentNode)(nil)
 var _ fs.NodeFlusher = (*NewCommentNode)(nil)
+var _ fs.NodeFsyncer = (*NewCommentNode)(nil)
 var _ fs.NodeSetattrer = (*NewCommentNode)(nil)
 
 func (n *NewCommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -472,6 +473,11 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 		log.Printf("Comment created successfully")
 	}
 
+	return 0
+}
+
+func (n *NewCommentNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	// Fsync is a no-op; actual persistence happens in Flush
 	return 0
 }
 
