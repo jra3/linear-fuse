@@ -342,6 +342,10 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	// Resolve status name to state ID if needed
 	if stateName, ok := updates["stateId"].(string); ok {
+		if i.issue.Team == nil {
+			log.Printf("Cannot resolve state '%s': issue has no team", stateName)
+			return syscall.EIO
+		}
 		stateID, err := i.lfs.ResolveStateID(ctx, i.issue.Team.ID, stateName)
 		if err != nil {
 			log.Printf("Failed to resolve state '%s': %v", stateName, err)
