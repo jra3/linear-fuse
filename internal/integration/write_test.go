@@ -11,6 +11,7 @@ import (
 // =============================================================================
 
 func TestEditIssueTitle(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Original Title")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -51,6 +52,7 @@ func TestEditIssueTitle(t *testing.T) {
 }
 
 func TestEditIssueDescription(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Description Edit Test", WithDescription("Original description"))
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -102,6 +104,7 @@ func TestEditIssueDescription(t *testing.T) {
 }
 
 func TestEditIssuePriority(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Priority Edit Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -139,6 +142,7 @@ func TestEditIssuePriority(t *testing.T) {
 }
 
 func TestEditIssueStatus(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Status Edit Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -191,6 +195,7 @@ func TestEditIssueStatus(t *testing.T) {
 }
 
 func TestEditIssueDueDate(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Due Date Edit Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -227,6 +232,7 @@ func TestEditIssueDueDate(t *testing.T) {
 }
 
 func TestClearIssueDueDate(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Clear Due Date Test", WithDueDate("2025-06-15"))
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -263,6 +269,7 @@ func TestClearIssueDueDate(t *testing.T) {
 }
 
 func TestEditIssueEstimate(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Estimate Edit Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -298,6 +305,7 @@ func TestEditIssueEstimate(t *testing.T) {
 }
 
 func TestEditMultipleFields(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Multiple Fields Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -345,6 +353,7 @@ func TestEditMultipleFields(t *testing.T) {
 // =============================================================================
 
 func TestCreateIssueViaMkdir(t *testing.T) {
+	skipIfNoWriteTests(t)
 	title := "[TEST] Created via Mkdir"
 	issuePath := issueDirPath(testTeamKey, title)
 
@@ -384,6 +393,7 @@ func TestCreateIssueViaMkdir(t *testing.T) {
 }
 
 func TestCreatedIssueReadable(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Created Issue Readable Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)

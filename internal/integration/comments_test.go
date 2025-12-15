@@ -7,6 +7,7 @@ import (
 )
 
 func TestCommentsDirectoryListing(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create issue with a comment
 	issue, cleanup, err := createTestIssue("Comments Listing Test")
 	if err != nil {
@@ -49,6 +50,7 @@ func TestCommentsDirectoryListing(t *testing.T) {
 }
 
 func TestCommentFilenameFormat(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Comment Filename Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -85,6 +87,7 @@ func TestCommentFilenameFormat(t *testing.T) {
 }
 
 func TestCommentFileContents(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Comment Contents Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -142,6 +145,7 @@ func TestCommentFileContents(t *testing.T) {
 }
 
 func TestCreateCommentViaNewMd(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Create Comment via new.md Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -187,6 +191,7 @@ func TestCreateCommentViaNewMd(t *testing.T) {
 }
 
 func TestDeleteComment(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Delete Comment Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -244,6 +249,7 @@ func TestDeleteComment(t *testing.T) {
 }
 
 func TestNewMdAlwaysExists(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("new.md Exists Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -260,6 +266,7 @@ func TestNewMdAlwaysExists(t *testing.T) {
 }
 
 func TestNewMdReadable(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("new.md Readable Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)

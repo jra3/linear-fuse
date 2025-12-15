@@ -39,6 +39,7 @@ func TestCacheExpiryRefreshesData(t *testing.T) {
 }
 
 func TestIssueEditInvalidatesTeamCache(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create an issue
 	issue, cleanup, err := createTestIssue("Team Cache Invalidation")
 	if err != nil {
@@ -80,6 +81,7 @@ func TestIssueEditInvalidatesTeamCache(t *testing.T) {
 }
 
 func TestCommentCreateInvalidatesCache(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create an issue
 	issue, cleanup, err := createTestIssue("Comment Cache Test")
 	if err != nil {
@@ -119,6 +121,7 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 }
 
 func TestCreateIssueInvalidatesTeamListing(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Count initial issues
 	issuesDir := issuesPath(testTeamKey)
 	entries1, err := os.ReadDir(issuesDir)

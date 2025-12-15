@@ -373,6 +373,7 @@ func TestProjectIssueSymlinks(t *testing.T) {
 // =============================================================================
 
 func TestSymlinkResolution(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create test issue
 	issue, cleanup, err := createTestIssue("Symlink Resolution Test")
 	if err != nil {

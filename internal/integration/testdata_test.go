@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -15,6 +16,19 @@ var (
 	lastAPICall   time.Time
 	apiCallDelay  = 1 * time.Second // Minimum delay between API write operations
 )
+
+// writeTestsEnabled returns true if write tests should run
+// Set LINEARFS_WRITE_TESTS=1 to enable tests that create/modify issues
+func writeTestsEnabled() bool {
+	return os.Getenv("LINEARFS_WRITE_TESTS") == "1"
+}
+
+// skipIfNoWriteTests skips the test if write tests are not enabled
+func skipIfNoWriteTests(t interface{ Skip(...any) }) {
+	if !writeTestsEnabled() {
+		t.Skip("Skipped: write tests disabled (set LINEARFS_WRITE_TESTS=1 to enable)")
+	}
+}
 
 // rateLimitWait ensures we don't make API calls too quickly
 func rateLimitWait() {

@@ -268,6 +268,7 @@ func TestIssuesDirectoryListing(t *testing.T) {
 }
 
 func TestIssueDirectoryContents(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create a test issue
 	issue, cleanup, err := createTestIssue("Directory Contents Test")
 	if err != nil {
@@ -306,6 +307,7 @@ func TestIssueDirectoryContents(t *testing.T) {
 }
 
 func TestIssueFileReadable(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create a test issue
 	issue, cleanup, err := createTestIssue("File Readable Test")
 	if err != nil {
@@ -332,6 +334,7 @@ func TestIssueFileReadable(t *testing.T) {
 }
 
 func TestIssueFileContainsRequiredFields(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create a test issue with known content
 	issue, cleanup, err := createTestIssue("Required Fields Test", WithDescription("Test description"))
 	if err != nil {
@@ -360,6 +363,7 @@ func TestIssueFileContainsRequiredFields(t *testing.T) {
 }
 
 func TestIssueFileDescription(t *testing.T) {
+	skipIfNoWriteTests(t)
 	desc := "This is a test description for the issue body"
 	issue, cleanup, err := createTestIssue("Description Test", WithDescription(desc))
 	if err != nil {
@@ -395,6 +399,7 @@ func TestNonexistentIssue(t *testing.T) {
 }
 
 func TestIssueWithNoAssignee(t *testing.T) {
+	skipIfNoWriteTests(t)
 	// Create issue without assignee
 	issue, cleanup, err := createTestIssue("No Assignee Test")
 	if err != nil {

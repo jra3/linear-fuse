@@ -10,6 +10,7 @@ import (
 // =============================================================================
 
 func TestInvalidStatusReturnsError(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Invalid Status Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -75,6 +76,7 @@ func TestWriteToReadmeReturnsError(t *testing.T) {
 }
 
 func TestDeleteNewMdReturnsError(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Delete new.md Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -146,6 +148,7 @@ func TestNonexistentPathReturnsENOENT(t *testing.T) {
 }
 
 func TestMalformedYAMLDoesNotCrash(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Malformed YAML Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
@@ -171,6 +174,7 @@ func TestMalformedYAMLDoesNotCrash(t *testing.T) {
 }
 
 func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
+	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Empty Write Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
