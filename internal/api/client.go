@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const linearAPIURL = "https://api.linear.app/graphql"
@@ -14,12 +17,18 @@ const linearAPIURL = "https://api.linear.app/graphql"
 type Client struct {
 	apiKey     string
 	httpClient *http.Client
+	limiter    *rate.Limiter
 }
 
 func NewClient(apiKey string) *Client {
+	// Linear allows 1,500 requests/hour (25/min).
+	// We use 20/min (1 every 3 seconds) with burst of 10 to stay conservative.
+	limiter := rate.NewLimiter(rate.Every(3*time.Second), 10)
+
 	return &Client{
 		apiKey:     apiKey,
 		httpClient: &http.Client{},
+		limiter:    limiter,
 	}
 }
 
@@ -36,6 +45,11 @@ type graphQLResponse struct {
 }
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
+	// Wait for rate limit token before making request
+	if err := c.limiter.Wait(ctx); err != nil {
+		return fmt.Errorf("rate limit wait cancelled: %w", err)
+	}
+
 	reqBody := graphQLRequest{
 		Query:     query,
 		Variables: variables,

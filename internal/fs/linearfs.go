@@ -12,6 +12,7 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/cache"
 	"github.com/jra3/linear-fuse/internal/config"
+	"golang.org/x/sync/singleflight"
 )
 
 type LinearFS struct {
@@ -31,6 +32,7 @@ type LinearFS struct {
 	commentCache       *cache.Cache[[]api.Comment]
 	documentCache      *cache.Cache[[]api.Document]
 	debug              bool
+	sfGroup            singleflight.Group // Deduplicates concurrent requests for same data
 }
 
 func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
@@ -78,13 +80,24 @@ func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Is
 		return issues, nil
 	}
 
-	issues, err := lfs.client.GetTeamIssues(ctx, teamID)
+	// Deduplicate concurrent requests for the same team's issues
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		// Double-check cache in case another request just populated it
+		if issues, ok := lfs.issueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetTeamIssues(ctx, teamID)
+		if err != nil {
+			return nil, err
+		}
+		lfs.issueCache.Set(cacheKey, issues)
+		return issues, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	lfs.issueCache.Set(cacheKey, issues)
-	return issues, nil
+	return result.([]api.Issue), nil
 }
 
 func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
@@ -115,45 +128,75 @@ func (lfs *LinearFS) ArchiveIssue(ctx context.Context, issueID string, teamID st
 }
 
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
+	cacheKey := "my:assigned"
 	if issues, ok := lfs.myIssueCache.Get("my"); ok {
 		return issues, nil
 	}
 
-	issues, err := lfs.client.GetMyIssues(ctx)
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.myIssueCache.Get("my"); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetMyIssues(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lfs.myIssueCache.Set("my", issues)
+		return issues, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	lfs.myIssueCache.Set("my", issues)
-	return issues, nil
+	return result.([]api.Issue), nil
 }
 
 func (lfs *LinearFS) GetMyCreatedIssues(ctx context.Context) ([]api.Issue, error) {
+	cacheKey := "my:created"
 	if issues, ok := lfs.myCreatedCache.Get("created"); ok {
 		return issues, nil
 	}
 
-	issues, err := lfs.client.GetMyCreatedIssues(ctx)
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.myCreatedCache.Get("created"); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetMyCreatedIssues(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lfs.myCreatedCache.Set("created", issues)
+		return issues, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	lfs.myCreatedCache.Set("created", issues)
-	return issues, nil
+	return result.([]api.Issue), nil
 }
 
 func (lfs *LinearFS) GetMyActiveIssues(ctx context.Context) ([]api.Issue, error) {
+	cacheKey := "my:active"
 	if issues, ok := lfs.myActiveCache.Get("active"); ok {
 		return issues, nil
 	}
 
-	issues, err := lfs.client.GetMyActiveIssues(ctx)
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.myActiveCache.Get("active"); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetMyActiveIssues(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lfs.myActiveCache.Set("active", issues)
+		return issues, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	lfs.myActiveCache.Set("active", issues)
-	return issues, nil
+	return result.([]api.Issue), nil
 }
 
 func (lfs *LinearFS) GetTeamStates(ctx context.Context, teamID string) ([]api.State, error) {
@@ -292,13 +335,22 @@ func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Is
 		return issues, nil
 	}
 
-	issues, err := lfs.client.GetUserIssues(ctx, userID)
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.userIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetUserIssues(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		lfs.userIssueCache.Set(cacheKey, issues)
+		return issues, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	lfs.userIssueCache.Set(cacheKey, issues)
-	return issues, nil
+	return result.([]api.Issue), nil
 }
 
 func (lfs *LinearFS) InvalidateUserIssues(userID string) {
@@ -311,13 +363,22 @@ func (lfs *LinearFS) GetIssueComments(ctx context.Context, issueID string) ([]ap
 		return comments, nil
 	}
 
-	comments, err := lfs.client.GetIssueComments(ctx, issueID)
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if comments, ok := lfs.commentCache.Get(cacheKey); ok {
+			return comments, nil
+		}
+		comments, err := lfs.client.GetIssueComments(ctx, issueID)
+		if err != nil {
+			return nil, err
+		}
+		lfs.commentCache.Set(cacheKey, comments)
+		return comments, nil
+	})
+
 	if err != nil {
 		return nil, err
 	}
-
-	lfs.commentCache.Set(cacheKey, comments)
-	return comments, nil
+	return result.([]api.Comment), nil
 }
 
 func (lfs *LinearFS) InvalidateIssueComments(issueID string) {
@@ -617,11 +678,14 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, err
 	root := &RootNode{lfs: lfs}
 
 	// Use longer timeouts to reduce kernel→userspace calls
-	timeout := 30 * time.Second
+	// AttrTimeout: how long kernel caches file attributes (size, mtime, etc.)
+	// EntryTimeout: how long kernel caches directory entry lookups
+	attrTimeout := 60 * time.Second  // Attributes change less often
+	entryTimeout := 30 * time.Second // Directory contents change more often
 
 	opts := &fs.Options{
-		AttrTimeout:  &timeout,
-		EntryTimeout: &timeout,
+		AttrTimeout:  &attrTimeout,
+		EntryTimeout: &entryTimeout,
 		MountOptions: fuse.MountOptions{
 			Name:   "linearfs",
 			FsName: "linear",

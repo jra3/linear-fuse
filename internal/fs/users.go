@@ -82,22 +82,9 @@ var _ fs.NodeLookuper = (*UserNode)(nil)
 var _ fs.NodeGetattrer = (*UserNode)(nil)
 
 func (u *UserNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
-
-	// Try to use most recent issue's updatedAt, fallback to current time
-	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)
-	if err == nil && len(issues) > 0 {
-		mostRecent := issues[0].UpdatedAt
-		for _, issue := range issues[1:] {
-			if issue.UpdatedAt.After(mostRecent) {
-				mostRecent = issue.UpdatedAt
-			}
-		}
-		out.SetTimes(&mostRecent, &mostRecent, &mostRecent)
-	} else {
-		now := time.Now()
-		out.SetTimes(&now, &now, &now)
-	}
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 

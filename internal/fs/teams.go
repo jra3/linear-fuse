@@ -91,14 +91,14 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	case ".states.md":
 		node := &StatesInfoNode{lfs: t.lfs, team: t.team}
-		content := node.generateContent(context.Background())
+		content := node.getContent(ctx)
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
 	case ".labels.md":
 		node := &LabelsInfoNode{lfs: t.lfs, team: t.team}
-		content := node.generateContent(context.Background())
+		content := node.getContent(ctx)
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
@@ -199,15 +199,24 @@ func (t *TeamInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, o
 // StatesInfoNode is a virtual file containing workflow states metadata
 type StatesInfoNode struct {
 	fs.Inode
-	lfs  *LinearFS
-	team api.Team
+	lfs           *LinearFS
+	team          api.Team
+	cachedContent []byte
+	cachedAt      time.Time
 }
 
 var _ fs.NodeGetattrer = (*StatesInfoNode)(nil)
 var _ fs.NodeOpener = (*StatesInfoNode)(nil)
 var _ fs.NodeReader = (*StatesInfoNode)(nil)
 
-func (s *StatesInfoNode) generateContent(ctx context.Context) []byte {
+const metadataCacheTTL = 10 * time.Minute // Match state/label cache TTL
+
+func (s *StatesInfoNode) getContent(ctx context.Context) []byte {
+	// Return cached content if still valid
+	if s.cachedContent != nil && time.Since(s.cachedAt) < metadataCacheTTL {
+		return s.cachedContent
+	}
+
 	states, err := s.lfs.GetTeamStates(ctx, s.team.ID)
 	if err != nil {
 		return []byte("# Error loading states\n")
@@ -226,7 +235,7 @@ func (s *StatesInfoNode) generateContent(ctx context.Context) []byte {
 		table += fmt.Sprintf("| %s | %s | %s |\n", state.Name, state.Type, state.ID)
 	}
 
-	content := fmt.Sprintf(`---
+	content := []byte(fmt.Sprintf(`---
 team: %s
 states:
 %s---
@@ -240,12 +249,15 @@ states:
 		statesYAML,
 		s.team.Key,
 		table,
-	)
-	return []byte(content)
+	))
+
+	s.cachedContent = content
+	s.cachedAt = time.Now()
+	return content
 }
 
 func (s *StatesInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := s.generateContent(ctx)
+	content := s.getContent(ctx)
 	out.Mode = 0444 | syscall.S_IFREG
 	out.Size = uint64(len(content))
 	return 0
@@ -256,7 +268,7 @@ func (s *StatesInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 }
 
 func (s *StatesInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := s.generateContent(ctx)
+	content := s.getContent(ctx)
 	if off >= int64(len(content)) {
 		return fuse.ReadResultData(nil), 0
 	}
@@ -270,15 +282,22 @@ func (s *StatesInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte,
 // LabelsInfoNode is a virtual file containing labels metadata
 type LabelsInfoNode struct {
 	fs.Inode
-	lfs  *LinearFS
-	team api.Team
+	lfs           *LinearFS
+	team          api.Team
+	cachedContent []byte
+	cachedAt      time.Time
 }
 
 var _ fs.NodeGetattrer = (*LabelsInfoNode)(nil)
 var _ fs.NodeOpener = (*LabelsInfoNode)(nil)
 var _ fs.NodeReader = (*LabelsInfoNode)(nil)
 
-func (l *LabelsInfoNode) generateContent(ctx context.Context) []byte {
+func (l *LabelsInfoNode) getContent(ctx context.Context) []byte {
+	// Return cached content if still valid
+	if l.cachedContent != nil && time.Since(l.cachedAt) < metadataCacheTTL {
+		return l.cachedContent
+	}
+
 	labels, err := l.lfs.GetTeamLabels(ctx, l.team.ID)
 	if err != nil {
 		return []byte("# Error loading labels\n")
@@ -300,7 +319,7 @@ func (l *LabelsInfoNode) generateContent(ctx context.Context) []byte {
 		table += fmt.Sprintf("| %s | %s | %s |\n", label.Name, label.Color, label.ID)
 	}
 
-	content := fmt.Sprintf(`---
+	content := []byte(fmt.Sprintf(`---
 team: %s
 labels:
 %s---
@@ -314,12 +333,15 @@ labels:
 		labelsYAML,
 		l.team.Key,
 		table,
-	)
-	return []byte(content)
+	))
+
+	l.cachedContent = content
+	l.cachedAt = time.Now()
+	return content
 }
 
 func (l *LabelsInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := l.generateContent(ctx)
+	content := l.getContent(ctx)
 	out.Mode = 0444 | syscall.S_IFREG
 	out.Size = uint64(len(content))
 	return 0
@@ -330,7 +352,7 @@ func (l *LabelsInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 }
 
 func (l *LabelsInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := l.generateContent(ctx)
+	content := l.getContent(ctx)
 	if off >= int64(len(content)) {
 		return fuse.ReadResultData(nil), 0
 	}
