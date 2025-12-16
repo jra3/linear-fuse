@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -20,8 +21,16 @@ type FilterRootNode struct {
 
 var _ fs.NodeReaddirer = (*FilterRootNode)(nil)
 var _ fs.NodeLookuper = (*FilterRootNode)(nil)
+var _ fs.NodeGetattrer = (*FilterRootNode)(nil)
 
 var filterCategories = []string{"status", "priority", "label", "assignee"}
+
+func (f *FilterRootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
 
 func (f *FilterRootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, len(filterCategories))
@@ -37,6 +46,9 @@ func (f *FilterRootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 func (f *FilterRootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	for _, cat := range filterCategories {
 		if cat == name {
+			now := time.Now()
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.SetTimes(&now, &now, &now)
 			node := &FilterCategoryNode{
 				lfs:      f.lfs,
 				team:     f.team,
@@ -58,6 +70,14 @@ type FilterCategoryNode struct {
 
 var _ fs.NodeReaddirer = (*FilterCategoryNode)(nil)
 var _ fs.NodeLookuper = (*FilterCategoryNode)(nil)
+var _ fs.NodeGetattrer = (*FilterCategoryNode)(nil)
+
+func (f *FilterCategoryNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
 
 func (f *FilterCategoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	values, err := f.getUniqueValues(ctx)
@@ -83,6 +103,9 @@ func (f *FilterCategoryNode) Lookup(ctx context.Context, name string, out *fuse.
 
 	for _, val := range values {
 		if val == name {
+			now := time.Now()
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.SetTimes(&now, &now, &now)
 			node := &FilterValueNode{
 				lfs:      f.lfs,
 				team:     f.team,
@@ -148,6 +171,27 @@ type FilterValueNode struct {
 
 var _ fs.NodeReaddirer = (*FilterValueNode)(nil)
 var _ fs.NodeLookuper = (*FilterValueNode)(nil)
+var _ fs.NodeGetattrer = (*FilterValueNode)(nil)
+
+func (f *FilterValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+
+	// Try to use most recent filtered issue's updatedAt
+	issues, err := f.getFilteredIssues(ctx)
+	if err == nil && len(issues) > 0 {
+		mostRecent := issues[0].UpdatedAt
+		for _, issue := range issues[1:] {
+			if issue.UpdatedAt.After(mostRecent) {
+				mostRecent = issue.UpdatedAt
+			}
+		}
+		out.SetTimes(&mostRecent, &mostRecent, &mostRecent)
+	} else {
+		now := time.Now()
+		out.SetTimes(&now, &now, &now)
+	}
+	return 0
+}
 
 func (f *FilterValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	issues, err := f.getFilteredIssues(ctx)

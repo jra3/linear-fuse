@@ -96,6 +96,7 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle new.md for creating documents
 	if name == "new.md" {
+		now := time.Now()
 		node := &NewDocumentNode{
 			lfs:       n.lfs,
 			issueID:   n.issueID,
@@ -104,6 +105,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		}
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Size = 0
+		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
 		out.SetEntryTimeout(1 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{

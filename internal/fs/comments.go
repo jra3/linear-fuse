@@ -35,15 +35,23 @@ func commentIno(commentID string) uint64 {
 // CommentsNode represents /teams/{KEY}/issues/{ID}/comments/
 type CommentsNode struct {
 	fs.Inode
-	lfs     *LinearFS
-	issueID string
-	teamID  string
+	lfs            *LinearFS
+	issueID        string
+	teamID         string
+	issueUpdatedAt time.Time
 }
 
 var _ fs.NodeReaddirer = (*CommentsNode)(nil)
 var _ fs.NodeLookuper = (*CommentsNode)(nil)
 var _ fs.NodeCreater = (*CommentsNode)(nil)
 var _ fs.NodeUnlinker = (*CommentsNode)(nil)
+var _ fs.NodeGetattrer = (*CommentsNode)(nil)
+
+func (n *CommentsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&n.issueUpdatedAt, &n.issueUpdatedAt, &n.issueUpdatedAt)
+	return 0
+}
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
@@ -80,6 +88,7 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle new.md for creating comments
 	if name == "new.md" {
+		now := time.Now()
 		node := &NewCommentNode{
 			lfs:     n.lfs,
 			issueID: n.issueID,
@@ -87,6 +96,7 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		}
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Size = 0
+		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
 		out.SetEntryTimeout(1 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{
@@ -380,8 +390,10 @@ func (n *NewCommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	now := time.Now()
 	out.Mode = 0644
 	out.Size = uint64(len(n.content))
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 

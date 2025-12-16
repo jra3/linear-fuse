@@ -71,12 +71,14 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle new.md for creating labels
 	if name == "new.md" {
+		now := time.Now()
 		node := &NewLabelNode{
 			lfs:    n.lfs,
 			teamID: n.teamID,
 		}
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Size = 0
+		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
 		out.SetEntryTimeout(1 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{

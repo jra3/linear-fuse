@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -17,6 +18,14 @@ type MyNode struct {
 
 var _ fs.NodeReaddirer = (*MyNode)(nil)
 var _ fs.NodeLookuper = (*MyNode)(nil)
+var _ fs.NodeGetattrer = (*MyNode)(nil)
+
+func (m *MyNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
 
 func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
@@ -28,6 +37,10 @@ func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	now := time.Now()
+	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.Attr.SetTimes(&now, &now, &now)
+
 	switch name {
 	case "assigned":
 		node := &MyIssuesNode{lfs: m.lfs, issueType: "assigned"}
@@ -52,6 +65,28 @@ type MyIssuesNode struct {
 
 var _ fs.NodeReaddirer = (*MyIssuesNode)(nil)
 var _ fs.NodeLookuper = (*MyIssuesNode)(nil)
+var _ fs.NodeGetattrer = (*MyIssuesNode)(nil)
+
+func (m *MyIssuesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+
+	// Try to use most recent issue's updatedAt, fallback to current time
+	issues, err := m.getIssues(ctx)
+	if err == nil && len(issues) > 0 {
+		// Find most recent updatedAt
+		mostRecent := issues[0].UpdatedAt
+		for _, issue := range issues[1:] {
+			if issue.UpdatedAt.After(mostRecent) {
+				mostRecent = issue.UpdatedAt
+			}
+		}
+		out.SetTimes(&mostRecent, &mostRecent, &mostRecent)
+	} else {
+		now := time.Now()
+		out.SetTimes(&now, &now, &now)
+	}
+	return 0
+}
 
 func (m *MyIssuesNode) getIssues(ctx context.Context) ([]api.Issue, error) {
 	switch m.issueType {

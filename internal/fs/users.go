@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -44,6 +45,9 @@ func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	for _, user := range users {
 		if userDirName(user) == name {
+			now := time.Now()
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.SetTimes(&now, &now, &now)
 			node := &UserNode{lfs: u.lfs, user: user}
 			return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
@@ -74,6 +78,27 @@ type UserNode struct {
 
 var _ fs.NodeReaddirer = (*UserNode)(nil)
 var _ fs.NodeLookuper = (*UserNode)(nil)
+var _ fs.NodeGetattrer = (*UserNode)(nil)
+
+func (u *UserNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+
+	// Try to use most recent issue's updatedAt, fallback to current time
+	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)
+	if err == nil && len(issues) > 0 {
+		mostRecent := issues[0].UpdatedAt
+		for _, issue := range issues[1:] {
+			if issue.UpdatedAt.After(mostRecent) {
+				mostRecent = issue.UpdatedAt
+			}
+		}
+		out.SetTimes(&mostRecent, &mostRecent, &mostRecent)
+	} else {
+		now := time.Now()
+		out.SetTimes(&now, &now, &now)
+	}
+	return 0
+}
 
 func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)

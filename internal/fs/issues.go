@@ -197,11 +197,13 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 
 	case "comments":
 		node := &CommentsNode{
-			lfs:     n.lfs,
-			issueID: n.issue.ID,
-			teamID:  n.issue.Team.ID,
+			lfs:            n.lfs,
+			issueID:        n.issue.ID,
+			teamID:         n.issue.Team.ID,
+			issueUpdatedAt: n.issue.UpdatedAt,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{
