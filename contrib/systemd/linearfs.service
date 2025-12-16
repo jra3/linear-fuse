@@ -5,11 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Set your API key here or use EnvironmentFile
-Environment=LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-# Alternative: load from file
-# EnvironmentFile=%h/.config/linearfs/env
-
+EnvironmentFile=%h/.config/linearfs/env
 ExecStartPre=/usr/bin/mkdir -p /mnt/linear
 ExecStart=%h/bin/linearfs mount -f /mnt/linear
 ExecStop=/usr/bin/fusermount3 -u /mnt/linear
