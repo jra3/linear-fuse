@@ -122,17 +122,17 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 // projectDirName returns a safe directory name for a project
 func projectDirName(project api.Project) string {
-	// Use slug if available, otherwise sanitize name
-	if project.Slug != "" {
-		return project.Slug
-	}
 	// Sanitize name: lowercase, replace spaces with hyphens, remove special chars
 	name := strings.ToLower(project.Name)
 	name = strings.ReplaceAll(name, " ", "-")
 	// Remove any characters that aren't alphanumeric or hyphen
 	reg := regexp.MustCompile(`[^a-z0-9-]`)
 	name = reg.ReplaceAllString(name, "")
-	return name
+	if name != "" {
+		return name
+	}
+	// Fallback to slug if name sanitizes to empty
+	return project.Slug
 }
 
 // ProjectNode represents a single project directory
