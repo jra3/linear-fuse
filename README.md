@@ -242,6 +242,69 @@ labels:
 
 Save the file to update the issue's labels in Linear.
 
+## Caching Strategy
+
+LinearFS caches data locally to minimize API calls and provide responsive filesystem operations. Since Linear's real-time sync engine is not exposed in their public API, LinearFS uses a TTL-based polling strategy with immediate invalidation on writes.
+
+### How It Works
+
+```
+Read:   Filesystem → Cache hit? → Return cached data
+                   → Cache miss? → Fetch from Linear API → Cache → Return
+
+Write:  Filesystem → Update via Linear API → Invalidate relevant caches
+```
+
+### TTL Values
+
+| Data Type | Default TTL | Rationale |
+|-----------|-------------|-----------|
+| Issues | 60s | Change frequently |
+| Comments | 60s | Change frequently |
+| Documents | 60s | Change frequently |
+| Projects | 60s | Moderate change rate |
+| Cycles | 60s | Change with issues |
+| **States** | **10 minutes** | Workflow states rarely change |
+| **Labels** | **10 minutes** | Team labels rarely change |
+| **Users** | **10 minutes** | Team membership rarely changes |
+
+### Write-Through Invalidation
+
+When you modify data through LinearFS, caches are immediately invalidated:
+
+- **Edit issue** → Invalidates team issues, my issues, user issues caches
+- **Add comment** → Invalidates comment cache for that issue
+- **Archive issue** → Invalidates team, my, and assignee issue caches
+- **Create/delete label** → Invalidates team labels cache
+
+This means your own changes appear immediately, but changes made by others (in the Linear app or API) appear after TTL expiry.
+
+### FUSE Kernel Caching
+
+In addition to the application-level cache, the Linux kernel caches filesystem attributes:
+
+- **Entry timeout**: 30 seconds (directory listings)
+- **Attr timeout**: 30 seconds (file metadata)
+
+This reduces kernel-to-userspace calls but means `ls` output may lag slightly behind cache invalidations.
+
+### Configuring TTL
+
+Adjust the base TTL in your config file:
+
+```yaml
+cache:
+  ttl: 60s    # Base TTL (states/labels/users get 10x this value)
+```
+
+Lower values = fresher data but more API calls. Higher values = better performance but staler data.
+
+### Limitations
+
+- **No real-time sync**: Linear's WebSocket-based sync engine is internal only; the public API offers webhooks (requires HTTP server) but not subscriptions
+- **Eventual consistency**: Changes by teammates appear after TTL expiry
+- **Rate limits**: Linear allows 1,500 requests/hour with API key auth
+
 ## Configuration
 
 Create `~/.config/linearfs/config.yaml`:
