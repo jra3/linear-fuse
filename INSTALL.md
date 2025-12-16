@@ -280,6 +280,65 @@ Run with debug mode for more info:
 linearfs mount -d /tmp/linear
 ```
 
+## Running as a systemd User Service (Linux)
+
+To have LinearFS start automatically on login, set up a systemd user service.
+
+### 1. Copy the Service File
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/linearfs.service ~/.config/systemd/user/
+```
+
+### 2. Edit the Service File
+
+Update the API key in `~/.config/systemd/user/linearfs.service`:
+
+```ini
+Environment=LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
+```
+
+Or use an environment file:
+```ini
+EnvironmentFile=%h/.config/linearfs/env
+```
+
+With `~/.config/linearfs/env` containing:
+```
+LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
+```
+
+### 3. Enable and Start
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable linearfs.service
+systemctl --user start linearfs.service
+```
+
+### 4. Check Status
+
+```bash
+systemctl --user status linearfs.service
+journalctl --user -u linearfs.service -f  # Follow logs
+```
+
+### 5. Management Commands
+
+```bash
+systemctl --user stop linearfs.service     # Stop
+systemctl --user restart linearfs.service  # Restart
+systemctl --user disable linearfs.service  # Disable autostart
+```
+
+> **Note:** The mount point (`/mnt/linear`) must be writable by your user. Create it with:
+> ```bash
+> sudo mkdir -p /mnt/linear && sudo chown $USER:$USER /mnt/linear
+> ```
+
+---
+
 ## Building from Source
 
 Requirements:
