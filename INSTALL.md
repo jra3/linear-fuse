@@ -293,11 +293,14 @@ cp contrib/systemd/linearfs.service ~/.config/systemd/user/
 
 ### 2. Create the Environment File
 
-The service reads your API key from `~/.config/linearfs/env`:
+The service reads configuration from `~/.config/linearfs/env`:
 
 ```bash
 mkdir -p ~/.config/linearfs
-echo 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE' > ~/.config/linearfs/env
+cat > ~/.config/linearfs/env << 'EOF'
+LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
+LINEARFS_MOUNT=/mnt/linear
+EOF
 chmod 600 ~/.config/linearfs/env  # Restrict permissions
 ```
 

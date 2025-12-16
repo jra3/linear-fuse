@@ -6,9 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/linearfs/env
-ExecStartPre=/usr/bin/mkdir -p /mnt/linear
-ExecStart=%h/bin/linearfs mount -f /mnt/linear
-ExecStop=/usr/bin/fusermount3 -u /mnt/linear
+ExecStartPre=/usr/bin/mkdir -p ${LINEARFS_MOUNT}
+ExecStart=%h/bin/linearfs mount -f ${LINEARFS_MOUNT}
+ExecStop=/usr/bin/fusermount3 -u ${LINEARFS_MOUNT}
 Restart=on-failure
 RestartSec=5
 
