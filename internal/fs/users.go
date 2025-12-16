@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"strings"
 	"syscall"
 	"time"
 
@@ -58,15 +59,15 @@ func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 // userDirName returns the directory name for a user (email without domain)
 func userDirName(user api.User) string {
-	// Use email local part as directory name for uniqueness
-	email := user.Email
-	for i, c := range email {
-		if c == '@' {
-			return email[:i]
-		}
+	// Use DisplayName as directory name (this is the user's handle)
+	if user.DisplayName != "" {
+		return user.DisplayName
 	}
-	// Fallback to full email if no @ found
-	return email
+	// Fallback to email local part if DisplayName not set
+	if idx := strings.Index(user.Email, "@"); idx != -1 {
+		return user.Email[:idx]
+	}
+	return user.Email
 }
 
 // UserNode represents a single user's directory (e.g., /users/alice)

@@ -13,12 +13,19 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// emailToHandle extracts the local part of an email (before @)
-func emailToHandle(email string) string {
-	if idx := strings.Index(email, "@"); idx != -1 {
-		return email[:idx]
+// assigneeHandle returns the handle for an assignee (prefers DisplayName, falls back to email local part)
+func assigneeHandle(user *api.User) string {
+	if user == nil {
+		return ""
 	}
-	return email
+	if user.DisplayName != "" {
+		return user.DisplayName
+	}
+	// Fallback to email local part
+	if idx := strings.Index(user.Email, "@"); idx != -1 {
+		return user.Email[:idx]
+	}
+	return user.Email
 }
 
 // FilterRootNode represents the .filter/ directory
@@ -155,7 +162,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 		seen["unassigned"] = true
 		for _, issue := range issues {
 			if issue.Assignee != nil {
-				seen[emailToHandle(issue.Assignee.Email)] = true
+				seen[assigneeHandle(issue.Assignee)] = true
 			}
 		}
 	}
@@ -268,7 +275,7 @@ func (f *FilterValueNode) matchesFilter(issue api.Issue) bool {
 		if f.value == "unassigned" {
 			return issue.Assignee == nil
 		}
-		return issue.Assignee != nil && emailToHandle(issue.Assignee.Email) == f.value
+		return issue.Assignee != nil && assigneeHandle(issue.Assignee) == f.value
 	}
 	return false
 }
