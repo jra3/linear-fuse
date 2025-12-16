@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"syscall"
@@ -22,6 +23,8 @@ type ProjectsNode struct {
 
 var _ fs.NodeReaddirer = (*ProjectsNode)(nil)
 var _ fs.NodeLookuper = (*ProjectsNode)(nil)
+var _ fs.NodeMkdirer = (*ProjectsNode)(nil)
+var _ fs.NodeRmdirer = (*ProjectsNode)(nil)
 
 func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
@@ -56,6 +59,67 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	return nil, syscall.ENOENT
 }
 
+// Mkdir creates a new project
+func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if p.lfs.debug {
+		log.Printf("Mkdir: creating project %s in team %s", name, p.team.Key)
+	}
+
+	input := map[string]any{
+		"name":    name,
+		"teamIds": []string{p.team.ID},
+	}
+
+	project, err := p.lfs.CreateProject(ctx, input)
+	if err != nil {
+		log.Printf("Failed to create project: %v", err)
+		return nil, syscall.EIO
+	}
+
+	// Invalidate cache
+	p.lfs.InvalidateTeamProjects(p.team.ID)
+
+	node := &ProjectNode{
+		lfs:     p.lfs,
+		team:    p.team,
+		project: *project,
+	}
+
+	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.SetAttrTimeout(30 * time.Second)
+	out.SetEntryTimeout(30 * time.Second)
+
+	return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+}
+
+// Rmdir archives a project (soft delete)
+func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	if p.lfs.debug {
+		log.Printf("Rmdir: archiving project %s in team %s", name, p.team.Key)
+	}
+
+	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
+	if err != nil {
+		return syscall.EIO
+	}
+
+	for _, project := range projects {
+		if projectDirName(project) == name {
+			err := p.lfs.ArchiveProject(ctx, project.ID, p.team.ID)
+			if err != nil {
+				log.Printf("Failed to archive project %s: %v", name, err)
+				return syscall.EIO
+			}
+			if p.lfs.debug {
+				log.Printf("Project %s archived successfully", name)
+			}
+			return 0
+		}
+	}
+
+	return syscall.ENOENT
+}
+
 // projectDirName returns a safe directory name for a project
 func projectDirName(project api.Project) string {
 	// Use slug if available, otherwise sanitize name
@@ -88,14 +152,18 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// +1 for .project.md
-	entries := make([]fuse.DirEntry, len(issues)+1)
+	// +2 for .project.md and docs/
+	entries := make([]fuse.DirEntry, len(issues)+2)
 	entries[0] = fuse.DirEntry{
 		Name: ".project.md",
 		Mode: syscall.S_IFREG,
 	}
+	entries[1] = fuse.DirEntry{
+		Name: "docs",
+		Mode: syscall.S_IFDIR,
+	}
 	for i, issue := range issues {
-		entries[i+1] = fuse.DirEntry{
+		entries[i+2] = fuse.DirEntry{
 			Name: issue.Identifier + ".md",
 			Mode: syscall.S_IFLNK, // Symlink to team issue
 		}
@@ -113,6 +181,12 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
+
+	// Handle docs/ directory
+	if name == "docs" {
+		node := &DocsNode{lfs: p.lfs, projectID: p.project.ID}
+		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
 	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)

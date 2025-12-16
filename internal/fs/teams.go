@@ -64,7 +64,7 @@ var _ fs.NodeReaddirer = (*TeamNode)(nil)
 var _ fs.NodeLookuper = (*TeamNode)(nil)
 
 func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// 6 entries: .team.md, .states.md, .labels.md, cycles/, projects/, issues/
+	// 8 entries: .team.md, .states.md, .labels.md, cycles/, projects/, issues/, docs/, labels/
 	entries := []fuse.DirEntry{
 		{Name: ".team.md", Mode: syscall.S_IFREG},
 		{Name: ".states.md", Mode: syscall.S_IFREG},
@@ -72,6 +72,8 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		{Name: "cycles", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
 		{Name: "issues", Mode: syscall.S_IFDIR},
+		{Name: "docs", Mode: syscall.S_IFDIR},
+		{Name: "labels", Mode: syscall.S_IFDIR},
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -112,6 +114,17 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	case "issues":
 		node := &IssuesNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+
+	case "docs":
+		node := &DocsNode{lfs: t.lfs, teamID: t.team.ID}
+		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+
+	case "labels":
+		node := &LabelsNode{lfs: t.lfs, teamID: t.team.ID}
+		return t.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  labelsDirIno(t.team.ID),
+		}), 0
 	}
 
 	return nil, syscall.ENOENT

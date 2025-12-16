@@ -136,10 +136,57 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 		update["estimate"] = nil
 	}
 
+	// Check labels
+	if labelsRaw, ok := doc.Frontmatter["labels"]; ok {
+		var newLabels []string
+		switch v := labelsRaw.(type) {
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					newLabels = append(newLabels, s)
+				}
+			}
+		case []string:
+			newLabels = v
+		}
+
+		// Get original label names
+		origLabels := make([]string, len(original.Labels.Nodes))
+		for i, l := range original.Labels.Nodes {
+			origLabels[i] = l.Name
+		}
+
+		// Check if labels changed (order-independent comparison)
+		if !stringSlicesEqual(newLabels, origLabels) {
+			update["labelIds"] = newLabels // Will need to resolve to actual label IDs
+		}
+	} else if _, exists := doc.Frontmatter["labels"]; !exists && len(original.Labels.Nodes) > 0 {
+		// Labels were removed - set to empty
+		update["labelIds"] = []string{}
+	}
+
 	// Check description (body)
 	if doc.Body != original.Description {
 		update["description"] = doc.Body
 	}
 
 	return update, nil
+}
+
+// stringSlicesEqual checks if two string slices contain the same elements (order-independent)
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	aMap := make(map[string]int)
+	for _, s := range a {
+		aMap[s]++
+	}
+	for _, s := range b {
+		aMap[s]--
+		if aMap[s] < 0 {
+			return false
+		}
+	}
+	return true
 }

@@ -29,6 +29,7 @@ type LinearFS struct {
 	userCache          *cache.Cache[[]api.User]
 	userIssueCache     *cache.Cache[[]api.Issue]
 	commentCache       *cache.Cache[[]api.Comment]
+	documentCache      *cache.Cache[[]api.Document]
 	debug              bool
 }
 
@@ -52,6 +53,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		userCache:          cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
 		userIssueCache:     cache.New[[]api.Issue](cfg.Cache.TTL),
 		commentCache:       cache.New[[]api.Comment](cfg.Cache.TTL),
+		documentCache:      cache.New[[]api.Document](cfg.Cache.TTL),
 		debug:              debug,
 	}, nil
 }
@@ -91,6 +93,25 @@ func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
 
 func (lfs *LinearFS) InvalidateMyIssues() {
 	lfs.myIssueCache.Delete("my")
+	lfs.myCreatedCache.Delete("created")
+	lfs.myActiveCache.Delete("active")
+}
+
+// ArchiveIssue archives an issue and invalidates all relevant caches
+func (lfs *LinearFS) ArchiveIssue(ctx context.Context, issueID string, teamID string, assigneeID string) error {
+	err := lfs.client.ArchiveIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate all caches that might contain this issue
+	lfs.InvalidateTeamIssues(teamID)
+	lfs.InvalidateMyIssues()
+	if assigneeID != "" {
+		lfs.InvalidateUserIssues(assigneeID)
+	}
+
+	return nil
 }
 
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
@@ -193,6 +214,39 @@ func (lfs *LinearFS) GetTeamProjects(ctx context.Context, teamID string) ([]api.
 
 	lfs.projectCache.Set(cacheKey, projects)
 	return projects, nil
+}
+
+func (lfs *LinearFS) InvalidateTeamProjects(teamID string) {
+	lfs.projectCache.Delete("projects:" + teamID)
+}
+
+// CreateProject creates a new project and invalidates the cache
+func (lfs *LinearFS) CreateProject(ctx context.Context, input map[string]any) (*api.Project, error) {
+	project, err := lfs.client.CreateProject(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Invalidate cache for all teams (project can be associated with multiple teams)
+	// For simplicity, invalidate all project caches
+	if teamIDs, ok := input["teamIds"].([]string); ok {
+		for _, teamID := range teamIDs {
+			lfs.InvalidateTeamProjects(teamID)
+		}
+	}
+
+	return project, nil
+}
+
+// ArchiveProject archives a project and invalidates the cache
+func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamID string) error {
+	err := lfs.client.ArchiveProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	lfs.InvalidateTeamProjects(teamID)
+	return nil
 }
 
 func (lfs *LinearFS) GetProjectIssues(ctx context.Context, projectID string) ([]api.ProjectIssue, error) {
@@ -301,6 +355,125 @@ func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentI
 	return nil
 }
 
+// Document methods
+
+func (lfs *LinearFS) GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error) {
+	cacheKey := "docs:issue:" + issueID
+	if docs, ok := lfs.documentCache.Get(cacheKey); ok {
+		return docs, nil
+	}
+
+	docs, err := lfs.client.GetIssueDocuments(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.documentCache.Set(cacheKey, docs)
+	return docs, nil
+}
+
+func (lfs *LinearFS) GetTeamDocuments(ctx context.Context, teamID string) ([]api.Document, error) {
+	cacheKey := "docs:team:" + teamID
+	if docs, ok := lfs.documentCache.Get(cacheKey); ok {
+		return docs, nil
+	}
+
+	docs, err := lfs.client.GetTeamDocuments(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.documentCache.Set(cacheKey, docs)
+	return docs, nil
+}
+
+func (lfs *LinearFS) GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error) {
+	cacheKey := "docs:project:" + projectID
+	if docs, ok := lfs.documentCache.Get(cacheKey); ok {
+		return docs, nil
+	}
+
+	docs, err := lfs.client.GetProjectDocuments(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.documentCache.Set(cacheKey, docs)
+	return docs, nil
+}
+
+func (lfs *LinearFS) InvalidateIssueDocuments(issueID string) {
+	lfs.documentCache.Delete("docs:issue:" + issueID)
+}
+
+func (lfs *LinearFS) InvalidateTeamDocuments(teamID string) {
+	lfs.documentCache.Delete("docs:team:" + teamID)
+}
+
+func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
+	lfs.documentCache.Delete("docs:project:" + projectID)
+}
+
+func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (*api.Document, error) {
+	doc, err := lfs.client.CreateDocument(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Invalidate relevant caches based on what parent the document belongs to
+	if issueID, ok := input["issueId"].(string); ok {
+		lfs.InvalidateIssueDocuments(issueID)
+	}
+	if teamID, ok := input["teamId"].(string); ok {
+		lfs.InvalidateTeamDocuments(teamID)
+	}
+	if projectID, ok := input["projectId"].(string); ok {
+		lfs.InvalidateProjectDocuments(projectID)
+	}
+
+	return doc, nil
+}
+
+func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) error {
+	err := lfs.client.UpdateDocument(ctx, documentID, input)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate relevant caches
+	if issueID != "" {
+		lfs.InvalidateIssueDocuments(issueID)
+	}
+	if teamID != "" {
+		lfs.InvalidateTeamDocuments(teamID)
+	}
+	if projectID != "" {
+		lfs.InvalidateProjectDocuments(projectID)
+	}
+
+	return nil
+}
+
+func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
+	err := lfs.client.DeleteDocument(ctx, documentID)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate relevant caches
+	if issueID != "" {
+		lfs.InvalidateIssueDocuments(issueID)
+	}
+	if teamID != "" {
+		lfs.InvalidateTeamDocuments(teamID)
+	}
+	if projectID != "" {
+		lfs.InvalidateProjectDocuments(projectID)
+	}
+
+	return nil
+}
+
 // ResolveUserID converts an email or name to a user ID
 func (lfs *LinearFS) ResolveUserID(ctx context.Context, identifier string) (string, error) {
 	users, err := lfs.GetUsers(ctx)
@@ -363,6 +536,76 @@ func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateNam
 	}
 
 	return "", fmt.Errorf("unknown state: %s", stateName)
+}
+
+// ResolveLabelIDs converts label names to their IDs for a given team
+// Returns the list of label IDs and any labels that couldn't be resolved
+func (lfs *LinearFS) ResolveLabelIDs(ctx context.Context, teamID string, labelNames []string) ([]string, []string, error) {
+	labels, err := lfs.GetTeamLabels(ctx, teamID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Build lookup map (case-insensitive)
+	labelMap := make(map[string]string) // lowercase name -> ID
+	for _, label := range labels {
+		labelMap[strings.ToLower(label.Name)] = label.ID
+	}
+
+	var ids []string
+	var notFound []string
+
+	for _, name := range labelNames {
+		if id, ok := labelMap[strings.ToLower(name)]; ok {
+			ids = append(ids, id)
+		} else {
+			notFound = append(notFound, name)
+		}
+	}
+
+	return ids, notFound, nil
+}
+
+// InvalidateTeamLabels clears the label cache for a team
+func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
+	lfs.labelCache.Delete("labels:" + teamID)
+}
+
+// CreateLabel creates a new label and invalidates the cache
+func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*api.Label, error) {
+	label, err := lfs.client.CreateLabel(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+
+	// Invalidate cache for the team
+	if teamID, ok := input["teamId"].(string); ok {
+		lfs.InvalidateTeamLabels(teamID)
+	}
+
+	return label, nil
+}
+
+// UpdateLabel updates a label and invalidates the cache
+func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) error {
+	_, err := lfs.client.UpdateLabel(ctx, labelID, input)
+	if err != nil {
+		return err
+	}
+
+	lfs.InvalidateTeamLabels(teamID)
+	return nil
+}
+
+// DeleteLabel deletes a label and invalidates the cache
+func (lfs *LinearFS) DeleteLabel(ctx context.Context, labelID string, teamID string) error {
+	err := lfs.client.DeleteLabel(ctx, labelID)
+	if err != nil {
+		return err
+	}
+
+	lfs.InvalidateTeamLabels(teamID)
+	return nil
 }
 
 func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, error) {

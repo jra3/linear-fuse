@@ -4,10 +4,11 @@ Mount your Linear workspace as a FUSE filesystem. Browse and edit issues as mark
 
 ## Features
 
-- Browse teams and issues as directories/files
+- Browse teams, issues, projects, and labels as directories/files
 - Issues rendered as markdown with YAML frontmatter
-- Edit frontmatter to update issue status, assignee, priority
-- Read and create comments on issues
+- Edit frontmatter to update issue status, assignee, priority, labels
+- Full CRUD for comments, documents, and labels
+- Create/archive issues and projects with standard filesystem operations
 - Multiple views: by team, by user, personal (assigned/created/active)
 
 ## Installation
@@ -61,17 +62,30 @@ fusermount -u /mnt/linear
 ├── README.md                    # In-filesystem documentation
 ├── teams/
 │   └── <team-key>/              # e.g., ENG, DES
-│       ├── .team.md             # Team metadata
-│       ├── .states.md           # Workflow states
-│       ├── .labels.md           # Available labels
+│       ├── .team.md             # Team metadata (read-only)
+│       ├── .states.md           # Workflow states (read-only)
+│       ├── .labels.md           # Labels reference (read-only)
 │       ├── issues/
 │       │   └── <identifier>/    # e.g., ENG-123/
 │       │       ├── issue.md     # Issue content (read/write)
-│       │       └── comments/    # Issue comments
-│       │           ├── 001-*.md # Numbered comments (read-only)
-│       │           └── new.md   # Write here to create comment
-│       ├── cycles/              # Sprint cycles
-│       └── projects/            # Team projects
+│       │       ├── comments/
+│       │       │   ├── 001-*.md # Comments (read/write/delete)
+│       │       │   └── new.md   # Write here to create comment
+│       │       └── docs/
+│       │           ├── *.md     # Issue documents (read/write/rename/delete)
+│       │           └── new.md   # Write here to create document
+│       ├── labels/              # Label management
+│       │   ├── *.md             # Labels (read/write/rename/delete)
+│       │   └── new.md           # Write here to create label
+│       ├── docs/                # Team documents
+│       │   ├── *.md             # Documents (read/write/rename/delete)
+│       │   └── new.md           # Write here to create document
+│       ├── cycles/              # Sprint cycles (read-only)
+│       └── projects/
+│           └── <project-slug>/
+│               ├── .project.md  # Project metadata (read-only)
+│               ├── docs/        # Project documents
+│               └── ENG-*.md     # Symlinks to issues
 ├── users/
 │   └── <username>/              # Issues by assignee (symlinks)
 └── my/
@@ -111,27 +125,122 @@ The login flow fails when users attempt to authenticate with SSO.
 - `estimate` - Point estimate
 - Description (content after frontmatter)
 
-## Creating Issues
+## File Operations
 
-Create a new issue by making a directory:
+LinearFS maps standard filesystem operations to Linear API actions:
 
-```bash
-mkdir /mnt/linear/teams/ENG/issues/"New issue title"
-```
+### Issues
 
-## Comments
-
-Read comments from the `comments/` subdirectory of any issue:
-
-```bash
-cat /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
-```
-
-Create a comment by writing to `new.md`:
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| Create issue | `mkdir issues/"Issue title"` | Creates new issue with title |
+| Archive issue | `rmdir issues/ENG-123` | Archives issue (soft delete) |
+| Edit issue | Edit `issue.md` and save | Updates issue fields |
 
 ```bash
-echo "This is my comment" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
+# Create a new issue
+mkdir /mnt/linear/teams/ENG/issues/"Fix login bug"
+
+# Archive an issue
+rmdir /mnt/linear/teams/ENG/issues/ENG-123
 ```
+
+### Comments
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| Read comments | `cat comments/001-*.md` | View comment content |
+| Create comment | `echo "text" > comments/new.md` | Posts new comment |
+| Edit comment | Edit comment file and save | Updates comment |
+| Delete comment | `rm comments/001-*.md` | Deletes comment |
+
+```bash
+# Add a comment
+echo "This needs review" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
+
+# Delete a comment
+rm /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
+```
+
+### Documents
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| Create document | `echo "..." > docs/new.md` | Creates document with title from frontmatter |
+| Edit document | Edit doc file and save | Updates title/content |
+| Rename document | `mv docs/old.md docs/new.md` | Renames document title |
+| Delete document | `rm docs/spec.md` | Deletes document |
+
+```bash
+# Create a document (with YAML frontmatter for title)
+cat > /mnt/linear/teams/ENG/issues/ENG-123/docs/new.md << 'EOF'
+---
+title: "Technical Spec"
+---
+Document content here...
+EOF
+
+# Rename a document
+mv docs/old-name.md docs/new-name.md
+```
+
+### Labels
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| Create label | `echo "..." > labels/new.md` | Creates label with name/color |
+| Edit label | Edit label file and save | Updates name/color/description |
+| Rename label | `mv labels/Bug.md labels/Defect.md` | Renames label |
+| Delete label | `rm labels/OldLabel.md` | Deletes label |
+
+```bash
+# Create a new label
+cat > /mnt/linear/teams/ENG/labels/new.md << 'EOF'
+---
+name: "Critical"
+color: "#FF0000"
+description: "Critical priority items"
+---
+EOF
+
+# Rename a label
+mv /mnt/linear/teams/ENG/labels/Bug.md /mnt/linear/teams/ENG/labels/Defect.md
+
+# Delete a label
+rm /mnt/linear/teams/ENG/labels/OldLabel.md
+```
+
+### Projects
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| Create project | `mkdir projects/"Project Name"` | Creates new project |
+| Archive project | `rmdir projects/project-slug` | Archives project (soft delete) |
+
+```bash
+# Create a new project
+mkdir /mnt/linear/teams/ENG/projects/"Q1 Launch"
+
+# Archive a project
+rmdir /mnt/linear/teams/ENG/projects/q1-launch
+```
+
+### Editing Labels on Issues
+
+Edit the `labels` array in an issue's frontmatter:
+
+```yaml
+---
+title: "Fix bug"
+status: "In Progress"
+labels:
+  - Bug
+  - Backend
+  - Critical
+---
+```
+
+Save the file to update the issue's labels in Linear.
 
 ## Configuration
 

@@ -353,9 +353,9 @@ func TestProjectIssueSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read project directory: %v", err)
 	}
 
-	// Check that non-.project.md entries are symlinks
+	// Check that issue entries (not .project.md or docs/) are symlinks
 	for _, entry := range projectEntries {
-		if entry.Name() == ".project.md" {
+		if entry.Name() == ".project.md" || entry.Name() == "docs" {
 			continue
 		}
 		info, err := entry.Info()

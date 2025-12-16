@@ -106,6 +106,22 @@ type Comment struct {
 	User      *User      `json:"user"`
 }
 
+type Document struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Content   string    `json:"content"`
+	SlugID    string    `json:"slugId"`
+	URL       string    `json:"url"`
+	Icon      string    `json:"icon"`
+	Color     string    `json:"color"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Creator   *User     `json:"creator"`
+	Issue     *Issue    `json:"issue"`
+	Project   *Project  `json:"project"`
+	Team      *Team     `json:"team"`
+}
+
 // PriorityName converts numeric priority to string
 func PriorityName(p int) string {
 	switch p {

@@ -1,14 +1,17 @@
-name: Integration Tests
+name: Integration Tests (Write)
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_write_tests:
+        description: 'Run write tests (creates/modifies Linear data)'
+        required: true
+        default: 'false'
+        type: boolean
 
 jobs:
-  integration:
+  integration-write:
+    name: Integration Tests (Write Operations)
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -30,10 +33,11 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Run integration tests
+      - name: Run integration tests (with writes)
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEARFS_INTEGRATION: "1"
+          LINEARFS_WRITE_TESTS: "1"
         run: go test -v -timeout 20m ./internal/integration/...
 
       - name: Cleanup on failure

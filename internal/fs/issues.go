@@ -38,6 +38,7 @@ type IssuesNode struct {
 var _ fs.NodeReaddirer = (*IssuesNode)(nil)
 var _ fs.NodeLookuper = (*IssuesNode)(nil)
 var _ fs.NodeMkdirer = (*IssuesNode)(nil)
+var _ fs.NodeRmdirer = (*IssuesNode)(nil)
 
 func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
@@ -120,6 +121,38 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	}), 0
 }
 
+// Rmdir archives an issue (soft delete)
+func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	if n.lfs.debug {
+		log.Printf("Rmdir: %s in team %s (archiving issue)", name, n.team.Key)
+	}
+
+	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	if err != nil {
+		return syscall.EIO
+	}
+
+	for _, issue := range issues {
+		if issue.Identifier == name {
+			assigneeID := ""
+			if issue.Assignee != nil {
+				assigneeID = issue.Assignee.ID
+			}
+			err := n.lfs.ArchiveIssue(ctx, issue.ID, n.team.ID, assigneeID)
+			if err != nil {
+				log.Printf("Failed to archive issue %s: %v", name, err)
+				return syscall.EIO
+			}
+			if n.lfs.debug {
+				log.Printf("Issue %s archived successfully", name)
+			}
+			return 0
+		}
+	}
+
+	return syscall.ENOENT
+}
+
 // IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory
 type IssueDirectoryNode struct {
 	fs.Inode
@@ -134,6 +167,7 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 	entries := []fuse.DirEntry{
 		{Name: "issue.md", Mode: syscall.S_IFREG},
 		{Name: "comments", Mode: syscall.S_IFDIR},
+		{Name: "docs", Mode: syscall.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
 }
@@ -173,6 +207,19 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFDIR,
 			Ino:  commentsDirIno(n.issue.ID),
+		}), 0
+
+	case "docs":
+		node := &DocsNode{
+			lfs:     n.lfs,
+			issueID: n.issue.ID,
+		}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  docsDirIno(n.issue.ID),
 		}), 0
 	}
 
@@ -363,6 +410,23 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			return syscall.EIO
 		}
 		updates["assigneeId"] = userID
+	}
+
+	// Resolve label names to IDs if needed
+	if labelNames, ok := updates["labelIds"].([]string); ok {
+		if i.issue.Team == nil {
+			log.Printf("Cannot resolve labels: issue has no team")
+			return syscall.EIO
+		}
+		labelIDs, notFound, err := i.lfs.ResolveLabelIDs(ctx, i.issue.Team.ID, labelNames)
+		if err != nil {
+			log.Printf("Failed to resolve labels: %v", err)
+			return syscall.EIO
+		}
+		if len(notFound) > 0 {
+			log.Printf("Unknown labels (will be ignored): %v", notFound)
+		}
+		updates["labelIds"] = labelIDs
 	}
 
 	// Call Linear API to update

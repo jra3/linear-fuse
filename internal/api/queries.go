@@ -422,6 +422,32 @@ query ProjectIssues($projectId: String!, $after: String) {
 }
 `
 
+const mutationCreateProject = `
+mutation CreateProject($input: ProjectCreateInput!) {
+  projectCreate(input: $input) {
+    success
+    project {
+      id
+      name
+      slugId
+      description
+      url
+      state
+      createdAt
+      updatedAt
+    }
+  }
+}
+`
+
+const mutationArchiveProject = `
+mutation ArchiveProject($id: String!) {
+  projectArchive(id: $id) {
+    success
+  }
+}
+`
+
 const queryUsers = `
 query Users {
   users {
@@ -542,6 +568,14 @@ mutation CreateIssue($input: IssueCreateInput!) {
 }
 `
 
+const mutationArchiveIssue = `
+mutation ArchiveIssue($id: String!) {
+  issueArchive(id: $id) {
+    success
+  }
+}
+`
+
 const queryIssueComments = `
 query IssueComments($issueId: String!) {
   issue(id: $issueId) {
@@ -606,6 +640,138 @@ mutation UpdateComment($id: String!, $body: String!) {
 const mutationDeleteComment = `
 mutation DeleteComment($id: String!) {
   commentDelete(id: $id) {
+    success
+  }
+}
+`
+
+const queryIssueDocuments = `
+query IssueDocuments($issueId: String!) {
+  issue(id: $issueId) {
+    documents(first: 100) {
+      nodes {
+        id
+        title
+        content
+        slugId
+        url
+        icon
+        color
+        createdAt
+        updatedAt
+        creator {
+          id
+          name
+          email
+        }
+      }
+    }
+  }
+}
+`
+
+const queryProjectDocuments = `
+query ProjectDocuments($projectId: ID!) {
+  documents(first: 100, filter: { project: { id: { eq: $projectId } } }) {
+    nodes {
+      id
+      title
+      content
+      slugId
+      url
+      icon
+      color
+      createdAt
+      updatedAt
+      creator {
+        id
+        name
+        email
+      }
+    }
+  }
+}
+`
+
+const mutationCreateDocument = `
+mutation CreateDocument($input: DocumentCreateInput!) {
+  documentCreate(input: $input) {
+    success
+    document {
+      id
+      title
+      content
+      slugId
+      url
+      icon
+      color
+      createdAt
+      updatedAt
+      creator {
+        id
+        name
+        email
+      }
+    }
+  }
+}
+`
+
+const mutationUpdateDocument = `
+mutation UpdateDocument($id: String!, $input: DocumentUpdateInput!) {
+  documentUpdate(id: $id, input: $input) {
+    success
+    document {
+      id
+      title
+      content
+      slugId
+      url
+      updatedAt
+    }
+  }
+}
+`
+
+const mutationDeleteDocument = `
+mutation DeleteDocument($id: String!) {
+  documentDelete(id: $id) {
+    success
+  }
+}
+`
+
+const mutationCreateLabel = `
+mutation CreateLabel($input: IssueLabelCreateInput!) {
+  issueLabelCreate(input: $input) {
+    success
+    issueLabel {
+      id
+      name
+      color
+      description
+    }
+  }
+}
+`
+
+const mutationUpdateLabel = `
+mutation UpdateLabel($id: String!, $input: IssueLabelUpdateInput!) {
+  issueLabelUpdate(id: $id, input: $input) {
+    success
+    issueLabel {
+      id
+      name
+      color
+      description
+    }
+  }
+}
+`
+
+const mutationDeleteLabel = `
+mutation DeleteLabel($id: String!) {
+  issueLabelDelete(id: $id) {
     success
   }
 }

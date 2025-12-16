@@ -210,6 +210,60 @@ func updateTestIssueTitle(issueID, newTitle string) error {
 	return updateTestIssue(issueID, map[string]any{"title": newTitle})
 }
 
+// createTestDocument creates a document attached to an issue for testing.
+func createTestDocument(issueID, title, content string) (*api.Document, func(), error) {
+	rateLimitWait() // Prevent API rate limiting
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	input := map[string]any{
+		"title":   fmt.Sprintf("[TEST] %s %d", title, time.Now().UnixMilli()),
+		"content": content,
+		"issueId": issueID,
+	}
+
+	doc, err := apiClient.CreateDocument(ctx, input)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create test document: %w", err)
+	}
+
+	cleanup := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = apiClient.DeleteDocument(ctx, doc.ID)
+	}
+
+	return doc, cleanup, nil
+}
+
+// createTestProjectDocument creates a document attached to a project for testing.
+func createTestProjectDocument(projectID, title, content string) (*api.Document, func(), error) {
+	rateLimitWait() // Prevent API rate limiting
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	input := map[string]any{
+		"title":     fmt.Sprintf("[TEST] %s %d", title, time.Now().UnixMilli()),
+		"content":   content,
+		"projectId": projectID,
+	}
+
+	doc, err := apiClient.CreateDocument(ctx, input)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create test document: %w", err)
+	}
+
+	cleanup := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = apiClient.DeleteDocument(ctx, doc.ID)
+	}
+
+	return doc, cleanup, nil
+}
+
 // deleteTestIssue archives/cancels a test issue (Linear doesn't have hard delete)
 func deleteTestIssue(issueID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

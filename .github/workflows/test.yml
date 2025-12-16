@@ -1,0 +1,97 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run unit tests
+        run: go test -v -race ./internal/marshal/... ./internal/cache/... ./internal/config/... ./internal/api/... ./internal/fs/...
+
+      - name: Check coverage
+        run: |
+          go test ./internal/marshal/... ./internal/cache/... ./internal/config/... -coverprofile=coverage.out
+          go tool cover -func=coverage.out
+
+          # Verify minimum coverage for key packages
+          MARSHAL_COV=$(go tool cover -func=coverage.out | grep 'internal/marshal' | tail -1 | awk '{print $3}' | sed 's/%//')
+          CACHE_COV=$(go tool cover -func=coverage.out | grep 'internal/cache' | tail -1 | awk '{print $3}' | sed 's/%//')
+          CONFIG_COV=$(go tool cover -func=coverage.out | grep 'internal/config' | tail -1 | awk '{print $3}' | sed 's/%//')
+
+          echo "Marshal coverage: ${MARSHAL_COV}%"
+          echo "Cache coverage: ${CACHE_COV}%"
+          echo "Config coverage: ${CONFIG_COV}%"
+
+  integration-tests-read:
+    name: Integration Tests (Read-Only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse3 libfuse3-dev
+          sudo sed -i 's/#user_allow_other/user_allow_other/' /etc/fuse.conf
+
+      - name: Build
+        run: make build
+
+      - name: Run read-only integration tests
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEARFS_INTEGRATION: "1"
+          # Note: LINEARFS_WRITE_TESTS is NOT set - only read tests run
+        run: go test -v -timeout 10m ./internal/integration/...
+
+      - name: Cleanup on failure
+        if: failure()
+        run: |
+          fusermount3 -u /tmp/linearfs-test-* 2>/dev/null || true
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install FUSE
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fuse3 libfuse3-dev
+
+      - name: Build
+        run: make build
+
+      - name: Verify binary
+        run: ./bin/linearfs version

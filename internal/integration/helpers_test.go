@@ -60,6 +60,30 @@ func newCommentPath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "comments", "new.md")
 }
 
+func docsPath(teamKey, issueID string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "docs")
+}
+
+func docFilePath(teamKey, issueID, filename string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "docs", filename)
+}
+
+func newDocPath(teamKey, issueID string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "docs", "new.md")
+}
+
+func projectDocsPath(teamKey, projectSlug string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", projectSlug, "docs")
+}
+
+func projectDocFilePath(teamKey, projectSlug, filename string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", projectSlug, "docs", filename)
+}
+
+func newProjectDocPath(teamKey, projectSlug string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", projectSlug, "docs", "new.md")
+}
+
 func cyclesPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "cycles")
 }

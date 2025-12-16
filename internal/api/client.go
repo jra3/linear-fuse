@@ -272,6 +272,30 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	return nil
 }
 
+// ArchiveIssue archives an issue (soft delete)
+func (c *Client) ArchiveIssue(ctx context.Context, issueID string) error {
+	var result struct {
+		IssueArchive struct {
+			Success bool `json:"success"`
+		} `json:"issueArchive"`
+	}
+
+	vars := map[string]any{
+		"id": issueID,
+	}
+
+	err := c.query(ctx, mutationArchiveIssue, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.IssueArchive.Success {
+		return fmt.Errorf("issue archive failed")
+	}
+
+	return nil
+}
+
 // GetTeamStates fetches workflow states for a team
 func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, error) {
 	var result struct {
@@ -354,6 +378,55 @@ func (c *Client) GetProjectIssues(ctx context.Context, projectID string) ([]Proj
 	return allIssues, nil
 }
 
+// CreateProject creates a new project
+func (c *Client) CreateProject(ctx context.Context, input map[string]any) (*Project, error) {
+	var result struct {
+		ProjectCreate struct {
+			Success bool    `json:"success"`
+			Project Project `json:"project"`
+		} `json:"projectCreate"`
+	}
+
+	vars := map[string]any{
+		"input": input,
+	}
+
+	err := c.query(ctx, mutationCreateProject, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.ProjectCreate.Success {
+		return nil, fmt.Errorf("project creation failed")
+	}
+
+	return &result.ProjectCreate.Project, nil
+}
+
+// ArchiveProject archives a project (soft delete)
+func (c *Client) ArchiveProject(ctx context.Context, projectID string) error {
+	var result struct {
+		ProjectArchive struct {
+			Success bool `json:"success"`
+		} `json:"projectArchive"`
+	}
+
+	vars := map[string]any{
+		"id": projectID,
+	}
+
+	err := c.query(ctx, mutationArchiveProject, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.ProjectArchive.Success {
+		return fmt.Errorf("project archive failed")
+	}
+
+	return nil
+}
+
 // GetTeamCycles fetches cycles for a team
 func (c *Client) GetTeamCycles(ctx context.Context, teamID string) ([]Cycle, error) {
 	var result struct {
@@ -415,6 +488,81 @@ func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, err
 	}
 
 	return labels, nil
+}
+
+// CreateLabel creates a new label
+func (c *Client) CreateLabel(ctx context.Context, input map[string]any) (*Label, error) {
+	var result struct {
+		IssueLabelCreate struct {
+			Success    bool  `json:"success"`
+			IssueLabel Label `json:"issueLabel"`
+		} `json:"issueLabelCreate"`
+	}
+
+	vars := map[string]any{
+		"input": input,
+	}
+
+	err := c.query(ctx, mutationCreateLabel, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.IssueLabelCreate.Success {
+		return nil, fmt.Errorf("label creation failed")
+	}
+
+	return &result.IssueLabelCreate.IssueLabel, nil
+}
+
+// UpdateLabel updates an existing label
+func (c *Client) UpdateLabel(ctx context.Context, id string, input map[string]any) (*Label, error) {
+	var result struct {
+		IssueLabelUpdate struct {
+			Success    bool  `json:"success"`
+			IssueLabel Label `json:"issueLabel"`
+		} `json:"issueLabelUpdate"`
+	}
+
+	vars := map[string]any{
+		"id":    id,
+		"input": input,
+	}
+
+	err := c.query(ctx, mutationUpdateLabel, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.IssueLabelUpdate.Success {
+		return nil, fmt.Errorf("label update failed")
+	}
+
+	return &result.IssueLabelUpdate.IssueLabel, nil
+}
+
+// DeleteLabel deletes a label
+func (c *Client) DeleteLabel(ctx context.Context, id string) error {
+	var result struct {
+		IssueLabelDelete struct {
+			Success bool `json:"success"`
+		} `json:"issueLabelDelete"`
+	}
+
+	vars := map[string]any{
+		"id": id,
+	}
+
+	err := c.query(ctx, mutationDeleteLabel, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.IssueLabelDelete.Success {
+		return fmt.Errorf("label deletion failed")
+	}
+
+	return nil
 }
 
 // GetUsers fetches all users in the workspace
@@ -589,6 +737,128 @@ func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
 
 	if !result.CommentDelete.Success {
 		return fmt.Errorf("comment deletion failed")
+	}
+
+	return nil
+}
+
+// GetIssueDocuments fetches documents attached to an issue
+func (c *Client) GetIssueDocuments(ctx context.Context, issueID string) ([]Document, error) {
+	var result struct {
+		Issue struct {
+			Documents struct {
+				Nodes []Document `json:"nodes"`
+			} `json:"documents"`
+		} `json:"issue"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+	}
+
+	err := c.query(ctx, queryIssueDocuments, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Issue.Documents.Nodes, nil
+}
+
+// GetTeamDocuments returns an empty list since Linear API doesn't support team-level documents
+// Documents can be attached to issues or projects, but not directly to teams
+func (c *Client) GetTeamDocuments(ctx context.Context, teamID string) ([]Document, error) {
+	return []Document{}, nil
+}
+
+// GetProjectDocuments fetches documents for a project
+func (c *Client) GetProjectDocuments(ctx context.Context, projectID string) ([]Document, error) {
+	var result struct {
+		Documents struct {
+			Nodes []Document `json:"nodes"`
+		} `json:"documents"`
+	}
+
+	vars := map[string]any{
+		"projectId": projectID,
+	}
+
+	err := c.query(ctx, queryProjectDocuments, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Documents.Nodes, nil
+}
+
+// CreateDocument creates a new document
+func (c *Client) CreateDocument(ctx context.Context, input map[string]any) (*Document, error) {
+	var result struct {
+		DocumentCreate struct {
+			Success  bool     `json:"success"`
+			Document Document `json:"document"`
+		} `json:"documentCreate"`
+	}
+
+	vars := map[string]any{
+		"input": input,
+	}
+
+	err := c.query(ctx, mutationCreateDocument, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.DocumentCreate.Success {
+		return nil, fmt.Errorf("document creation failed")
+	}
+
+	return &result.DocumentCreate.Document, nil
+}
+
+// UpdateDocument updates an existing document
+func (c *Client) UpdateDocument(ctx context.Context, documentID string, input map[string]any) error {
+	var result struct {
+		DocumentUpdate struct {
+			Success bool `json:"success"`
+		} `json:"documentUpdate"`
+	}
+
+	vars := map[string]any{
+		"id":    documentID,
+		"input": input,
+	}
+
+	err := c.query(ctx, mutationUpdateDocument, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.DocumentUpdate.Success {
+		return fmt.Errorf("document update failed")
+	}
+
+	return nil
+}
+
+// DeleteDocument deletes a document
+func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
+	var result struct {
+		DocumentDelete struct {
+			Success bool `json:"success"`
+		} `json:"documentDelete"`
+	}
+
+	vars := map[string]any{
+		"id": documentID,
+	}
+
+	err := c.query(ctx, mutationDeleteDocument, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.DocumentDelete.Success {
+		return fmt.Errorf("document deletion failed")
 	}
 
 	return nil
