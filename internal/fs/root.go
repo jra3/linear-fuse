@@ -124,6 +124,7 @@ This is a FUSE filesystem that exposes Linear issues as markdown files.
 │       └── {ID}.md        # Symlinks to team issues
 └── my/                    # Your personal views
     ├── assigned/          # All issues assigned to you
+    │   └── {ID} -> ../../teams/{KEY}/issues/{ID}  # Symlinks to issue dirs
     ├── created/           # Issues you created
     └── active/            # Assigned issues not done/canceled
 ` + "```" + `

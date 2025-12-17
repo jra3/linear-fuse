@@ -167,6 +167,28 @@ func (s *IssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	return 0
 }
 
+// IssueDirSymlink is a symlink pointing to an issue directory in /teams/<KEY>/issues/<identifier>/
+type IssueDirSymlink struct {
+	fs.Inode
+	teamKey    string
+	identifier string
+}
+
+var _ fs.NodeReadlinker = (*IssueDirSymlink)(nil)
+var _ fs.NodeGetattrer = (*IssueDirSymlink)(nil)
+
+func (s *IssueDirSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+	target := fmt.Sprintf("../../teams/%s/issues/%s", s.teamKey, s.identifier)
+	return []byte(target), 0
+}
+
+func (s *IssueDirSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0777 | syscall.S_IFLNK
+	target := fmt.Sprintf("../../teams/%s/issues/%s", s.teamKey, s.identifier)
+	out.Size = uint64(len(target))
+	return 0
+}
+
 // UserInfoNode is a virtual file containing user metadata
 type UserInfoNode struct {
 	fs.Inode

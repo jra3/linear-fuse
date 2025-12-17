@@ -94,8 +94,8 @@ func (m *MyIssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	entries := make([]fuse.DirEntry, len(issues))
 	for i, issue := range issues {
 		entries[i] = fuse.DirEntry{
-			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFLNK, // Symlink
+			Name: issue.Identifier,
+			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
 	}
 
@@ -109,12 +109,12 @@ func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	}
 
 	for _, issue := range issues {
-		if issue.Identifier+".md" == name {
+		if issue.Identifier == name {
 			teamKey := ""
 			if issue.Team != nil {
 				teamKey = issue.Team.Key
 			}
-			node := &IssueSymlink{
+			node := &IssueDirSymlink{
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
 			}
