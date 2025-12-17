@@ -91,156 +91,64 @@ func (r *ReadmeNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 
 const readmeContent = `# Linear Filesystem
 
-This is a FUSE filesystem that exposes Linear issues as markdown files.
+Issues as markdown files. Edit frontmatter to update Linear.
+
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| List teams | ` + "`" + `ls /teams/` + "`" + ` |
+| My active issues | ` + "`" + `ls /my/active/` + "`" + ` |
+| Issues by status | ` + "`" + `ls /teams/ENG/by/status/Todo/` + "`" + ` |
+| Read issue | ` + "`" + `cat /teams/ENG/issues/ENG-123/issue.md` + "`" + ` |
+| Update issue | Edit issue.md frontmatter, save |
+| Add comment | ` + "`" + `echo "text" > .../comments/new.md` + "`" + ` |
+| Create issue | ` + "`" + `mkdir /teams/ENG/issues/"Title"` + "`" + ` |
+| Archive issue | ` + "`" + `rmdir /teams/ENG/issues/ENG-123` + "`" + ` |
 
 ## Directory Structure
 
 ` + "```" + `
-/
-├── README.md              # This file
-├── teams/                 # Issues organized by team
-│   └── {KEY}/             # Team directory (e.g., ENG)
-│       ├── team.md        # Team metadata (read-only)
-│       ├── states.md      # Workflow states with IDs (read-only)
-│       ├── labels.md      # Available labels with IDs (read-only)
-│       ├── by/            # Filter issues by attribute
-│       │   ├── status/{name}/    # Issues by status (symlinks)
-│       │   ├── label/{name}/     # Issues by label (symlinks)
-│       │   └── assignee/{name}/  # Issues by assignee (symlinks)
-│       ├── issues/        # Team issues
-│       │   └── {ID}/      # Issue directory (e.g., ENG-123/)
-│       │       ├── issue.md     # Issue content (read/write)
-│       │       └── comments/    # Issue comments
-│       │           ├── 001-2025-01-10T14-30.md  # Comments (read-only)
-│       │           └── new.md   # Write here to create comments
-│       ├── cycles/        # Sprint cycles
-│       │   ├── current -> Cycle-22  # Symlink to active cycle
-│       │   └── {name}/    # Cycle directory (e.g., Cycle-22/)
-│       │       ├── cycle.md    # Cycle metadata
-│       │       └── {ID} -> ../../issues/{ID}  # Symlinks to issues
-│       └── projects/      # Team projects
-│           └── {slug}/    # Project directory
-│               ├── project.md  # Project metadata
-│               └── {ID} -> ../../issues/{ID}  # Symlinks to issues
-├── users/                 # Issues organized by assignee
-│   └── {username}/
-│       ├── user.md        # User metadata (read-only)
-│       └── {ID} -> ../../teams/{KEY}/issues/{ID}  # Symlinks
-└── my/                    # Your personal views
-    ├── assigned/          # All issues assigned to you
-    │   └── {ID} -> ../../teams/{KEY}/issues/{ID}  # Symlinks to issue dirs
-    ├── created/           # Issues you created
-    └── active/            # Assigned issues not done/canceled
+/teams/{KEY}/
+├── team.md, states.md, labels.md  # Metadata (read-only)
+├── by/status/{name}/              # Filtered views (symlinks)
+├── by/label/{name}/
+├── by/assignee/{name}/
+├── issues/{ID}/
+│   ├── issue.md                   # Read/write
+│   ├── comments/                  # new.md to create
+│   └── docs/                      # new.md to create
+├── cycles/current/                # Active sprint
+└── projects/{slug}/
+
+/users/{name}/                     # Issues by assignee
+/my/assigned|created|active/       # Personal views
 ` + "```" + `
 
-## Issue Files
+## Issue Frontmatter
 
-Issue files are markdown with YAML frontmatter:
-
-` + "```" + `markdown
+` + "```" + `yaml
 ---
-id: abc123-...
 identifier: ENG-123
-title: Fix the bug
-status: In Progress
-assignee: user@example.com
-priority: high
-labels:
+title: "Fix bug"          # editable
+status: "In Progress"     # editable (see states.md)
+assignee: "user@example"  # editable
+priority: high            # editable: none/low/medium/high/urgent
+labels:                   # editable (see labels.md)
   - Bug
-  - Urgent
-dueDate: "2025-01-15"
-estimate: 3
-project: Project Name
-created: "2025-01-01T00:00:00Z"
-updated: "2025-01-10T00:00:00Z"
-url: https://linear.app/...
+  - Backend
+dueDate: "2025-01-15"     # editable
+estimate: 3               # editable
 ---
-
-Issue description in markdown...
+Description here (editable)
 ` + "```" + `
 
-### Editable Fields
+Read-only: id, identifier, url, created, updated, project
 
-You can edit these fields by modifying the frontmatter and saving:
+## Notes
 
-| Field      | Description                          | Example              |
-|------------|--------------------------------------|----------------------|
-| title      | Issue title                          | "Fix login bug"      |
-| status     | Workflow state name                  | "In Progress"        |
-| assignee   | User email or name                   | "user@example.com"   |
-| priority   | none/low/medium/high/urgent          | "high"               |
-| dueDate    | Due date (ISO format or YYYY-MM-DD)  | "2025-01-15"         |
-| estimate   | Point estimate                       | 3                    |
-
-The description (content after frontmatter) is also editable.
-
-### Read-Only Fields
-
-These fields are informational and changes will be ignored:
-- id, identifier, url, created, updated, labels, project
-
-## Comments
-
-Each issue has a comments/ subdirectory containing:
-
-- Numbered comment files (001-timestamp.md, 002-timestamp.md, etc.)
-- Comments are read-only and include author/timestamp in frontmatter
-
-### Reading Comments
-
-` + "```" + `bash
-ls /teams/ENG/issues/ENG-123/comments/
-cat /teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
-` + "```" + `
-
-### Creating Comments
-
-Write to new.md (or any new .md file) in the comments directory:
-
-` + "```" + `bash
-echo "My comment here" > /teams/ENG/issues/ENG-123/comments/new.md
-` + "```" + `
-
-The file is consumed: comment is created via API, and the new numbered
-comment file will appear on the next directory listing.
-
-## Creating Issues
-
-Create a new issue by making a directory in a team's issues directory:
-
-` + "```" + `bash
-mkdir /teams/ENG/issues/"New issue title"
-` + "```" + `
-
-The directory name becomes the issue title.
-
-## Symlinks
-
-All issue symlinks point to issue directories (not files):
-
-- /my/* → /teams/{KEY}/issues/{ID}/
-- /users/* → /teams/{KEY}/issues/{ID}/
-- /projects/* → /teams/{KEY}/issues/{ID}/
-- /cycles/* → /teams/{KEY}/issues/{ID}/
-
-Edits to issue.md anywhere affect the same underlying issue.
-
-## Metadata Files
-
-Metadata files (team.md, states.md, labels.md, user.md, project.md)
-contain YAML frontmatter with IDs. Use these to look up valid values:
-
-- Check states.md for valid status names
-- Check labels.md for available labels
-- Check user.md for user IDs and emails
-
-## Tips for AI Assistants
-
-1. Read states.md before changing issue status to get valid state names
-2. Use the frontmatter 'id' field when you need to reference entities via API
-3. The 'identifier' (e.g., ENG-123) is the human-readable issue key
-4. All symlinks point to issue directories containing issue.md and comments/
-5. Filter views: /my/active/ shows only non-completed assigned issues
-6. To add a comment, write to comments/new.md in an issue directory
-7. Use /cycles/current/ to access the active sprint cycle
+- Check states.md for valid status names before changing status
+- Check labels.md for available label names
+- All symlinks resolve to issue directories containing issue.md
+- Cache TTL: 60s (external changes may be delayed)
 `
