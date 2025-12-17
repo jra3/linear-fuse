@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"golang.org/x/time/rate"
 )
+
+var debugRateLimit = os.Getenv("LINEARFS_DEBUG_RATE") != ""
 
 const linearAPIURL = "https://api.linear.app/graphql"
 
@@ -22,8 +26,8 @@ type Client struct {
 
 func NewClient(apiKey string) *Client {
 	// Linear allows 1,500 requests/hour (25/min).
-	// We use 20/min (1 every 3 seconds) with burst of 10 to stay conservative.
-	limiter := rate.NewLimiter(rate.Every(3*time.Second), 10)
+	// Burst of 50 handles cold cache scenarios; rate of 2/sec for sustained use.
+	limiter := rate.NewLimiter(rate.Limit(2), 50)
 
 	return &Client{
 		apiKey:     apiKey,
@@ -46,8 +50,20 @@ type graphQLResponse struct {
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
 	// Wait for rate limit token before making request
+	if debugRateLimit {
+		reservation := c.limiter.Reserve()
+		delay := reservation.Delay()
+		if delay > 0 {
+			log.Printf("[RATE] Waiting %v for rate limit token", delay)
+		}
+		reservation.Cancel() // Cancel and use Wait() instead for proper blocking
+	}
+	start := time.Now()
 	if err := c.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait cancelled: %w", err)
+	}
+	if debugRateLimit && time.Since(start) > 100*time.Millisecond {
+		log.Printf("[RATE] Waited %v for rate limit", time.Since(start))
 	}
 
 	reqBody := graphQLRequest{
