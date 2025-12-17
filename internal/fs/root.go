@@ -110,7 +110,10 @@ This is a FUSE filesystem that exposes Linear issues as markdown files.
 │       │           ├── 001-2025-01-10T14-30.md  # Comments (read-only)
 │       │           └── new.md   # Write here to create comments
 │       ├── cycles/        # Sprint cycles
-│       │   └── {num}.md   # Cycle files (e.g., 70.md)
+│       │   ├── current -> Cycle-22  # Symlink to active cycle
+│       │   └── {name}/    # Cycle directory (e.g., Cycle-22/)
+│       │       ├── cycle.md    # Cycle metadata
+│       │       └── {ID}.md     # Symlinks to issues/
 │       └── projects/      # Team projects
 │           └── {slug}/    # Project directory
 │               ├── .project.md  # Project metadata
@@ -208,7 +211,7 @@ The directory name becomes the issue title.
 
 ## Symlinks
 
-Files in /users/, /my/, and /projects/ are symlinks pointing to the
+Files in /users/, /my/, /projects/, and /cycles/ are symlinks pointing to the
 canonical issue files in /teams/{KEY}/issues/{ID}/issue.md. This means:
 
 - Edits made anywhere affect the same underlying issue

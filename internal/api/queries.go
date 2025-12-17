@@ -370,6 +370,29 @@ query TeamCycles($teamId: String!) {
 }
 `
 
+const queryCycleIssues = `
+query CycleIssues($cycleId: String!, $after: String) {
+  cycle(id: $cycleId) {
+    issues(first: 100, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        updatedAt
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+}
+`
+
 const queryTeamProjects = `
 query TeamProjects($teamId: String!) {
   team(id: $teamId) {

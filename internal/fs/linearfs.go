@@ -22,6 +22,7 @@ type LinearFS struct {
 	stateCache         *cache.Cache[[]api.State]
 	labelCache         *cache.Cache[[]api.Label]
 	cycleCache         *cache.Cache[[]api.Cycle]
+	cycleIssueCache    *cache.Cache[[]api.CycleIssue]
 	projectCache       *cache.Cache[[]api.Project]
 	projectIssueCache  *cache.Cache[[]api.ProjectIssue]
 	myIssueCache       *cache.Cache[[]api.Issue]
@@ -47,6 +48,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		stateCache:         cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
 		labelCache:         cache.New[[]api.Label](cfg.Cache.TTL * 10), // Labels change rarely
 		cycleCache:         cache.New[[]api.Cycle](cfg.Cache.TTL),      // Cycles change with issues
+		cycleIssueCache:    cache.New[[]api.CycleIssue](cfg.Cache.TTL),
 		projectCache:       cache.New[[]api.Project](cfg.Cache.TTL),
 		projectIssueCache:  cache.New[[]api.ProjectIssue](cfg.Cache.TTL),
 		myIssueCache:       cache.New[[]api.Issue](cfg.Cache.TTL),
@@ -242,6 +244,30 @@ func (lfs *LinearFS) GetTeamCycles(ctx context.Context, teamID string) ([]api.Cy
 
 	lfs.cycleCache.Set(cacheKey, cycles)
 	return cycles, nil
+}
+
+func (lfs *LinearFS) GetCycleIssues(ctx context.Context, cycleID string) ([]api.CycleIssue, error) {
+	cacheKey := "cycle-issues:" + cycleID
+	if issues, ok := lfs.cycleIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.cycleIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetCycleIssues(ctx, cycleID)
+		if err != nil {
+			return nil, err
+		}
+		lfs.cycleIssueCache.Set(cacheKey, issues)
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.CycleIssue), nil
 }
 
 func (lfs *LinearFS) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {

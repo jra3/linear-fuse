@@ -463,6 +463,44 @@ func (c *Client) GetTeamCycles(ctx context.Context, teamID string) ([]Cycle, err
 	return result.Team.Cycles.Nodes, nil
 }
 
+// GetCycleIssues fetches issues belonging to a cycle with pagination
+func (c *Client) GetCycleIssues(ctx context.Context, cycleID string) ([]CycleIssue, error) {
+	var allIssues []CycleIssue
+	var cursor *string
+
+	for {
+		var result struct {
+			Cycle struct {
+				Issues struct {
+					PageInfo PageInfo     `json:"pageInfo"`
+					Nodes    []CycleIssue `json:"nodes"`
+				} `json:"issues"`
+			} `json:"cycle"`
+		}
+
+		vars := map[string]any{
+			"cycleId": cycleID,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryCycleIssues, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Cycle.Issues.Nodes...)
+
+		if !result.Cycle.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Cycle.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
 // GetTeamLabels fetches labels for a team (team + workspace labels)
 func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, error) {
 	var result struct {

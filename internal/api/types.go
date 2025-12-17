@@ -87,6 +87,15 @@ type ProjectIssue struct {
 	Team       *Team  `json:"team"`
 }
 
+// CycleIssue is a minimal issue representation for cycle listings
+type CycleIssue struct {
+	ID         string    `json:"id"`
+	Identifier string    `json:"identifier"`
+	Title      string    `json:"title"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	Team       *Team     `json:"team"`
+}
+
 type Cycle struct {
 	ID                         string    `json:"id"`
 	Number                     int       `json:"number"`
