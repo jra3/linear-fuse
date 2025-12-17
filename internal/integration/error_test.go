@@ -40,29 +40,29 @@ func TestInvalidStatusReturnsError(t *testing.T) {
 }
 
 func TestWriteToReadOnlyFileReturnsError(t *testing.T) {
-	// Try to write to .team.md (read-only metadata file)
+	// Try to write to team.md (read-only metadata file)
 	path := teamInfoPath(testTeamKey)
 	err := os.WriteFile(path, []byte("test"), 0644)
 	if err == nil {
-		t.Error("Expected error when writing to read-only .team.md")
+		t.Error("Expected error when writing to read-only team.md")
 	}
 }
 
 func TestWriteToStatesFileReturnsError(t *testing.T) {
-	// Try to write to .states.md (read-only metadata file)
+	// Try to write to states.md (read-only metadata file)
 	path := teamStatesPath(testTeamKey)
 	err := os.WriteFile(path, []byte("test"), 0644)
 	if err == nil {
-		t.Error("Expected error when writing to read-only .states.md")
+		t.Error("Expected error when writing to read-only states.md")
 	}
 }
 
 func TestWriteToLabelsFileReturnsError(t *testing.T) {
-	// Try to write to .labels.md (read-only metadata file)
+	// Try to write to labels.md (read-only metadata file)
 	path := teamLabelsPath(testTeamKey)
 	err := os.WriteFile(path, []byte("test"), 0644)
 	if err == nil {
-		t.Error("Expected error when writing to read-only .labels.md")
+		t.Error("Expected error when writing to read-only labels.md")
 	}
 }
 

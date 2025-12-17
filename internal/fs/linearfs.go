@@ -16,24 +16,26 @@ import (
 )
 
 type LinearFS struct {
-	client             *api.Client
-	teamCache          *cache.Cache[[]api.Team]
-	issueCache         *cache.Cache[[]api.Issue]
-	stateCache         *cache.Cache[[]api.State]
-	labelCache         *cache.Cache[[]api.Label]
-	cycleCache         *cache.Cache[[]api.Cycle]
-	cycleIssueCache    *cache.Cache[[]api.CycleIssue]
-	projectCache       *cache.Cache[[]api.Project]
-	projectIssueCache  *cache.Cache[[]api.ProjectIssue]
-	myIssueCache       *cache.Cache[[]api.Issue]
-	myCreatedCache     *cache.Cache[[]api.Issue]
-	myActiveCache      *cache.Cache[[]api.Issue]
-	userCache          *cache.Cache[[]api.User]
-	userIssueCache     *cache.Cache[[]api.Issue]
-	commentCache       *cache.Cache[[]api.Comment]
-	documentCache      *cache.Cache[[]api.Document]
-	debug              bool
-	sfGroup            singleflight.Group // Deduplicates concurrent requests for same data
+	client              *api.Client
+	teamCache           *cache.Cache[[]api.Team]
+	issueCache          *cache.Cache[[]api.Issue]
+	issueByIdCache      *cache.Cache[api.Issue] // Individual issues by identifier (e.g., "ENG-123")
+	filteredIssueCache  *cache.Cache[[]api.Issue] // Server-side filtered issues (keys: "status:teamID:value", etc.)
+	stateCache          *cache.Cache[[]api.State]
+	labelCache          *cache.Cache[[]api.Label]
+	cycleCache          *cache.Cache[[]api.Cycle]
+	cycleIssueCache     *cache.Cache[[]api.CycleIssue]
+	projectCache        *cache.Cache[[]api.Project]
+	projectIssueCache   *cache.Cache[[]api.ProjectIssue]
+	myIssueCache        *cache.Cache[[]api.Issue]
+	myCreatedCache      *cache.Cache[[]api.Issue]
+	myActiveCache       *cache.Cache[[]api.Issue]
+	userCache           *cache.Cache[[]api.User]
+	userIssueCache      *cache.Cache[[]api.Issue]
+	commentCache        *cache.Cache[[]api.Comment]
+	documentCache       *cache.Cache[[]api.Document]
+	debug               bool
+	sfGroup             singleflight.Group // Deduplicates concurrent requests for same data
 }
 
 func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
@@ -42,23 +44,25 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	return &LinearFS{
-		client:             api.NewClient(cfg.APIKey),
-		teamCache:          cache.New[[]api.Team](cfg.Cache.TTL),
-		issueCache:         cache.New[[]api.Issue](cfg.Cache.TTL),
-		stateCache:         cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
-		labelCache:         cache.New[[]api.Label](cfg.Cache.TTL * 10), // Labels change rarely
-		cycleCache:         cache.New[[]api.Cycle](cfg.Cache.TTL),      // Cycles change with issues
-		cycleIssueCache:    cache.New[[]api.CycleIssue](cfg.Cache.TTL),
-		projectCache:       cache.New[[]api.Project](cfg.Cache.TTL),
-		projectIssueCache:  cache.New[[]api.ProjectIssue](cfg.Cache.TTL),
-		myIssueCache:       cache.New[[]api.Issue](cfg.Cache.TTL),
-		myCreatedCache:     cache.New[[]api.Issue](cfg.Cache.TTL),
-		myActiveCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
-		userCache:          cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
-		userIssueCache:     cache.New[[]api.Issue](cfg.Cache.TTL),
-		commentCache:       cache.New[[]api.Comment](cfg.Cache.TTL),
-		documentCache:      cache.New[[]api.Document](cfg.Cache.TTL),
-		debug:              debug,
+		client:              api.NewClient(cfg.APIKey),
+		teamCache:           cache.New[[]api.Team](cfg.Cache.TTL),
+		issueCache:          cache.New[[]api.Issue](cfg.Cache.TTL),
+		issueByIdCache:      cache.New[api.Issue](cfg.Cache.TTL), // Individual issues for fast lookup
+		filteredIssueCache:  cache.New[[]api.Issue](cfg.Cache.TTL), // Server-side filtered issues
+		stateCache:          cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
+		labelCache:          cache.New[[]api.Label](cfg.Cache.TTL * 10), // Labels change rarely
+		cycleCache:          cache.New[[]api.Cycle](cfg.Cache.TTL),      // Cycles change with issues
+		cycleIssueCache:     cache.New[[]api.CycleIssue](cfg.Cache.TTL),
+		projectCache:        cache.New[[]api.Project](cfg.Cache.TTL),
+		projectIssueCache:   cache.New[[]api.ProjectIssue](cfg.Cache.TTL),
+		myIssueCache:        cache.New[[]api.Issue](cfg.Cache.TTL),
+		myCreatedCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
+		myActiveCache:       cache.New[[]api.Issue](cfg.Cache.TTL),
+		userCache:           cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
+		userIssueCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
+		commentCache:        cache.New[[]api.Comment](cfg.Cache.TTL),
+		documentCache:       cache.New[[]api.Document](cfg.Cache.TTL),
+		debug:               debug,
 	}, nil
 }
 
@@ -100,6 +104,8 @@ func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Is
 			return nil, err
 		}
 		lfs.issueCache.Set(cacheKey, issues)
+		// Cache individual issues for fast lookup in IssuesNode.Lookup
+		lfs.cacheIssuesByIdentifier(issues)
 		return issues, nil
 	})
 
@@ -111,6 +117,152 @@ func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Is
 
 func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
 	lfs.issueCache.Delete("issues:" + teamID)
+}
+
+// cacheIssuesByIdentifier caches individual issues by their identifier for fast lookup
+func (lfs *LinearFS) cacheIssuesByIdentifier(issues []api.Issue) {
+	for _, issue := range issues {
+		lfs.issueByIdCache.Set(issue.Identifier, issue)
+	}
+}
+
+// GetIssueByIdentifier returns a cached issue by identifier (e.g., "ENG-123")
+// Returns nil if not cached - does NOT make API calls
+func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
+	if issue, ok := lfs.issueByIdCache.Get(identifier); ok {
+		return &issue
+	}
+	return nil
+}
+
+// GetFilteredIssuesByStatus fetches issues filtered by status name using server-side filtering
+func (lfs *LinearFS) GetFilteredIssuesByStatus(ctx context.Context, teamID, statusName string) ([]api.Issue, error) {
+	cacheKey := "status:" + teamID + ":" + statusName
+	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetTeamIssuesByStatus(ctx, teamID, statusName)
+		if err != nil {
+			return nil, err
+		}
+		lfs.filteredIssueCache.Set(cacheKey, issues)
+		lfs.cacheIssuesByIdentifier(issues)
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.Issue), nil
+}
+
+// GetFilteredIssuesByPriority fetches issues filtered by priority using server-side filtering
+func (lfs *LinearFS) GetFilteredIssuesByPriority(ctx context.Context, teamID string, priority int) ([]api.Issue, error) {
+	cacheKey := fmt.Sprintf("priority:%s:%d", teamID, priority)
+	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetTeamIssuesByPriority(ctx, teamID, priority)
+		if err != nil {
+			return nil, err
+		}
+		lfs.filteredIssueCache.Set(cacheKey, issues)
+		lfs.cacheIssuesByIdentifier(issues)
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.Issue), nil
+}
+
+// GetFilteredIssuesByLabel fetches issues filtered by label name using server-side filtering
+func (lfs *LinearFS) GetFilteredIssuesByLabel(ctx context.Context, teamID, labelName string) ([]api.Issue, error) {
+	cacheKey := "label:" + teamID + ":" + labelName
+	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetTeamIssuesByLabel(ctx, teamID, labelName)
+		if err != nil {
+			return nil, err
+		}
+		lfs.filteredIssueCache.Set(cacheKey, issues)
+		lfs.cacheIssuesByIdentifier(issues)
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.Issue), nil
+}
+
+// GetFilteredIssuesByAssignee fetches issues filtered by assignee using server-side filtering
+func (lfs *LinearFS) GetFilteredIssuesByAssignee(ctx context.Context, teamID, assigneeID string) ([]api.Issue, error) {
+	cacheKey := "assignee:" + teamID + ":" + assigneeID
+	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetTeamIssuesByAssignee(ctx, teamID, assigneeID)
+		if err != nil {
+			return nil, err
+		}
+		lfs.filteredIssueCache.Set(cacheKey, issues)
+		lfs.cacheIssuesByIdentifier(issues)
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.Issue), nil
+}
+
+// GetFilteredIssuesUnassigned fetches issues with no assignee using server-side filtering
+func (lfs *LinearFS) GetFilteredIssuesUnassigned(ctx context.Context, teamID string) ([]api.Issue, error) {
+	cacheKey := "unassigned:" + teamID
+	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+		return issues, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
+			return issues, nil
+		}
+		issues, err := lfs.client.GetTeamIssuesUnassigned(ctx, teamID)
+		if err != nil {
+			return nil, err
+		}
+		lfs.filteredIssueCache.Set(cacheKey, issues)
+		lfs.cacheIssuesByIdentifier(issues)
+		return issues, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.Issue), nil
 }
 
 func (lfs *LinearFS) InvalidateMyIssues() {
@@ -151,6 +303,8 @@ func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
 			return nil, err
 		}
 		lfs.myIssueCache.Set("my", issues)
+		// Cache individual issues for fast symlink resolution
+		lfs.cacheIssuesByIdentifier(issues)
 		return issues, nil
 	})
 
@@ -175,6 +329,8 @@ func (lfs *LinearFS) GetMyCreatedIssues(ctx context.Context) ([]api.Issue, error
 			return nil, err
 		}
 		lfs.myCreatedCache.Set("created", issues)
+		// Cache individual issues for fast symlink resolution
+		lfs.cacheIssuesByIdentifier(issues)
 		return issues, nil
 	})
 
@@ -199,6 +355,8 @@ func (lfs *LinearFS) GetMyActiveIssues(ctx context.Context) ([]api.Issue, error)
 			return nil, err
 		}
 		lfs.myActiveCache.Set("active", issues)
+		// Cache individual issues for fast symlink resolution
+		lfs.cacheIssuesByIdentifier(issues)
 		return issues, nil
 	})
 
@@ -384,6 +542,8 @@ func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Is
 			return nil, err
 		}
 		lfs.userIssueCache.Set(cacheKey, issues)
+		// Cache individual issues for fast symlink resolution
+		lfs.cacheIssuesByIdentifier(issues)
 		return issues, nil
 	})
 

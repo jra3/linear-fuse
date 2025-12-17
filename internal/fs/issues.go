@@ -58,6 +58,24 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// First, check if we have this issue cached individually (from user/my issue fetches)
+	// This avoids expensive GetTeamIssues calls when following symlinks
+	if issue := n.lfs.GetIssueByIdentifier(name); issue != nil {
+		node := &IssueDirectoryNode{
+			lfs:   n.lfs,
+			issue: *issue,
+		}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  issueDirIno(issue.ID),
+		}), 0
+	}
+
+	// Fall back to fetching all team issues if not in individual cache
 	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
 	if err != nil {
 		return nil, syscall.EIO

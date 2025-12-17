@@ -799,3 +799,268 @@ mutation DeleteLabel($id: String!) {
   }
 }
 `
+
+// Filtered team issues queries - server-side filtering for by/ directories
+
+const queryTeamIssuesByStatus = `
+query TeamIssuesByStatus($teamId: String!, $statusName: String!, $after: String) {
+  team(id: $teamId) {
+    issues(first: 100, after: $after, filter: { state: { name: { eq: $statusName } } }) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+            color
+            description
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
+const queryTeamIssuesByPriority = `
+query TeamIssuesByPriority($teamId: ID!, $priority: Int!, $after: String) {
+  issues(first: 100, after: $after, filter: { team: { id: { eq: $teamId } }, priority: { eq: $priority } }) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      id
+      identifier
+      title
+      description
+      state {
+        id
+        name
+        type
+      }
+      assignee {
+        id
+        name
+        email
+      }
+      priority
+      labels {
+        nodes {
+          id
+          name
+          color
+          description
+        }
+      }
+      dueDate
+      estimate
+      createdAt
+      updatedAt
+      url
+      team {
+        id
+        key
+        name
+      }
+      project {
+        id
+        name
+        slugId
+      }
+    }
+  }
+}
+`
+
+const queryTeamIssuesByLabel = `
+query TeamIssuesByLabel($teamId: String!, $labelName: String!, $after: String) {
+  team(id: $teamId) {
+    issues(first: 100, after: $after, filter: { labels: { name: { eq: $labelName } } }) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+            color
+            description
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
+const queryTeamIssuesByAssignee = `
+query TeamIssuesByAssignee($teamId: String!, $assigneeId: ID!, $after: String) {
+  team(id: $teamId) {
+    issues(first: 100, after: $after, filter: { assignee: { id: { eq: $assigneeId } } }) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+            color
+            description
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
+const queryTeamIssuesUnassigned = `
+query TeamIssuesUnassigned($teamId: String!, $after: String) {
+  team(id: $teamId) {
+    issues(first: 100, after: $after, filter: { assignee: { null: true } }) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        id
+        identifier
+        title
+        description
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        priority
+        labels {
+          nodes {
+            id
+            name
+            color
+            description
+          }
+        }
+        dueDate
+        estimate
+        createdAt
+        updatedAt
+        url
+        team {
+          id
+          key
+          name
+        }
+        project {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`

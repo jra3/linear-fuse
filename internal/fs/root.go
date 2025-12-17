@@ -100,9 +100,13 @@ This is a FUSE filesystem that exposes Linear issues as markdown files.
 ├── README.md              # This file
 ├── teams/                 # Issues organized by team
 │   └── {KEY}/             # Team directory (e.g., ENG)
-│       ├── .team.md       # Team metadata (read-only)
-│       ├── .states.md     # Workflow states with IDs (read-only)
-│       ├── .labels.md     # Available labels with IDs (read-only)
+│       ├── team.md        # Team metadata (read-only)
+│       ├── states.md      # Workflow states with IDs (read-only)
+│       ├── labels.md      # Available labels with IDs (read-only)
+│       ├── by/            # Filter issues by attribute
+│       │   ├── status/{name}/    # Issues by status (symlinks)
+│       │   ├── label/{name}/     # Issues by label (symlinks)
+│       │   └── assignee/{name}/  # Issues by assignee (symlinks)
 │       ├── issues/        # Team issues
 │       │   └── {ID}/      # Issue directory (e.g., ENG-123/)
 │       │       ├── issue.md     # Issue content (read/write)
@@ -116,11 +120,11 @@ This is a FUSE filesystem that exposes Linear issues as markdown files.
 │       │       └── {ID} -> ../../issues/{ID}  # Symlinks to issues
 │       └── projects/      # Team projects
 │           └── {slug}/    # Project directory
-│               ├── .project.md  # Project metadata
+│               ├── project.md  # Project metadata
 │               └── {ID} -> ../../issues/{ID}  # Symlinks to issues
 ├── users/                 # Issues organized by assignee
 │   └── {username}/
-│       ├── .user.md       # User metadata (read-only)
+│       ├── user.md        # User metadata (read-only)
 │       └── {ID} -> ../../teams/{KEY}/issues/{ID}  # Symlinks
 └── my/                    # Your personal views
     ├── assigned/          # All issues assigned to you
@@ -223,16 +227,16 @@ Edits to issue.md anywhere affect the same underlying issue.
 
 ## Metadata Files
 
-Hidden metadata files (.team.md, .states.md, .labels.md, .user.md, .project.md)
+Metadata files (team.md, states.md, labels.md, user.md, project.md)
 contain YAML frontmatter with IDs. Use these to look up valid values:
 
-- Check .states.md for valid status names
-- Check .labels.md for available labels
-- Check .user.md for user IDs and emails
+- Check states.md for valid status names
+- Check labels.md for available labels
+- Check user.md for user IDs and emails
 
 ## Tips for AI Assistants
 
-1. Read .states.md before changing issue status to get valid state names
+1. Read states.md before changing issue status to get valid state names
 2. Use the frontmatter 'id' field when you need to reference entities via API
 3. The 'identifier' (e.g., ENG-123) is the human-readable issue key
 4. All symlinks point to issue directories containing issue.md and comments/

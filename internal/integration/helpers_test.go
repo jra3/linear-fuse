@@ -25,15 +25,15 @@ func teamPath(teamKey string) string {
 }
 
 func teamInfoPath(teamKey string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, ".team.md")
+	return filepath.Join(mountPoint, "teams", teamKey, "team.md")
 }
 
 func teamStatesPath(teamKey string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, ".states.md")
+	return filepath.Join(mountPoint, "teams", teamKey, "states.md")
 }
 
 func teamLabelsPath(teamKey string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, ".labels.md")
+	return filepath.Join(mountPoint, "teams", teamKey, "labels.md")
 }
 
 func issuesPath(teamKey string) string {
@@ -117,7 +117,7 @@ func userPath(username string) string {
 }
 
 func userInfoPath(username string) string {
-	return filepath.Join(mountPoint, "users", username, ".user.md")
+	return filepath.Join(mountPoint, "users", username, "user.md")
 }
 
 // Retry helpers

@@ -181,16 +181,16 @@ func TestUserDirectoryContainsSymlinksAndInfo(t *testing.T) {
 		t.Fatalf("Failed to read user directory: %v", err)
 	}
 
-	// Should have .user.md info file
+	// Should have user.md info file
 	hasUserMd := false
 	for _, e := range userEntries {
-		if e.Name() == ".user.md" {
+		if e.Name() == "user.md" {
 			hasUserMd = true
 			break
 		}
 	}
 	if !hasUserMd {
-		t.Error("User directory should contain .user.md")
+		t.Error("User directory should contain user.md")
 	}
 }
 
@@ -204,11 +204,11 @@ func TestUserInfoFile(t *testing.T) {
 		t.Skip("No users to test")
 	}
 
-	// Read .user.md from first user
-	userInfoPath := filepath.Join(usersPath(), entries[0].Name(), ".user.md")
+	// Read user.md from first user
+	userInfoPath := filepath.Join(usersPath(), entries[0].Name(), "user.md")
 	content, err := os.ReadFile(userInfoPath)
 	if err != nil {
-		t.Fatalf("Failed to read .user.md: %v", err)
+		t.Fatalf("Failed to read user.md: %v", err)
 	}
 
 	doc, err := parseFrontmatter(content)
@@ -220,7 +220,7 @@ func TestUserInfoFile(t *testing.T) {
 	requiredFields := []string{"id", "email", "name"}
 	for _, field := range requiredFields {
 		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q in .user.md", field)
+			t.Errorf("Missing required field %q in user.md", field)
 		}
 	}
 }
@@ -242,9 +242,9 @@ func TestUserIssueSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read user directory: %v", err)
 	}
 
-	// Check that non-.user.md entries are symlinks
+	// Check that non-user.md entries are symlinks
 	for _, entry := range userEntries {
-		if entry.Name() == ".user.md" {
+		if entry.Name() == "user.md" {
 			continue
 		}
 		info, err := entry.Info()
@@ -292,16 +292,16 @@ func TestProjectDirectoryContainsInfoFile(t *testing.T) {
 		t.Fatalf("Failed to read project directory: %v", err)
 	}
 
-	// Should have .project.md info file
+	// Should have project.md info file
 	hasProjectMd := false
 	for _, e := range projectEntries {
-		if e.Name() == ".project.md" {
+		if e.Name() == "project.md" {
 			hasProjectMd = true
 			break
 		}
 	}
 	if !hasProjectMd {
-		t.Error("Project directory should contain .project.md")
+		t.Error("Project directory should contain project.md")
 	}
 }
 
@@ -315,11 +315,11 @@ func TestProjectInfoFile(t *testing.T) {
 		t.Skip("No projects to test")
 	}
 
-	// Read .project.md from first project
-	projectInfoPath := filepath.Join(projectsPath(testTeamKey), entries[0].Name(), ".project.md")
+	// Read project.md from first project
+	projectInfoPath := filepath.Join(projectsPath(testTeamKey), entries[0].Name(), "project.md")
 	content, err := os.ReadFile(projectInfoPath)
 	if err != nil {
-		t.Fatalf("Failed to read .project.md: %v", err)
+		t.Fatalf("Failed to read project.md: %v", err)
 	}
 
 	doc, err := parseFrontmatter(content)
@@ -331,7 +331,7 @@ func TestProjectInfoFile(t *testing.T) {
 	requiredFields := []string{"id", "name", "url"}
 	for _, field := range requiredFields {
 		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q in .project.md", field)
+			t.Errorf("Missing required field %q in project.md", field)
 		}
 	}
 }
@@ -353,9 +353,9 @@ func TestProjectIssueSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read project directory: %v", err)
 	}
 
-	// Check that issue entries (not .project.md or docs/) are symlinks
+	// Check that issue entries (not project.md or docs/) are symlinks
 	for _, entry := range projectEntries {
-		if entry.Name() == ".project.md" || entry.Name() == "docs" {
+		if entry.Name() == "project.md" || entry.Name() == "docs" {
 			continue
 		}
 		info, err := entry.Info()

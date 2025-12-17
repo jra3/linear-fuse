@@ -94,10 +94,10 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
-	// +1 for .user.md
+	// +1 for user.md
 	entries := make([]fuse.DirEntry, len(issues)+1)
 	entries[0] = fuse.DirEntry{
-		Name: ".user.md",
+		Name: "user.md",
 		Mode: syscall.S_IFREG,
 	}
 	for i, issue := range issues {
@@ -111,8 +111,8 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle .user.md metadata file
-	if name == ".user.md" {
+	// Handle user.md metadata file
+	if name == "user.md" {
 		node := &UserInfoNode{user: u.user}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG

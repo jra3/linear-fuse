@@ -194,6 +194,198 @@ func (c *Client) GetTeamIssues(ctx context.Context, teamID string) ([]Issue, err
 	return allIssues, nil
 }
 
+// GetTeamIssuesByStatus fetches issues filtered by status name
+func (c *Client) GetTeamIssuesByStatus(ctx context.Context, teamID, statusName string) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Team struct {
+				Issues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"issues"`
+			} `json:"team"`
+		}
+
+		vars := map[string]any{
+			"teamId":     teamID,
+			"statusName": statusName,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryTeamIssuesByStatus, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Team.Issues.Nodes...)
+
+		if !result.Team.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Team.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
+// GetTeamIssuesByPriority fetches issues filtered by priority (0=none, 1=urgent, 2=high, 3=medium, 4=low)
+func (c *Client) GetTeamIssuesByPriority(ctx context.Context, teamID string, priority int) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Issues struct {
+				PageInfo PageInfo `json:"pageInfo"`
+				Nodes    []Issue  `json:"nodes"`
+			} `json:"issues"`
+		}
+
+		vars := map[string]any{
+			"teamId":   teamID,
+			"priority": priority,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryTeamIssuesByPriority, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Issues.Nodes...)
+
+		if !result.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
+// GetTeamIssuesByLabel fetches issues filtered by label name
+func (c *Client) GetTeamIssuesByLabel(ctx context.Context, teamID, labelName string) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Team struct {
+				Issues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"issues"`
+			} `json:"team"`
+		}
+
+		vars := map[string]any{
+			"teamId":    teamID,
+			"labelName": labelName,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryTeamIssuesByLabel, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Team.Issues.Nodes...)
+
+		if !result.Team.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Team.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
+// GetTeamIssuesByAssignee fetches issues filtered by assignee ID
+func (c *Client) GetTeamIssuesByAssignee(ctx context.Context, teamID, assigneeID string) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Team struct {
+				Issues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"issues"`
+			} `json:"team"`
+		}
+
+		vars := map[string]any{
+			"teamId":     teamID,
+			"assigneeId": assigneeID,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryTeamIssuesByAssignee, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Team.Issues.Nodes...)
+
+		if !result.Team.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Team.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
+// GetTeamIssuesUnassigned fetches issues with no assignee
+func (c *Client) GetTeamIssuesUnassigned(ctx context.Context, teamID string) ([]Issue, error) {
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Team struct {
+				Issues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"issues"`
+			} `json:"team"`
+		}
+
+		vars := map[string]any{
+			"teamId": teamID,
+		}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryTeamIssuesUnassigned, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Team.Issues.Nodes...)
+
+		if !result.Team.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Team.Issues.PageInfo.EndCursor
+	}
+
+	return allIssues, nil
+}
+
 // GetIssue fetches a single issue by ID
 func (c *Client) GetIssue(ctx context.Context, issueID string) (*Issue, error) {
 	var result struct {

@@ -152,10 +152,10 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// +2 for .project.md and docs/
+	// +2 for project.md and docs/
 	entries := make([]fuse.DirEntry, len(issues)+2)
 	entries[0] = fuse.DirEntry{
-		Name: ".project.md",
+		Name: "project.md",
 		Mode: syscall.S_IFREG,
 	}
 	entries[1] = fuse.DirEntry{
@@ -173,8 +173,8 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 }
 
 func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle .project.md metadata file
-	if name == ".project.md" {
+	// Handle project.md metadata file
+	if name == "project.md" {
 		node := &ProjectInfoNode{project: p.project}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG

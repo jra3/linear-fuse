@@ -143,7 +143,7 @@ func TestTeamDirectoryContents(t *testing.T) {
 		t.Fatalf("Failed to read team directory: %v", err)
 	}
 
-	expected := []string{".team.md", ".states.md", ".labels.md", "issues", "cycles", "projects"}
+	expected := []string{"team.md", "states.md", "labels.md", "by", "issues", "cycles", "projects"}
 	entryNames := make(map[string]bool)
 	for _, e := range entries {
 		entryNames[e.Name()] = true
@@ -159,7 +159,7 @@ func TestTeamDirectoryContents(t *testing.T) {
 func TestTeamInfoFile(t *testing.T) {
 	content, err := os.ReadFile(teamInfoPath(testTeamKey))
 	if err != nil {
-		t.Fatalf("Failed to read .team.md: %v", err)
+		t.Fatalf("Failed to read team.md: %v", err)
 	}
 
 	doc, err := parseFrontmatter(content)
@@ -171,7 +171,7 @@ func TestTeamInfoFile(t *testing.T) {
 	requiredFields := []string{"id", "key", "name"}
 	for _, field := range requiredFields {
 		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q in .team.md", field)
+			t.Errorf("Missing required field %q in team.md", field)
 		}
 	}
 
@@ -186,7 +186,7 @@ func TestTeamInfoFile(t *testing.T) {
 func TestTeamStatesFile(t *testing.T) {
 	content, err := os.ReadFile(teamStatesPath(testTeamKey))
 	if err != nil {
-		t.Fatalf("Failed to read .states.md: %v", err)
+		t.Fatalf("Failed to read states.md: %v", err)
 	}
 
 	str := string(content)
@@ -205,7 +205,7 @@ func TestTeamStatesFile(t *testing.T) {
 func TestTeamLabelsFile(t *testing.T) {
 	content, err := os.ReadFile(teamLabelsPath(testTeamKey))
 	if err != nil {
-		t.Fatalf("Failed to read .labels.md: %v", err)
+		t.Fatalf("Failed to read labels.md: %v", err)
 	}
 
 	str := string(content)
@@ -217,10 +217,10 @@ func TestTeamLabelsFile(t *testing.T) {
 }
 
 func TestTeamMetadataFilesReadOnly(t *testing.T) {
-	// Try to write to .team.md - should fail
+	// Try to write to team.md - should fail
 	err := os.WriteFile(teamInfoPath(testTeamKey), []byte("test"), 0644)
 	if err == nil {
-		t.Error("Expected error writing to .team.md (should be read-only)")
+		t.Error("Expected error writing to team.md (should be read-only)")
 	}
 }
 

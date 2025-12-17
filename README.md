@@ -74,9 +74,13 @@ fusermount3 -u /mnt/linear
 ├── README.md                    # In-filesystem documentation
 ├── teams/
 │   └── <team-key>/              # e.g., ENG, DES
-│       ├── .team.md             # Team metadata (read-only)
-│       ├── .states.md           # Workflow states (read-only)
-│       ├── .labels.md           # Labels reference (read-only)
+│       ├── team.md              # Team metadata (read-only)
+│       ├── states.md            # Workflow states (read-only)
+│       ├── labels.md            # Labels reference (read-only)
+│       ├── by/                  # Filter issues by attribute
+│       │   ├── status/<name>/   # Issues filtered by status (symlinks)
+│       │   ├── label/<name>/    # Issues filtered by label (symlinks)
+│       │   └── assignee/<name>/ # Issues filtered by assignee (symlinks)
 │       ├── issues/
 │       │   └── <identifier>/    # e.g., ENG-123/
 │       │       ├── issue.md     # Issue content (read/write)
@@ -95,11 +99,13 @@ fusermount3 -u /mnt/linear
 │       ├── cycles/              # Sprint cycles (read-only)
 │       └── projects/
 │           └── <project-slug>/
-│               ├── .project.md  # Project metadata (read-only)
+│               ├── project.md   # Project metadata (read-only)
 │               ├── docs/        # Project documents
-│               └── ENG-*.md     # Symlinks to issues
+│               └── ENG-*        # Symlinks to issue directories
 ├── users/
-│   └── <username>/              # Issues by assignee (symlinks)
+│   └── <username>/
+│       ├── user.md              # User metadata (read-only)
+│       └── ENG-*                # Symlinks to issue directories
 └── my/
     ├── assigned/                # Issues assigned to you
     ├── created/                 # Issues you created
@@ -130,7 +136,7 @@ The login flow fails when users attempt to authenticate with SSO.
 ### Editable Fields
 
 - `title` - Issue title
-- `status` - Workflow state name (check .states.md for valid values)
+- `status` - Workflow state name (check states.md for valid values)
 - `assignee` - User email or name
 - `priority` - none/low/medium/high/urgent
 - `dueDate` - Due date (ISO format)

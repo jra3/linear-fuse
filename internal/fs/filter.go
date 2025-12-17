@@ -28,7 +28,7 @@ func assigneeHandle(user *api.User) string {
 	return user.Email
 }
 
-// FilterRootNode represents the .filter/ directory
+// FilterRootNode represents the by/ directory
 type FilterRootNode struct {
 	fs.Inode
 	lfs  *LinearFS
@@ -39,7 +39,7 @@ var _ fs.NodeReaddirer = (*FilterRootNode)(nil)
 var _ fs.NodeLookuper = (*FilterRootNode)(nil)
 var _ fs.NodeGetattrer = (*FilterRootNode)(nil)
 
-var filterCategories = []string{"status", "priority", "label", "assignee"}
+var filterCategories = []string{"status", "label", "assignee"}
 
 func (f *FilterRootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
@@ -76,7 +76,7 @@ func (f *FilterRootNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	return nil, syscall.ENOENT
 }
 
-// FilterCategoryNode represents a filter category directory (e.g., .filter/status/)
+// FilterCategoryNode represents a filter category directory (e.g., by/status/)
 type FilterCategoryNode struct {
 	fs.Inode
 	lfs      *LinearFS
@@ -135,48 +135,52 @@ func (f *FilterCategoryNode) Lookup(ctx context.Context, name string, out *fuse.
 }
 
 func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, error) {
-	// Priority always shows all 4 values
-	if f.category == "priority" {
-		return []string{"urgent", "high", "medium", "low"}, nil
-	}
-
-	issues, err := f.lfs.GetTeamIssues(ctx, f.team.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool)
-
 	switch f.category {
 	case "status":
-		for _, issue := range issues {
-			seen[issue.State.Name] = true
+		// Use team states from API - much faster than scanning all issues
+		states, err := f.lfs.GetTeamStates(ctx, f.team.ID)
+		if err != nil {
+			return nil, err
 		}
+		values := make([]string, len(states))
+		for i, state := range states {
+			values[i] = state.Name
+		}
+		sort.Strings(values)
+		return values, nil
+
 	case "label":
-		for _, issue := range issues {
-			for _, label := range issue.Labels.Nodes {
-				seen[label.Name] = true
-			}
+		// Use team labels from API - much faster than scanning all issues
+		labels, err := f.lfs.GetTeamLabels(ctx, f.team.ID)
+		if err != nil {
+			return nil, err
 		}
+		values := make([]string, len(labels))
+		for i, label := range labels {
+			values[i] = label.Name
+		}
+		sort.Strings(values)
+		return values, nil
+
 	case "assignee":
-		seen["unassigned"] = true
-		for _, issue := range issues {
-			if issue.Assignee != nil {
-				seen[assigneeHandle(issue.Assignee)] = true
-			}
+		// Use users list - show all active users plus "unassigned"
+		users, err := f.lfs.GetUsers(ctx)
+		if err != nil {
+			return nil, err
 		}
+		values := make([]string, 0, len(users)+1)
+		values = append(values, "unassigned")
+		for _, user := range users {
+			values = append(values, assigneeHandle(&user))
+		}
+		sort.Strings(values)
+		return values, nil
 	}
 
-	// Convert to sorted slice
-	values := make([]string, 0, len(seen))
-	for v := range seen {
-		values = append(values, v)
-	}
-	sort.Strings(values)
-	return values, nil
+	return nil, nil
 }
 
-// FilterValueNode represents a filter value directory (e.g., .filter/status/In Progress/)
+// FilterValueNode represents a filter value directory (e.g., by/status/In Progress/)
 type FilterValueNode struct {
 	fs.Inode
 	lfs      *LinearFS
@@ -231,26 +235,46 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 }
 
 func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, error) {
-	issues, err := f.lfs.GetTeamIssues(ctx, f.team.ID)
+	// Use server-side filtering for much better performance
+	switch f.category {
+	case "status":
+		return f.lfs.GetFilteredIssuesByStatus(ctx, f.team.ID, f.value)
+	case "label":
+		return f.lfs.GetFilteredIssuesByLabel(ctx, f.team.ID, f.value)
+	case "assignee":
+		if f.value == "unassigned" {
+			return f.lfs.GetFilteredIssuesUnassigned(ctx, f.team.ID)
+		}
+		// Need to resolve assignee handle to ID
+		assigneeID, err := f.resolveAssigneeID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return f.lfs.GetFilteredIssuesByAssignee(ctx, f.team.ID, assigneeID)
+	default:
+		return nil, fmt.Errorf("unknown filter category: %s", f.category)
+	}
+}
+
+// resolveAssigneeID converts an assignee handle (display name or email prefix) to user ID
+func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error) {
+	users, err := f.lfs.GetUsers(ctx)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	var filtered []api.Issue
-	for _, issue := range issues {
-		if f.matchesFilter(issue) {
-			filtered = append(filtered, issue)
+	for _, user := range users {
+		if assigneeHandle(&user) == f.value {
+			return user.ID, nil
 		}
 	}
-	return filtered, nil
+	return "", fmt.Errorf("unknown assignee: %s", f.value)
 }
 
 func (f *FilterValueNode) matchesFilter(issue api.Issue) bool {
 	switch f.category {
 	case "status":
 		return issue.State.Name == f.value
-	case "priority":
-		return api.PriorityName(issue.Priority) == f.value
 	case "label":
 		for _, label := range issue.Labels.Nodes {
 			if label.Name == f.value {
@@ -268,7 +292,7 @@ func (f *FilterValueNode) matchesFilter(issue api.Issue) bool {
 }
 
 // FilterIssueSymlink is a symlink pointing to an issue directory
-// Path from .filter/category/value/ to issues/ is ../../../issues/
+// Path from by/category/value/ to issues/ is ../../../issues/
 type FilterIssueSymlink struct {
 	fs.Inode
 	identifier string
@@ -278,7 +302,7 @@ var _ fs.NodeReadlinker = (*FilterIssueSymlink)(nil)
 var _ fs.NodeGetattrer = (*FilterIssueSymlink)(nil)
 
 func (s *FilterIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// From .filter/category/value/ go up 3 levels to team dir, then into issues/
+	// From by/category/value/ go up 3 levels to team dir, then into issues/
 	target := fmt.Sprintf("../../../issues/%s", s.identifier)
 	return []byte(target), 0
 }

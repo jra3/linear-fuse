@@ -65,10 +65,10 @@ var _ fs.NodeLookuper = (*TeamNode)(nil)
 
 func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
-		{Name: ".team.md", Mode: syscall.S_IFREG},
-		{Name: ".states.md", Mode: syscall.S_IFREG},
-		{Name: ".labels.md", Mode: syscall.S_IFREG},
-		{Name: ".filter", Mode: syscall.S_IFDIR},
+		{Name: "team.md", Mode: syscall.S_IFREG},
+		{Name: "states.md", Mode: syscall.S_IFREG},
+		{Name: "labels.md", Mode: syscall.S_IFREG},
+		{Name: "by", Mode: syscall.S_IFDIR},
 		{Name: "cycles", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
 		{Name: "issues", Mode: syscall.S_IFDIR},
@@ -81,7 +81,7 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
-	case ".team.md":
+	case "team.md":
 		node := &TeamInfoNode{team: t.team}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
@@ -89,21 +89,21 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
-	case ".states.md":
+	case "states.md":
 		node := &StatesInfoNode{lfs: t.lfs, team: t.team}
 		content := node.getContent(ctx)
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
-	case ".labels.md":
+	case "labels.md":
 		node := &LabelsInfoNode{lfs: t.lfs, team: t.team}
 		content := node.getContent(ctx)
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
-	case ".filter":
+	case "by":
 		node := &FilterRootNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
