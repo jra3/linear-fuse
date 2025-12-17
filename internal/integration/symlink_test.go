@@ -48,9 +48,13 @@ func TestMyAssignedSymlinkTarget(t *testing.T) {
 		t.Fatalf("Failed to read symlink: %v", err)
 	}
 
-	// Target should be relative path to teams/{KEY}/issues/{ID}/issue.md
-	if !strings.Contains(target, "teams/") || !strings.Contains(target, "/issues/") || !strings.HasSuffix(target, "/issue.md") {
+	// Target should be relative path to teams/{KEY}/issues/{ID}/ (directory, not file)
+	if !strings.Contains(target, "teams/") || !strings.Contains(target, "/issues/") {
 		t.Errorf("Symlink target format incorrect: %s", target)
+	}
+	// Should NOT end with /issue.md - symlinks point to directories now
+	if strings.HasSuffix(target, "/issue.md") {
+		t.Errorf("Symlink should point to directory, not file: %s", target)
 	}
 }
 
@@ -64,11 +68,11 @@ func TestMyAssignedSymlinkResolvable(t *testing.T) {
 		t.Skip("No assigned issues to test symlink resolution")
 	}
 
-	// Try to read through the symlink
-	linkPath := filepath.Join(myAssignedPath(), entries[0].Name())
+	// Symlinks point to issue directories, so read issue.md inside
+	linkPath := filepath.Join(myAssignedPath(), entries[0].Name(), "issue.md")
 	content, err := os.ReadFile(linkPath)
 	if err != nil {
-		t.Fatalf("Failed to read through symlink: %v", err)
+		t.Fatalf("Failed to read issue.md through symlink: %v", err)
 	}
 
 	// Should have frontmatter

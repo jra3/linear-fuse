@@ -148,8 +148,8 @@ func (t *TeamInfoNode) generateContent() []byte {
 	content := fmt.Sprintf(`---
 id: %s
 key: %s
-name: %s
-icon: %s
+name: %q
+icon: %q
 created: %q
 updated: %q
 ---
