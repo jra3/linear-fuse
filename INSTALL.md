@@ -9,26 +9,55 @@ This guide covers installing LinearFS on macOS, Arch Linux, and Ubuntu/Debian.
 
 ## macOS
 
-### 1. Install macFUSE
+> **⚠️ Apple Silicon Users:** macFUSE requires booting into Recovery Mode to enable kernel extensions. This is a one-time setup. See step 1 below for detailed instructions.
+
+### 1. Install and Configure macFUSE
 
 macFUSE provides the FUSE kernel extension for macOS.
+
+#### Install macFUSE
 
 ```bash
 brew install --cask macfuse
 ```
 
-After installation, you must approve the kernel extension:
+You'll be prompted for your password during installation.
+
+#### Enable Kernel Extensions (Apple Silicon Only)
+
+**On Apple Silicon Macs (M1/M2/M3), you MUST enable kernel extensions in Recovery Mode:**
+
+1. **Shut down** your Mac completely
+2. **Press and hold the power button** until you see "Loading startup options"
+3. Click **Options**, then click **Continue**
+4. Select your user account and enter your password
+5. From the menu bar, select **Utilities** → **Startup Security Utility**
+6. Click the lock icon and authenticate
+7. Select **Reduced Security**
+8. Check the box: **"Allow user management of kernel extensions from identified developers"**
+9. Click **OK** and restart your Mac
+
+> **Intel Macs:** You can skip the Recovery Mode step. Just approve the extension in System Settings after installation.
+
+#### Approve the Kernel Extension
+
+After restarting:
 
 1. Open **System Settings** → **Privacy & Security**
-2. Scroll down to find the blocked extension from "Benjamin Fleischer"
+2. Scroll down to find "System software from developer 'Benjamin Fleischer' was blocked"
 3. Click **Allow**
-4. Restart your Mac
+4. Enter your password if prompted
+5. **Restart your Mac** again
 
-> **Note:** On Apple Silicon Macs, you may need to enable kernel extensions in Recovery Mode:
-> 1. Shut down your Mac
-> 2. Press and hold the power button until "Loading startup options" appears
-> 3. Select **Options** → **Startup Security Utility**
-> 4. Select **Reduced Security** and check "Allow user management of kernel extensions"
+#### Verify Installation
+
+After the final restart, verify macFUSE is working:
+
+```bash
+ls /Library/Filesystems/macfuse.fs
+```
+
+If you see output, macFUSE is installed correctly.
 
 ### 2. Install Go
 
@@ -70,9 +99,76 @@ linearfs mount /tmp/linear
 
 | Issue | Solution |
 |-------|----------|
-| "macFUSE is not installed" | Reboot after installing macFUSE |
-| "System Extension Blocked" | Approve in System Settings → Privacy & Security |
-| "Operation not permitted" | Check SIP isn't blocking; try mounting to ~/mnt instead |
+| "no FUSE mount utility found" | macFUSE not installed or kernel extension not loaded. Verify with `ls /Library/Filesystems/macfuse.fs`. If present but still errors, reboot. |
+| "System Extension Blocked" | Open System Settings → Privacy & Security, scroll down, click "Allow" for Benjamin Fleischer, then restart |
+| "Operation not permitted" | On Apple Silicon: Enable kernel extensions in Recovery Mode (see step 1). On Intel: Check that SIP isn't blocking |
+| macFUSE installed but mount fails | **Apple Silicon:** Did you enable kernel extensions in Recovery Mode? This is required. **All Macs:** Did you approve the extension AND restart twice? |
+| Service starts but mount empty | Check logs: `tail -f /tmp/linearfs.err`. Verify API key in `~/.config/linearfs/config.yaml` |
+
+### Running as a launchd Service (Automatic Startup)
+
+To have LinearFS start automatically on login:
+
+#### 1. Copy the Service File
+
+```bash
+cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
+```
+
+#### 2. Configure Mount Point
+
+The default mount point is `~/mnt/linear`. To customize it, edit the env file:
+
+```bash
+mkdir -p ~/.config/linearfs
+cat > ~/.config/linearfs/env << 'EOF'
+LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
+LINEARFS_MOUNT=/Users/YOUR_USERNAME/mnt/linear
+EOF
+chmod 600 ~/.config/linearfs/env
+```
+
+Or simply use the config.yaml file (recommended):
+
+```bash
+mkdir -p ~/.config/linearfs
+cat > ~/.config/linearfs/config.yaml << 'EOF'
+api_key: "lin_api_YOUR_KEY_HERE"
+cache:
+  ttl: 60s
+EOF
+chmod 600 ~/.config/linearfs/config.yaml
+```
+
+#### 3. Create Mount Point
+
+```bash
+mkdir -p ~/mnt/linear
+```
+
+#### 4. Load and Start
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.linearfs.mount.plist
+launchctl start com.linearfs.mount
+```
+
+The service will now start automatically on login.
+
+#### 5. Management Commands
+
+```bash
+launchctl stop com.linearfs.mount      # Stop the service
+launchctl start com.linearfs.mount     # Start the service
+launchctl unload ~/Library/LaunchAgents/com.linearfs.mount.plist  # Disable autostart
+```
+
+#### 6. View Logs
+
+```bash
+tail -f /tmp/linearfs.log   # Standard output
+tail -f /tmp/linearfs.err   # Error output
+```
 
 ---
 

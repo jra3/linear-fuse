@@ -13,6 +13,10 @@ Mount your Linear workspace as a FUSE filesystem. Browse and edit issues as mark
 
 ## Installation
 
+See [INSTALL.md](INSTALL.md) for detailed platform-specific installation instructions.
+
+### Quick Start
+
 ```bash
 # Build from source
 make build
@@ -23,8 +27,11 @@ make install
 
 ### Requirements
 
-- Go 1.21+
-- FUSE3 (`sudo pacman -S fuse3` on Arch)
+- **Go 1.21+**
+- **FUSE filesystem:**
+  - **macOS:** macFUSE (`brew install --cask macfuse`)
+    - ⚠️ Apple Silicon requires enabling kernel extensions in Recovery Mode
+  - **Linux:** FUSE3 (`sudo pacman -S fuse3` on Arch, `sudo apt install fuse3` on Ubuntu/Debian)
 
 ## Usage
 
@@ -51,7 +58,12 @@ echo "My comment" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
 ls /mnt/linear/my/assigned/
 
 # Unmount
-fusermount -u /mnt/linear
+# macOS
+umount /mnt/linear
+
+# Linux
+fusermount3 -u /mnt/linear
+
 # or Ctrl+C if running in foreground
 ```
 
@@ -321,6 +333,35 @@ mount:
 log:
   level: info
 ```
+
+## Running as a Service
+
+### macOS (launchd)
+
+To start LinearFS automatically on login:
+
+```bash
+# Install the service
+cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.linearfs.mount.plist
+launchctl start com.linearfs.mount
+
+# Your Linear workspace will now be mounted at ~/mnt/linear on every login
+```
+
+See [INSTALL.md](INSTALL.md#running-as-a-launchd-service-automatic-startup) for details.
+
+### Linux (systemd)
+
+```bash
+# Install the service
+mkdir -p ~/.config/systemd/user
+cp contrib/systemd/linearfs.service ~/.config/systemd/user/
+systemctl --user enable linearfs.service
+systemctl --user start linearfs.service
+```
+
+See [INSTALL.md](INSTALL.md#running-as-a-systemd-user-service-linux) for details.
 
 ## License
 

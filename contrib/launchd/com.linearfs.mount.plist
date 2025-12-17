@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.linearfs.mount</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>
+            # Load environment variables
+            if [ -f "$HOME/.config/linearfs/env" ]; then
+                . "$HOME/.config/linearfs/env"
+            fi
+
+            # Set default mount point if not configured
+            LINEARFS_MOUNT="${LINEARFS_MOUNT:-$HOME/mnt/linear}"
+
+            # Create mount point if it doesn't exist
+            mkdir -p "$LINEARFS_MOUNT"
+
+            # Start linearfs in foreground mode
+            exec "$HOME/bin/linearfs" mount -f "$LINEARFS_MOUNT"
+        </string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/linearfs.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/linearfs.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
