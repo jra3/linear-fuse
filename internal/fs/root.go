@@ -212,11 +212,13 @@ The directory name becomes the issue title.
 
 ## Symlinks
 
-Files in /users/, /my/, /projects/, and /cycles/ are symlinks pointing to the
-canonical issue files in /teams/{KEY}/issues/{ID}/issue.md. This means:
+Symlinks provide multiple views of the same issues:
 
-- Edits made anywhere affect the same underlying issue
-- All views stay in sync automatically
+- /my/* symlinks point to issue directories: /teams/{KEY}/issues/{ID}/
+- /users/, /projects/, /cycles/ symlinks point to issue.md files
+
+All symlinks resolve to the canonical location in /teams/{KEY}/issues/{ID}/.
+Edits made anywhere affect the same underlying issue.
 
 ## Metadata Files
 
@@ -232,7 +234,8 @@ contain YAML frontmatter with IDs. Use these to look up valid values:
 1. Read .states.md before changing issue status to get valid state names
 2. Use the frontmatter 'id' field when you need to reference entities via API
 3. The 'identifier' (e.g., ENG-123) is the human-readable issue key
-4. Symlinks in /my/ and /users/ resolve to /teams/{KEY}/issues/{ID}/issue.md
+4. /my/* symlinks point to issue directories; /users/* symlinks point to issue.md
 5. Filter views: /my/active/ shows only non-completed assigned issues
 6. To add a comment, write to comments/new.md in an issue directory
+7. Use /cycles/current/ to access the active sprint cycle
 `
