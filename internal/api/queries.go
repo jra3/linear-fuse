@@ -62,6 +62,22 @@ query TeamIssues($teamId: String!, $after: String) {
           name
           slugId
         }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
+        }
       }
     }
   }
@@ -109,6 +125,22 @@ query Issue($id: String!) {
       name
       slugId
     }
+    projectMilestone {
+      id
+      name
+    }
+    parent {
+      id
+      identifier
+      title
+    }
+    children {
+      nodes {
+        id
+        identifier
+        title
+      }
+    }
   }
 }
 `
@@ -152,12 +184,32 @@ const issueFields = `
     name
     slugId
   }
+  projectMilestone {
+    id
+    name
+  }
+  parent {
+    id
+    identifier
+    title
+  }
+  children {
+    nodes {
+      id
+      identifier
+      title
+    }
+  }
 `
 
 const queryMyIssues = `
-query MyIssues {
+query MyIssues($after: String) {
   viewer {
-    assignedIssues(first: 100) {
+    assignedIssues(first: 100, after: $after) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
       nodes {
         id
         identifier
@@ -196,6 +248,22 @@ query MyIssues {
           id
           name
           slugId
+        }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
         }
       }
     }
@@ -249,6 +317,22 @@ query MyCreatedIssues($after: String) {
           id
           name
           slugId
+        }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
         }
       }
     }
@@ -308,6 +392,22 @@ query MyActiveIssues($after: String) {
           id
           name
           slugId
+        }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
         }
       }
     }
@@ -417,6 +517,12 @@ query TeamProjects($teamId: String!) {
           id
           name
         }
+        initiatives {
+          nodes {
+            id
+            name
+          }
+        }
       }
     }
   }
@@ -445,6 +551,102 @@ query ProjectIssues($projectId: String!, $after: String) {
 }
 `
 
+const queryProjectMilestones = `
+query ProjectMilestones($projectId: String!) {
+  project(id: $projectId) {
+    projectMilestones {
+      nodes {
+        id
+        name
+        description
+        targetDate
+        sortOrder
+      }
+    }
+  }
+}
+`
+
+const queryProjectUpdates = `
+query ProjectUpdates($projectId: String!) {
+  project(id: $projectId) {
+    projectUpdates {
+      nodes {
+        id
+        body
+        health
+        createdAt
+        updatedAt
+        user {
+          id
+          name
+          email
+        }
+      }
+    }
+  }
+}
+`
+
+const mutationCreateProjectUpdate = `
+mutation CreateProjectUpdate($projectId: String!, $body: String!, $health: ProjectUpdateHealthType) {
+  projectUpdateCreate(input: {projectId: $projectId, body: $body, health: $health}) {
+    success
+    projectUpdate {
+      id
+      body
+      health
+      createdAt
+      user {
+        id
+        name
+        email
+      }
+    }
+  }
+}
+`
+
+const queryInitiativeUpdates = `
+query InitiativeUpdates($initiativeId: String!) {
+  initiative(id: $initiativeId) {
+    initiativeUpdates {
+      nodes {
+        id
+        body
+        health
+        createdAt
+        updatedAt
+        user {
+          id
+          name
+          email
+        }
+      }
+    }
+  }
+}
+`
+
+const mutationCreateInitiativeUpdate = `
+mutation CreateInitiativeUpdate($initiativeId: String!, $body: String!, $health: InitiativeUpdateHealthType) {
+  initiativeUpdateCreate(input: {initiativeId: $initiativeId, body: $body, health: $health}) {
+    success
+    initiativeUpdate {
+      id
+      body
+      health
+      createdAt
+      user {
+        id
+        name
+        email
+      }
+    }
+  }
+}
+`
+
 const mutationCreateProject = `
 mutation CreateProject($input: ProjectCreateInput!) {
   projectCreate(input: $input) {
@@ -466,6 +668,22 @@ mutation CreateProject($input: ProjectCreateInput!) {
 const mutationArchiveProject = `
 mutation ArchiveProject($id: String!) {
   projectArchive(id: $id) {
+    success
+  }
+}
+`
+
+const mutationInitiativeToProjectCreate = `
+mutation InitiativeToProjectCreate($initiativeId: String!, $projectId: String!) {
+  initiativeToProjectCreate(initiativeId: $initiativeId, projectId: $projectId) {
+    success
+  }
+}
+`
+
+const mutationInitiativeToProjectDelete = `
+mutation InitiativeToProjectDelete($initiativeId: String!, $projectId: String!) {
+  initiativeToProjectDelete(initiativeId: $initiativeId, projectId: $projectId) {
     success
   }
 }
@@ -531,6 +749,22 @@ query UserIssues($userId: String!, $after: String) {
           id
           name
           slugId
+        }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
         }
       }
     }
@@ -849,6 +1083,22 @@ query TeamIssuesByStatus($teamId: String!, $statusName: String!, $after: String)
           name
           slugId
         }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
+        }
       }
     }
   }
@@ -901,6 +1151,22 @@ query TeamIssuesByPriority($teamId: ID!, $priority: Int!, $after: String) {
         name
         slugId
       }
+      projectMilestone {
+        id
+        name
+      }
+      parent {
+        id
+        identifier
+        title
+      }
+      children {
+        nodes {
+          id
+          identifier
+          title
+        }
+      }
     }
   }
 }
@@ -952,6 +1218,22 @@ query TeamIssuesByLabel($teamId: String!, $labelName: String!, $after: String) {
           id
           name
           slugId
+        }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
         }
       }
     }
@@ -1006,6 +1288,22 @@ query TeamIssuesByAssignee($teamId: String!, $assigneeId: ID!, $after: String) {
           name
           slugId
         }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
+        }
       }
     }
   }
@@ -1055,6 +1353,54 @@ query TeamIssuesUnassigned($teamId: String!, $after: String) {
           name
         }
         project {
+          id
+          name
+          slugId
+        }
+        projectMilestone {
+          id
+          name
+        }
+        parent {
+          id
+          identifier
+          title
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+          }
+        }
+      }
+    }
+  }
+}
+`
+
+const queryInitiatives = `
+query Initiatives {
+  initiatives {
+    nodes {
+      id
+      name
+      slugId
+      description
+      status
+      color
+      icon
+      targetDate
+      url
+      createdAt
+      updatedAt
+      owner {
+        id
+        name
+        email
+      }
+      projects {
+        nodes {
           id
           name
           slugId

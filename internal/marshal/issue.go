@@ -51,6 +51,14 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 		fm["project"] = issue.Project.Name
 	}
 
+	if issue.ProjectMilestone != nil {
+		fm["milestone"] = issue.ProjectMilestone.Name
+	}
+
+	if issue.Parent != nil {
+		fm["parent"] = issue.Parent.Identifier
+	}
+
 	// Body is just the description
 	body := issue.Description
 	if body == "" {
@@ -99,6 +107,9 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 		if assignee != origAssignee {
 			update["assigneeId"] = assignee // Will need to resolve to actual user ID
 		}
+	} else if _, exists := doc.Frontmatter["assignee"]; !exists && original.Assignee != nil {
+		// Assignee was removed - set to null
+		update["assigneeId"] = nil
 	}
 
 	// Check due date
@@ -163,6 +174,48 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	} else if _, exists := doc.Frontmatter["labels"]; !exists && len(original.Labels.Nodes) > 0 {
 		// Labels were removed - set to empty
 		update["labelIds"] = []string{}
+	}
+
+	// Check parent
+	if parent, ok := doc.Frontmatter["parent"].(string); ok {
+		origParent := ""
+		if original.Parent != nil {
+			origParent = original.Parent.Identifier
+		}
+		if parent != origParent {
+			update["parentId"] = parent // Will need to resolve to actual issue ID
+		}
+	} else if _, exists := doc.Frontmatter["parent"]; !exists && original.Parent != nil {
+		// Parent was removed - set to null
+		update["parentId"] = nil
+	}
+
+	// Check project
+	if project, ok := doc.Frontmatter["project"].(string); ok {
+		origProject := ""
+		if original.Project != nil {
+			origProject = original.Project.Name
+		}
+		if project != origProject {
+			update["projectId"] = project // Will need to resolve to actual project ID
+		}
+	} else if _, exists := doc.Frontmatter["project"]; !exists && original.Project != nil {
+		// Project was removed - set to null
+		update["projectId"] = nil
+	}
+
+	// Check milestone
+	if milestone, ok := doc.Frontmatter["milestone"].(string); ok {
+		origMilestone := ""
+		if original.ProjectMilestone != nil {
+			origMilestone = original.ProjectMilestone.Name
+		}
+		if milestone != origMilestone {
+			update["projectMilestoneId"] = milestone // Will need to resolve to actual milestone ID
+		}
+	} else if _, exists := doc.Frontmatter["milestone"]; !exists && original.ProjectMilestone != nil {
+		// Milestone was removed - set to null
+		update["projectMilestoneId"] = nil
 	}
 
 	// Check description (body)

@@ -34,7 +34,11 @@ type LinearFS struct {
 	userIssueCache      *cache.Cache[[]api.Issue]
 	commentCache        *cache.Cache[[]api.Comment]
 	documentCache       *cache.Cache[[]api.Document]
-	debug               bool
+	initiativeCache     *cache.Cache[[]api.Initiative]
+	milestoneCache         *cache.Cache[[]api.ProjectMilestone]
+	projectUpdateCache     *cache.Cache[[]api.ProjectUpdate]
+	initiativeUpdateCache  *cache.Cache[[]api.InitiativeUpdate]
+	debug                  bool
 	sfGroup             singleflight.Group // Deduplicates concurrent requests for same data
 }
 
@@ -62,7 +66,11 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		userIssueCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
 		commentCache:        cache.New[[]api.Comment](cfg.Cache.TTL),
 		documentCache:       cache.New[[]api.Document](cfg.Cache.TTL),
-		debug:               debug,
+		initiativeCache:     cache.New[[]api.Initiative](cfg.Cache.TTL),
+		milestoneCache:         cache.New[[]api.ProjectMilestone](cfg.Cache.TTL),
+		projectUpdateCache:     cache.New[[]api.ProjectUpdate](cfg.Cache.TTL),
+		initiativeUpdateCache:  cache.New[[]api.InitiativeUpdate](cfg.Cache.TTL),
+		debug:                  debug,
 	}, nil
 }
 
@@ -454,6 +462,11 @@ func (lfs *LinearFS) InvalidateTeamProjects(teamID string) {
 	lfs.projectCache.Delete("projects:" + teamID)
 }
 
+// InvalidateProjectIssues clears the issue cache for a project
+func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
+	lfs.projectIssueCache.Delete("project-issues:" + projectID)
+}
+
 // CreateProject creates a new project and invalidates the cache
 func (lfs *LinearFS) CreateProject(ctx context.Context, input map[string]any) (*api.Project, error) {
 	project, err := lfs.client.CreateProject(ctx, input)
@@ -789,6 +802,24 @@ func (lfs *LinearFS) ResolveUserID(ctx context.Context, identifier string) (stri
 	return "", fmt.Errorf("unknown user: %s", identifier)
 }
 
+// ResolveIssueID converts an issue identifier (e.g., "ENG-123") to its UUID
+func (lfs *LinearFS) ResolveIssueID(ctx context.Context, identifier string) (string, error) {
+	// First check the cache
+	if issue := lfs.GetIssueByIdentifier(identifier); issue != nil {
+		return issue.ID, nil
+	}
+
+	// Fall back to API call - Linear's issue query accepts identifiers
+	issue, err := lfs.client.GetIssue(ctx, identifier)
+	if err != nil {
+		return "", fmt.Errorf("unknown issue: %s", identifier)
+	}
+
+	// Cache the issue for future lookups
+	lfs.issueByIdCache.Set(issue.Identifier, *issue)
+	return issue.ID, nil
+}
+
 // ResolveStateID converts a state name to its ID for a given team
 func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateName string) (string, error) {
 	states, err := lfs.GetTeamStates(ctx, teamID)
@@ -842,6 +873,161 @@ func (lfs *LinearFS) ResolveLabelIDs(ctx context.Context, teamID string, labelNa
 	return ids, notFound, nil
 }
 
+// ResolveProjectID converts a project name to its ID for a given team
+func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projectName string) (string, error) {
+	projects, err := lfs.GetTeamProjects(ctx, teamID)
+	if err != nil {
+		return "", err
+	}
+
+	// Try exact match first
+	for _, project := range projects {
+		if project.Name == projectName {
+			return project.ID, nil
+		}
+	}
+
+	// Try case-insensitive match
+	lowerName := strings.ToLower(projectName)
+	for _, project := range projects {
+		if strings.ToLower(project.Name) == lowerName {
+			return project.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("unknown project: %s", projectName)
+}
+
+// GetProjectMilestones fetches milestones for a project with caching
+func (lfs *LinearFS) GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error) {
+	cacheKey := "milestones:" + projectID
+	if milestones, ok := lfs.milestoneCache.Get(cacheKey); ok {
+		return milestones, nil
+	}
+
+	milestones, err := lfs.client.GetProjectMilestones(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.milestoneCache.Set(cacheKey, milestones)
+	return milestones, nil
+}
+
+// ResolveMilestoneID converts a milestone name to its ID for a given project
+func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, milestoneName string) (string, error) {
+	milestones, err := lfs.GetProjectMilestones(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+
+	// Try exact match first
+	for _, milestone := range milestones {
+		if milestone.Name == milestoneName {
+			return milestone.ID, nil
+		}
+	}
+
+	// Try case-insensitive match
+	lowerName := strings.ToLower(milestoneName)
+	for _, milestone := range milestones {
+		if strings.ToLower(milestone.Name) == lowerName {
+			return milestone.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
+}
+
+// GetProjectUpdates fetches status updates for a project with caching
+func (lfs *LinearFS) GetProjectUpdates(ctx context.Context, projectID string) ([]api.ProjectUpdate, error) {
+	cacheKey := "project-updates:" + projectID
+	if updates, ok := lfs.projectUpdateCache.Get(cacheKey); ok {
+		return updates, nil
+	}
+
+	updates, err := lfs.client.GetProjectUpdates(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.projectUpdateCache.Set(cacheKey, updates)
+	return updates, nil
+}
+
+// InvalidateProjectUpdates clears the updates cache for a project
+func (lfs *LinearFS) InvalidateProjectUpdates(projectID string) {
+	lfs.projectUpdateCache.Delete("project-updates:" + projectID)
+}
+
+// CreateProjectUpdate creates a new status update on a project
+func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*api.ProjectUpdate, error) {
+	update, err := lfs.client.CreateProjectUpdate(ctx, projectID, body, health)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.InvalidateProjectUpdates(projectID)
+	return update, nil
+}
+
+// GetInitiativeUpdates fetches status updates for an initiative with caching
+func (lfs *LinearFS) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]api.InitiativeUpdate, error) {
+	cacheKey := "initiative-updates:" + initiativeID
+	if updates, ok := lfs.initiativeUpdateCache.Get(cacheKey); ok {
+		return updates, nil
+	}
+
+	updates, err := lfs.client.GetInitiativeUpdates(ctx, initiativeID)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.initiativeUpdateCache.Set(cacheKey, updates)
+	return updates, nil
+}
+
+// InvalidateInitiativeUpdates clears the updates cache for an initiative
+func (lfs *LinearFS) InvalidateInitiativeUpdates(initiativeID string) {
+	lfs.initiativeUpdateCache.Delete("initiative-updates:" + initiativeID)
+}
+
+// CreateInitiativeUpdate creates a new status update on an initiative
+func (lfs *LinearFS) CreateInitiativeUpdate(ctx context.Context, initiativeID, body, health string) (*api.InitiativeUpdate, error) {
+	update, err := lfs.client.CreateInitiativeUpdate(ctx, initiativeID, body, health)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.InvalidateInitiativeUpdates(initiativeID)
+	return update, nil
+}
+
+// ResolveInitiativeID converts an initiative name to its ID
+func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName string) (string, error) {
+	initiatives, err := lfs.GetInitiatives(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Try exact match first
+	for _, initiative := range initiatives {
+		if initiative.Name == initiativeName {
+			return initiative.ID, nil
+		}
+	}
+
+	// Try case-insensitive match
+	lowerName := strings.ToLower(initiativeName)
+	for _, initiative := range initiatives {
+		if strings.ToLower(initiative.Name) == lowerName {
+			return initiative.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("unknown initiative: %s", initiativeName)
+}
+
 // InvalidateTeamLabels clears the label cache for a team
 func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 	lfs.labelCache.Delete("labels:" + teamID)
@@ -882,6 +1068,31 @@ func (lfs *LinearFS) DeleteLabel(ctx context.Context, labelID string, teamID str
 
 	lfs.InvalidateTeamLabels(teamID)
 	return nil
+}
+
+// GetInitiatives fetches all initiatives with caching
+func (lfs *LinearFS) GetInitiatives(ctx context.Context) ([]api.Initiative, error) {
+	cacheKey := "initiatives"
+	if initiatives, ok := lfs.initiativeCache.Get(cacheKey); ok {
+		return initiatives, nil
+	}
+
+	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
+		if initiatives, ok := lfs.initiativeCache.Get(cacheKey); ok {
+			return initiatives, nil
+		}
+		initiatives, err := lfs.client.GetInitiatives(ctx)
+		if err != nil {
+			return nil, err
+		}
+		lfs.initiativeCache.Set(cacheKey, initiatives)
+		return initiatives, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result.([]api.Initiative), nil
 }
 
 func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, error) {

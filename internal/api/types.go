@@ -12,21 +12,43 @@ type Team struct {
 }
 
 type Issue struct {
-	ID          string     `json:"id"`
-	Identifier  string     `json:"identifier"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	State       State      `json:"state"`
-	Assignee    *User      `json:"assignee"`
-	Priority    int        `json:"priority"`
-	Labels      Labels     `json:"labels"`
-	DueDate     *string    `json:"dueDate"`
-	Estimate    *float64   `json:"estimate"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
-	URL         string     `json:"url"`
-	Team        *Team      `json:"team"`
-	Project     *Project   `json:"project"`
+	ID               string            `json:"id"`
+	Identifier       string            `json:"identifier"`
+	Title            string            `json:"title"`
+	Description      string            `json:"description"`
+	State            State             `json:"state"`
+	Assignee         *User             `json:"assignee"`
+	Priority         int               `json:"priority"`
+	Labels           Labels            `json:"labels"`
+	DueDate          *string           `json:"dueDate"`
+	Estimate         *float64          `json:"estimate"`
+	CreatedAt        time.Time         `json:"createdAt"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
+	URL              string            `json:"url"`
+	Team             *Team             `json:"team"`
+	Project          *Project          `json:"project"`
+	ProjectMilestone *ProjectMilestone `json:"projectMilestone"`
+	Parent           *ParentIssue      `json:"parent"`
+	Children         ChildIssues       `json:"children"`
+}
+
+// ParentIssue is a minimal issue representation for parent references
+type ParentIssue struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
+}
+
+// ChildIssues is a collection of child/sub-issues
+type ChildIssues struct {
+	Nodes []ChildIssue `json:"nodes"`
+}
+
+// ChildIssue is a minimal issue representation for child listings
+type ChildIssue struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+	Title      string `json:"title"`
 }
 
 type State struct {
@@ -55,23 +77,44 @@ type Label struct {
 }
 
 type Project struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Slug        string     `json:"slugId"`
-	Description string     `json:"description"`
-	URL         string     `json:"url"`
-	State       string     `json:"state"`
-	StartDate   *string    `json:"startDate"`
-	TargetDate  *string    `json:"targetDate"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
-	Lead        *User      `json:"lead"`
-	Status      *Status    `json:"status"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Slug        string              `json:"slugId"`
+	Description string              `json:"description"`
+	URL         string              `json:"url"`
+	State       string              `json:"state"`
+	StartDate   *string             `json:"startDate"`
+	TargetDate  *string             `json:"targetDate"`
+	CreatedAt   time.Time           `json:"createdAt"`
+	UpdatedAt   time.Time           `json:"updatedAt"`
+	Lead        *User               `json:"lead"`
+	Status      *Status             `json:"status"`
+	Initiatives *ProjectInitiatives `json:"initiatives"`
+}
+
+// ProjectInitiatives is a collection of initiatives a project belongs to
+type ProjectInitiatives struct {
+	Nodes []ProjectInitiative `json:"nodes"`
+}
+
+// ProjectInitiative is a minimal initiative representation for project listings
+type ProjectInitiative struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type Status struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// ProjectMilestone represents a milestone within a project
+type ProjectMilestone struct {
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	TargetDate  *string `json:"targetDate"`
+	SortOrder   float64 `json:"sortOrder"`
 }
 
 type PageInfo struct {
@@ -115,6 +158,16 @@ type Comment struct {
 	User      *User      `json:"user"`
 }
 
+// ProjectUpdate represents a status update on a project
+type ProjectUpdate struct {
+	ID        string    `json:"id"`
+	Body      string    `json:"body"`
+	Health    string    `json:"health"` // onTrack, atRisk, offTrack
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	User      *User     `json:"user"`
+}
+
 type Document struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
@@ -129,6 +182,42 @@ type Document struct {
 	Issue     *Issue    `json:"issue"`
 	Project   *Project  `json:"project"`
 	Team      *Team     `json:"team"`
+}
+
+type Initiative struct {
+	ID          string             `json:"id"`
+	Name        string             `json:"name"`
+	Slug        string             `json:"slugId"`
+	Description string             `json:"description"`
+	Status      string             `json:"status"`
+	Color       string             `json:"color"`
+	Icon        string             `json:"icon"`
+	TargetDate  *string            `json:"targetDate"`
+	URL         string             `json:"url"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	UpdatedAt   time.Time          `json:"updatedAt"`
+	Owner       *User              `json:"owner"`
+	Projects    InitiativeProjects `json:"projects"`
+}
+
+type InitiativeProjects struct {
+	Nodes []InitiativeProject `json:"nodes"`
+}
+
+type InitiativeProject struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slugId"`
+}
+
+// InitiativeUpdate represents a status update on an initiative
+type InitiativeUpdate struct {
+	ID        string    `json:"id"`
+	Body      string    `json:"body"`
+	Health    string    `json:"health"` // onTrack, atRisk, offTrack
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	User      *User     `json:"user"`
 }
 
 // PriorityName converts numeric priority to string

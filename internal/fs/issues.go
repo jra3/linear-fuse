@@ -28,6 +28,13 @@ func issueDirIno(issueID string) uint64 {
 	return h.Sum64()
 }
 
+// childrenDirIno generates a stable inode number for a children directory
+func childrenDirIno(issueID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("children:" + issueID))
+	return h.Sum64()
+}
+
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
 	fs.Inode
@@ -186,6 +193,7 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 		{Name: "issue.md", Mode: syscall.S_IFREG},
 		{Name: "comments", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
+		{Name: "children", Mode: syscall.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
 }
@@ -240,6 +248,19 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFDIR,
 			Ino:  docsDirIno(n.issue.ID),
+		}), 0
+
+	case "children":
+		node := &ChildrenNode{
+			lfs:   n.lfs,
+			issue: n.issue,
+		}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  childrenDirIno(n.issue.ID),
 		}), 0
 	}
 
@@ -449,6 +470,50 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		updates["labelIds"] = labelIDs
 	}
 
+	// Resolve parent issue identifier to ID if needed
+	if parentID, ok := updates["parentId"].(string); ok {
+		issueID, err := i.lfs.ResolveIssueID(ctx, parentID)
+		if err != nil {
+			log.Printf("Failed to resolve parent '%s': %v", parentID, err)
+			return syscall.EIO
+		}
+		updates["parentId"] = issueID
+	}
+
+	// Resolve project name to ID if needed
+	if projectName, ok := updates["projectId"].(string); ok {
+		if i.issue.Team == nil {
+			log.Printf("Cannot resolve project '%s': issue has no team", projectName)
+			return syscall.EIO
+		}
+		projectID, err := i.lfs.ResolveProjectID(ctx, i.issue.Team.ID, projectName)
+		if err != nil {
+			log.Printf("Failed to resolve project '%s': %v", projectName, err)
+			return syscall.EIO
+		}
+		updates["projectId"] = projectID
+	}
+
+	// Resolve milestone name to ID if needed
+	if milestoneName, ok := updates["projectMilestoneId"].(string); ok {
+		// Get project ID - prefer newly set project, fallback to existing
+		var projectID string
+		if newProjectID, ok := updates["projectId"].(string); ok {
+			projectID = newProjectID
+		} else if i.issue.Project != nil {
+			projectID = i.issue.Project.ID
+		} else {
+			log.Printf("Cannot resolve milestone '%s': issue has no project", milestoneName)
+			return syscall.EIO
+		}
+		milestoneID, err := i.lfs.ResolveMilestoneID(ctx, projectID, milestoneName)
+		if err != nil {
+			log.Printf("Failed to resolve milestone '%s': %v", milestoneName, err)
+			return syscall.EIO
+		}
+		updates["projectMilestoneId"] = milestoneID
+	}
+
 	// Call Linear API to update
 	if err := i.lfs.client.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
@@ -467,6 +532,17 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if i.issue.Assignee != nil {
 		i.lfs.InvalidateUserIssues(i.issue.Assignee.ID)
 	}
+	// Invalidate project caches if project changed
+	if _, hasProjectUpdate := updates["projectId"]; hasProjectUpdate {
+		// Invalidate old project (if issue was in one)
+		if i.issue.Project != nil {
+			i.lfs.InvalidateProjectIssues(i.issue.Project.ID)
+		}
+		// Invalidate new project (if being assigned to one)
+		if newProjectID, ok := updates["projectId"].(string); ok {
+			i.lfs.InvalidateProjectIssues(newProjectID)
+		}
+	}
 
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
@@ -476,5 +552,60 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
 	// Fsync is a no-op; actual persistence happens in Flush
+	return 0
+}
+
+// ChildrenNode represents the /teams/{KEY}/issues/{ID}/children/ directory
+type ChildrenNode struct {
+	fs.Inode
+	lfs   *LinearFS
+	issue api.Issue
+}
+
+var _ fs.NodeReaddirer = (*ChildrenNode)(nil)
+var _ fs.NodeLookuper = (*ChildrenNode)(nil)
+
+func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	entries := make([]fuse.DirEntry, len(n.issue.Children.Nodes))
+	for i, child := range n.issue.Children.Nodes {
+		entries[i] = fuse.DirEntry{
+			Name: child.Identifier,
+			Mode: syscall.S_IFLNK,
+		}
+	}
+	return fs.NewListDirStream(entries), 0
+}
+
+func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	for _, child := range n.issue.Children.Nodes {
+		if child.Identifier == name {
+			node := &ChildSymlinkNode{
+				child: child,
+			}
+			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+		}
+	}
+	return nil, syscall.ENOENT
+}
+
+// ChildSymlinkNode is a symlink pointing to a child issue directory
+type ChildSymlinkNode struct {
+	fs.Inode
+	child api.ChildIssue
+}
+
+var _ fs.NodeReadlinker = (*ChildSymlinkNode)(nil)
+var _ fs.NodeGetattrer = (*ChildSymlinkNode)(nil)
+
+func (s *ChildSymlinkNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+	// Point to sibling issue directory: ../ENG-456
+	target := "../" + s.child.Identifier
+	return []byte(target), 0
+}
+
+func (s *ChildSymlinkNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0777 | syscall.S_IFLNK
+	out.Size = uint64(len("../") + len(s.child.Identifier))
 	return 0
 }

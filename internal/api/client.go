@@ -406,20 +406,38 @@ func (c *Client) GetIssue(ctx context.Context, issueID string) (*Issue, error) {
 
 // GetMyIssues fetches issues assigned to the current user
 func (c *Client) GetMyIssues(ctx context.Context) ([]Issue, error) {
-	var result struct {
-		Viewer struct {
-			AssignedIssues struct {
-				Nodes []Issue `json:"nodes"`
-			} `json:"assignedIssues"`
-		} `json:"viewer"`
+	var allIssues []Issue
+	var cursor *string
+
+	for {
+		var result struct {
+			Viewer struct {
+				AssignedIssues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []Issue  `json:"nodes"`
+				} `json:"assignedIssues"`
+			} `json:"viewer"`
+		}
+
+		vars := map[string]any{}
+		if cursor != nil {
+			vars["after"] = *cursor
+		}
+
+		err := c.query(ctx, queryMyIssues, vars, &result)
+		if err != nil {
+			return nil, err
+		}
+
+		allIssues = append(allIssues, result.Viewer.AssignedIssues.Nodes...)
+
+		if !result.Viewer.AssignedIssues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Viewer.AssignedIssues.PageInfo.EndCursor
 	}
 
-	err := c.query(ctx, queryMyIssues, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Viewer.AssignedIssues.Nodes, nil
+	return allIssues, nil
 }
 
 // GetMyCreatedIssues fetches issues created by the current user
@@ -625,6 +643,130 @@ func (c *Client) GetProjectIssues(ctx context.Context, projectID string) ([]Proj
 	return allIssues, nil
 }
 
+// GetProjectMilestones fetches milestones for a project
+func (c *Client) GetProjectMilestones(ctx context.Context, projectID string) ([]ProjectMilestone, error) {
+	var result struct {
+		Project struct {
+			ProjectMilestones struct {
+				Nodes []ProjectMilestone `json:"nodes"`
+			} `json:"projectMilestones"`
+		} `json:"project"`
+	}
+
+	vars := map[string]any{
+		"projectId": projectID,
+	}
+
+	err := c.query(ctx, queryProjectMilestones, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Project.ProjectMilestones.Nodes, nil
+}
+
+// GetProjectUpdates fetches status updates for a project
+func (c *Client) GetProjectUpdates(ctx context.Context, projectID string) ([]ProjectUpdate, error) {
+	var result struct {
+		Project struct {
+			ProjectUpdates struct {
+				Nodes []ProjectUpdate `json:"nodes"`
+			} `json:"projectUpdates"`
+		} `json:"project"`
+	}
+
+	vars := map[string]any{
+		"projectId": projectID,
+	}
+
+	err := c.query(ctx, queryProjectUpdates, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Project.ProjectUpdates.Nodes, nil
+}
+
+// CreateProjectUpdate creates a new status update on a project
+func (c *Client) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*ProjectUpdate, error) {
+	var result struct {
+		ProjectUpdateCreate struct {
+			Success       bool          `json:"success"`
+			ProjectUpdate ProjectUpdate `json:"projectUpdate"`
+		} `json:"projectUpdateCreate"`
+	}
+
+	vars := map[string]any{
+		"projectId": projectID,
+		"body":      body,
+	}
+	if health != "" {
+		vars["health"] = health
+	}
+
+	err := c.query(ctx, mutationCreateProjectUpdate, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.ProjectUpdateCreate.Success {
+		return nil, fmt.Errorf("failed to create project update")
+	}
+
+	return &result.ProjectUpdateCreate.ProjectUpdate, nil
+}
+
+// GetInitiativeUpdates fetches status updates for an initiative
+func (c *Client) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]InitiativeUpdate, error) {
+	var result struct {
+		Initiative struct {
+			InitiativeUpdates struct {
+				Nodes []InitiativeUpdate `json:"nodes"`
+			} `json:"initiativeUpdates"`
+		} `json:"initiative"`
+	}
+
+	vars := map[string]any{
+		"initiativeId": initiativeID,
+	}
+
+	err := c.query(ctx, queryInitiativeUpdates, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Initiative.InitiativeUpdates.Nodes, nil
+}
+
+// CreateInitiativeUpdate creates a new status update on an initiative
+func (c *Client) CreateInitiativeUpdate(ctx context.Context, initiativeID, body, health string) (*InitiativeUpdate, error) {
+	var result struct {
+		InitiativeUpdateCreate struct {
+			Success          bool             `json:"success"`
+			InitiativeUpdate InitiativeUpdate `json:"initiativeUpdate"`
+		} `json:"initiativeUpdateCreate"`
+	}
+
+	vars := map[string]any{
+		"initiativeId": initiativeID,
+		"body":         body,
+	}
+	if health != "" {
+		vars["health"] = health
+	}
+
+	err := c.query(ctx, mutationCreateInitiativeUpdate, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.InitiativeUpdateCreate.Success {
+		return nil, fmt.Errorf("failed to create initiative update")
+	}
+
+	return &result.InitiativeUpdateCreate.InitiativeUpdate, nil
+}
+
 // CreateProject creates a new project
 func (c *Client) CreateProject(ctx context.Context, input map[string]any) (*Project, error) {
 	var result struct {
@@ -669,6 +811,56 @@ func (c *Client) ArchiveProject(ctx context.Context, projectID string) error {
 
 	if !result.ProjectArchive.Success {
 		return fmt.Errorf("project archive failed")
+	}
+
+	return nil
+}
+
+// AddProjectToInitiative links a project to an initiative
+func (c *Client) AddProjectToInitiative(ctx context.Context, projectID, initiativeID string) error {
+	var result struct {
+		InitiativeToProjectCreate struct {
+			Success bool `json:"success"`
+		} `json:"initiativeToProjectCreate"`
+	}
+
+	vars := map[string]any{
+		"projectId":    projectID,
+		"initiativeId": initiativeID,
+	}
+
+	err := c.query(ctx, mutationInitiativeToProjectCreate, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.InitiativeToProjectCreate.Success {
+		return fmt.Errorf("failed to add project to initiative")
+	}
+
+	return nil
+}
+
+// RemoveProjectFromInitiative unlinks a project from an initiative
+func (c *Client) RemoveProjectFromInitiative(ctx context.Context, projectID, initiativeID string) error {
+	var result struct {
+		InitiativeToProjectDelete struct {
+			Success bool `json:"success"`
+		} `json:"initiativeToProjectDelete"`
+	}
+
+	vars := map[string]any{
+		"projectId":    projectID,
+		"initiativeId": initiativeID,
+	}
+
+	err := c.query(ctx, mutationInitiativeToProjectDelete, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.InitiativeToProjectDelete.Success {
+		return fmt.Errorf("failed to remove project from initiative")
 	}
 
 	return nil
@@ -1147,4 +1339,20 @@ func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
 	}
 
 	return nil
+}
+
+// GetInitiatives fetches all initiatives
+func (c *Client) GetInitiatives(ctx context.Context) ([]Initiative, error) {
+	var result struct {
+		Initiatives struct {
+			Nodes []Initiative `json:"nodes"`
+		} `json:"initiatives"`
+	}
+
+	err := c.query(ctx, queryInitiatives, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Initiatives.Nodes, nil
 }
