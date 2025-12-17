@@ -79,7 +79,14 @@ func (lfs *LinearFS) GetTeams(ctx context.Context) ([]api.Team, error) {
 func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
 	cacheKey := "issues:" + teamID
 	if issues, ok := lfs.issueCache.Get(cacheKey); ok {
+		if lfs.debug {
+			log.Printf("[CACHE HIT] GetTeamIssues %s (%d issues)", teamID, len(issues))
+		}
 		return issues, nil
+	}
+
+	if lfs.debug {
+		log.Printf("[CACHE MISS] GetTeamIssues %s", teamID)
 	}
 
 	// Deduplicate concurrent requests for the same team's issues
@@ -358,7 +365,14 @@ func (lfs *LinearFS) GetUsers(ctx context.Context) ([]api.User, error) {
 func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
 	cacheKey := "user-issues:" + userID
 	if issues, ok := lfs.userIssueCache.Get(cacheKey); ok {
+		if lfs.debug {
+			log.Printf("[CACHE HIT] GetUserIssues %s (%d issues)", userID, len(issues))
+		}
 		return issues, nil
+	}
+
+	if lfs.debug {
+		log.Printf("[CACHE MISS] GetUserIssues %s", userID)
 	}
 
 	result, err, _ := lfs.sfGroup.Do(cacheKey, func() (interface{}, error) {
@@ -409,6 +423,11 @@ func (lfs *LinearFS) GetIssueComments(ctx context.Context, issueID string) ([]ap
 
 func (lfs *LinearFS) InvalidateIssueComments(issueID string) {
 	lfs.commentCache.Delete("comments:" + issueID)
+}
+
+// TryGetCachedComments returns cached comments if available, without making API calls
+func (lfs *LinearFS) TryGetCachedComments(issueID string) ([]api.Comment, bool) {
+	return lfs.commentCache.Get("comments:" + issueID)
 }
 
 func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body string) (*api.Comment, error) {
@@ -491,6 +510,16 @@ func (lfs *LinearFS) GetProjectDocuments(ctx context.Context, projectID string) 
 
 func (lfs *LinearFS) InvalidateIssueDocuments(issueID string) {
 	lfs.documentCache.Delete("docs:issue:" + issueID)
+}
+
+// TryGetCachedIssueDocuments returns cached documents if available, without making API calls
+func (lfs *LinearFS) TryGetCachedIssueDocuments(issueID string) ([]api.Document, bool) {
+	return lfs.documentCache.Get("docs:issue:" + issueID)
+}
+
+// TryGetCachedProjectDocuments returns cached documents if available, without making API calls
+func (lfs *LinearFS) TryGetCachedProjectDocuments(projectID string) ([]api.Document, bool) {
+	return lfs.documentCache.Get("docs:project:" + projectID)
 }
 
 func (lfs *LinearFS) InvalidateTeamDocuments(teamID string) {

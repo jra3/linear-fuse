@@ -15,6 +15,7 @@ import (
 )
 
 var debugRateLimit = os.Getenv("LINEARFS_DEBUG_RATE") != ""
+var debugAPI = os.Getenv("LINEARFS_DEBUG_API") != ""
 
 const linearAPIURL = "https://api.linear.app/graphql"
 
@@ -49,6 +50,30 @@ type graphQLResponse struct {
 }
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
+	// Extract operation name for logging (first word after "query" or "mutation")
+	var opName string
+	if debugAPI {
+		// Simple extraction: find first { and take word before it
+		for i, ch := range query {
+			if ch == '{' || ch == '(' {
+				// Walk backwards to find operation name
+				end := i - 1
+				for end > 0 && (query[end] == ' ' || query[end] == '\n') {
+					end--
+				}
+				start := end
+				for start > 0 && query[start-1] != ' ' && query[start-1] != '\n' {
+					start--
+				}
+				if start < end {
+					opName = query[start : end+1]
+				}
+				break
+			}
+		}
+		log.Printf("[API] Calling %s vars=%v", opName, variables)
+	}
+
 	// Wait for rate limit token before making request
 	if debugRateLimit {
 		reservation := c.limiter.Reserve()

@@ -68,29 +68,37 @@ func (n *DocsNode) parentID() string {
 }
 
 func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	docs, err := n.getDocuments(ctx)
-	if err != nil {
-		log.Printf("Failed to get documents: %v", err)
-		return nil, syscall.EIO
-	}
-
-	// +1 for new.md
-	entries := make([]fuse.DirEntry, len(docs)+1)
+	// Try to get cached documents (don't trigger API call)
+	docs, ok := n.tryGetCachedDocuments()
 
 	// Always include new.md for creating documents
-	entries[0] = fuse.DirEntry{
-		Name: "new.md",
-		Mode: syscall.S_IFREG,
+	entries := []fuse.DirEntry{
+		{Name: "new.md", Mode: syscall.S_IFREG},
 	}
 
-	for i, doc := range docs {
-		entries[i+1] = fuse.DirEntry{
-			Name: documentFilename(doc),
-			Mode: syscall.S_IFREG,
+	// If we have cached documents, include them
+	if ok && len(docs) > 0 {
+		for _, doc := range docs {
+			entries = append(entries, fuse.DirEntry{
+				Name: documentFilename(doc),
+				Mode: syscall.S_IFREG,
+			})
 		}
 	}
 
 	return fs.NewListDirStream(entries), 0
+}
+
+// tryGetCachedDocuments returns cached documents if available, without making API calls
+func (n *DocsNode) tryGetCachedDocuments() ([]api.Document, bool) {
+	if n.issueID != "" {
+		return n.lfs.TryGetCachedIssueDocuments(n.issueID)
+	}
+	if n.projectID != "" {
+		return n.lfs.TryGetCachedProjectDocuments(n.projectID)
+	}
+	// Team documents always return empty (API doesn't support team-level docs)
+	return []api.Document{}, true
 }
 
 func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {

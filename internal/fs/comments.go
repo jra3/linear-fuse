@@ -54,31 +54,28 @@ func (n *CommentsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 }
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	// Sort comments by creation time
-	sort.Slice(comments, func(i, j int) bool {
-		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
-	})
-
-	// +1 for new.md
-	entries := make([]fuse.DirEntry, len(comments)+1)
+	// Try to get cached comments (don't trigger API call)
+	comments, ok := n.lfs.TryGetCachedComments(n.issueID)
 
 	// Always include new.md for creating comments
-	entries[0] = fuse.DirEntry{
-		Name: "new.md",
-		Mode: syscall.S_IFREG,
+	entries := []fuse.DirEntry{
+		{Name: "new.md", Mode: syscall.S_IFREG},
 	}
 
-	for i, comment := range comments {
-		// Format: 001-2025-01-10T14:30.md
-		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		entries[i+1] = fuse.DirEntry{
-			Name: fmt.Sprintf("%03d-%s.md", i+1, timestamp),
-			Mode: syscall.S_IFREG,
+	// If we have cached comments, include them
+	if ok && len(comments) > 0 {
+		// Sort comments by creation time
+		sort.Slice(comments, func(i, j int) bool {
+			return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+		})
+
+		for i, comment := range comments {
+			// Format: 001-2025-01-10T14:30.md
+			timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
+			entries = append(entries, fuse.DirEntry{
+				Name: fmt.Sprintf("%03d-%s.md", i+1, timestamp),
+				Mode: syscall.S_IFREG,
+			})
 		}
 	}
 
