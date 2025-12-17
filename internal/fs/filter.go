@@ -205,8 +205,8 @@ func (f *FilterValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	entries := make([]fuse.DirEntry, len(issues))
 	for i, issue := range issues {
 		entries[i] = fuse.DirEntry{
-			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFLNK,
+			Name: issue.Identifier,
+			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
 	}
 	return fs.NewListDirStream(entries), 0
@@ -219,7 +219,7 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	}
 
 	for _, issue := range issues {
-		if issue.Identifier+".md" == name {
+		if issue.Identifier == name {
 			node := &FilterIssueSymlink{
 				identifier: issue.Identifier,
 			}
@@ -267,7 +267,7 @@ func (f *FilterValueNode) matchesFilter(issue api.Issue) bool {
 	return false
 }
 
-// FilterIssueSymlink is a symlink pointing to an issue in issues/<identifier>/issue.md
+// FilterIssueSymlink is a symlink pointing to an issue directory
 // Path from .filter/category/value/ to issues/ is ../../../issues/
 type FilterIssueSymlink struct {
 	fs.Inode
@@ -279,13 +279,13 @@ var _ fs.NodeGetattrer = (*FilterIssueSymlink)(nil)
 
 func (s *FilterIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	// From .filter/category/value/ go up 3 levels to team dir, then into issues/
-	target := fmt.Sprintf("../../../issues/%s/issue.md", s.identifier)
+	target := fmt.Sprintf("../../../issues/%s", s.identifier)
 	return []byte(target), 0
 }
 
 func (s *FilterIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	target := fmt.Sprintf("../../../issues/%s", s.identifier)
 	out.Mode = 0777 | syscall.S_IFLNK
-	target := fmt.Sprintf("../../../issues/%s/issue.md", s.identifier)
 	out.Size = uint64(len(target))
 	return 0
 }

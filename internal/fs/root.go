@@ -113,15 +113,15 @@ This is a FUSE filesystem that exposes Linear issues as markdown files.
 │       │   ├── current -> Cycle-22  # Symlink to active cycle
 │       │   └── {name}/    # Cycle directory (e.g., Cycle-22/)
 │       │       ├── cycle.md    # Cycle metadata
-│       │       └── {ID}.md     # Symlinks to issues/
+│       │       └── {ID} -> ../../issues/{ID}  # Symlinks to issues
 │       └── projects/      # Team projects
 │           └── {slug}/    # Project directory
 │               ├── .project.md  # Project metadata
-│               └── {ID}.md      # Symlinks to issues/
+│               └── {ID} -> ../../issues/{ID}  # Symlinks to issues
 ├── users/                 # Issues organized by assignee
 │   └── {username}/
 │       ├── .user.md       # User metadata (read-only)
-│       └── {ID}.md        # Symlinks to team issues
+│       └── {ID} -> ../../teams/{KEY}/issues/{ID}  # Symlinks
 └── my/                    # Your personal views
     ├── assigned/          # All issues assigned to you
     │   └── {ID} -> ../../teams/{KEY}/issues/{ID}  # Symlinks to issue dirs
@@ -212,13 +212,14 @@ The directory name becomes the issue title.
 
 ## Symlinks
 
-Symlinks provide multiple views of the same issues:
+All issue symlinks point to issue directories (not files):
 
-- /my/* symlinks point to issue directories: /teams/{KEY}/issues/{ID}/
-- /users/, /projects/, /cycles/ symlinks point to issue.md files
+- /my/* → /teams/{KEY}/issues/{ID}/
+- /users/* → /teams/{KEY}/issues/{ID}/
+- /projects/* → /teams/{KEY}/issues/{ID}/
+- /cycles/* → /teams/{KEY}/issues/{ID}/
 
-All symlinks resolve to the canonical location in /teams/{KEY}/issues/{ID}/.
-Edits made anywhere affect the same underlying issue.
+Edits to issue.md anywhere affect the same underlying issue.
 
 ## Metadata Files
 
@@ -234,7 +235,7 @@ contain YAML frontmatter with IDs. Use these to look up valid values:
 1. Read .states.md before changing issue status to get valid state names
 2. Use the frontmatter 'id' field when you need to reference entities via API
 3. The 'identifier' (e.g., ENG-123) is the human-readable issue key
-4. /my/* symlinks point to issue directories; /users/* symlinks point to issue.md
+4. All symlinks point to issue directories containing issue.md and comments/
 5. Filter views: /my/active/ shows only non-completed assigned issues
 6. To add a comment, write to comments/new.md in an issue directory
 7. Use /cycles/current/ to access the active sprint cycle

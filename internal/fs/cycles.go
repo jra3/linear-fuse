@@ -155,8 +155,8 @@ func (c *CycleDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 
 	for _, issue := range issues {
 		entries = append(entries, fuse.DirEntry{
-			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFLNK,
+			Name: issue.Identifier,
+			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		})
 	}
 
@@ -174,20 +174,15 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 	}
 
-	// Handle issue symlinks (e.g., "ENG-123.md")
+	// Handle issue symlinks (e.g., "ENG-123")
 	issues, err := c.lfs.GetCycleIssues(ctx, c.cycle.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
 
 	for _, issue := range issues {
-		if issue.Identifier+".md" == name {
-			teamKey := ""
-			if issue.Team != nil {
-				teamKey = issue.Team.Key
-			}
+		if issue.Identifier == name {
 			node := &CycleIssueSymlink{
-				teamKey:    teamKey,
 				identifier: issue.Identifier,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
@@ -198,10 +193,9 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	return nil, syscall.ENOENT
 }
 
-// CycleIssueSymlink represents a symlink from cycle to issue
+// CycleIssueSymlink represents a symlink from cycle to issue directory
 type CycleIssueSymlink struct {
 	fs.Inode
-	teamKey    string
 	identifier string
 }
 
@@ -209,13 +203,13 @@ var _ fs.NodeReadlinker = (*CycleIssueSymlink)(nil)
 var _ fs.NodeGetattrer = (*CycleIssueSymlink)(nil)
 
 func (s *CycleIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// Path from /teams/ENG/cycles/71/ENG-123.md to /teams/ENG/issues/ENG-123/issue.md
-	target := fmt.Sprintf("../../issues/%s/issue.md", s.identifier)
+	// Path from /teams/ENG/cycles/Cycle-22/ENG-123 to /teams/ENG/issues/ENG-123/
+	target := fmt.Sprintf("../../issues/%s", s.identifier)
 	return []byte(target), 0
 }
 
 func (s *CycleIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	target := fmt.Sprintf("../../issues/%s/issue.md", s.identifier)
+	target := fmt.Sprintf("../../issues/%s", s.identifier)
 	out.Mode = 0777 | syscall.S_IFLNK
 	out.Size = uint64(len(target))
 	return 0

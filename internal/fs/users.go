@@ -102,8 +102,8 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	}
 	for i, issue := range issues {
 		entries[i+1] = fuse.DirEntry{
-			Name: issue.Identifier + ".md",
-			Mode: syscall.S_IFLNK, // Symlink
+			Name: issue.Identifier,
+			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
 	}
 
@@ -126,13 +126,13 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	for _, issue := range issues {
-		if issue.Identifier+".md" == name {
-			// Create symlink to team directory
+		if issue.Identifier == name {
+			// Create symlink to team issue directory
 			teamKey := ""
 			if issue.Team != nil {
 				teamKey = issue.Team.Key
 			}
-			node := &IssueSymlink{
+			node := &IssueDirSymlink{
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
 			}
@@ -142,29 +142,6 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	return nil, syscall.ENOENT
-}
-
-// IssueSymlink is a symlink pointing to an issue in /teams/<KEY>/issues/<identifier>.md
-type IssueSymlink struct {
-	fs.Inode
-	teamKey    string
-	identifier string
-}
-
-var _ fs.NodeReadlinker = (*IssueSymlink)(nil)
-var _ fs.NodeGetattrer = (*IssueSymlink)(nil)
-
-func (s *IssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// Return relative path to team issues directory
-	target := fmt.Sprintf("../../teams/%s/issues/%s/issue.md", s.teamKey, s.identifier)
-	return []byte(target), 0
-}
-
-func (s *IssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0777 | syscall.S_IFLNK
-	target := fmt.Sprintf("../../teams/%s/issues/%s/issue.md", s.teamKey, s.identifier)
-	out.Size = uint64(len(target))
-	return 0
 }
 
 // IssueDirSymlink is a symlink pointing to an issue directory in /teams/<KEY>/issues/<identifier>/
