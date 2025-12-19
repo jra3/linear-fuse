@@ -80,6 +80,7 @@ fusermount3 -u /mnt/linear
 │       ├── labels.md            # Labels reference (read-only)
 │       ├── by/                  # Filter issues by attribute
 │       │   ├── status/<name>/   # Issues filtered by status (symlinks)
+│       │   ├── priority/<level>/# Issues filtered by priority (symlinks)
 │       │   ├── label/<name>/    # Issues filtered by label (symlinks)
 │       │   └── assignee/<name>/ # Issues filtered by assignee (symlinks)
 │       ├── issues/
@@ -101,13 +102,15 @@ fusermount3 -u /mnt/linear
 │       ├── cycles/              # Sprint cycles (read-only)
 │       └── projects/
 │           └── <project-slug>/
-│               ├── project.md   # Project metadata (read-only)
+│               ├── project.md   # Project metadata (read/write)
 │               ├── docs/        # Project documents
+│               ├── updates/     # Status updates (write to new.md)
 │               └── ENG-*        # Symlinks to issue directories
 ├── initiatives/
 │   └── <initiative-slug>/
 │       ├── initiative.md        # Initiative metadata (read-only)
-│       └── projects/            # Symlinks to team projects
+│       ├── projects/            # Symlinks to team projects
+│       └── updates/             # Status updates (write to new.md)
 ├── users/
 │   └── <username>/
 │       ├── user.md              # User metadata (read-only)

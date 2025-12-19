@@ -74,6 +74,11 @@ make build
 make install  # Copies binary to ~/bin
 ```
 
+> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> ```bash
+> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+> ```
+
 ### 4. Configure
 
 ```bash
@@ -204,6 +209,11 @@ make build
 make install  # Copies binary to ~/bin
 ```
 
+> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> ```bash
+> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+> ```
+
 ### 5. Configure
 
 ```bash
@@ -267,9 +277,10 @@ sudo usermod -aG fuse $USER
 sudo apt install golang-go
 
 # Option 2: From Go website (recommended for latest version)
-wget https://go.dev/dl/go1.23.4.linux-amd64.tar.gz
+# Check https://go.dev/dl/ for the latest version
+wget https://go.dev/dl/go1.23.linux-amd64.tar.gz  # Replace with latest
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.23.4.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.23.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -282,6 +293,11 @@ cd linear-fuse
 make build
 make install  # Copies binary to ~/bin
 ```
+
+> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> ```bash
+> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+> ```
 
 ### 6. Configure
 
@@ -455,12 +471,14 @@ This allows Claude Code to read issues, list directories, and view file contents
 Add to your global `~/.claude/CLAUDE.md`:
 
 ```markdown
-## Linear Integration
+# Linear.app issues via FUSE mount on disk
+- data is found in /mnt/linear
+- the README.md file should be fully read and understood before reading/writing data there
 
-Linear issues are available at `/mnt/linear/`. Read `/mnt/linear/README.md` for the filesystem structure and usage instructions.
+@/mnt/linear/README.md
 ```
 
-This tells Claude Code where to find your Linear data and how to use it.
+The `@/mnt/linear/README.md` directive automatically imports the mounted filesystem's documentation into Claude's context, giving it full knowledge of the directory structure and available operations.
 
 ### 3. Usage
 
