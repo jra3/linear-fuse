@@ -108,12 +108,12 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Issues by status | ` + "`" + `ls /teams/ENG/by/status/Todo/` + "`" + ` |
 | Read issue | ` + "`" + `cat /teams/ENG/issues/ENG-123/issue.md` + "`" + ` |
 | Update issue | Edit issue.md frontmatter, save |
-| Add comment | ` + "`" + `echo "text" > .../comments/new.md` + "`" + ` |
+| Add comment | ` + "`" + `echo "text" > .../comments/new.md` + "`" + ` (write-only) |
 | Create issue | ` + "`" + `mkdir /teams/ENG/issues/"Title"` + "`" + ` |
 | Archive issue | ` + "`" + `rmdir /teams/ENG/issues/ENG-123` + "`" + ` |
 | View sub-issues | ` + "`" + `ls /teams/ENG/issues/ENG-123/children/` + "`" + ` |
-| Post project update | ` + "`" + `echo "text" > .../projects/{slug}/updates/new.md` + "`" + ` |
-| Post initiative update | ` + "`" + `echo "text" > /initiatives/{slug}/updates/new.md` + "`" + ` |
+| Post project update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
+| Post initiative update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
 
 ## Directory Structure
 
@@ -125,19 +125,19 @@ Issues as markdown files. Edit frontmatter to update Linear.
 ├── by/assignee/{name}/
 ├── issues/{ID}/
 │   ├── issue.md                   # Read/write
-│   ├── comments/                  # new.md to create
-│   ├── docs/                      # new.md to create
+│   ├── comments/                  # Write to new.md to create (write-only)
+│   ├── docs/                      # Write to new.md to create (write-only)
 │   └── children/                  # Sub-issues (symlinks)
 ├── cycles/current/                # Active sprint
 └── projects/{slug}/
     ├── project.md                 # Editable (initiatives list)
-    ├── docs/                      # new.md to create
-    └── updates/                   # new.md to post status updates
+    ├── docs/                      # Write to new.md to create (write-only)
+    └── updates/                   # Write to new.md to post (write-only)
 
 /initiatives/{slug}/
 ├── initiative.md                  # Metadata (read-only)
 ├── projects/                      # Symlinks to /teams/{KEY}/projects/
-└── updates/                       # new.md to post status updates
+└── updates/                       # Write to new.md to post (write-only)
 
 /users/{name}/                     # Issues by assignee
 /my/assigned|created|active/       # Personal views
@@ -213,4 +213,36 @@ Existing updates are read-only: ` + "`" + `001-2025-01-15-ontrack.md` + "`" + `
 - Check labels.md for available label names
 - All symlinks resolve to issue directories containing issue.md
 - Cache TTL: 60s (external changes may be delayed)
+
+## Write-Only new.md Files
+
+The ` + "`" + `new.md` + "`" + ` files in comments/, docs/, and updates/ directories are **write-only
+triggers** that create new items in Linear. They work like a mailbox slot: content
+goes in but nothing comes out.
+
+**How it works:**
+1. Write content to new.md (the file is always empty, size 0)
+2. On save/flush, content is sent to Linear and consumed
+3. The new item appears as a separate file (e.g., 001-2025-01-15.md)
+
+**Correct usage:**
+` + "```" + `bash
+# Use echo or cat with redirect
+echo "My comment" > /teams/ENG/issues/ENG-123/comments/new.md
+
+# Multi-line with heredoc
+cat > /teams/ENG/issues/ENG-123/comments/new.md << 'EOF'
+Multi-line content here
+EOF
+` + "```" + `
+
+**What won't work:**
+- Reading new.md (always returns empty)
+- Editors that read before writing (vim, vscode)
+- Tools that expect to read existing content first
+
+**After writing:**
+- Item syncs to Linear within seconds
+- Due to cache TTL, ` + "`" + `ls` + "`" + ` may not show it immediately
+- Check Linear directly to confirm creation
 `

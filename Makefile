@@ -1,4 +1,4 @@
-.PHONY: build install clean test integration-test integration-test-full run
+.PHONY: build install clean test integration-test integration-test-full run bench-dirs
 
 BINARY=linearfs
 VERSION?=dev
@@ -38,3 +38,7 @@ fmt:
 
 lint:
 	golangci-lint run
+
+bench-dirs: build
+	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
+	./scripts/bench-dirs.sh

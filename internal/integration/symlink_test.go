@@ -357,9 +357,9 @@ func TestProjectIssueSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read project directory: %v", err)
 	}
 
-	// Check that issue entries (not project.md or docs/) are symlinks
+	// Check that issue entries (not project.md, docs/, or updates/) are symlinks
 	for _, entry := range projectEntries {
-		if entry.Name() == "project.md" || entry.Name() == "docs" {
+		if entry.Name() == "project.md" || entry.Name() == "docs" || entry.Name() == "updates" {
 			continue
 		}
 		info, err := entry.Info()
@@ -414,20 +414,21 @@ func TestSymlinkResolution(t *testing.T) {
 		t.Fatal("Expected a symlink")
 	}
 
-	// Verify symlink target format
+	// Verify symlink target format - symlinks point to issue directories, not files
 	target, err := os.Readlink(symlinkPath)
 	if err != nil {
 		t.Fatalf("Failed to readlink: %v", err)
 	}
-	expectedSuffix := fmt.Sprintf("teams/%s/issues/%s/issue.md", testTeamKey, issue.Identifier)
+	expectedSuffix := fmt.Sprintf("teams/%s/issues/%s", testTeamKey, issue.Identifier)
 	if !strings.HasSuffix(target, expectedSuffix) {
 		t.Errorf("Symlink target should end with %q, got %q", expectedSuffix, target)
 	}
 
-	// Read through symlink
-	content, err := os.ReadFile(symlinkPath)
+	// Read through symlink - symlinks point to directories, so read issue.md inside
+	issueMdPath := filepath.Join(symlinkPath, "issue.md")
+	content, err := os.ReadFile(issueMdPath)
 	if err != nil {
-		t.Fatalf("Failed to read through symlink: %v", err)
+		t.Fatalf("Failed to read issue.md through symlink: %v", err)
 	}
 
 	// Verify content has expected structure

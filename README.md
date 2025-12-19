@@ -4,12 +4,13 @@ Mount your Linear workspace as a FUSE filesystem. Browse and edit issues as mark
 
 ## Features
 
-- Browse teams, issues, projects, and labels as directories/files
+- Browse teams, issues, projects, initiatives, and labels as directories/files
 - Issues rendered as markdown with YAML frontmatter
 - Edit frontmatter to update issue status, assignee, priority, labels
 - Full CRUD for comments, documents, and labels
 - Create/archive issues and projects with standard filesystem operations
 - Multiple views: by team, by user, personal (assigned/created/active)
+- Initiatives with linked projects
 
 ## Installation
 
@@ -87,9 +88,10 @@ fusermount3 -u /mnt/linear
 │       │       ├── comments/
 │       │       │   ├── 001-*.md # Comments (read/write/delete)
 │       │       │   └── new.md   # Write here to create comment
-│       │       └── docs/
-│       │           ├── *.md     # Issue documents (read/write/rename/delete)
-│       │           └── new.md   # Write here to create document
+│       │       ├── docs/
+│       │       │   ├── *.md     # Issue documents (read/write/rename/delete)
+│       │       │   └── new.md   # Write here to create document
+│       │       └── children/    # Sub-issues (symlinks to sibling issues)
 │       ├── labels/              # Label management
 │       │   ├── *.md             # Labels (read/write/rename/delete)
 │       │   └── new.md           # Write here to create label
@@ -102,6 +104,10 @@ fusermount3 -u /mnt/linear
 │               ├── project.md   # Project metadata (read-only)
 │               ├── docs/        # Project documents
 │               └── ENG-*        # Symlinks to issue directories
+├── initiatives/
+│   └── <initiative-slug>/
+│       ├── initiative.md        # Initiative metadata (read-only)
+│       └── projects/            # Symlinks to team projects
 ├── users/
 │   └── <username>/
 │       ├── user.md              # User metadata (read-only)
@@ -128,6 +134,7 @@ priority: high
 labels:
   - bug
   - backend
+parent: ENG-100
 ---
 
 The login flow fails when users attempt to authenticate with SSO.
@@ -139,8 +146,10 @@ The login flow fails when users attempt to authenticate with SSO.
 - `status` - Workflow state name (check states.md for valid values)
 - `assignee` - User email or name
 - `priority` - none/low/medium/high/urgent
+- `labels` - List of label names (check labels.md for valid values)
 - `dueDate` - Due date (ISO format)
 - `estimate` - Point estimate
+- `parent` - Parent issue identifier (e.g., ENG-100)
 - Description (content after frontmatter)
 
 ## File Operations
@@ -163,6 +172,23 @@ mkdir /mnt/linear/teams/ENG/issues/"Fix login bug"
 rmdir /mnt/linear/teams/ENG/issues/ENG-123
 ```
 
+### Sub-Issues
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| View sub-issues | `ls issues/ENG-123/children/` | Lists child issues as symlinks |
+| Set parent | Edit `parent:` in issue.md | Sets parent issue |
+| Remove parent | Remove `parent:` line | Clears parent relationship |
+
+```bash
+# View sub-issues of ENG-123
+ls /mnt/linear/teams/ENG/issues/ENG-123/children/
+
+# Set parent by editing frontmatter
+# Add: parent: ENG-100
+vim /mnt/linear/teams/ENG/issues/ENG-456/issue.md
+```
+
 ### Comments
 
 | Operation | Command | Effect |
@@ -171,6 +197,9 @@ rmdir /mnt/linear/teams/ENG/issues/ENG-123
 | Create comment | `echo "text" > comments/new.md` | Posts new comment |
 | Edit comment | Edit comment file and save | Updates comment |
 | Delete comment | `rm comments/001-*.md` | Deletes comment |
+
+> **Note:** `new.md` is a write-only trigger file. It's always empty (0 bytes) and cannot be read.
+> Write content to it using `echo` or `cat` with redirect. Editors that read before writing won't work.
 
 ```bash
 # Add a comment
@@ -188,6 +217,8 @@ rm /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
 | Edit document | Edit doc file and save | Updates title/content |
 | Rename document | `mv docs/old.md docs/new.md` | Renames document title |
 | Delete document | `rm docs/spec.md` | Deletes document |
+
+> **Note:** `new.md` is a write-only trigger file (see Comments section above).
 
 ```bash
 # Create a document (with YAML frontmatter for title)
@@ -210,6 +241,8 @@ mv docs/old-name.md docs/new-name.md
 | Edit label | Edit label file and save | Updates name/color/description |
 | Rename label | `mv labels/Bug.md labels/Defect.md` | Renames label |
 | Delete label | `rm labels/OldLabel.md` | Deletes label |
+
+> **Note:** `new.md` is a write-only trigger file (see Comments section above).
 
 ```bash
 # Create a new label
