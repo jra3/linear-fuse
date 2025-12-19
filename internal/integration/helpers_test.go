@@ -132,7 +132,7 @@ func readFileWithRetry(path string, maxWait time.Duration) ([]byte, error) {
 			return content, nil
 		}
 		lastErr = err
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	return nil, fmt.Errorf("failed to read %s after %v: %w", path, maxWait, lastErr)
@@ -145,7 +145,7 @@ func waitForFile(path string, maxWait time.Duration) error {
 		if _, err := os.Stat(path); err == nil {
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	return fmt.Errorf("file %s not found after %v", path, maxWait)
@@ -158,7 +158,7 @@ func waitForFileGone(path string, maxWait time.Duration) error {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	return fmt.Errorf("file %s still exists after %v", path, maxWait)
@@ -176,16 +176,20 @@ func waitForDirEntry(dir, name string, maxWait time.Duration) error {
 				}
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	return fmt.Errorf("entry %s not found in %s after %v", name, dir, maxWait)
 }
 
-const defaultWaitTime = 5 * time.Second
+const defaultWaitTime = 500 * time.Millisecond
 
+// waitForCacheExpiry waits for the internal cache to expire.
+// Only needed after API-direct operations (createTestIssue, etc.) where
+// the filesystem wasn't notified of the change. After filesystem writes,
+// cache invalidation is immediate - no wait needed.
 func waitForCacheExpiry() {
-	time.Sleep(3 * time.Second) // Cache TTL is 2s, wait a bit longer
+	time.Sleep(150 * time.Millisecond) // Cache TTL is 100ms, wait a bit longer
 }
 
 // Frontmatter helpers

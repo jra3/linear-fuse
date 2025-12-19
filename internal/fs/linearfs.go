@@ -17,6 +17,7 @@ import (
 
 type LinearFS struct {
 	client              *api.Client
+	server              *fuse.Server // FUSE server for kernel cache invalidation
 	teamCache           *cache.Cache[[]api.Team]
 	issueCache          *cache.Cache[[]api.Issue]
 	issueByIdCache      *cache.Cache[api.Issue] // Individual issues by identifier (e.g., "ENG-123")
@@ -125,6 +126,46 @@ func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Is
 
 func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
 	lfs.issueCache.Delete("issues:" + teamID)
+}
+
+// SetServer sets the FUSE server reference for kernel cache invalidation
+func (lfs *LinearFS) SetServer(server *fuse.Server) {
+	lfs.server = server
+}
+
+// InvalidateKernelInode tells the kernel to drop cached data for an inode
+func (lfs *LinearFS) InvalidateKernelInode(ino uint64) {
+	if lfs.server != nil {
+		lfs.server.InodeNotify(ino, 0, -1) // -1 = entire file
+	}
+}
+
+// InvalidateKernelEntry tells the kernel to drop a cached directory entry
+func (lfs *LinearFS) InvalidateKernelEntry(parent uint64, name string) {
+	if lfs.server != nil {
+		lfs.server.EntryNotify(parent, name)
+	}
+}
+
+// InvalidateFilteredIssues clears all filtered issue cache entries for a team
+// This includes by-status, by-priority, by-label, by-assignee, and unassigned filters
+func (lfs *LinearFS) InvalidateFilteredIssues(teamID string) {
+	prefixes := []string{
+		"status:" + teamID + ":",
+		"priority:" + teamID + ":",
+		"label:" + teamID + ":",
+		"assignee:" + teamID + ":",
+	}
+	for _, prefix := range prefixes {
+		lfs.filteredIssueCache.DeleteByPrefix(prefix)
+	}
+	// Also delete exact match for unassigned
+	lfs.filteredIssueCache.Delete("unassigned:" + teamID)
+}
+
+// InvalidateIssueById clears a specific issue from the identifier cache
+func (lfs *LinearFS) InvalidateIssueById(identifier string) {
+	lfs.issueByIdCache.Delete(identifier)
 }
 
 // cacheIssuesByIdentifier caches individual issues by their identifier for fast lookup
@@ -609,8 +650,17 @@ func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body str
 		return nil, err
 	}
 
-	// Invalidate cache so next read shows the new comment
-	lfs.InvalidateIssueComments(issueID)
+	// Insert into cache - append if exists, otherwise fetch and set
+	cacheKey := "comments:" + issueID
+	if comments, ok := lfs.commentCache.Get(cacheKey); ok {
+		lfs.commentCache.Set(cacheKey, append(comments, *comment))
+	} else {
+		// Cache miss - fetch all comments to populate cache with complete data
+		comments, err := lfs.client.GetIssueComments(ctx, issueID)
+		if err == nil {
+			lfs.commentCache.Set(cacheKey, comments)
+		}
+	}
 	return comment, nil
 }
 
@@ -709,15 +759,39 @@ func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (
 		return nil, err
 	}
 
-	// Invalidate relevant caches based on what parent the document belongs to
+	// Insert into cache - append if exists, otherwise fetch and set
 	if issueID, ok := input["issueId"].(string); ok {
-		lfs.InvalidateIssueDocuments(issueID)
+		cacheKey := "docs:issue:" + issueID
+		if docs, ok := lfs.documentCache.Get(cacheKey); ok {
+			lfs.documentCache.Set(cacheKey, append(docs, *doc))
+		} else {
+			docs, err := lfs.client.GetIssueDocuments(ctx, issueID)
+			if err == nil {
+				lfs.documentCache.Set(cacheKey, docs)
+			}
+		}
 	}
 	if teamID, ok := input["teamId"].(string); ok {
-		lfs.InvalidateTeamDocuments(teamID)
+		cacheKey := "docs:team:" + teamID
+		if docs, ok := lfs.documentCache.Get(cacheKey); ok {
+			lfs.documentCache.Set(cacheKey, append(docs, *doc))
+		} else {
+			docs, err := lfs.client.GetTeamDocuments(ctx, teamID)
+			if err == nil {
+				lfs.documentCache.Set(cacheKey, docs)
+			}
+		}
 	}
 	if projectID, ok := input["projectId"].(string); ok {
-		lfs.InvalidateProjectDocuments(projectID)
+		cacheKey := "docs:project:" + projectID
+		if docs, ok := lfs.documentCache.Get(cacheKey); ok {
+			lfs.documentCache.Set(cacheKey, append(docs, *doc))
+		} else {
+			docs, err := lfs.client.GetProjectDocuments(ctx, projectID)
+			if err == nil {
+				lfs.documentCache.Set(cacheKey, docs)
+			}
+		}
 	}
 
 	return doc, nil
@@ -967,7 +1041,16 @@ func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, h
 		return nil, err
 	}
 
-	lfs.InvalidateProjectUpdates(projectID)
+	// Insert into cache - append if exists, otherwise fetch and set
+	cacheKey := "project-updates:" + projectID
+	if updates, ok := lfs.projectUpdateCache.Get(cacheKey); ok {
+		lfs.projectUpdateCache.Set(cacheKey, append(updates, *update))
+	} else {
+		updates, err := lfs.client.GetProjectUpdates(ctx, projectID)
+		if err == nil {
+			lfs.projectUpdateCache.Set(cacheKey, updates)
+		}
+	}
 	return update, nil
 }
 
@@ -999,7 +1082,16 @@ func (lfs *LinearFS) CreateInitiativeUpdate(ctx context.Context, initiativeID, b
 		return nil, err
 	}
 
-	lfs.InvalidateInitiativeUpdates(initiativeID)
+	// Insert into cache - append if exists, otherwise fetch and set
+	cacheKey := "initiative-updates:" + initiativeID
+	if updates, ok := lfs.initiativeUpdateCache.Get(cacheKey); ok {
+		lfs.initiativeUpdateCache.Set(cacheKey, append(updates, *update))
+	} else {
+		updates, err := lfs.client.GetInitiativeUpdates(ctx, initiativeID)
+		if err == nil {
+			lfs.initiativeUpdateCache.Set(cacheKey, updates)
+		}
+	}
 	return update, nil
 }
 
@@ -1033,16 +1125,24 @@ func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 	lfs.labelCache.Delete("labels:" + teamID)
 }
 
-// CreateLabel creates a new label and invalidates the cache
+// CreateLabel creates a new label and updates the cache
 func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*api.Label, error) {
 	label, err := lfs.client.CreateLabel(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
-	// Invalidate cache for the team
+	// Insert into cache - append if exists, otherwise fetch and set
 	if teamID, ok := input["teamId"].(string); ok {
-		lfs.InvalidateTeamLabels(teamID)
+		cacheKey := "labels:" + teamID
+		if labels, ok := lfs.labelCache.Get(cacheKey); ok {
+			lfs.labelCache.Set(cacheKey, append(labels, *label))
+		} else {
+			labels, err := lfs.client.GetTeamLabels(ctx, teamID)
+			if err == nil {
+				lfs.labelCache.Set(cacheKey, labels)
+			}
+		}
 	}
 
 	return label, nil
@@ -1127,6 +1227,9 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, err
 	if err != nil {
 		return nil, err
 	}
+
+	// Store server reference for kernel cache invalidation
+	lfs.SetServer(server)
 
 	return server, nil
 }

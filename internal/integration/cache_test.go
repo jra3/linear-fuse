@@ -67,9 +67,8 @@ func TestIssueEditInvalidatesTeamCache(t *testing.T) {
 		t.Fatalf("Failed to write: %v", err)
 	}
 
-	waitForCacheExpiry()
-
-	// Verify the write worked via API (filesystem reads may be cached)
+	// No wait needed - filesystem write is synchronous
+	// Verify the write worked via API
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -106,8 +105,7 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 		t.Fatalf("Failed to create comment: %v", err)
 	}
 
-	waitForCacheExpiry()
-
+	// No wait needed - kernel cache invalidated on filesystem write
 	// Re-read comments directory
 	entries2, err := os.ReadDir(commentsDir)
 	if err != nil {
@@ -117,6 +115,47 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 	// Should have one more entry (the new comment)
 	if len(entries2) != initialCount+1 {
 		t.Errorf("Comment cache not invalidated, expected %d entries, got %d", initialCount+1, len(entries2))
+	}
+}
+
+func TestCommentVisibleImmediatelyAfterCreate(t *testing.T) {
+	skipIfNoWriteTests(t)
+	// This test verifies that after creating a comment via new.md,
+	// the new comment is visible immediately (cache insertion, not invalidation)
+
+	issue, cleanup, err := createTestIssue("Immediate Visibility Test")
+	if err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+	defer cleanup()
+
+	waitForCacheExpiry() // Wait for initial cache to settle
+
+	// First read populates the cache
+	commentsDir := commentsPath(testTeamKey, issue.Identifier)
+	entries1, err := os.ReadDir(commentsDir)
+	if err != nil {
+		t.Fatalf("Failed to read comments: %v", err)
+	}
+	initialCount := len(entries1)
+
+	// Create comment via new.md
+	commentBody := "[TEST] Immediate visibility comment"
+	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
+	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
+		t.Fatalf("Failed to create comment: %v", err)
+	}
+
+	// NO wait needed - kernel cache is invalidated on filesystem write
+	// Re-read comments directory - should see new comment immediately
+	entries2, err := os.ReadDir(commentsDir)
+	if err != nil {
+		t.Fatalf("Failed to re-read comments: %v", err)
+	}
+
+	// Should have one more entry without waiting for cache expiry
+	if len(entries2) != initialCount+1 {
+		t.Errorf("Comment not immediately visible after creation, expected %d entries, got %d", initialCount+1, len(entries2))
 	}
 }
 

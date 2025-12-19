@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"regexp"
 	"sort"
@@ -16,6 +17,13 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
 )
+
+// initiativeUpdatesDirIno generates a stable inode number for an initiative updates directory
+func initiativeUpdatesDirIno(initiativeID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("initiative-updates:" + initiativeID))
+	return h.Sum64()
+}
 
 // InitiativesNode represents the /initiatives directory
 type InitiativesNode struct {
@@ -245,15 +253,17 @@ func (p *InitiativeProjectsNode) Lookup(ctx context.Context, name string, out *f
 
 // initiativeProjectDirName returns a safe directory name for an initiative project
 func initiativeProjectDirName(proj api.InitiativeProject) string {
-	if proj.Slug != "" {
-		return proj.Slug
-	}
+	// Derive from name (not slugId, which is an opaque hash in Linear)
 	name := strings.ToLower(proj.Name)
 	name = strings.ReplaceAll(name, " ", "-")
 	reg := regexp.MustCompile(`[^a-z0-9-]`)
 	name = reg.ReplaceAllString(name, "")
 	if name != "" {
 		return name
+	}
+	// Fallback to slug/ID only if name sanitizes to empty
+	if proj.Slug != "" {
+		return proj.Slug
 	}
 	return proj.ID
 }
@@ -356,7 +366,7 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 			lfs:          n.lfs,
 			initiativeID: n.initiativeID,
 		}
-		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -475,7 +485,7 @@ func (n *NewInitiativeUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, 
 	defer n.mu.Unlock()
 
 	now := time.Now()
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -486,19 +496,8 @@ func (n *NewInitiativeUpdateNode) Open(ctx context.Context, flags uint32) (fs.Fi
 }
 
 func (n *NewInitiativeUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
+	// new.md is write-only - return permission denied
+	return nil, syscall.EACCES
 }
 
 func (n *NewInitiativeUpdateNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
@@ -535,7 +534,7 @@ func (n *NewInitiativeUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, 
 		}
 	}
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -565,6 +564,9 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 	}
 
 	n.created = true
+
+	// Invalidate kernel cache entry for updates directory
+	n.lfs.InvalidateKernelEntry(initiativeUpdatesDirIno(n.initiativeID), "new.md")
 
 	if n.lfs.debug {
 		log.Printf("Initiative update created successfully")

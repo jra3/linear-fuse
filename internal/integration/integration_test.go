@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 	cfg := &config.Config{
 		APIKey: apiKey,
 		Cache: config.CacheConfig{
-			TTL: 2 * time.Second,
+			TTL: 100 * time.Millisecond, // Short TTL for fast tests
 		},
 	}
 
@@ -78,6 +78,17 @@ func discoverTestTeam() error {
 	if len(teams) == 0 {
 		return fmt.Errorf("no teams found in workspace")
 	}
+
+	// Prefer TST team for tests, fall back to first team
+	for _, team := range teams {
+		if team.Key == "TST" {
+			testTeamID = team.ID
+			testTeamKey = team.Key
+			return nil
+		}
+	}
+
+	// Fallback to first team if TST not found
 	testTeamID = teams[0].ID
 	testTeamKey = teams[0].Key
 	return nil

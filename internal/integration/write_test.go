@@ -39,8 +39,7 @@ func TestEditIssueTitle(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// Verify via API
-	waitForCacheExpiry()
+	// Verify via API (no wait needed - filesystem write is synchronous)
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -92,7 +91,7 @@ func TestEditIssueDescription(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -129,7 +128,7 @@ func TestEditIssuePriority(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -183,7 +182,7 @@ func TestEditIssueStatus(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -220,7 +219,7 @@ func TestEditIssueDueDate(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -257,7 +256,7 @@ func TestClearIssueDueDate(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -284,7 +283,7 @@ func TestEditIssueEstimate(t *testing.T) {
 		t.Fatalf("Failed to read issue: %v", err)
 	}
 
-	modified, err := modifyFrontmatter(content, "estimate", 5)
+	modified, err := modifyFrontmatter(content, "estimate", 4)
 	if err != nil {
 		t.Fatalf("Failed to modify frontmatter: %v", err)
 	}
@@ -293,14 +292,16 @@ func TestEditIssueEstimate(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
 	}
 
-	if updated.Estimate == nil || *updated.Estimate != 5 {
-		t.Errorf("Expected estimate 5, got %v", updated.Estimate)
+	if updated.Estimate == nil {
+		t.Error("Expected estimate 4, got nil")
+	} else if *updated.Estimate != 4 {
+		t.Errorf("Expected estimate 4, got %v", *updated.Estimate)
 	}
 }
 
@@ -334,7 +335,7 @@ func TestEditMultipleFields(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// No wait needed - filesystem write is synchronous
 	updated, err := getTestIssue(issue.ID)
 	if err != nil {
 		t.Fatalf("Failed to get issue from API: %v", err)
@@ -361,9 +362,7 @@ func TestCreateIssueViaMkdir(t *testing.T) {
 		t.Fatalf("Failed to create issue via mkdir: %v", err)
 	}
 
-	// Wait for issue to appear in listing
-	waitForCacheExpiry()
-
+	// No wait needed - kernel cache is invalidated on mkdir
 	// List issues and find one with our title
 	entries, err := os.ReadDir(issuesPath(testTeamKey))
 	if err != nil {

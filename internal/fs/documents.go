@@ -68,22 +68,25 @@ func (n *DocsNode) parentID() string {
 }
 
 func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Try to get cached documents (don't trigger API call)
-	docs, ok := n.tryGetCachedDocuments()
+	// Fetch documents (uses cache if available)
+	docs, err := n.getDocuments(ctx)
+	if err != nil {
+		// On error, return just new.md
+		return fs.NewListDirStream([]fuse.DirEntry{
+			{Name: "new.md", Mode: syscall.S_IFREG},
+		}), 0
+	}
 
 	// Always include new.md for creating documents
 	entries := []fuse.DirEntry{
 		{Name: "new.md", Mode: syscall.S_IFREG},
 	}
 
-	// If we have cached documents, include them
-	if ok && len(docs) > 0 {
-		for _, doc := range docs {
-			entries = append(entries, fuse.DirEntry{
-				Name: documentFilename(doc),
-				Mode: syscall.S_IFREG,
-			})
-		}
+	for _, doc := range docs {
+		entries = append(entries, fuse.DirEntry{
+			Name: documentFilename(doc),
+			Mode: syscall.S_IFREG,
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -111,7 +114,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 			teamID:    n.teamID,
 			projectID: n.projectID,
 		}
-		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -181,6 +184,8 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				log.Printf("Failed to delete document: %v", err)
 				return syscall.EIO
 			}
+			// Invalidate kernel cache for this entry
+			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), name)
 			if n.lfs.debug {
 				log.Printf("Document deleted successfully")
 			}
@@ -233,6 +238,9 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 			if n.lfs.debug {
 				log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
 			}
+			// Invalidate kernel cache for old and new names
+			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), name)
+			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), newName)
 			return 0
 		}
 	}
@@ -406,6 +414,9 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		return syscall.EIO
 	}
 
+	// Invalidate kernel cache for this document file
+	n.lfs.InvalidateKernelInode(documentIno(n.document.ID))
+
 	n.dirty = false
 	n.contentReady = false // Force regenerate on next read
 
@@ -446,7 +457,7 @@ func (n *NewDocumentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -456,19 +467,8 @@ func (n *NewDocumentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle
 }
 
 func (n *NewDocumentNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
+	// new.md is write-only - return permission denied
+	return nil, syscall.EACCES
 }
 
 func (n *NewDocumentNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
@@ -505,7 +505,7 @@ func (n *NewDocumentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse
 		}
 	}
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -558,6 +558,16 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	}
 
 	n.created = true
+
+	// Invalidate kernel cache for docs directory
+	parentID := n.issueID
+	if parentID == "" {
+		parentID = n.teamID
+	}
+	if parentID == "" {
+		parentID = n.projectID
+	}
+	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), "new.md")
 
 	if n.lfs.debug {
 		log.Printf("Document created successfully")

@@ -54,29 +54,32 @@ func (n *CommentsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 }
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Try to get cached comments (don't trigger API call)
-	comments, ok := n.lfs.TryGetCachedComments(n.issueID)
+	// Fetch comments (uses cache if available)
+	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
+	if err != nil {
+		// On error, return just new.md
+		return fs.NewListDirStream([]fuse.DirEntry{
+			{Name: "new.md", Mode: syscall.S_IFREG},
+		}), 0
+	}
 
 	// Always include new.md for creating comments
 	entries := []fuse.DirEntry{
 		{Name: "new.md", Mode: syscall.S_IFREG},
 	}
 
-	// If we have cached comments, include them
-	if ok && len(comments) > 0 {
-		// Sort comments by creation time
-		sort.Slice(comments, func(i, j int) bool {
-			return comments[i].CreatedAt.Before(comments[j].CreatedAt)
-		})
+	// Sort comments by creation time
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+	})
 
-		for i, comment := range comments {
-			// Format: 001-2025-01-10T14:30.md
-			timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-			entries = append(entries, fuse.DirEntry{
-				Name: fmt.Sprintf("%03d-%s.md", i+1, timestamp),
-				Mode: syscall.S_IFREG,
-			})
-		}
+	for i, comment := range comments {
+		// Format: 001-2025-01-10T14:30.md
+		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
+		entries = append(entries, fuse.DirEntry{
+			Name: fmt.Sprintf("%03d-%s.md", i+1, timestamp),
+			Mode: syscall.S_IFREG,
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -91,7 +94,7 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 			issueID: n.issueID,
 			teamID:  n.teamID,
 		}
-		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -170,6 +173,8 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				log.Printf("Failed to delete comment: %v", err)
 				return syscall.EIO
 			}
+			// Invalidate kernel cache for this entry
+			n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), name)
 			if n.lfs.debug {
 				log.Printf("Comment deleted successfully")
 			}
@@ -333,6 +338,9 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		return syscall.EIO
 	}
 
+	// Invalidate kernel cache for this comment file
+	n.lfs.InvalidateKernelInode(commentIno(n.comment.ID))
+
 	n.dirty = false
 	n.contentReady = false // Force regenerate on next read
 
@@ -388,7 +396,7 @@ func (n *NewCommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	defer n.mu.Unlock()
 
 	now := time.Now()
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -399,19 +407,8 @@ func (n *NewCommentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 }
 
 func (n *NewCommentNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
+	// new.md is write-only - return permission denied
+	return nil, syscall.EACCES
 }
 
 func (n *NewCommentNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
@@ -448,7 +445,7 @@ func (n *NewCommentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.
 		}
 	}
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -477,6 +474,9 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 	}
 
 	n.created = true
+
+	// Invalidate kernel cache for comments directory
+	n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), "new.md")
 
 	if n.lfs.debug {
 		log.Printf("Comment created successfully")

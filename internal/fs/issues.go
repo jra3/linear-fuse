@@ -21,6 +21,13 @@ func issueIno(issueID string) uint64 {
 	return h.Sum64()
 }
 
+// issuesDirIno generates a stable inode number for a team's issues directory
+func issuesDirIno(teamID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("issues:" + teamID))
+	return h.Sum64()
+}
+
 // issueDirIno generates a stable inode number for an issue directory
 func issueDirIno(issueID string) uint64 {
 	h := fnv.New64a()
@@ -126,9 +133,11 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		return nil, syscall.EIO
 	}
 
-	// Invalidate cache
+	// Invalidate caches
 	n.lfs.InvalidateTeamIssues(n.team.ID)
 	n.lfs.InvalidateMyIssues()
+	n.lfs.InvalidateFilteredIssues(n.team.ID)
+	n.lfs.InvalidateKernelEntry(issuesDirIno(n.team.ID), issue.Identifier)
 
 	node := &IssueDirectoryNode{
 		lfs:   n.lfs,
@@ -168,6 +177,15 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 				log.Printf("Failed to archive issue %s: %v", name, err)
 				return syscall.EIO
 			}
+
+			// Additional cache invalidations
+			n.lfs.InvalidateFilteredIssues(n.team.ID)
+			n.lfs.InvalidateIssueById(issue.Identifier)
+			if issue.Project != nil {
+				n.lfs.InvalidateProjectIssues(issue.Project.ID)
+			}
+			n.lfs.InvalidateKernelEntry(issuesDirIno(n.team.ID), name)
+
 			if n.lfs.debug {
 				log.Printf("Issue %s archived successfully", name)
 			}
@@ -527,11 +545,22 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Invalidate caches so next read gets fresh data
 	if i.issue.Team != nil {
 		i.lfs.InvalidateTeamIssues(i.issue.Team.ID)
+		i.lfs.InvalidateFilteredIssues(i.issue.Team.ID)
 	}
 	i.lfs.InvalidateMyIssues()
+	i.lfs.InvalidateIssueById(i.issue.Identifier)
+
+	// Invalidate user caches for old and new assignee
 	if i.issue.Assignee != nil {
 		i.lfs.InvalidateUserIssues(i.issue.Assignee.ID)
 	}
+	if newAssigneeID, ok := updates["assigneeId"].(string); ok {
+		// Also invalidate new assignee's cache if different from old
+		if i.issue.Assignee == nil || newAssigneeID != i.issue.Assignee.ID {
+			i.lfs.InvalidateUserIssues(newAssigneeID)
+		}
+	}
+
 	// Invalidate project caches if project changed
 	if _, hasProjectUpdate := updates["projectId"]; hasProjectUpdate {
 		// Invalidate old project (if issue was in one)
@@ -543,6 +572,9 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			i.lfs.InvalidateProjectIssues(newProjectID)
 		}
 	}
+
+	// Invalidate kernel cache for this file
+	i.lfs.InvalidateKernelInode(issueIno(i.issue.ID))
 
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read

@@ -76,7 +76,7 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 			lfs:    n.lfs,
 			teamID: n.teamID,
 		}
-		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -142,6 +142,8 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			if n.lfs.debug {
 				log.Printf("Label deleted successfully")
 			}
+			// Invalidate kernel cache entry
+			n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), name)
 			return 0
 		}
 	}
@@ -192,6 +194,9 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 			if n.lfs.debug {
 				log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
 			}
+			// Invalidate kernel cache for old and new names
+			n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), name)
+			n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), newName)
 			return 0
 		}
 	}
@@ -386,6 +391,9 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	n.dirty = false
 	n.contentReady = false // Force regenerate on next read
 
+	// Invalidate kernel inode cache
+	n.lfs.InvalidateKernelInode(labelIno(n.label.ID))
+
 	if n.lfs.debug {
 		log.Printf("Label updated successfully")
 	}
@@ -420,7 +428,7 @@ func (n *NewLabelNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -430,19 +438,8 @@ func (n *NewLabelNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, u
 }
 
 func (n *NewLabelNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
+	// new.md is write-only - return permission denied
+	return nil, syscall.EACCES
 }
 
 func (n *NewLabelNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
@@ -479,7 +476,7 @@ func (n *NewLabelNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Se
 		}
 	}
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -527,6 +524,9 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	}
 
 	n.created = true
+
+	// Invalidate kernel cache entry for labels directory
+	n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), "new.md")
 
 	if n.lfs.debug {
 		log.Printf("Label created successfully")

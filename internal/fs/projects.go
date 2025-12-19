@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"regexp"
 	"sort"
@@ -17,6 +18,27 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
+
+// projectsDirIno generates a stable inode number for a projects directory
+func projectsDirIno(teamID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("projects:" + teamID))
+	return h.Sum64()
+}
+
+// projectInfoIno generates a stable inode number for a project info file
+func projectInfoIno(projectID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("project-info:" + projectID))
+	return h.Sum64()
+}
+
+// updatesDirIno generates a stable inode number for a project updates directory
+func updatesDirIno(projectID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("updates:" + projectID))
+	return h.Sum64()
+}
 
 // ProjectsNode represents the /teams/{KEY}/projects directory
 type ProjectsNode struct {
@@ -83,6 +105,9 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	// Invalidate cache
 	p.lfs.InvalidateTeamProjects(p.team.ID)
 
+	// Invalidate kernel cache entry for projects directory
+	p.lfs.InvalidateKernelEntry(projectsDirIno(p.team.ID), name)
+
 	node := &ProjectNode{
 		lfs:     p.lfs,
 		team:    p.team,
@@ -117,6 +142,8 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 			if p.lfs.debug {
 				log.Printf("Project %s archived successfully", name)
 			}
+			// Invalidate kernel cache entry for projects directory
+			p.lfs.InvalidateKernelEntry(projectsDirIno(p.team.ID), name)
 			return 0
 		}
 	}
@@ -188,7 +215,10 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		return p.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFREG,
+			Ino:  projectInfoIno(p.project.ID),
+		}), 0
 	}
 
 	// Handle docs/ directory
@@ -508,6 +538,9 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	p.lfs.InvalidateTeamProjects(p.team.ID)
 	p.lfs.initiativeCache.Delete("initiatives")
 
+	// Invalidate kernel inode cache
+	p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))
+
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read
 
@@ -570,7 +603,7 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 			lfs:       n.lfs,
 			projectID: n.projectID,
 		}
-		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -689,7 +722,7 @@ func (n *NewUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	defer n.mu.Unlock()
 
 	now := time.Now()
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -700,19 +733,8 @@ func (n *NewUpdateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, 
 }
 
 func (n *NewUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
+	// new.md is write-only - return permission denied
+	return nil, syscall.EACCES
 }
 
 func (n *NewUpdateNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
@@ -749,7 +771,7 @@ func (n *NewUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.S
 		}
 	}
 
-	out.Mode = 0644
+	out.Mode = 0200
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -779,6 +801,9 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	}
 
 	n.created = true
+
+	// Invalidate kernel cache entry for updates directory
+	n.lfs.InvalidateKernelEntry(updatesDirIno(n.projectID), "new.md")
 
 	if n.lfs.debug {
 		log.Printf("Project update created successfully")

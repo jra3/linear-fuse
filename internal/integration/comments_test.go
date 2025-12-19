@@ -8,22 +8,23 @@ import (
 
 func TestCommentsDirectoryListing(t *testing.T) {
 	skipIfNoWriteTests(t)
-	// Create issue with a comment
+	// Create issue
 	issue, cleanup, err := createTestIssue("Comments Listing Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
 	defer cleanup()
 
-	comment, commentCleanup, err := createTestComment(issue.ID, "Test comment for listing")
-	if err != nil {
-		t.Fatalf("Failed to create test comment: %v", err)
-	}
-	defer commentCleanup()
-	_ = comment
-
 	waitForCacheExpiry()
 
+	// Create comment via filesystem (new.md)
+	commentBody := "[TEST] Comment for listing test"
+	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
+	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
+		t.Fatalf("Failed to write to new.md: %v", err)
+	}
+
+	// Read comments directory
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
 	if err != nil {
 		t.Fatalf("Failed to read comments directory: %v", err)
@@ -57,13 +58,13 @@ func TestCommentFilenameFormat(t *testing.T) {
 	}
 	defer cleanup()
 
-	_, commentCleanup, err := createTestComment(issue.ID, "Test comment")
-	if err != nil {
-		t.Fatalf("Failed to create test comment: %v", err)
-	}
-	defer commentCleanup()
-
 	waitForCacheExpiry()
+
+	// Create comment via filesystem
+	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
+	if err := os.WriteFile(newMdPath, []byte("[TEST] Comment for filename test"), 0644); err != nil {
+		t.Fatalf("Failed to write to new.md: %v", err)
+	}
 
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
 	if err != nil {
@@ -94,14 +95,14 @@ func TestCommentFileContents(t *testing.T) {
 	}
 	defer cleanup()
 
-	commentBody := "This is the comment body text"
-	_, commentCleanup, err := createTestComment(issue.ID, commentBody)
-	if err != nil {
-		t.Fatalf("Failed to create test comment: %v", err)
-	}
-	defer commentCleanup()
-
 	waitForCacheExpiry()
+
+	// Create comment via filesystem
+	commentBody := "This is the comment body text"
+	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
+	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
+		t.Fatalf("Failed to write to new.md: %v", err)
+	}
 
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
 	if err != nil {
@@ -135,7 +136,7 @@ func TestCommentFileContents(t *testing.T) {
 			t.Error("Comment missing created field")
 		}
 
-		// Check body contains our text (prefixed with [TEST])
+		// Check body contains our text
 		if !strings.Contains(doc.Body, commentBody) {
 			t.Errorf("Comment body should contain %q", commentBody)
 		}
@@ -162,8 +163,7 @@ func TestCreateCommentViaNewMd(t *testing.T) {
 		t.Fatalf("Failed to write to new.md: %v", err)
 	}
 
-	waitForCacheExpiry()
-
+	// No wait needed - kernel cache invalidated on filesystem write
 	// Verify comment was created by listing
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
 	if err != nil {
@@ -198,12 +198,13 @@ func TestDeleteComment(t *testing.T) {
 	}
 	defer cleanup()
 
-	comment, _, err := createTestComment(issue.ID, "Comment to delete")
-	if err != nil {
-		t.Fatalf("Failed to create test comment: %v", err)
-	}
-
 	waitForCacheExpiry()
+
+	// Create comment via filesystem
+	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
+	if err := os.WriteFile(newMdPath, []byte("[TEST] Comment to delete"), 0644); err != nil {
+		t.Fatalf("Failed to write to new.md: %v", err)
+	}
 
 	// Find the comment file
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
@@ -213,18 +214,7 @@ func TestDeleteComment(t *testing.T) {
 
 	var commentFile string
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
-			continue
-		}
-		content, err := os.ReadFile(commentFilePath(testTeamKey, issue.Identifier, entry.Name()))
-		if err != nil {
-			continue
-		}
-		doc, err := parseFrontmatter(content)
-		if err != nil {
-			continue
-		}
-		if id, ok := doc.Frontmatter["id"].(string); ok && id == comment.ID {
+		if entry.Name() != "new.md" && strings.HasSuffix(entry.Name(), ".md") {
 			commentFile = entry.Name()
 			break
 		}
@@ -239,12 +229,16 @@ func TestDeleteComment(t *testing.T) {
 		t.Fatalf("Failed to delete comment: %v", err)
 	}
 
-	waitForCacheExpiry()
+	// Verify it's gone from directory listing
+	entries, err = os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
+	if err != nil {
+		t.Fatalf("Failed to re-read comments directory: %v", err)
+	}
 
-	// Verify it's gone
-	_, err = os.Stat(commentFilePath(testTeamKey, issue.Identifier, commentFile))
-	if err == nil {
-		t.Error("Comment file should be deleted")
+	for _, entry := range entries {
+		if entry.Name() == commentFile {
+			t.Error("Comment file should be deleted")
+		}
 	}
 }
 
@@ -265,9 +259,9 @@ func TestNewMdAlwaysExists(t *testing.T) {
 	}
 }
 
-func TestNewMdReadable(t *testing.T) {
+func TestNewMdWriteOnly(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("new.md Readable Test")
+	issue, cleanup, err := createTestIssue("new.md Write-Only Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -275,11 +269,15 @@ func TestNewMdReadable(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	content, err := os.ReadFile(newCommentPath(testTeamKey, issue.Identifier))
-	if err != nil {
-		t.Fatalf("Failed to read new.md: %v", err)
+	// new.md should be write-only (0200), so reading should fail
+	_, err = os.ReadFile(newCommentPath(testTeamKey, issue.Identifier))
+	if err == nil {
+		t.Error("new.md should be write-only and not readable")
 	}
 
-	// new.md should be empty or have placeholder text
-	_ = content // Content can be empty, that's fine
+	// Verify we can still write to it
+	err = os.WriteFile(newCommentPath(testTeamKey, issue.Identifier), []byte("[TEST] Write-only test"), 0644)
+	if err != nil {
+		t.Errorf("new.md should be writable: %v", err)
+	}
 }

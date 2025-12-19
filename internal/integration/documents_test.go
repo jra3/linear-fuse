@@ -162,8 +162,7 @@ func TestCreateDocumentViaNewMd(t *testing.T) {
 		t.Fatalf("Failed to write to new.md: %v", err)
 	}
 
-	waitForCacheExpiry()
-
+	// No wait needed - kernel cache invalidated on filesystem write
 	// Verify document was created by listing
 	entries, err := os.ReadDir(docsPath(testTeamKey, issue.Identifier))
 	if err != nil {
@@ -244,8 +243,7 @@ func TestUpdateDocument(t *testing.T) {
 		t.Fatalf("Failed to write updated document: %v", err)
 	}
 
-	waitForCacheExpiry()
-
+	// No wait needed - kernel cache invalidated on filesystem write
 	// Re-read and verify
 	newContent, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, docFile))
 	if err != nil {
@@ -307,8 +305,7 @@ func TestDeleteDocument(t *testing.T) {
 		t.Fatalf("Failed to delete document: %v", err)
 	}
 
-	waitForCacheExpiry()
-
+	// No wait needed - kernel cache invalidated on filesystem delete
 	// Verify it's gone
 	_, err = os.Stat(docFilePath(testTeamKey, issue.Identifier, docFile))
 	if err == nil {
@@ -333,9 +330,9 @@ func TestDocsNewMdAlwaysExists(t *testing.T) {
 	}
 }
 
-func TestDocsNewMdReadable(t *testing.T) {
+func TestDocsNewMdWriteOnly(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("new.md Readable Test")
+	issue, cleanup, err := createTestIssue("new.md Write-Only Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -343,13 +340,21 @@ func TestDocsNewMdReadable(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	content, err := os.ReadFile(newDocPath(testTeamKey, issue.Identifier))
-	if err != nil {
-		t.Fatalf("Failed to read new.md: %v", err)
+	// new.md should be write-only (0200), so reading should fail
+	_, err = os.ReadFile(newDocPath(testTeamKey, issue.Identifier))
+	if err == nil {
+		t.Error("new.md should be write-only and not readable")
 	}
 
-	// new.md should be empty or have placeholder text
-	_ = content // Content can be empty, that's fine
+	// Verify we can still write to it
+	content := `---
+title: Test Document
+---
+Test content`
+	err = os.WriteFile(newDocPath(testTeamKey, issue.Identifier), []byte(content), 0644)
+	if err != nil {
+		t.Errorf("new.md should be writable: %v", err)
+	}
 }
 
 func TestDocsDirectoryExistsInIssue(t *testing.T) {
