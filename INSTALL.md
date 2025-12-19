@@ -430,6 +430,47 @@ systemctl --user disable linearfs.service  # Disable autostart
 
 ---
 
+## Claude Code Integration
+
+If you use [Claude Code](https://claude.ai/code), you can give it access to your mounted Linear workspace for AI-assisted issue management.
+
+### 1. Add Permissions
+
+Add these permissions to your `~/.claude/settings.json`:
+
+```json
+{
+  "allow": [
+    "Read(//mnt/linear/**)",
+    "Bash(ls /mnt/linear/:*)",
+    "Bash(cat /mnt/linear/:*)"
+  ]
+}
+```
+
+This allows Claude Code to read issues, list directories, and view file contents without prompting for approval.
+
+### 2. Add Context
+
+Add to your global `~/.claude/CLAUDE.md`:
+
+```markdown
+## Linear Integration
+
+Linear issues are available at `/mnt/linear/`. Read `/mnt/linear/README.md` for the filesystem structure and usage instructions.
+```
+
+This tells Claude Code where to find your Linear data and how to use it.
+
+### 3. Usage
+
+Now you can ask Claude Code things like:
+- "What issues are assigned to me?" → reads `/mnt/linear/my/assigned/`
+- "Show me the bug issues" → reads `/mnt/linear/teams/ENG/by/label/bug/`
+- "What's the status of ENG-123?" → reads the issue file directly
+
+---
+
 ## Building from Source
 
 Requirements:

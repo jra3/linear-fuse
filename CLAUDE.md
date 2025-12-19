@@ -19,76 +19,115 @@ To test manually:
 fusermount3 -u /tmp/linear              # Unmount
 ```
 
+Integration tests (requires LINEAR_API_KEY):
+```bash
+LINEARFS_INTEGRATION=1 go test -v ./internal/integration/...
+LINEARFS_INTEGRATION=1 LINEARFS_WRITE_TESTS=1 go test -v ./internal/integration/...  # Include write tests
+```
+
+## Claude Code Integration
+
+To allow Claude Code to read from the mounted filesystem, add these permissions to `~/.claude/settings.json`:
+
+```json
+{
+  "allow": [
+    "Read(//mnt/linear/**)",
+    "Bash(ls /mnt/linear/:*)",
+    "Bash(cat /mnt/linear/:*)"
+  ]
+}
+```
+
+Also add to your global `~/.claude/CLAUDE.md`:
+```markdown
+# Linear.app issues via FUSE mount
+- Linear data is available at /mnt/linear
+- Read /mnt/linear/README.md for usage instructions
+```
+
 ## Architecture
 
-LinearFS exposes Linear issues as a FUSE filesystem. The data flow is:
+LinearFS exposes Linear as a FUSE filesystem:
 
 ```
 Linear API → api.Client → LinearFS (caching) → FUSE nodes → kernel → user
 ```
 
-### Key Packages
-
-- **internal/api**: GraphQL client for Linear. Handles pagination, queries, and mutations. Types in `types.go` mirror Linear's schema.
-
-- **internal/fs**: FUSE filesystem implementation using go-fuse/v2. Each node type implements `fs.Node*` interfaces:
-  - `RootNode` → `/` with `teams/`, `users/`, and `my/` directories
-  - `TeamsNode`/`TeamNode` → `/teams/<KEY>/`
-  - `IssuesNode` → `/teams/<KEY>/issues/` (lists issue directories)
-  - `IssueDirectoryNode` → `/teams/<KEY>/issues/<ID>/` (contains issue.md and comments/)
-  - `IssueFileNode` → `/teams/<KEY>/issues/<ID>/issue.md` (read/write)
-  - `CommentsNode` → `/teams/<KEY>/issues/<ID>/comments/` (lists comments)
-  - `CommentNode` → Individual comment files (read-only)
-  - `NewCommentNode` → Handles comment creation via new.md
-  - `MyNode`/`MyIssuesNode` → `/my/assigned/`, `/my/created/`, `/my/active/`
-  - `UsersNode`/`UserNode` → `/users/<name>/` (symlinks to team issues)
-
-- **internal/marshal**: Converts between Linear issues and markdown with YAML frontmatter. `IssueToMarkdown` for reads, `MarkdownToIssueUpdate` for writes (computes diff).
-
-- **internal/cache**: Generic TTL cache wrapping a sync.Map.
-
-- **internal/config**: Loads config from `~/.config/linearfs/config.yaml` with env var override for API key.
-
 ### Directory Structure
 
-Issues are directories containing `issue.md` and a `comments/` subdirectory:
+```
+/mnt/linear/
+├── teams/<KEY>/
+│   ├── team.md, states.md, labels.md    # Team metadata (read-only)
+│   ├── issues/
+│   │   └── <ID>/
+│   │       ├── issue.md                  # Issue content (read/write)
+│   │       ├── comments/*.md             # Comments (read/write/delete)
+│   │       ├── docs/*.md                 # Documents (read/write/delete)
+│   │       └── children/                 # Sub-issue symlinks
+│   ├── by/                               # Filtered views
+│   │   ├── status/<state>/               # Issues by workflow state
+│   │   ├── priority/<level>/             # Issues by priority
+│   │   ├── assignee/<email>/             # Issues by assignee
+│   │   ├── label/<name>/                 # Issues by label
+│   │   └── unassigned/                   # Unassigned issues
+│   ├── labels/*.md                       # Label CRUD via new.md
+│   ├── projects/<slug>/
+│   │   ├── project.md                    # Project metadata (read/write)
+│   │   ├── docs/*.md                     # Project documents
+│   │   └── updates/*.md                  # Status updates via new.md
+│   └── cycles/<name>/                    # Sprint/cycle issues
+├── initiatives/<slug>/
+│   ├── initiative.md                     # Initiative metadata
+│   ├── projects/                         # Linked project symlinks
+│   └── updates/*.md                      # Status updates via new.md
+├── users/<name>/                         # Per-user issue symlinks
+└── my/
+    ├── assigned/, created/, active/      # Personal issue views
+```
 
-```
-/teams/ENG/issues/
-├── ENG-123/
-│   ├── issue.md           # Issue content (read/write)
-│   └── comments/
-│       ├── 001-2025-01-10T14-30.md  # Comments (read-only)
-│       ├── 002-2025-01-10T15-00.md
-│       └── new.md         # Write here to create comment
-```
+### Key Packages
+
+- **internal/api**: GraphQL client for Linear. Types in `types.go` mirror Linear's schema.
+- **internal/fs**: FUSE implementation using go-fuse/v2. Key node types:
+  - `LinearFS` - Main struct with caches and server reference
+  - `IssueFileNode` - Read/write issue.md files
+  - `CommentsNode`/`CommentNode` - Comment listing and CRUD
+  - `DocsNode`/`DocumentFileNode` - Document CRUD
+  - `LabelsNode`/`LabelFileNode` - Label CRUD
+  - `ProjectsNode`/`ProjectInfoNode` - Project management
+  - `ByNode`/`FilteredIssuesNode` - Server-side filtered queries
+- **internal/marshal**: Markdown ↔ Linear issue conversion with YAML frontmatter
+- **internal/cache**: Generic TTL cache with `DeleteByPrefix` for bulk invalidation
 
 ### Write Flow
 
-When a user edits an issue file:
-1. `IssueFileNode.Write()` buffers changes
-2. `IssueFileNode.Flush()` (on save) parses markdown via `marshal.MarkdownToIssueUpdate`
-3. Status names resolved to IDs via `LinearFS.ResolveStateID`
-4. `api.Client.UpdateIssue()` sends mutation to Linear
-5. Cache invalidated for fresh data on next read
+1. User edits file → `Write()` buffers changes
+2. On save → `Flush()` parses content, calls Linear API
+3. Internal caches invalidated (`InvalidateTeamIssues`, `InvalidateFilteredIssues`, etc.)
+4. Kernel cache invalidated via `server.InodeNotify()` / `server.EntryNotify()`
+5. Subsequent reads see fresh data immediately
 
-### Comment Creation Flow
+### Cache Invalidation
 
-1. User writes to `comments/new.md` (or creates any `.md` file)
-2. `NewCommentNode.Write()` buffers content
-3. `NewCommentNode.Flush()` calls `LinearFS.CreateComment()`
-4. Comment cache invalidated, new comment appears on next listing
+After writes, both internal and kernel caches must be invalidated:
+- Internal: `lfs.issueCache.Delete()`, `lfs.InvalidateFilteredIssues()`, etc.
+- Kernel: `lfs.InvalidateKernelInode(ino)`, `lfs.InvalidateKernelEntry(parent, name)`
 
-### File Attributes
-
-Issue files get their mtime/ctime from Linear's `updatedAt`/`createdAt`. This is set in `Lookup()` methods via `out.Attr.SetTimes()`, not just `Getattr()`.
+Each writable node type has stable inode generation via fnv hash (e.g., `issueIno()`, `commentIno()`).
 
 ## Configuration
 
-API key via environment variable `LINEAR_API_KEY` or config file:
+API key via `LINEAR_API_KEY` env var or `~/.config/linearfs/config.yaml`:
 ```yaml
 api_key: "lin_api_xxxxx"
 cache:
   ttl: 60s
 ```
-- I am ok with any and all breaking changes. we are FIRMLY in the prototype phase with this project
+
+## Development Notes
+
+- Breaking changes are acceptable - this is a prototype
+- Integration tests use TST team by preference (falls back to first team)
+- Test cache TTL is 100ms for fast tests; waits removed after filesystem writes
