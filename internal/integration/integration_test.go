@@ -17,6 +17,7 @@ import (
 var (
 	mountPoint  string
 	server      *fuse.Server
+	lfs         *fs.LinearFS
 	apiClient   *api.Client
 	testTeamID  string
 	testTeamKey string
@@ -46,7 +47,7 @@ func TestMain(m *testing.M) {
 		},
 	}
 
-	server, err = fs.Mount(mountPoint, cfg, false)
+	server, lfs, err = fs.Mount(mountPoint, cfg, false)
 	if err != nil {
 		os.RemoveAll(mountPoint)
 		log.Fatalf("Failed to mount filesystem: %v", err)
@@ -99,6 +100,9 @@ func cleanup() {
 		if err := server.Unmount(); err != nil {
 			log.Printf("Warning: failed to unmount: %v", err)
 		}
+	}
+	if lfs != nil {
+		lfs.Close()
 	}
 	if mountPoint != "" {
 		os.RemoveAll(mountPoint)

@@ -75,6 +75,31 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}, nil
 }
 
+// Close stops all background cache goroutines to prevent resource leaks
+func (lfs *LinearFS) Close() {
+	lfs.teamCache.Stop()
+	lfs.issueCache.Stop()
+	lfs.issueByIdCache.Stop()
+	lfs.filteredIssueCache.Stop()
+	lfs.stateCache.Stop()
+	lfs.labelCache.Stop()
+	lfs.cycleCache.Stop()
+	lfs.cycleIssueCache.Stop()
+	lfs.projectCache.Stop()
+	lfs.projectIssueCache.Stop()
+	lfs.myIssueCache.Stop()
+	lfs.myCreatedCache.Stop()
+	lfs.myActiveCache.Stop()
+	lfs.userCache.Stop()
+	lfs.userIssueCache.Stop()
+	lfs.commentCache.Stop()
+	lfs.documentCache.Stop()
+	lfs.initiativeCache.Stop()
+	lfs.milestoneCache.Stop()
+	lfs.projectUpdateCache.Stop()
+	lfs.initiativeUpdateCache.Stop()
+}
+
 func (lfs *LinearFS) GetTeams(ctx context.Context) ([]api.Team, error) {
 	if teams, ok := lfs.teamCache.Get("teams"); ok {
 		return teams, nil
@@ -1243,10 +1268,10 @@ func (lfs *LinearFS) GetInitiatives(ctx context.Context) ([]api.Initiative, erro
 	return result.([]api.Initiative), nil
 }
 
-func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, error) {
+func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *LinearFS, error) {
 	lfs, err := NewLinearFS(cfg, debug)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	root := &RootNode{lfs: lfs}
@@ -1273,11 +1298,11 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, err
 
 	server, err := fs.Mount(mountpoint, root, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Store server reference for kernel cache invalidation
 	lfs.SetServer(server)
 
-	return server, nil
+	return server, lfs, nil
 }

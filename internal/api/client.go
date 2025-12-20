@@ -32,7 +32,7 @@ func NewClient(apiKey string) *Client {
 
 	return &Client{
 		apiKey:     apiKey,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		limiter:    limiter,
 	}
 }

@@ -15,12 +15,14 @@ type Cache[T any] struct {
 	mu      sync.RWMutex
 	entries map[string]entry[T]
 	ttl     time.Duration
+	stopCh  chan struct{}
 }
 
 func New[T any](ttl time.Duration) *Cache[T] {
 	c := &Cache[T]{
 		entries: make(map[string]entry[T]),
 		ttl:     ttl,
+		stopCh:  make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine
@@ -83,18 +85,28 @@ func (c *Cache[T]) DeleteByPrefix(prefix string) {
 	}
 }
 
+// Stop terminates the background cleanup goroutine
+func (c *Cache[T]) Stop() {
+	close(c.stopCh)
+}
+
 func (c *Cache[T]) cleanup() {
 	ticker := time.NewTicker(c.ttl)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		c.mu.Lock()
-		now := time.Now()
-		for key, e := range c.entries {
-			if now.After(e.expiresAt) {
-				delete(c.entries, key)
+	for {
+		select {
+		case <-ticker.C:
+			c.mu.Lock()
+			now := time.Now()
+			for key, e := range c.entries {
+				if now.After(e.expiresAt) {
+					delete(c.entries, key)
+				}
 			}
+			c.mu.Unlock()
+		case <-c.stopCh:
+			return
 		}
-		c.mu.Unlock()
 	}
 }

@@ -51,7 +51,7 @@ func runMount(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Mounting Linear filesystem at %s\n", mountpoint)
 
-	server, err := fs.Mount(mountpoint, cfg, debug)
+	server, lfs, err := fs.Mount(mountpoint, cfg, debug)
 	if err != nil {
 		return fmt.Errorf("failed to mount: %w", err)
 	}
@@ -68,6 +68,9 @@ func runMount(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Filesystem mounted. Press Ctrl+C to unmount.")
 	server.Wait()
+
+	// Stop background cache goroutines
+	lfs.Close()
 
 	return nil
 }
