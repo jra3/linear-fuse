@@ -48,30 +48,31 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		return nil, fmt.Errorf("LINEAR_API_KEY not set - set env var or add api_key to config file")
 	}
 
+	maxEntries := cfg.Cache.MaxEntries
 	return &LinearFS{
-		client:              api.NewClient(cfg.APIKey),
-		teamCache:           cache.New[[]api.Team](cfg.Cache.TTL),
-		issueCache:          cache.New[[]api.Issue](cfg.Cache.TTL),
-		issueByIdCache:      cache.New[api.Issue](cfg.Cache.TTL), // Individual issues for fast lookup
-		filteredIssueCache:  cache.New[[]api.Issue](cfg.Cache.TTL), // Server-side filtered issues
-		stateCache:          cache.New[[]api.State](cfg.Cache.TTL * 10), // States change rarely
-		labelCache:          cache.New[[]api.Label](cfg.Cache.TTL * 10), // Labels change rarely
-		cycleCache:          cache.New[[]api.Cycle](cfg.Cache.TTL),      // Cycles change with issues
-		cycleIssueCache:     cache.New[[]api.CycleIssue](cfg.Cache.TTL),
-		projectCache:        cache.New[[]api.Project](cfg.Cache.TTL),
-		projectIssueCache:   cache.New[[]api.ProjectIssue](cfg.Cache.TTL),
-		myIssueCache:        cache.New[[]api.Issue](cfg.Cache.TTL),
-		myCreatedCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
-		myActiveCache:       cache.New[[]api.Issue](cfg.Cache.TTL),
-		userCache:           cache.New[[]api.User](cfg.Cache.TTL * 10), // Users change rarely
-		userIssueCache:      cache.New[[]api.Issue](cfg.Cache.TTL),
-		commentCache:        cache.New[[]api.Comment](cfg.Cache.TTL),
-		documentCache:       cache.New[[]api.Document](cfg.Cache.TTL),
-		initiativeCache:     cache.New[[]api.Initiative](cfg.Cache.TTL),
-		milestoneCache:         cache.New[[]api.ProjectMilestone](cfg.Cache.TTL),
-		projectUpdateCache:     cache.New[[]api.ProjectUpdate](cfg.Cache.TTL),
-		initiativeUpdateCache:  cache.New[[]api.InitiativeUpdate](cfg.Cache.TTL),
-		debug:                  debug,
+		client:               api.NewClient(cfg.APIKey),
+		teamCache:            cache.New[[]api.Team](cfg.Cache.TTL, maxEntries),
+		issueCache:           cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
+		issueByIdCache:       cache.New[api.Issue](cfg.Cache.TTL, maxEntries),
+		filteredIssueCache:   cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
+		stateCache:           cache.New[[]api.State](cfg.Cache.TTL*10, maxEntries),
+		labelCache:           cache.New[[]api.Label](cfg.Cache.TTL*10, maxEntries),
+		cycleCache:           cache.New[[]api.Cycle](cfg.Cache.TTL, maxEntries),
+		cycleIssueCache:      cache.New[[]api.CycleIssue](cfg.Cache.TTL, maxEntries),
+		projectCache:         cache.New[[]api.Project](cfg.Cache.TTL, maxEntries),
+		projectIssueCache:    cache.New[[]api.ProjectIssue](cfg.Cache.TTL, maxEntries),
+		myIssueCache:         cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
+		myCreatedCache:       cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
+		myActiveCache:        cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
+		userCache:            cache.New[[]api.User](cfg.Cache.TTL*10, maxEntries),
+		userIssueCache:       cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
+		commentCache:         cache.New[[]api.Comment](cfg.Cache.TTL, maxEntries),
+		documentCache:        cache.New[[]api.Document](cfg.Cache.TTL, maxEntries),
+		initiativeCache:      cache.New[[]api.Initiative](cfg.Cache.TTL, maxEntries),
+		milestoneCache:       cache.New[[]api.ProjectMilestone](cfg.Cache.TTL, maxEntries),
+		projectUpdateCache:   cache.New[[]api.ProjectUpdate](cfg.Cache.TTL, maxEntries),
+		initiativeUpdateCache: cache.New[[]api.InitiativeUpdate](cfg.Cache.TTL, maxEntries),
+		debug:                debug,
 	}, nil
 }
 

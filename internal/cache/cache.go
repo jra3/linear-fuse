@@ -11,18 +11,24 @@ type entry[T any] struct {
 	expiresAt time.Time
 }
 
+// Cache is a generic TTL cache with optional max entries limit.
+// When maxEntries is exceeded, the entry closest to expiry is evicted.
 type Cache[T any] struct {
-	mu      sync.RWMutex
-	entries map[string]entry[T]
-	ttl     time.Duration
-	stopCh  chan struct{}
+	mu         sync.RWMutex
+	entries    map[string]entry[T]
+	ttl        time.Duration
+	maxEntries int
+	stopCh     chan struct{}
 }
 
-func New[T any](ttl time.Duration) *Cache[T] {
+// New creates a cache with the given TTL and max entries limit.
+// If maxEntries is 0 or negative, the cache size is unlimited.
+func New[T any](ttl time.Duration, maxEntries int) *Cache[T] {
 	c := &Cache[T]{
-		entries: make(map[string]entry[T]),
-		ttl:     ttl,
-		stopCh:  make(chan struct{}),
+		entries:    make(map[string]entry[T]),
+		ttl:        ttl,
+		maxEntries: maxEntries,
+		stopCh:     make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine
@@ -53,9 +59,34 @@ func (c *Cache[T]) Set(key string, value T) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// If at capacity and this is a new key, evict the entry closest to expiry
+	if c.maxEntries > 0 && len(c.entries) >= c.maxEntries {
+		if _, exists := c.entries[key]; !exists {
+			c.evictOldest()
+		}
+	}
+
 	c.entries[key] = entry[T]{
 		value:     value,
 		expiresAt: time.Now().Add(c.ttl),
+	}
+}
+
+// evictOldest removes the entry with the earliest expiry time.
+// Must be called with lock held.
+func (c *Cache[T]) evictOldest() {
+	var oldestKey string
+	var oldestExpiry time.Time
+
+	for key, e := range c.entries {
+		if oldestKey == "" || e.expiresAt.Before(oldestExpiry) {
+			oldestKey = key
+			oldestExpiry = e.expiresAt
+		}
+	}
+
+	if oldestKey != "" {
+		delete(c.entries, oldestKey)
 	}
 }
 

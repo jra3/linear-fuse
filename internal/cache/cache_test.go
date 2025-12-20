@@ -1,18 +1,22 @@
 package cache
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 )
 
 func TestNew(t *testing.T) {
-	c := New[string](time.Minute)
+	c := New[string](time.Minute, 100)
 	if c == nil {
 		t.Fatal("New() returned nil")
 	}
 	if c.ttl != time.Minute {
 		t.Errorf("New() ttl = %v, want %v", c.ttl, time.Minute)
+	}
+	if c.maxEntries != 100 {
+		t.Errorf("New() maxEntries = %d, want 100", c.maxEntries)
 	}
 	if c.entries == nil {
 		t.Error("New() entries map is nil")
@@ -20,7 +24,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestGetSet(t *testing.T) {
-	c := New[string](time.Minute)
+	c := New[string](time.Minute, 0)
 
 	// Test missing key
 	val, ok := c.Get("missing")
@@ -54,7 +58,7 @@ func TestGetSet(t *testing.T) {
 
 func TestGetExpired(t *testing.T) {
 	// Use very short TTL for testing expiration
-	c := New[string](50 * time.Millisecond)
+	c := New[string](50*time.Millisecond, 0)
 
 	c.Set("key1", "value1")
 
@@ -81,7 +85,7 @@ func TestGetExpired(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	c := New[string](time.Minute)
+	c := New[string](time.Minute, 0)
 
 	c.Set("key1", "value1")
 	c.Set("key2", "value2")
@@ -109,7 +113,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
-	c := New[string](time.Minute)
+	c := New[string](time.Minute, 0)
 
 	c.Set("key1", "value1")
 	c.Set("key2", "value2")
@@ -138,7 +142,7 @@ func TestClear(t *testing.T) {
 
 func TestCacheWithDifferentTypes(t *testing.T) {
 	t.Run("int cache", func(t *testing.T) {
-		c := New[int](time.Minute)
+		c := New[int](time.Minute, 0)
 		c.Set("count", 42)
 		val, ok := c.Get("count")
 		if !ok || val != 42 {
@@ -151,7 +155,7 @@ func TestCacheWithDifferentTypes(t *testing.T) {
 			ID   string
 			Name string
 		}
-		c := New[Item](time.Minute)
+		c := New[Item](time.Minute, 0)
 		c.Set("item1", Item{ID: "1", Name: "First"})
 		val, ok := c.Get("item1")
 		if !ok {
@@ -163,7 +167,7 @@ func TestCacheWithDifferentTypes(t *testing.T) {
 	})
 
 	t.Run("slice cache", func(t *testing.T) {
-		c := New[[]string](time.Minute)
+		c := New[[]string](time.Minute, 0)
 		c.Set("items", []string{"a", "b", "c"})
 		val, ok := c.Get("items")
 		if !ok {
@@ -178,7 +182,7 @@ func TestCacheWithDifferentTypes(t *testing.T) {
 		type Data struct {
 			Value int
 		}
-		c := New[*Data](time.Minute)
+		c := New[*Data](time.Minute, 0)
 		d := &Data{Value: 100}
 		c.Set("ptr", d)
 		val, ok := c.Get("ptr")
@@ -192,7 +196,7 @@ func TestCacheWithDifferentTypes(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	c := New[int](time.Minute)
+	c := New[int](time.Minute, 0)
 	var wg sync.WaitGroup
 	numGoroutines := 100
 	numOps := 100
@@ -248,7 +252,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 func TestZeroValueTypes(t *testing.T) {
 	t.Run("string zero value", func(t *testing.T) {
-		c := New[string](time.Minute)
+		c := New[string](time.Minute, 0)
 		val, ok := c.Get("missing")
 		if ok {
 			t.Error("Get() should return false for missing key")
@@ -259,7 +263,7 @@ func TestZeroValueTypes(t *testing.T) {
 	})
 
 	t.Run("int zero value", func(t *testing.T) {
-		c := New[int](time.Minute)
+		c := New[int](time.Minute, 0)
 		val, ok := c.Get("missing")
 		if ok {
 			t.Error("Get() should return false for missing key")
@@ -273,7 +277,7 @@ func TestZeroValueTypes(t *testing.T) {
 		type Data struct {
 			Value int
 		}
-		c := New[*Data](time.Minute)
+		c := New[*Data](time.Minute, 0)
 		val, ok := c.Get("missing")
 		if ok {
 			t.Error("Get() should return false for missing key")
@@ -284,7 +288,7 @@ func TestZeroValueTypes(t *testing.T) {
 	})
 
 	t.Run("slice zero value", func(t *testing.T) {
-		c := New[[]string](time.Minute)
+		c := New[[]string](time.Minute, 0)
 		val, ok := c.Get("missing")
 		if ok {
 			t.Error("Get() should return false for missing key")
@@ -296,7 +300,7 @@ func TestZeroValueTypes(t *testing.T) {
 }
 
 func TestMultipleKeys(t *testing.T) {
-	c := New[string](time.Minute)
+	c := New[string](time.Minute, 0)
 
 	// Set multiple keys
 	keys := []string{"a", "b", "c", "d", "e"}
@@ -338,6 +342,79 @@ func TestMultipleKeys(t *testing.T) {
 		expected := key + "-value"
 		if val != expected {
 			t.Errorf("Get(%q) = %q, want %q", key, val, expected)
+		}
+	}
+}
+
+func TestMaxEntriesEviction(t *testing.T) {
+	// Create cache with max 3 entries
+	c := New[string](time.Minute, 3)
+
+	// Add 3 entries with small delays to ensure different expiry times
+	c.Set("key1", "value1")
+	time.Sleep(10 * time.Millisecond)
+	c.Set("key2", "value2")
+	time.Sleep(10 * time.Millisecond)
+	c.Set("key3", "value3")
+
+	// All 3 should exist
+	for _, key := range []string{"key1", "key2", "key3"} {
+		if _, ok := c.Get(key); !ok {
+			t.Errorf("Get(%q) should return true before eviction", key)
+		}
+	}
+
+	// Add 4th entry - should evict key1 (oldest by expiry)
+	c.Set("key4", "value4")
+
+	// key1 should be evicted (oldest expiry)
+	if _, ok := c.Get("key1"); ok {
+		t.Error("key1 should have been evicted")
+	}
+
+	// key2, key3, key4 should still exist
+	for _, key := range []string{"key2", "key3", "key4"} {
+		if _, ok := c.Get(key); !ok {
+			t.Errorf("Get(%q) should return true after eviction", key)
+		}
+	}
+}
+
+func TestMaxEntriesOverwriteNoEviction(t *testing.T) {
+	// Create cache with max 2 entries
+	c := New[string](time.Minute, 2)
+
+	c.Set("key1", "value1")
+	c.Set("key2", "value2")
+
+	// Overwriting existing key should NOT trigger eviction
+	c.Set("key1", "value1-updated")
+
+	// Both keys should still exist
+	val1, ok1 := c.Get("key1")
+	val2, ok2 := c.Get("key2")
+
+	if !ok1 || val1 != "value1-updated" {
+		t.Errorf("key1 should exist with updated value, got %q, %v", val1, ok1)
+	}
+	if !ok2 || val2 != "value2" {
+		t.Errorf("key2 should exist, got %q, %v", val2, ok2)
+	}
+}
+
+func TestMaxEntriesZeroMeansUnlimited(t *testing.T) {
+	// maxEntries=0 should mean unlimited
+	c := New[string](time.Minute, 0)
+
+	// Add many entries
+	for i := 0; i < 100; i++ {
+		c.Set(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
+	}
+
+	// All should exist
+	for i := 0; i < 100; i++ {
+		if _, ok := c.Get(fmt.Sprintf("key%d", i)); !ok {
+			t.Errorf("key%d should exist with unlimited cache", i)
 		}
 	}
 }
