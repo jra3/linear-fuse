@@ -420,3 +420,154 @@ func TestCreatedIssueReadable(t *testing.T) {
 		t.Error("Created issue missing id field")
 	}
 }
+
+// =============================================================================
+// Cycle Tests
+// =============================================================================
+
+func TestReadIssueCycle(t *testing.T) {
+	skipIfNoWriteTests(t)
+
+	// Find a cycle to use
+	cycle, err := findFirstActiveCycle()
+	if err != nil {
+		t.Skipf("No cycles available for testing: %v", err)
+	}
+
+	// Create an issue with a cycle
+	issue, cleanup, err := createTestIssue("Cycle Read Test", WithCycleID(cycle.ID))
+	if err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+	defer cleanup()
+
+	waitForCacheExpiry()
+
+	// Read the issue and verify cycle is in frontmatter
+	content, err := readFileWithRetry(issueFilePath(testTeamKey, issue.Identifier), defaultWaitTime)
+	if err != nil {
+		t.Fatalf("Failed to read issue: %v", err)
+	}
+
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("Failed to parse frontmatter: %v", err)
+	}
+
+	cycleName, ok := doc.Frontmatter["cycle"].(string)
+	if !ok {
+		t.Fatal("Issue should have cycle field in frontmatter")
+	}
+
+	if cycleName != cycle.Name {
+		t.Errorf("Expected cycle %q, got %q", cycle.Name, cycleName)
+	}
+}
+
+func TestSetIssueCycle(t *testing.T) {
+	skipIfNoWriteTests(t)
+
+	// Find a cycle to use
+	cycle, err := findFirstActiveCycle()
+	if err != nil {
+		t.Skipf("No cycles available for testing: %v", err)
+	}
+
+	// Create an issue without a cycle
+	issue, cleanup, err := createTestIssue("Cycle Set Test")
+	if err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+	defer cleanup()
+
+	waitForCacheExpiry()
+
+	// Read current content
+	path := issueFilePath(testTeamKey, issue.Identifier)
+	content, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("Failed to read issue: %v", err)
+	}
+
+	// Add cycle to frontmatter
+	modified, err := modifyFrontmatter(content, "cycle", cycle.Name)
+	if err != nil {
+		t.Fatalf("Failed to modify frontmatter: %v", err)
+	}
+
+	// Write back
+	if err := os.WriteFile(path, modified, 0644); err != nil {
+		t.Fatalf("Failed to write issue: %v", err)
+	}
+
+	// Verify via API
+	updated, err := getTestIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from API: %v", err)
+	}
+
+	if updated.Cycle == nil {
+		t.Fatal("Issue should have a cycle after update")
+	}
+
+	if updated.Cycle.ID != cycle.ID {
+		t.Errorf("Expected cycle ID %q, got %q", cycle.ID, updated.Cycle.ID)
+	}
+}
+
+func TestRemoveIssueCycle(t *testing.T) {
+	skipIfNoWriteTests(t)
+
+	// Find a cycle to use
+	cycle, err := findFirstActiveCycle()
+	if err != nil {
+		t.Skipf("No cycles available for testing: %v", err)
+	}
+
+	// Create an issue with a cycle
+	issue, cleanup, err := createTestIssue("Cycle Remove Test", WithCycleID(cycle.ID))
+	if err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+	defer cleanup()
+
+	waitForCacheExpiry()
+
+	// Read current content
+	path := issueFilePath(testTeamKey, issue.Identifier)
+	content, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("Failed to read issue: %v", err)
+	}
+
+	// Verify it has the cycle first
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+
+	if _, ok := doc.Frontmatter["cycle"]; !ok {
+		t.Fatal("Issue should have cycle before removal")
+	}
+
+	// Remove cycle from frontmatter
+	modified, err := removeFrontmatterField(content, "cycle")
+	if err != nil {
+		t.Fatalf("Failed to remove cycle: %v", err)
+	}
+
+	// Write back
+	if err := os.WriteFile(path, modified, 0644); err != nil {
+		t.Fatalf("Failed to write issue: %v", err)
+	}
+
+	// Verify via API
+	updated, err := getTestIssue(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from API: %v", err)
+	}
+
+	if updated.Cycle != nil {
+		t.Errorf("Issue should not have a cycle after removal, got %q", updated.Cycle.Name)
+	}
+}

@@ -89,7 +89,7 @@ Linear API → api.Client → LinearFS (caching) → FUSE nodes → kernel → u
 
 ### Key Packages
 
-- **internal/api**: GraphQL client for Linear. Types in `types.go` mirror Linear's schema.
+- **internal/api**: GraphQL client for Linear. Types in `types.go` mirror Linear's schema. Queries in `queries.go`.
 - **internal/fs**: FUSE implementation using go-fuse/v2. Key node types:
   - `LinearFS` - Main struct with caches and server reference
   - `IssueFileNode` - Read/write issue.md files
@@ -100,6 +100,47 @@ Linear API → api.Client → LinearFS (caching) → FUSE nodes → kernel → u
   - `ByNode`/`FilteredIssuesNode` - Server-side filtered queries
 - **internal/marshal**: Markdown ↔ Linear issue conversion with YAML frontmatter
 - **internal/cache**: Generic TTL cache with `DeleteByPrefix` for bulk invalidation
+
+### GraphQL Query Design
+
+Queries in `internal/api/queries.go` use GraphQL fragments to avoid field duplication:
+
+```graphql
+fragment IssueFields on Issue {
+  id
+  identifier
+  title
+  ...
+}
+
+query TeamIssues($teamId: String!) {
+  team(id: $teamId) {
+    issues { nodes { ...IssueFields } }
+  }
+}
+```
+
+Fragments are defined as Go constants and appended via string concatenation:
+
+```go
+const issueFieldsFragment = `fragment IssueFields on Issue { ... }`
+
+var queryTeamIssues = `
+query TeamIssues($teamId: String!) {
+  team(id: $teamId) {
+    issues { nodes { ...IssueFields } }
+  }
+}
+` + issueFieldsFragment
+```
+
+Available fragments:
+- `IssueFields` - All issue fields (used by 11 queries)
+- `CommentFields` - Comment fields (query, create, update)
+- `DocumentFields` - Document fields (issue docs, project docs, create)
+- `LabelFields` - Label fields (query, create, update)
+
+When adding new fields to an entity, update the corresponding fragment.
 
 ### Write Flow
 

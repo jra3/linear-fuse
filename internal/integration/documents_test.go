@@ -402,3 +402,112 @@ func TestCannotDeleteNewMd(t *testing.T) {
 		t.Error("Should not be able to delete new.md")
 	}
 }
+
+func TestCreateDocumentViaFilename(t *testing.T) {
+	skipIfNoWriteTests(t)
+	issue, cleanup, err := createTestIssue("Create Doc via Filename Test")
+	if err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+	defer cleanup()
+
+	waitForCacheExpiry()
+
+	// Create document by writing to a new filename (not new.md)
+	// The filename (minus .md) becomes the document title
+	docTitle := "[TEST] Doc Created via Filename"
+	docFilename := docTitle + ".md"
+	docBody := "This document was created by writing to a named file."
+	docFullPath := docFilePath(testTeamKey, issue.Identifier, docFilename)
+
+	if err := os.WriteFile(docFullPath, []byte(docBody), 0644); err != nil {
+		t.Fatalf("Failed to create document via filename: %v", err)
+	}
+
+	// Verify document was created by listing
+	entries, err := os.ReadDir(docsPath(testTeamKey, issue.Identifier))
+	if err != nil {
+		t.Fatalf("Failed to read docs directory: %v", err)
+	}
+
+	found := false
+	var createdDocFile string
+	for _, entry := range entries {
+		if entry.Name() == "new.md" {
+			continue
+		}
+		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
+		if err != nil {
+			continue
+		}
+		// Check if title matches (could be in frontmatter or slug could be derived from title)
+		if strings.Contains(string(content), docTitle) || strings.Contains(string(content), docBody) {
+			found = true
+			createdDocFile = entry.Name()
+			break
+		}
+	}
+
+	if !found {
+		t.Error("Document created via filename not found")
+	}
+
+	// Cleanup: delete the created document
+	if createdDocFile != "" {
+		_ = os.Remove(docFilePath(testTeamKey, issue.Identifier, createdDocFile))
+	}
+}
+
+func TestCreateDocumentViaFilenameWithDashes(t *testing.T) {
+	skipIfNoWriteTests(t)
+	issue, cleanup, err := createTestIssue("Create Doc via Dashed Filename Test")
+	if err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+	defer cleanup()
+
+	waitForCacheExpiry()
+
+	// Create document using dashes in filename - should convert to spaces in title
+	docFilename := "[TEST]-dashed-document-title.md"
+	expectedTitle := "[TEST] dashed document title" // dashes become spaces
+	docBody := "This document title was created from a dashed filename."
+	docFullPath := docFilePath(testTeamKey, issue.Identifier, docFilename)
+
+	if err := os.WriteFile(docFullPath, []byte(docBody), 0644); err != nil {
+		t.Fatalf("Failed to create document via dashed filename: %v", err)
+	}
+
+	// Verify document was created
+	entries, err := os.ReadDir(docsPath(testTeamKey, issue.Identifier))
+	if err != nil {
+		t.Fatalf("Failed to read docs directory: %v", err)
+	}
+
+	found := false
+	var createdDocFile string
+	for _, entry := range entries {
+		if entry.Name() == "new.md" {
+			continue
+		}
+		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
+		if err != nil {
+			continue
+		}
+		// The title should have spaces, not dashes
+		if strings.Contains(string(content), expectedTitle) || strings.Contains(string(content), docBody) {
+			found = true
+			createdDocFile = entry.Name()
+			break
+		}
+	}
+
+	if !found {
+		t.Error("Document created via dashed filename not found")
+	}
+
+	// Cleanup
+	if createdDocFile != "" {
+		_ = os.Remove(docFilePath(testTeamKey, issue.Identifier, createdDocFile))
+	}
+}

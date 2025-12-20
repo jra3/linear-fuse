@@ -263,6 +263,7 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 		issueID:   n.issueID,
 		teamID:    n.teamID,
 		projectID: n.projectID,
+		filename:  name, // Store filename for use as title
 	}
 
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
@@ -439,6 +440,7 @@ type NewDocumentNode struct {
 	issueID   string
 	teamID    string
 	projectID string
+	filename  string // Original filename (used as title if none in content)
 
 	mu      sync.Mutex
 	content []byte
@@ -523,6 +525,15 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	if err != nil {
 		log.Printf("Failed to parse new document: %v", err)
 		return syscall.EIO
+	}
+
+	// If no title in content, use filename (unless it's new.md)
+	if title == "" || title == "Untitled" {
+		if n.filename != "" && n.filename != "new.md" {
+			// Convert filename to title: remove .md, replace dashes with spaces
+			title = strings.TrimSuffix(n.filename, ".md")
+			title = strings.ReplaceAll(title, "-", " ")
+		}
 	}
 
 	if title == "" {

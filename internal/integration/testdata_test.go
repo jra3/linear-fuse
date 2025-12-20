@@ -264,6 +264,44 @@ func createTestProjectDocument(projectID, title, content string) (*api.Document,
 	return doc, cleanup, nil
 }
 
+// getTeamCycles fetches cycles for the test team
+func getTeamCycles() ([]api.Cycle, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return apiClient.GetTeamCycles(ctx, testTeamID)
+}
+
+// findFirstActiveCycle finds the first active (current or future) cycle for testing
+func findFirstActiveCycle() (*api.Cycle, error) {
+	cycles, err := getTeamCycles()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	for _, c := range cycles {
+		// Check if cycle is current or future
+		if c.EndsAt.After(now) {
+			return &c, nil
+		}
+	}
+
+	// If no active cycles, return the most recent one
+	if len(cycles) > 0 {
+		return &cycles[0], nil
+	}
+
+	return nil, fmt.Errorf("no cycles found")
+}
+
+// WithCycleID sets the cycle for a test issue
+func WithCycleID(cycleID string) IssueOption {
+	return func(input map[string]any) {
+		input["cycleId"] = cycleID
+	}
+}
+
 // deleteTestIssue archives/cancels a test issue (Linear doesn't have hard delete)
 func deleteTestIssue(issueID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

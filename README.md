@@ -43,17 +43,17 @@ export LINEAR_API_KEY="lin_api_xxxxx"
 # Mount the filesystem
 linearfs mount /mnt/linear
 
-# Browse your issues
+# Browse your issues (replace TEAM with your team key)
 ls /mnt/linear/teams/
-ls /mnt/linear/teams/ENG/issues/
-cat /mnt/linear/teams/ENG/issues/ENG-123/issue.md
+ls /mnt/linear/teams/TEAM/issues/
+cat /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md
 
 # View comments on an issue
-ls /mnt/linear/teams/ENG/issues/ENG-123/comments/
-cat /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
+ls /mnt/linear/teams/TEAM/issues/TEAM-123/comments/
+cat /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 
 # Add a comment
-echo "My comment" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
+echo "My comment" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/new.md
 
 # View your assigned issues
 ls /mnt/linear/my/assigned/
@@ -68,13 +68,26 @@ fusermount3 -u /mnt/linear
 # or Ctrl+C if running in foreground
 ```
 
+## File Permissions
+
+Use `ls -l` to see what operations are allowed on each file:
+
+| Permission | Meaning | Example |
+|------------|---------|---------|
+| `-r--r--r--` | Read-only | `team.md`, `states.md`, `initiative.md` |
+| `-rw-r--r--` | **Editable** | `issue.md`, `project.md`, existing docs/comments |
+| `--w-------` | Write-only trigger | `new.md` (creates new items) |
+| `lrwxrwxrwx` | Symlink | Issues in cycles/projects/filtered views |
+
+**Important:** Existing documents and comments are editable. Edit them directly—don't write to `new.md` to update existing content.
+
 ## Directory Structure
 
 ```
 /mnt/linear/
 ├── README.md                    # In-filesystem documentation
 ├── teams/
-│   └── <team-key>/              # e.g., ENG, DES
+│   └── <TEAM>/                  # Your team key (e.g., ENG, PROD)
 │       ├── team.md              # Team metadata (read-only)
 │       ├── states.md            # Workflow states (read-only)
 │       ├── labels.md            # Labels reference (read-only)
@@ -84,7 +97,7 @@ fusermount3 -u /mnt/linear
 │       │   ├── label/<name>/    # Issues filtered by label (symlinks)
 │       │   └── assignee/<name>/ # Issues filtered by assignee (symlinks)
 │       ├── issues/
-│       │   └── <identifier>/    # e.g., ENG-123/
+│       │   └── <TEAM-nnn>/       # Issue identifier (e.g., TEAM-123)
 │       │       ├── issue.md     # Issue content (read/write)
 │       │       ├── comments/
 │       │       │   ├── 001-*.md # Comments (read/write/delete)
@@ -105,7 +118,7 @@ fusermount3 -u /mnt/linear
 │               ├── project.md   # Project metadata (read/write)
 │               ├── docs/        # Project documents
 │               ├── updates/     # Status updates (write to new.md)
-│               └── ENG-*        # Symlinks to issue directories
+│               └── TEAM-*       # Symlinks to issue directories
 ├── initiatives/
 │   └── <initiative-slug>/
 │       ├── initiative.md        # Initiative metadata (read-only)
@@ -114,7 +127,7 @@ fusermount3 -u /mnt/linear
 ├── users/
 │   └── <username>/
 │       ├── user.md              # User metadata (read-only)
-│       └── ENG-*                # Symlinks to issue directories
+│       └── TEAM-*               # Symlinks to issue directories
 └── my/
     ├── assigned/                # Issues assigned to you
     ├── created/                 # Issues you created
@@ -126,8 +139,8 @@ fusermount3 -u /mnt/linear
 ```markdown
 ---
 id: "abc123-def456"
-identifier: ENG-123
-url: "https://linear.app/team/issue/ENG-123"
+identifier: TEAM-123
+url: "https://linear.app/myworkspace/issue/TEAM-123"
 created: 2025-01-10T10:30:00Z
 updated: 2025-01-11T14:22:00Z
 title: "Fix authentication bug"
@@ -137,7 +150,7 @@ priority: high
 labels:
   - bug
   - backend
-parent: ENG-100
+parent: TEAM-100
 ---
 
 The login flow fails when users attempt to authenticate with SSO.
@@ -152,7 +165,7 @@ The login flow fails when users attempt to authenticate with SSO.
 - `labels` - List of label names (check labels.md for valid values)
 - `dueDate` - Due date (ISO format)
 - `estimate` - Point estimate
-- `parent` - Parent issue identifier (e.g., ENG-100)
+- `parent` - Parent issue identifier (e.g., TEAM-100)
 - Description (content after frontmatter)
 
 ## File Operations
@@ -164,32 +177,32 @@ LinearFS maps standard filesystem operations to Linear API actions:
 | Operation | Command | Effect |
 |-----------|---------|--------|
 | Create issue | `mkdir issues/"Issue title"` | Creates new issue with title |
-| Archive issue | `rmdir issues/ENG-123` | Archives issue (soft delete) |
+| Archive issue | `rmdir issues/TEAM-123` | Archives issue (soft delete) |
 | Edit issue | Edit `issue.md` and save | Updates issue fields |
 
 ```bash
 # Create a new issue
-mkdir /mnt/linear/teams/ENG/issues/"Fix login bug"
+mkdir /mnt/linear/teams/TEAM/issues/"Fix login bug"
 
 # Archive an issue
-rmdir /mnt/linear/teams/ENG/issues/ENG-123
+rmdir /mnt/linear/teams/TEAM/issues/TEAM-123
 ```
 
 ### Sub-Issues
 
 | Operation | Command | Effect |
 |-----------|---------|--------|
-| View sub-issues | `ls issues/ENG-123/children/` | Lists child issues as symlinks |
+| View sub-issues | `ls issues/TEAM-123/children/` | Lists child issues as symlinks |
 | Set parent | Edit `parent:` in issue.md | Sets parent issue |
 | Remove parent | Remove `parent:` line | Clears parent relationship |
 
 ```bash
-# View sub-issues of ENG-123
-ls /mnt/linear/teams/ENG/issues/ENG-123/children/
+# View sub-issues of TEAM-123
+ls /mnt/linear/teams/TEAM/issues/TEAM-123/children/
 
-# Set parent by editing frontmatter
-# Add: parent: ENG-100
-vim /mnt/linear/teams/ENG/issues/ENG-456/issue.md
+# Set parent by editing frontmatter (editors work here, unlike new.md)
+# Add: parent: TEAM-100
+vim /mnt/linear/teams/TEAM/issues/TEAM-456/issue.md
 ```
 
 ### Comments
@@ -206,10 +219,10 @@ vim /mnt/linear/teams/ENG/issues/ENG-456/issue.md
 
 ```bash
 # Add a comment
-echo "This needs review" > /mnt/linear/teams/ENG/issues/ENG-123/comments/new.md
+echo "This needs review" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/new.md
 
 # Delete a comment
-rm /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
+rm /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 ```
 
 ### Documents
@@ -225,7 +238,7 @@ rm /mnt/linear/teams/ENG/issues/ENG-123/comments/001-2025-01-10T14-30.md
 
 ```bash
 # Create a document (with YAML frontmatter for title)
-cat > /mnt/linear/teams/ENG/issues/ENG-123/docs/new.md << 'EOF'
+cat > /mnt/linear/teams/TEAM/issues/TEAM-123/docs/new.md << 'EOF'
 ---
 title: "Technical Spec"
 ---
@@ -249,7 +262,7 @@ mv docs/old-name.md docs/new-name.md
 
 ```bash
 # Create a new label
-cat > /mnt/linear/teams/ENG/labels/new.md << 'EOF'
+cat > /mnt/linear/teams/TEAM/labels/new.md << 'EOF'
 ---
 name: "Critical"
 color: "#FF0000"
@@ -258,10 +271,10 @@ description: "Critical priority items"
 EOF
 
 # Rename a label
-mv /mnt/linear/teams/ENG/labels/Bug.md /mnt/linear/teams/ENG/labels/Defect.md
+mv /mnt/linear/teams/TEAM/labels/Bug.md /mnt/linear/teams/TEAM/labels/Defect.md
 
 # Delete a label
-rm /mnt/linear/teams/ENG/labels/OldLabel.md
+rm /mnt/linear/teams/TEAM/labels/OldLabel.md
 ```
 
 ### Projects
@@ -273,10 +286,10 @@ rm /mnt/linear/teams/ENG/labels/OldLabel.md
 
 ```bash
 # Create a new project
-mkdir /mnt/linear/teams/ENG/projects/"Q1 Launch"
+mkdir /mnt/linear/teams/TEAM/projects/"Q1 Launch"
 
 # Archive a project
-rmdir /mnt/linear/teams/ENG/projects/q1-launch
+rmdir /mnt/linear/teams/TEAM/projects/q1-launch
 ```
 
 ### Editing Labels on Issues

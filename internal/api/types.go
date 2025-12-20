@@ -30,6 +30,14 @@ type Issue struct {
 	ProjectMilestone *ProjectMilestone `json:"projectMilestone"`
 	Parent           *ParentIssue      `json:"parent"`
 	Children         ChildIssues       `json:"children"`
+	Cycle            *IssueCycle       `json:"cycle"`
+}
+
+// IssueCycle is a minimal cycle representation for issue references
+type IssueCycle struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Number int    `json:"number"`
 }
 
 // ParentIssue is a minimal issue representation for parent references

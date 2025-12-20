@@ -15,405 +15,123 @@ query Teams {
 }
 `
 
-const queryTeamIssues = `
+var queryTeamIssues = `
 query TeamIssues($teamId: String!, $after: String) {
   team(id: $teamId) {
     issues(first: 100, after: $after) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryIssue = `
+var queryIssue = `
 query Issue($id: String!) {
-  issue(id: $id) {
-    id
-    identifier
-    title
-    description
-    state {
-      id
-      name
-      type
-    }
-    assignee {
-      id
-      name
-      email
-    }
-    priority
-    labels {
-      nodes {
-        id
-        name
-        color
-        description
-      }
-    }
-    dueDate
-    estimate
-    createdAt
-    updatedAt
-    url
-    team {
-      id
-      key
-      name
-    }
-    project {
-      id
-      name
-      slugId
-    }
-    projectMilestone {
-      id
-      name
-    }
-    parent {
-      id
-      identifier
-      title
-    }
-    children {
-      nodes {
-        id
-        identifier
-        title
-      }
-    }
-  }
+  issue(id: $id) { ...IssueFields }
 }
-`
+` + issueFieldsFragment
 
-const issueFields = `
+// issueFieldsFragment is a GraphQL fragment containing all fields fetched for an issue.
+// Append this to queries that use `...IssueFields` spread syntax.
+const issueFieldsFragment = `
+fragment IssueFields on Issue {
   id
   identifier
   title
   description
-  state {
-    id
-    name
-    type
-  }
-  assignee {
-    id
-    name
-    email
-  }
+  state { id name type }
+  assignee { id name email }
   priority
-  labels {
-    nodes {
-      id
-      name
-      color
-      description
-    }
-  }
+  labels { nodes { id name color description } }
   dueDate
   estimate
   createdAt
   updatedAt
   url
-  team {
-    id
-    key
-    name
-  }
-  project {
-    id
-    name
-    slugId
-  }
-  projectMilestone {
-    id
-    name
-  }
-  parent {
-    id
-    identifier
-    title
-  }
-  children {
-    nodes {
-      id
-      identifier
-      title
-    }
-  }
+  team { id key name }
+  project { id name slugId }
+  projectMilestone { id name }
+  parent { id identifier title }
+  children { nodes { id identifier title } }
+  cycle { id name number }
+}
 `
 
-const queryMyIssues = `
+// commentFieldsFragment is a GraphQL fragment for comment fields.
+const commentFieldsFragment = `
+fragment CommentFields on Comment {
+  id
+  body
+  createdAt
+  updatedAt
+  editedAt
+  user { id name email }
+}
+`
+
+// documentFieldsFragment is a GraphQL fragment for document fields.
+const documentFieldsFragment = `
+fragment DocumentFields on Document {
+  id
+  title
+  content
+  slugId
+  url
+  icon
+  color
+  createdAt
+  updatedAt
+  creator { id name email }
+}
+`
+
+// labelFieldsFragment is a GraphQL fragment for label fields.
+const labelFieldsFragment = `
+fragment LabelFields on IssueLabel {
+  id
+  name
+  color
+  description
+}
+`
+
+var queryMyIssues = `
 query MyIssues($after: String) {
   viewer {
     assignedIssues(first: 100, after: $after) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryMyCreatedIssues = `
+var queryMyCreatedIssues = `
 query MyCreatedIssues($after: String) {
   viewer {
     createdIssues(first: 100, after: $after) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryMyActiveIssues = `
+var queryMyActiveIssues = `
 query MyActiveIssues($after: String) {
   viewer {
     assignedIssues(
       first: 100
       after: $after
-      filter: {
-        state: { type: { nin: ["completed", "canceled"] } }
-      }
+      filter: { state: { type: { nin: ["completed", "canceled"] } } }
     ) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
 const queryTeamStates = `
 query TeamStates($teamId: String!) {
@@ -429,28 +147,18 @@ query TeamStates($teamId: String!) {
 }
 `
 
-const queryTeamLabels = `
+var queryTeamLabels = `
 query TeamLabels($teamId: String!) {
   team(id: $teamId) {
     labels {
-      nodes {
-        id
-        name
-        color
-        description
-      }
+      nodes { ...LabelFields }
     }
   }
   issueLabels {
-    nodes {
-      id
-      name
-      color
-      description
-    }
+    nodes { ...LabelFields }
   }
 }
-`
+` + labelFieldsFragment
 
 const queryTeamCycles = `
 query TeamCycles($teamId: String!) {
@@ -703,74 +411,32 @@ query Users {
 }
 `
 
-const queryUserIssues = `
-query UserIssues($userId: String!, $after: String) {
-  user(id: $userId) {
-    assignedIssues(first: 100, after: $after) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
+const queryTeamMembers = `
+query TeamMembers($teamId: String!) {
+  team(id: $teamId) {
+    members {
       nodes {
         id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
+        name
+        email
+        displayName
+        active
       }
     }
   }
 }
 `
+
+var queryUserIssues = `
+query UserIssues($userId: String!, $after: String) {
+  user(id: $userId) {
+    assignedIssues(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
+    }
+  }
+}
+` + issueFieldsFragment
 
 const mutationUpdateIssue = `
 mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
@@ -833,66 +499,33 @@ mutation ArchiveIssue($id: String!) {
 }
 `
 
-const queryIssueComments = `
+var queryIssueComments = `
 query IssueComments($issueId: String!) {
   issue(id: $issueId) {
     comments(first: 100) {
-      nodes {
-        id
-        body
-        createdAt
-        updatedAt
-        editedAt
-        user {
-          id
-          name
-          email
-        }
-      }
+      nodes { ...CommentFields }
     }
   }
 }
-`
+` + commentFieldsFragment
 
-const mutationCreateComment = `
+var mutationCreateComment = `
 mutation CreateComment($issueId: String!, $body: String!) {
   commentCreate(input: { issueId: $issueId, body: $body }) {
     success
-    comment {
-      id
-      body
-      createdAt
-      updatedAt
-      editedAt
-      user {
-        id
-        name
-        email
-      }
-    }
+    comment { ...CommentFields }
   }
 }
-`
+` + commentFieldsFragment
 
-const mutationUpdateComment = `
+var mutationUpdateComment = `
 mutation UpdateComment($id: String!, $body: String!) {
   commentUpdate(id: $id, input: { body: $body }) {
     success
-    comment {
-      id
-      body
-      createdAt
-      updatedAt
-      editedAt
-      user {
-        id
-        name
-        email
-      }
-    }
+    comment { ...CommentFields }
   }
 }
-`
+` + commentFieldsFragment
 
 const mutationDeleteComment = `
 mutation DeleteComment($id: String!) {
@@ -902,77 +535,32 @@ mutation DeleteComment($id: String!) {
 }
 `
 
-const queryIssueDocuments = `
+var queryIssueDocuments = `
 query IssueDocuments($issueId: String!) {
   issue(id: $issueId) {
     documents(first: 100) {
-      nodes {
-        id
-        title
-        content
-        slugId
-        url
-        icon
-        color
-        createdAt
-        updatedAt
-        creator {
-          id
-          name
-          email
-        }
-      }
+      nodes { ...DocumentFields }
     }
   }
 }
-`
+` + documentFieldsFragment
 
-const queryProjectDocuments = `
+var queryProjectDocuments = `
 query ProjectDocuments($projectId: ID!) {
   documents(first: 100, filter: { project: { id: { eq: $projectId } } }) {
-    nodes {
-      id
-      title
-      content
-      slugId
-      url
-      icon
-      color
-      createdAt
-      updatedAt
-      creator {
-        id
-        name
-        email
-      }
-    }
+    nodes { ...DocumentFields }
   }
 }
-`
+` + documentFieldsFragment
 
-const mutationCreateDocument = `
+var mutationCreateDocument = `
 mutation CreateDocument($input: DocumentCreateInput!) {
   documentCreate(input: $input) {
     success
-    document {
-      id
-      title
-      content
-      slugId
-      url
-      icon
-      color
-      createdAt
-      updatedAt
-      creator {
-        id
-        name
-        email
-      }
-    }
+    document { ...DocumentFields }
   }
 }
-`
+` + documentFieldsFragment
 
 const mutationUpdateDocument = `
 mutation UpdateDocument($id: String!, $input: DocumentUpdateInput!) {
@@ -998,33 +586,23 @@ mutation DeleteDocument($id: String!) {
 }
 `
 
-const mutationCreateLabel = `
+var mutationCreateLabel = `
 mutation CreateLabel($input: IssueLabelCreateInput!) {
   issueLabelCreate(input: $input) {
     success
-    issueLabel {
-      id
-      name
-      color
-      description
-    }
+    issueLabel { ...LabelFields }
   }
 }
-`
+` + labelFieldsFragment
 
-const mutationUpdateLabel = `
+var mutationUpdateLabel = `
 mutation UpdateLabel($id: String!, $input: IssueLabelUpdateInput!) {
   issueLabelUpdate(id: $id, input: $input) {
     success
-    issueLabel {
-      id
-      name
-      color
-      description
-    }
+    issueLabel { ...LabelFields }
   }
 }
-`
+` + labelFieldsFragment
 
 const mutationDeleteLabel = `
 mutation DeleteLabel($id: String!) {
@@ -1036,348 +614,58 @@ mutation DeleteLabel($id: String!) {
 
 // Filtered team issues queries - server-side filtering for by/ directories
 
-const queryTeamIssuesByStatus = `
+var queryTeamIssuesByStatus = `
 query TeamIssuesByStatus($teamId: String!, $statusName: String!, $after: String) {
   team(id: $teamId) {
     issues(first: 100, after: $after, filter: { state: { name: { eq: $statusName } } }) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryTeamIssuesByPriority = `
+var queryTeamIssuesByPriority = `
 query TeamIssuesByPriority($teamId: ID!, $priority: Int!, $after: String) {
   issues(first: 100, after: $after, filter: { team: { id: { eq: $teamId } }, priority: { eq: $priority } }) {
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    nodes {
-      id
-      identifier
-      title
-      description
-      state {
-        id
-        name
-        type
-      }
-      assignee {
-        id
-        name
-        email
-      }
-      priority
-      labels {
-        nodes {
-          id
-          name
-          color
-          description
-        }
-      }
-      dueDate
-      estimate
-      createdAt
-      updatedAt
-      url
-      team {
-        id
-        key
-        name
-      }
-      project {
-        id
-        name
-        slugId
-      }
-      projectMilestone {
-        id
-        name
-      }
-      parent {
-        id
-        identifier
-        title
-      }
-      children {
-        nodes {
-          id
-          identifier
-          title
-        }
-      }
-    }
+    pageInfo { hasNextPage endCursor }
+    nodes { ...IssueFields }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryTeamIssuesByLabel = `
+var queryTeamIssuesByLabel = `
 query TeamIssuesByLabel($teamId: String!, $labelName: String!, $after: String) {
   team(id: $teamId) {
     issues(first: 100, after: $after, filter: { labels: { name: { eq: $labelName } } }) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryTeamIssuesByAssignee = `
+var queryTeamIssuesByAssignee = `
 query TeamIssuesByAssignee($teamId: String!, $assigneeId: ID!, $after: String) {
   team(id: $teamId) {
     issues(first: 100, after: $after, filter: { assignee: { id: { eq: $assigneeId } } }) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
-const queryTeamIssuesUnassigned = `
+var queryTeamIssuesUnassigned = `
 query TeamIssuesUnassigned($teamId: String!, $after: String) {
   team(id: $teamId) {
     issues(first: 100, after: $after, filter: { assignee: { null: true } }) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        description
-        state {
-          id
-          name
-          type
-        }
-        assignee {
-          id
-          name
-          email
-        }
-        priority
-        labels {
-          nodes {
-            id
-            name
-            color
-            description
-          }
-        }
-        dueDate
-        estimate
-        createdAt
-        updatedAt
-        url
-        team {
-          id
-          key
-          name
-        }
-        project {
-          id
-          name
-          slugId
-        }
-        projectMilestone {
-          id
-          name
-        }
-        parent {
-          id
-          identifier
-          title
-        }
-        children {
-          nodes {
-            id
-            identifier
-            title
-          }
-        }
-      }
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
     }
   }
 }
-`
+` + issueFieldsFragment
 
 const queryInitiatives = `
 query Initiatives {

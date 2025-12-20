@@ -574,6 +574,29 @@ func (lfs *LinearFS) GetUsers(ctx context.Context) ([]api.User, error) {
 	return active, nil
 }
 
+func (lfs *LinearFS) GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error) {
+	cacheKey := "team-members:" + teamID
+	if users, ok := lfs.userCache.Get(cacheKey); ok {
+		return users, nil
+	}
+
+	users, err := lfs.client.GetTeamMembers(ctx, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to active users only
+	active := make([]api.User, 0, len(users))
+	for _, u := range users {
+		if u.Active {
+			active = append(active, u)
+		}
+	}
+
+	lfs.userCache.Set(cacheKey, active)
+	return active, nil
+}
+
 func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
 	cacheKey := "user-issues:" + userID
 	if issues, ok := lfs.userIssueCache.Get(cacheKey); ok {
@@ -1011,6 +1034,31 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	}
 
 	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
+}
+
+// ResolveCycleID resolves a cycle name to its ID
+func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleName string) (string, error) {
+	cycles, err := lfs.GetTeamCycles(ctx, teamID)
+	if err != nil {
+		return "", err
+	}
+
+	// Try exact match first
+	for _, cycle := range cycles {
+		if cycle.Name == cycleName {
+			return cycle.ID, nil
+		}
+	}
+
+	// Try case-insensitive match
+	lowerName := strings.ToLower(cycleName)
+	for _, cycle := range cycles {
+		if strings.ToLower(cycle.Name) == lowerName {
+			return cycle.ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("unknown cycle: %s", cycleName)
 }
 
 // GetProjectUpdates fetches status updates for a project with caching

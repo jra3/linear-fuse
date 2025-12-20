@@ -1058,6 +1058,28 @@ func (c *Client) GetUsers(ctx context.Context) ([]User, error) {
 	return result.Users.Nodes, nil
 }
 
+// GetTeamMembers fetches members of a specific team
+func (c *Client) GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
+	var result struct {
+		Team struct {
+			Members struct {
+				Nodes []User `json:"nodes"`
+			} `json:"members"`
+		} `json:"team"`
+	}
+
+	vars := map[string]any{
+		"teamId": teamID,
+	}
+
+	err := c.query(ctx, queryTeamMembers, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Team.Members.Nodes, nil
+}
+
 // GetUserIssues fetches issues assigned to a specific user
 func (c *Client) GetUserIssues(ctx context.Context, userID string) ([]Issue, error) {
 	var allIssues []Issue

@@ -109,38 +109,59 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Read issue | ` + "`" + `cat /teams/ENG/issues/ENG-123/issue.md` + "`" + ` |
 | Update issue | Edit issue.md frontmatter, save |
 | Add comment | ` + "`" + `echo "text" > .../comments/new.md` + "`" + ` (write-only) |
+| Create document | ` + "`" + `echo "text" > .../docs/"Title.md"` + "`" + ` (filename = title) |
 | Create issue | ` + "`" + `mkdir /teams/ENG/issues/"Title"` + "`" + ` |
 | Archive issue | ` + "`" + `rmdir /teams/ENG/issues/ENG-123` + "`" + ` |
 | View sub-issues | ` + "`" + `ls /teams/ENG/issues/ENG-123/children/` + "`" + ` |
 | Post project update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
 | Post initiative update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
+| Edit existing comment | Edit ` + "`" + `comments/{id}.md` + "`" + ` directly |
+| Edit existing document | Edit ` + "`" + `docs/{slug}.md` + "`" + ` directly |
+
+## File Permissions
+
+Use ` + "`" + `ls -l` + "`" + ` to see what operations are allowed:
+
+| Permission | Meaning | Example |
+|------------|---------|---------|
+| ` + "`" + `-r--r--r--` + "`" + ` | Read-only | team.md, states.md, initiative.md |
+| ` + "`" + `-rw-r--r--` + "`" + ` | **Editable** | issue.md, project.md, existing docs/comments |
+| ` + "`" + `--w-------` + "`" + ` | Write-only trigger | new.md (creates new items) |
+| ` + "`" + `lrwxrwxrwx` + "`" + ` | Symlink | Issues in cycles/projects/filtered views |
+
+**Important:** Existing documents and comments are editable. Edit them directly—don't
+write to new.md to update existing content.
 
 ## Directory Structure
 
 ` + "```" + `
 /teams/{KEY}/
-├── team.md, states.md, labels.md  # Metadata (read-only)
-├── by/status/{name}/              # Filtered views (symlinks)
-├── by/label/{name}/
-├── by/assignee/{name}/
+├── team.md, states.md, labels.md  # read-only metadata
+├── by/status|label|assignee/      # symlinks to issues
 ├── issues/{ID}/
-│   ├── issue.md                   # Read/write
-│   ├── comments/                  # Write to new.md to create (write-only)
-│   ├── docs/                      # Write to new.md to create (write-only)
-│   └── children/                  # Sub-issues (symlinks)
-├── cycles/current/                # Active sprint
+│   ├── issue.md                   # EDITABLE
+│   ├── comments/
+│   │   ├── new.md                 # write-only: creates comment
+│   │   └── {id}.md                # EDITABLE: existing comments
+│   ├── docs/
+│   │   ├── "Title.md"             # create: filename becomes title
+│   │   └── {slug}.md              # EDITABLE: existing documents
+│   └── children/                  # symlinks to sub-issues
+├── cycles/{name}/                 # symlinks to issues
 └── projects/{slug}/
-    ├── project.md                 # Editable (initiatives list)
-    ├── docs/                      # Write to new.md to create (write-only)
-    └── updates/                   # Write to new.md to post (write-only)
+    ├── project.md                 # EDITABLE
+    ├── docs/                      # same as issue docs
+    └── updates/
+        ├── new.md                 # write-only: posts update
+        └── {id}.md                # read-only: existing updates
 
 /initiatives/{slug}/
-├── initiative.md                  # Metadata (read-only)
-├── projects/                      # Symlinks to /teams/{KEY}/projects/
-└── updates/                       # Write to new.md to post (write-only)
+├── initiative.md                  # read-only
+├── projects/                      # symlinks to projects
+└── updates/                       # same as project updates
 
-/users/{name}/                     # Issues by assignee
-/my/assigned|created|active/       # Personal views
+/users/{name}/                     # symlinks to issues
+/my/assigned|created|active/       # symlinks to your issues
 ` + "```" + `
 
 ## Issue Frontmatter
@@ -160,6 +181,7 @@ estimate: 3               # editable
 parent: ENG-100           # editable (parent issue identifier)
 project: "My Project"     # editable (project name)
 milestone: "Phase 1"      # editable (milestone within project)
+cycle: "Sprint 42"        # editable (cycle/sprint name)
 ---
 Description here (editable)
 ` + "```" + `
@@ -207,6 +229,23 @@ Blocked on dependency from Team B.
 
 Existing updates are read-only: ` + "`" + `001-2025-01-15-ontrack.md` + "`" + `
 
+## Creating Documents
+
+Create documents by writing to a filename in the docs/ directory:
+
+` + "```" + `bash
+# Filename becomes the title
+echo "content" > docs/"My Document Title.md"
+
+# Dashes convert to spaces
+echo "content" > docs/technical-spec.md  # title: "technical spec"
+` + "```" + `
+
+Title priority:
+1. ` + "`" + `title:` + "`" + ` in YAML frontmatter (if present in content)
+2. First ` + "`" + `# Heading` + "`" + ` in content (if present)
+3. Filename (minus .md, dashes become spaces)
+
 ## Notes
 
 - Check states.md for valid status names before changing status
@@ -216,9 +255,9 @@ Existing updates are read-only: ` + "`" + `001-2025-01-15-ontrack.md` + "`" + `
 
 ## Write-Only new.md Files
 
-The ` + "`" + `new.md` + "`" + ` files in comments/, docs/, and updates/ directories are **write-only
+The ` + "`" + `new.md` + "`" + ` files in comments/ and updates/ directories are **write-only
 triggers** that create new items in Linear. They work like a mailbox slot: content
-goes in but nothing comes out.
+goes in but nothing comes out. (For docs/, prefer using a named filename instead.)
 
 **How it works:**
 1. Write content to new.md (the file is always empty, size 0)
@@ -245,4 +284,9 @@ EOF
 - Item syncs to Linear within seconds
 - Due to cache TTL, ` + "`" + `ls` + "`" + ` may not show it immediately
 - Check Linear directly to confirm creation
+
+**To update existing content:**
+- List the directory first: ` + "`" + `ls comments/` + "`" + ` or ` + "`" + `ls docs/` + "`" + `
+- Edit the existing file directly (e.g., ` + "`" + `vim {id}.md` + "`" + `)
+- Do NOT write to new.md—that creates duplicates
 `

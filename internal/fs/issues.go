@@ -532,6 +532,20 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		updates["projectMilestoneId"] = milestoneID
 	}
 
+	// Resolve cycle name to ID if needed
+	if cycleName, ok := updates["cycleId"].(string); ok {
+		if i.issue.Team == nil {
+			log.Printf("Cannot resolve cycle '%s': issue has no team", cycleName)
+			return syscall.EIO
+		}
+		cycleID, err := i.lfs.ResolveCycleID(ctx, i.issue.Team.ID, cycleName)
+		if err != nil {
+			log.Printf("Failed to resolve cycle '%s': %v", cycleName, err)
+			return syscall.EIO
+		}
+		updates["cycleId"] = cycleID
+	}
+
 	// Call Linear API to update
 	if err := i.lfs.client.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)

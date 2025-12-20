@@ -163,8 +163,8 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 		return values, nil
 
 	case "assignee":
-		// Use users list - show all active users plus "unassigned"
-		users, err := f.lfs.GetUsers(ctx)
+		// Use team members - show only users who are members of this team plus "unassigned"
+		users, err := f.lfs.GetTeamMembers(ctx, f.team.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +258,7 @@ func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, e
 
 // resolveAssigneeID converts an assignee handle (display name or email prefix) to user ID
 func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error) {
-	users, err := f.lfs.GetUsers(ctx)
+	users, err := f.lfs.GetTeamMembers(ctx, f.team.ID)
 	if err != nil {
 		return "", err
 	}

@@ -59,6 +59,10 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 		fm["parent"] = issue.Parent.Identifier
 	}
 
+	if issue.Cycle != nil {
+		fm["cycle"] = issue.Cycle.Name
+	}
+
 	// Body is just the description
 	body := issue.Description
 	if body == "" {
@@ -216,6 +220,20 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	} else if _, exists := doc.Frontmatter["milestone"]; !exists && original.ProjectMilestone != nil {
 		// Milestone was removed - set to null
 		update["projectMilestoneId"] = nil
+	}
+
+	// Check cycle
+	if cycle, ok := doc.Frontmatter["cycle"].(string); ok {
+		origCycle := ""
+		if original.Cycle != nil {
+			origCycle = original.Cycle.Name
+		}
+		if cycle != origCycle {
+			update["cycleId"] = cycle // Will need to resolve to actual cycle ID
+		}
+	} else if _, exists := doc.Frontmatter["cycle"]; !exists && original.Cycle != nil {
+		// Cycle was removed - set to null
+		update["cycleId"] = nil
 	}
 
 	// Check description (body)

@@ -7,6 +7,18 @@ This guide covers installing LinearFS on macOS, Arch Linux, and Ubuntu/Debian.
 - **Go 1.21+** - for building from source
 - **Linear API Key** - get one from [Linear Settings → API](https://linear.app/settings/api)
 
+## Mount Point
+
+This guide uses `/mnt/linear` as the standard mount point. Create it before mounting:
+
+```bash
+# Linux
+sudo mkdir -p /mnt/linear && sudo chown $USER:$USER /mnt/linear
+
+# macOS
+sudo mkdir -p /mnt/linear
+```
+
 ## macOS
 
 > **⚠️ Apple Silicon Users:** macFUSE requires booting into Recovery Mode to enable kernel extensions. This is a one-time setup. See step 1 below for detailed instructions.
@@ -96,8 +108,7 @@ export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ### 5. Mount
 
 ```bash
-mkdir -p /tmp/linear
-linearfs mount /tmp/linear
+linearfs mount /mnt/linear
 ```
 
 ### macOS Troubleshooting
@@ -122,13 +133,13 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 
 #### 2. Configure Mount Point
 
-The default mount point is `~/mnt/linear`. To customize it, edit the env file:
+The default mount point is `/mnt/linear`. To customize it, edit the env file:
 
 ```bash
 mkdir -p ~/.config/linearfs
 cat > ~/.config/linearfs/env << 'EOF'
 LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-LINEARFS_MOUNT=/Users/YOUR_USERNAME/mnt/linear
+LINEARFS_MOUNT=/mnt/linear
 EOF
 chmod 600 ~/.config/linearfs/env
 ```
@@ -148,7 +159,7 @@ chmod 600 ~/.config/linearfs/config.yaml
 #### 3. Create Mount Point
 
 ```bash
-mkdir -p ~/mnt/linear
+sudo mkdir -p /mnt/linear
 ```
 
 #### 4. Load and Start
@@ -231,8 +242,7 @@ export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ### 6. Mount
 
 ```bash
-mkdir -p /tmp/linear
-linearfs mount /tmp/linear
+linearfs mount /mnt/linear
 ```
 
 ### Arch Linux Troubleshooting
@@ -241,7 +251,7 @@ linearfs mount /tmp/linear
 |-------|----------|
 | "fusermount3: command not found" | `sudo pacman -S fuse3` |
 | "Permission denied" | Add user to `fuse` group, or run with sudo |
-| Mount point busy | `fusermount3 -uz /tmp/linear` to force unmount |
+| Mount point busy | `fusermount3 -uz /mnt/linear` to force unmount |
 
 ---
 
@@ -316,8 +326,7 @@ export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ### 7. Mount
 
 ```bash
-mkdir -p /tmp/linear
-linearfs mount /tmp/linear
+linearfs mount /mnt/linear
 ```
 
 ### Ubuntu/Debian Troubleshooting
@@ -327,7 +336,7 @@ linearfs mount /tmp/linear
 | "fusermount3: command not found" | `sudo apt install fuse3` |
 | "fuse: device not found" | `sudo modprobe fuse` |
 | "Permission denied" | Add user to `fuse` group and edit `/etc/fuse.conf` |
-| Mount point busy | `fusermount3 -uz /tmp/linear` to force unmount |
+| Mount point busy | `fusermount3 -uz /mnt/linear` to force unmount |
 
 ---
 
@@ -340,20 +349,20 @@ After mounting, verify LinearFS is working:
 mount | grep linear
 
 # List teams
-ls /tmp/linear/teams/
+ls /mnt/linear/teams/
 
-# Read an issue
-cat /tmp/linear/teams/YOUR_TEAM/issues/ISSUE-123/issue.md
+# Read an issue (replace TEAM with your team key, e.g., ENG, PROD)
+cat /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md
 ```
 
 ## Unmounting
 
 ```bash
 # Clean unmount
-fusermount3 -u /tmp/linear
+fusermount3 -u /mnt/linear
 
 # Force unmount (if busy)
-fusermount3 -uz /tmp/linear
+fusermount3 -uz /mnt/linear
 ```
 
 ## Common Issues
@@ -376,8 +385,8 @@ echo 'api_key: "lin_api_YOUR_KEY_HERE"' > ~/.config/linearfs/config.yaml
 The filesystem crashed or was killed. Force unmount and remount:
 
 ```bash
-fusermount3 -uz /tmp/linear
-linearfs mount /tmp/linear
+fusermount3 -uz /mnt/linear
+linearfs mount /mnt/linear
 ```
 
 ### "Input/output error"
@@ -389,7 +398,7 @@ Usually indicates an API error. Check:
 
 Run with debug mode for more info:
 ```bash
-linearfs mount -d /tmp/linear
+linearfs mount -d /mnt/linear
 ```
 
 ## Running as a systemd User Service (Linux)
@@ -439,11 +448,6 @@ systemctl --user restart linearfs.service  # Restart
 systemctl --user disable linearfs.service  # Disable autostart
 ```
 
-> **Note:** The mount point (`/mnt/linear`) must be writable by your user. Create it with:
-> ```bash
-> sudo mkdir -p /mnt/linear && sudo chown $USER:$USER /mnt/linear
-> ```
-
 ---
 
 ## Claude Code Integration
@@ -484,8 +488,8 @@ The `@/mnt/linear/README.md` directive automatically imports the mounted filesys
 
 Now you can ask Claude Code things like:
 - "What issues are assigned to me?" → reads `/mnt/linear/my/assigned/`
-- "Show me the bug issues" → reads `/mnt/linear/teams/ENG/by/label/bug/`
-- "What's the status of ENG-123?" → reads the issue file directly
+- "Show me the bug issues" → reads `/mnt/linear/teams/TEAM/by/label/bug/`
+- "What's the status of TEAM-123?" → reads the issue file directly
 
 ---
 
@@ -501,4 +505,22 @@ cd linear-fuse
 make build      # Build binary to bin/linearfs
 make test       # Run tests
 make install    # Copy to ~/bin
+```
+
+## Updating LinearFS
+
+To update to the latest version:
+
+```bash
+cd linear-fuse
+git pull
+make build
+make install
+
+# If running as a service, restart it:
+# Linux:
+systemctl --user restart linearfs.service
+
+# macOS:
+launchctl stop com.linearfs.mount && launchctl start com.linearfs.mount
 ```
