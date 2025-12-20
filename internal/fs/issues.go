@@ -491,7 +491,8 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			return syscall.EIO
 		}
 		if len(notFound) > 0 {
-			log.Printf("Unknown labels (will be ignored): %v", notFound)
+			log.Printf("Unknown labels: %v (see labels.md for valid labels)", notFound)
+			return syscall.EINVAL
 		}
 		updates["labelIds"] = labelIDs
 	}
