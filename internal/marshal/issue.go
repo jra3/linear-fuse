@@ -20,7 +20,9 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 
 	// Editable fields
 	fm["title"] = issue.Title
-	fm["status"] = issue.State.Name
+	if issue.State.ID != "" {
+		fm["status"] = issue.State.Name
+	}
 	fm["priority"] = api.PriorityName(issue.Priority)
 
 	if issue.Assignee != nil {
@@ -91,8 +93,14 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 		update["title"] = title
 	}
 
-	if status, ok := doc.Frontmatter["status"].(string); ok && status != original.State.Name {
-		update["stateId"] = status // Will need to resolve to actual state ID
+	if status, ok := doc.Frontmatter["status"].(string); ok {
+		origStatus := ""
+		if original.State.ID != "" {
+			origStatus = original.State.Name
+		}
+		if status != origStatus {
+			update["stateId"] = status // Will need to resolve to actual state ID
+		}
 	}
 
 	if priority, ok := doc.Frontmatter["priority"].(string); ok {

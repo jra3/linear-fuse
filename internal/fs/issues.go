@@ -240,10 +240,14 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		}), 0
 
 	case "comments":
+		teamID := ""
+		if n.issue.Team != nil {
+			teamID = n.issue.Team.ID
+		}
 		node := &CommentsNode{
 			lfs:            n.lfs,
 			issueID:        n.issue.ID,
-			teamID:         n.issue.Team.ID,
+			teamID:         teamID,
 			issueUpdatedAt: n.issue.UpdatedAt,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
