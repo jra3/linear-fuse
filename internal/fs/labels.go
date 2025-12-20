@@ -363,6 +363,10 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return 0
 	}
 
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Parse the markdown and get update fields
 	update, err := parseLabelMarkdown(n.content, &n.label)
 	if err != nil {
@@ -500,6 +504,10 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		log.Printf("New label has no name")
 		return syscall.EINVAL
 	}
+
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	if n.lfs.debug {
 		log.Printf("Creating label: name=%s color=%s", name, color)

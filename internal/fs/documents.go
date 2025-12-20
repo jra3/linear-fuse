@@ -390,6 +390,10 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		return 0
 	}
 
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Parse the markdown and get update fields
 	update, err := marshal.MarkdownToDocumentUpdate(n.content, &n.document)
 	if err != nil {
@@ -519,6 +523,10 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	if n.created || len(n.content) == 0 {
 		return 0
 	}
+
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	// Parse the new document content
 	title, body, err := marshal.ParseNewDocument(n.content)

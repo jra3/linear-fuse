@@ -432,6 +432,10 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return 0
 	}
 
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	if i.lfs.debug {
 		log.Printf("Flush: %s (saving changes)", i.issue.Identifier)
 	}

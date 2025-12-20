@@ -553,6 +553,10 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 		return 0
 	}
 
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	if n.lfs.debug {
 		log.Printf("Creating initiative update: health=%s body=%s", health, body[:min(50, len(body))])
 	}

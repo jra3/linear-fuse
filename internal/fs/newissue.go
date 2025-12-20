@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -115,6 +116,10 @@ func (n *NewIssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		}
 		return 0
 	}
+
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	if n.lfs.debug {
 		log.Printf("NewIssueNode.Flush: creating issue")

@@ -450,6 +450,10 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return 0
 	}
 
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	if p.lfs.debug {
 		log.Printf("Flush: project %s (saving changes)", p.project.Name)
 	}
@@ -789,6 +793,10 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if body == "" {
 		return 0
 	}
+
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	if n.lfs.debug {
 		log.Printf("Creating project update: health=%s body=%s", health, body[:min(50, len(body))])

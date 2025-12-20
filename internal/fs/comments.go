@@ -309,6 +309,10 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		return 0
 	}
 
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Extract body from the markdown (skip frontmatter)
 	body := extractCommentBody(n.content)
 	if body == "" {
@@ -462,6 +466,10 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 	if body == "" {
 		return 0
 	}
+
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	if n.lfs.debug {
 		log.Printf("Creating comment on issue %s: %s", n.issueID, body)
