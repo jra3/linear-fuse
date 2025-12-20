@@ -88,6 +88,10 @@ func cyclesPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "cycles")
 }
 
+func byStatusPath(teamKey, status string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "by", "status", status)
+}
+
 func projectsPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "projects")
 }
