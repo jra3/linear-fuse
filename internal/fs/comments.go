@@ -129,8 +129,8 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 			}
 			out.Attr.Mode = 0644 | syscall.S_IFREG // Read-write
 			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
+			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
+			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
 			// Use updatedAt for mtime (comments can be edited)
 			out.Attr.SetTimes(&comment.UpdatedAt, &comment.UpdatedAt, &comment.CreatedAt)
 			return n.NewInode(ctx, node, fs.StableAttr{

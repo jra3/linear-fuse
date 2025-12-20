@@ -104,8 +104,8 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 			}
 			out.Attr.Mode = 0644 | syscall.S_IFREG
 			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
+			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
+			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
 			return n.NewInode(ctx, node, fs.StableAttr{
 				Mode: syscall.S_IFREG,
 				Ino:  labelIno(label.ID),
