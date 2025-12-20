@@ -350,7 +350,7 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 		timestamp := update.CreatedAt.Format("2006-01-02")
 		healthSuffix := strings.ToLower(update.Health)
 		entries = append(entries, fuse.DirEntry{
-			Name: fmt.Sprintf("%03d-%s-%s.md", i+1, timestamp, healthSuffix),
+			Name: fmt.Sprintf("%04d-%s-%s.md", i+1, timestamp, healthSuffix),
 			Mode: syscall.S_IFREG,
 		})
 	}
@@ -388,7 +388,7 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 	for i, update := range updates {
 		timestamp := update.CreatedAt.Format("2006-01-02")
 		healthSuffix := strings.ToLower(update.Health)
-		expectedName := fmt.Sprintf("%03d-%s-%s.md", i+1, timestamp, healthSuffix)
+		expectedName := fmt.Sprintf("%04d-%s-%s.md", i+1, timestamp, healthSuffix)
 		if expectedName == name {
 			content := initiativeUpdateToMarkdown(&update)
 			node := &InitiativeUpdateNode{

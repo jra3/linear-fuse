@@ -77,7 +77,7 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		// Format: 001-2025-01-10T14:30.md
 		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
 		entries = append(entries, fuse.DirEntry{
-			Name: fmt.Sprintf("%03d-%s.md", i+1, timestamp),
+			Name: fmt.Sprintf("%04d-%s.md", i+1, timestamp),
 			Mode: syscall.S_IFREG,
 		})
 	}
@@ -117,7 +117,7 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	// Match by filename pattern
 	for i, comment := range comments {
 		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		expectedName := fmt.Sprintf("%03d-%s.md", i+1, timestamp)
+		expectedName := fmt.Sprintf("%04d-%s.md", i+1, timestamp)
 		if expectedName == name {
 			content := commentToMarkdown(&comment)
 			node := &CommentNode{
@@ -166,7 +166,7 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Find the comment by filename
 	for i, comment := range comments {
 		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		expectedName := fmt.Sprintf("%03d-%s.md", i+1, timestamp)
+		expectedName := fmt.Sprintf("%04d-%s.md", i+1, timestamp)
 		if expectedName == name {
 			err := n.lfs.DeleteComment(ctx, n.issueID, comment.ID)
 			if err != nil {
