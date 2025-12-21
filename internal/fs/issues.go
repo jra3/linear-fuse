@@ -481,20 +481,33 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	// Resolve label names to IDs if needed
 	if labelNames, ok := updates["labelIds"].([]string); ok {
-		if i.issue.Team == nil {
-			log.Printf("Cannot resolve labels: issue has no team")
-			return syscall.EIO
+		if len(labelNames) == 0 {
+			// Clearing all labels - use removedLabelIds instead of empty labelIds
+			// (Linear API rejects labelIds: [])
+			delete(updates, "labelIds")
+			if len(i.issue.Labels.Nodes) > 0 {
+				removedIDs := make([]string, len(i.issue.Labels.Nodes))
+				for idx, l := range i.issue.Labels.Nodes {
+					removedIDs[idx] = l.ID
+				}
+				updates["removedLabelIds"] = removedIDs
+			}
+		} else {
+			if i.issue.Team == nil {
+				log.Printf("Cannot resolve labels: issue has no team")
+				return syscall.EIO
+			}
+			labelIDs, notFound, err := i.lfs.ResolveLabelIDs(ctx, i.issue.Team.ID, labelNames)
+			if err != nil {
+				log.Printf("Failed to resolve labels: %v", err)
+				return syscall.EIO
+			}
+			if len(notFound) > 0 {
+				log.Printf("Unknown labels: %v (see labels.md for valid labels)", notFound)
+				return syscall.EINVAL
+			}
+			updates["labelIds"] = labelIDs
 		}
-		labelIDs, notFound, err := i.lfs.ResolveLabelIDs(ctx, i.issue.Team.ID, labelNames)
-		if err != nil {
-			log.Printf("Failed to resolve labels: %v", err)
-			return syscall.EIO
-		}
-		if len(notFound) > 0 {
-			log.Printf("Unknown labels: %v (see labels.md for valid labels)", notFound)
-			return syscall.EINVAL
-		}
-		updates["labelIds"] = labelIDs
 	}
 
 	// Resolve parent issue identifier to ID if needed
