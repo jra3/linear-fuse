@@ -167,6 +167,20 @@ cache:
   ttl: 60s
 ```
 
+## Linear API Reference
+
+The full Linear GraphQL schema is available locally at `docs/linear-schema.graphql` (gitignored).
+
+To refresh the schema:
+```bash
+curl -s "https://raw.githubusercontent.com/linear/linear/master/packages/sdk/src/schema.graphql" > docs/linear-schema.graphql
+```
+
+Key input types for mutations:
+- `IssueUpdateInput` - Use `labelIds` to set labels, `removedLabelIds` to clear (not empty array)
+- `IssueCreateInput` - Fields for creating new issues
+- `CommentCreateInput` / `CommentUpdateInput` - Comment mutations
+
 ## Development Notes
 
 - Breaking changes are acceptable - this is a prototype
