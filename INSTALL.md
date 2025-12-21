@@ -9,15 +9,22 @@ This guide covers installing LinearFS on macOS, Arch Linux, and Ubuntu/Debian.
 
 ## Mount Point
 
-This guide uses `/mnt/linear` as the standard mount point. Create it before mounting:
+The recommended mount point varies by platform:
+
+- **Linux**: `/mnt/linear` (system-wide location)
+- **macOS**: `~/mnt/linear` (user home directory)
+
+Create the mount point before first use:
 
 ```bash
 # Linux
 sudo mkdir -p /mnt/linear && sudo chown $USER:$USER /mnt/linear
 
 # macOS
-sudo mkdir -p /mnt/linear
+mkdir -p ~/mnt/linear
 ```
+
+> **Note:** You can use any mount point you prefer. The examples below use the platform-specific defaults.
 
 ## macOS
 
@@ -108,7 +115,7 @@ export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ### 5. Mount
 
 ```bash
-linearfs mount /mnt/linear
+linearfs mount ~/mnt/linear
 ```
 
 ### macOS Troubleshooting
@@ -133,13 +140,13 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 
 #### 2. Configure Mount Point
 
-The default mount point is `/mnt/linear`. To customize it, edit the env file:
+The default mount point is `~/mnt/linear`. To customize it, edit the env file:
 
 ```bash
 mkdir -p ~/.config/linearfs
 cat > ~/.config/linearfs/env << 'EOF'
 LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-LINEARFS_MOUNT=/mnt/linear
+LINEARFS_MOUNT=~/mnt/linear
 EOF
 chmod 600 ~/.config/linearfs/env
 ```
@@ -159,7 +166,7 @@ chmod 600 ~/.config/linearfs/config.yaml
 #### 3. Create Mount Point
 
 ```bash
-sudo mkdir -p /mnt/linear
+mkdir -p ~/mnt/linear
 ```
 
 #### 4. Load and Start
@@ -348,21 +355,26 @@ After mounting, verify LinearFS is working:
 # Check mount
 mount | grep linear
 
-# List teams
-ls /mnt/linear/teams/
+# List teams (use ~/mnt/linear on macOS, /mnt/linear on Linux)
+ls /mnt/linear/teams/        # Linux
+ls ~/mnt/linear/teams/       # macOS
 
 # Read an issue (replace TEAM with your team key, e.g., ENG, PROD)
-cat /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md
+cat /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md        # Linux
+cat ~/mnt/linear/teams/TEAM/issues/TEAM-123/issue.md       # macOS
 ```
 
 ## Unmounting
 
 ```bash
-# Clean unmount
+# Linux - Clean unmount
 fusermount3 -u /mnt/linear
 
-# Force unmount (if busy)
+# Linux - Force unmount (if busy)
 fusermount3 -uz /mnt/linear
+
+# macOS - Unmount
+umount ~/mnt/linear
 ```
 
 ## Common Issues
@@ -385,8 +397,13 @@ echo 'api_key: "lin_api_YOUR_KEY_HERE"' > ~/.config/linearfs/config.yaml
 The filesystem crashed or was killed. Force unmount and remount:
 
 ```bash
+# Linux
 fusermount3 -uz /mnt/linear
 linearfs mount /mnt/linear
+
+# macOS
+umount ~/mnt/linear
+linearfs mount ~/mnt/linear
 ```
 
 ### "Input/output error"
@@ -398,7 +415,11 @@ Usually indicates an API error. Check:
 
 Run with debug mode for more info:
 ```bash
+# Linux
 linearfs mount -d /mnt/linear
+
+# macOS
+linearfs mount -d ~/mnt/linear
 ```
 
 ## Running as a systemd User Service (Linux)
@@ -456,8 +477,9 @@ If you use [Claude Code](https://claude.ai/code), you can give it access to your
 
 ### 1. Add Permissions
 
-Add these permissions to your `~/.claude/settings.json`:
+Add these permissions to your `~/.claude/settings.json` (adjust the path for your platform):
 
+**Linux:**
 ```json
 {
   "allow": [
@@ -468,12 +490,24 @@ Add these permissions to your `~/.claude/settings.json`:
 }
 ```
 
+**macOS:**
+```json
+{
+  "allow": [
+    "Read(//Users/YOUR_USERNAME/mnt/linear/**)",
+    "Bash(ls ~/mnt/linear/:*)",
+    "Bash(cat ~/mnt/linear/:*)"
+  ]
+}
+```
+
 This allows Claude Code to read issues, list directories, and view file contents without prompting for approval.
 
 ### 2. Add Context
 
-Add to your global `~/.claude/CLAUDE.md`:
+Add to your global `~/.claude/CLAUDE.md` (adjust path for your platform):
 
+**Linux:**
 ```markdown
 # Linear.app issues via FUSE mount on disk
 - data is found in /mnt/linear
@@ -482,13 +516,22 @@ Add to your global `~/.claude/CLAUDE.md`:
 @/mnt/linear/README.md
 ```
 
-The `@/mnt/linear/README.md` directive automatically imports the mounted filesystem's documentation into Claude's context, giving it full knowledge of the directory structure and available operations.
+**macOS:**
+```markdown
+# Linear.app issues via FUSE mount on disk
+- data is found in ~/mnt/linear
+- the README.md file should be fully read and understood before reading/writing data there
+
+@~/mnt/linear/README.md
+```
+
+The `@` directive automatically imports the mounted filesystem's documentation into Claude's context, giving it full knowledge of the directory structure and available operations.
 
 ### 3. Usage
 
 Now you can ask Claude Code things like:
-- "What issues are assigned to me?" → reads `/mnt/linear/my/assigned/`
-- "Show me the bug issues" → reads `/mnt/linear/teams/TEAM/by/label/bug/`
+- "What issues are assigned to me?" → reads `my/assigned/`
+- "Show me the bug issues" → reads `teams/TEAM/by/label/bug/`
 - "What's the status of TEAM-123?" → reads the issue file directly
 
 ---
