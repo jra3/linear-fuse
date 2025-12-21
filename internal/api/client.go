@@ -17,10 +17,11 @@ import (
 var debugRateLimit = os.Getenv("LINEARFS_DEBUG_RATE") != ""
 var debugAPI = os.Getenv("LINEARFS_DEBUG_API") != ""
 
-const linearAPIURL = "https://api.linear.app/graphql"
+const defaultAPIURL = "https://api.linear.app/graphql"
 
 type Client struct {
 	apiKey     string
+	apiURL     string
 	httpClient *http.Client
 	limiter    *rate.Limiter
 }
@@ -32,9 +33,15 @@ func NewClient(apiKey string) *Client {
 
 	return &Client{
 		apiKey:     apiKey,
+		apiURL:     defaultAPIURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		limiter:    limiter,
 	}
+}
+
+// SetAPIURL overrides the API URL (for testing).
+func (c *Client) SetAPIURL(url string) {
+	c.apiURL = url
 }
 
 type graphQLRequest struct {
@@ -101,7 +108,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", linearAPIURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.apiURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

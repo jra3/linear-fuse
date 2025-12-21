@@ -18,29 +18,21 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Run unit tests
-        run: go test -v -race ./internal/marshal/... ./internal/cache/... ./internal/config/... ./internal/api/... ./internal/fs/...
+        run: go test -v -race ./...
 
       - name: Check coverage
         run: |
-          go test ./internal/marshal/... ./internal/cache/... ./internal/config/... -coverprofile=coverage.out
-          go tool cover -func=coverage.out
-
-          # Verify minimum coverage for key packages
-          MARSHAL_COV=$(go tool cover -func=coverage.out | grep 'internal/marshal' | tail -1 | awk '{print $3}' | sed 's/%//')
-          CACHE_COV=$(go tool cover -func=coverage.out | grep 'internal/cache' | tail -1 | awk '{print $3}' | sed 's/%//')
-          CONFIG_COV=$(go tool cover -func=coverage.out | grep 'internal/config' | tail -1 | awk '{print $3}' | sed 's/%//')
-
-          echo "Marshal coverage: ${MARSHAL_COV}%"
-          echo "Cache coverage: ${CACHE_COV}%"
-          echo "Config coverage: ${CONFIG_COV}%"
+          go test -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -20
 
   integration-tests-read:
     name: Integration Tests (Read-Only)
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: [unit-tests]
 
     steps:
       - name: Checkout code
@@ -49,7 +41,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Install FUSE
         run: |
@@ -83,7 +75,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.22'
 
       - name: Install FUSE
         run: |
