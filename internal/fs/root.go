@@ -176,7 +176,7 @@ priority: high            # editable: none/low/medium/high/urgent
 labels:                   # editable (see labels.md)
   - Bug
   - Backend
-dueDate: "2025-01-15"     # editable
+due: "2025-01-15"         # editable (YYYY-MM-DD)
 estimate: 3               # editable
 parent: ENG-100           # editable (parent issue identifier)
 project: "My Project"     # editable (project name)
@@ -250,6 +250,8 @@ Title priority:
 
 - Check states.md for valid status names before changing status
 - Check labels.md for available label names
+- **Invalid values fail the write** (unknown status, labels, assignee, etc.)
+- **Clear optional fields** by deleting the line (assignee, labels, due, estimate, parent, project, milestone, cycle)
 - All symlinks resolve to issue directories containing issue.md
 - Cache TTL: 60s (external changes may be delayed)
 
