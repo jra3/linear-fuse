@@ -612,6 +612,29 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Invalidate kernel cache for this file
 	i.lfs.InvalidateKernelInode(issueIno(i.issue.ID))
 
+	// Update i.issue with the new values so next read sees them
+	// (otherwise generateContent would serialize the old i.issue data)
+	if title, ok := updates["title"].(string); ok {
+		i.issue.Title = title
+	}
+	if desc, ok := updates["description"].(string); ok {
+		i.issue.Description = desc
+	}
+	if priority, ok := updates["priority"].(int); ok {
+		i.issue.Priority = priority
+	}
+	if dueDate, ok := updates["dueDate"].(string); ok {
+		i.issue.DueDate = &dueDate
+	} else if updates["dueDate"] == nil {
+		i.issue.DueDate = nil
+	}
+	if estimate, ok := updates["estimate"].(int); ok {
+		est := float64(estimate)
+		i.issue.Estimate = &est
+	} else if updates["estimate"] == nil {
+		i.issue.Estimate = nil
+	}
+
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 
