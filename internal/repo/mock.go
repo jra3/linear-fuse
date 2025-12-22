@@ -234,6 +234,18 @@ func (m *MockRepository) GetMyActiveIssues(ctx context.Context) ([]api.Issue, er
 	return result, nil
 }
 
+func (m *MockRepository) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
+	var result []api.Issue
+	for _, issues := range m.Issues {
+		for _, issue := range issues {
+			if issue.Assignee != nil && issue.Assignee.ID == userID {
+				result = append(result, issue)
+			}
+		}
+	}
+	return result, nil
+}
+
 // =============================================================================
 // Search
 // =============================================================================

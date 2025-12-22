@@ -270,6 +270,14 @@ func (r *SQLiteRepository) GetMyCreatedIssues(ctx context.Context) ([]api.Issue,
 	return []api.Issue{}, nil
 }
 
+func (r *SQLiteRepository) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
+	issues, err := r.store.Queries().ListUserAssignedIssues(ctx, sql.NullString{String: userID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list user issues: %w", err)
+	}
+	return db.DBIssuesToAPIIssues(issues)
+}
+
 func (r *SQLiteRepository) GetMyActiveIssues(ctx context.Context) ([]api.Issue, error) {
 	user, err := r.GetCurrentUser(ctx)
 	if err != nil {

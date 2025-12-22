@@ -290,9 +290,7 @@ func (lfs *LinearFS) GetTeamMembers(ctx context.Context, teamID string) ([]api.U
 
 // GetUserIssues returns issues assigned to a user across all teams
 func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
-	// Query across all teams - get issues assigned to this user
-	// The repo doesn't have a cross-team method, so we use the API client
-	return lfs.client.GetUserIssues(ctx, userID)
+	return lfs.repo.GetUserIssues(ctx, userID)
 }
 
 // InvalidateUserIssues is a no-op; SQLite is the source of truth
@@ -697,4 +695,40 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *Li
 	lfs.SetServer(server)
 
 	return server, lfs, nil
+}
+
+// MountFS mounts an existing LinearFS instance at the given path.
+// This is useful for testing when you need to configure LinearFS before mounting.
+func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error) {
+	root := &RootNode{lfs: lfs}
+
+	// Use longer timeouts to reduce kernel→userspace calls
+	attrTimeout := 60 * time.Second
+	entryTimeout := 30 * time.Second
+
+	opts := &fs.Options{
+		AttrTimeout:  &attrTimeout,
+		EntryTimeout: &entryTimeout,
+		MountOptions: fuse.MountOptions{
+			Name:   "linearfs",
+			FsName: "linear",
+			Debug:  debug,
+		},
+	}
+
+	server, err := fs.Mount(mountpoint, root, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	lfs.SetServer(server)
+	return server, nil
+}
+
+// InjectTestStore sets up the SQLite store and repository for testing.
+// This is used by integration tests to pre-populate the database with fixtures.
+func (lfs *LinearFS) InjectTestStore(store *db.Store) error {
+	lfs.store = store
+	lfs.repo = repo.NewSQLiteRepository(store, nil)
+	return nil
 }

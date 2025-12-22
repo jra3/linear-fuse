@@ -19,10 +19,16 @@ To test manually:
 fusermount3 -u /tmp/linear              # Unmount
 ```
 
-Integration tests (requires LINEAR_API_KEY):
+Integration tests:
 ```bash
-LINEARFS_INTEGRATION=1 go test -v ./internal/integration/...
-LINEARFS_INTEGRATION=1 LINEARFS_WRITE_TESTS=1 go test -v ./internal/integration/...  # Include write tests
+# Default: Runs with SQLite fixtures (no API key needed, fast)
+go test -v ./internal/integration/...
+
+# Live API mode: Runs against real Linear API
+LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx go test -v ./internal/integration/...
+
+# Include write tests (creates/modifies issues in Linear)
+LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx LINEARFS_WRITE_TESTS=1 go test -v ./internal/integration/...
 ```
 
 ## Claude Code Integration
@@ -48,11 +54,19 @@ Also add to your global `~/.claude/CLAUDE.md`:
 
 ## Architecture
 
-LinearFS exposes Linear as a FUSE filesystem:
+LinearFS exposes Linear as a FUSE filesystem with SQLite as the persistent data store:
 
 ```
-Linear API → api.Client → LinearFS (caching) → FUSE nodes → kernel → user
+Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS → FUSE
+                ↓
+           (mutations only)
 ```
+
+**Data Flow:**
+- **Sync Worker**: Background process fetches data from Linear API and stores in SQLite
+- **Repository**: Abstraction layer for all data access (reads from SQLite)
+- **LinearFS**: FUSE implementation that serves data via Repository
+- **API Client**: Used directly only for mutations (create, update, delete)
 
 ### Directory Structure
 
@@ -99,7 +113,16 @@ Linear API → api.Client → LinearFS (caching) → FUSE nodes → kernel → u
   - `ProjectsNode`/`ProjectInfoNode` - Project management
   - `ByNode`/`FilteredIssuesNode` - Server-side filtered queries
 - **internal/marshal**: Markdown ↔ Linear issue conversion with YAML frontmatter
-- **internal/cache**: Generic TTL cache with `DeleteByPrefix` for bulk invalidation
+- **internal/db**: SQLite database layer with sqlc-generated queries
+  - `schema.sql` - Table definitions (see [docs/DATABASE.md](docs/DATABASE.md))
+  - `queries.sql` - sqlc query definitions
+  - `convert.go` - API ↔ DB type conversion functions
+- **internal/repo**: Repository pattern for data access
+  - `repo.go` - Repository interface (~50 methods)
+  - `sqlite.go` - SQLite-backed implementation
+  - `mock.go` - In-memory mock for testing
+- **internal/sync**: Background sync worker for Linear → SQLite
+- **internal/cache**: Generic TTL cache (being phased out in favor of SQLite)
 
 ### GraphQL Query Design
 
@@ -180,6 +203,42 @@ Key input types for mutations:
 - `IssueUpdateInput` - Use `labelIds` to set labels, `removedLabelIds` to clear (not empty array)
 - `IssueCreateInput` - Fields for creating new issues
 - `CommentCreateInput` / `CommentUpdateInput` - Comment mutations
+
+## Database Design
+
+SQLite serves as the persistent cache layer. See [docs/DATABASE.md](docs/DATABASE.md) for full details.
+
+### Key Principles
+
+1. **Hybrid Column + JSON Storage**: Extract queryable fields as columns, store full API response in `data JSON`
+2. **Denormalization**: Store both IDs and names to avoid joins (e.g., `state_id` + `state_name`)
+3. **Sync Metadata**: Every table has `synced_at` for staleness detection
+4. **FTS5 Search**: Full-text search on issues via triggers that sync with content table
+
+### Adding New Tables
+
+```sql
+CREATE TABLE IF NOT EXISTS new_entity (
+    id TEXT PRIMARY KEY,
+    -- Extract columns for querying
+    parent_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    -- Timestamps
+    created_at DATETIME,
+    updated_at DATETIME,
+    synced_at DATETIME NOT NULL,
+    -- Full API response
+    data JSON NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_new_entity_parent ON new_entity(parent_id);
+```
+
+After schema changes:
+1. Update `internal/db/queries.sql` with CRUD queries
+2. Run `sqlc generate`
+3. Add conversion functions to `internal/db/convert.go`
+4. Add repository methods to `internal/repo/repo.go` and implementations
 
 ## Development Notes
 

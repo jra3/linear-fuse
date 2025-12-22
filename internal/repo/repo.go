@@ -77,6 +77,9 @@ type Repository interface {
 	// GetMyActiveIssues returns non-completed issues assigned to the current user
 	GetMyActiveIssues(ctx context.Context) ([]api.Issue, error)
 
+	// GetUserIssues returns all issues assigned to a specific user (across all teams)
+	GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error)
+
 	// ==========================================================================
 	// Search
 	// ==========================================================================

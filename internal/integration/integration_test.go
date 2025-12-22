@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/config"
+	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/fs"
+	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
 
 var (
@@ -21,23 +24,44 @@ var (
 	apiClient   *api.Client
 	testTeamID  string
 	testTeamKey string
+
+	// liveAPIMode indicates if tests are running against real Linear API
+	liveAPIMode bool
 )
 
 func TestMain(m *testing.M) {
-	if os.Getenv("LINEARFS_INTEGRATION") != "1" {
-		fmt.Println("Skipping integration tests (set LINEARFS_INTEGRATION=1 to run)")
-		os.Exit(0)
-	}
-
 	apiKey := os.Getenv("LINEAR_API_KEY")
-	if apiKey == "" {
-		log.Fatal("LINEAR_API_KEY required for integration tests")
+	liveAPIMode = os.Getenv("LINEARFS_LIVE_API") == "1" && apiKey != ""
+
+	if liveAPIMode {
+		// Live API mode: requires API key
+		if apiKey == "" {
+			log.Fatal("LINEAR_API_KEY required for live API tests")
+		}
+		if err := setupLiveAPI(apiKey); err != nil {
+			log.Fatalf("Failed to setup live API: %v", err)
+		}
+	} else {
+		// SQLite fixture mode: no API key needed
+		if err := setupSQLiteFixtures(); err != nil {
+			log.Fatalf("Failed to setup SQLite fixtures: %v", err)
+		}
 	}
 
+	log.Printf("Integration tests using mount=%s team=%s (liveAPI=%v)", mountPoint, testTeamKey, liveAPIMode)
+
+	code := m.Run()
+
+	cleanup()
+	os.Exit(code)
+}
+
+// setupLiveAPI configures tests to run against real Linear API
+func setupLiveAPI(apiKey string) error {
 	var err error
 	mountPoint, err = os.MkdirTemp("", "linearfs-test-*")
 	if err != nil {
-		log.Fatalf("Failed to create mount point: %v", err)
+		return fmt.Errorf("create mount point: %w", err)
 	}
 
 	cfg := &config.Config{
@@ -50,22 +74,138 @@ func TestMain(m *testing.M) {
 	server, lfs, err = fs.Mount(mountPoint, cfg, false)
 	if err != nil {
 		os.RemoveAll(mountPoint)
-		log.Fatalf("Failed to mount filesystem: %v", err)
+		return fmt.Errorf("mount filesystem: %w", err)
 	}
 
 	apiClient = api.NewClient(apiKey)
 
 	if err := discoverTestTeam(); err != nil {
 		cleanup()
-		log.Fatalf("Failed to discover test team: %v", err)
+		return fmt.Errorf("discover test team: %w", err)
 	}
 
-	log.Printf("Integration tests using mount=%s team=%s", mountPoint, testTeamKey)
+	return nil
+}
 
-	code := m.Run()
+// setupSQLiteFixtures configures tests to run with pre-populated SQLite data
+func setupSQLiteFixtures() error {
+	var err error
+	mountPoint, err = os.MkdirTemp("", "linearfs-test-*")
+	if err != nil {
+		return fmt.Errorf("create mount point: %w", err)
+	}
 
-	cleanup()
-	os.Exit(code)
+	// Create temp database
+	dbPath := filepath.Join(mountPoint, "test.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("open db: %w", err)
+	}
+
+	// Populate with fixtures
+	ctx := context.Background()
+	if err := populateTestFixtures(ctx, store); err != nil {
+		store.Close()
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("populate fixtures: %w", err)
+	}
+
+	// Create LinearFS with a dummy API key (won't be used for mutations in fixture mode)
+	cfg := &config.Config{
+		APIKey: "fixture-mode-key",
+		Cache: config.CacheConfig{
+			TTL: 100 * time.Millisecond,
+		},
+	}
+
+	lfs, err = fs.NewLinearFS(cfg, false)
+	if err != nil {
+		store.Close()
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("create linearfs: %w", err)
+	}
+
+	// Inject the store and create repository (no API client for fetching)
+	if err := lfs.InjectTestStore(store); err != nil {
+		lfs.Close()
+		store.Close()
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("inject store: %w", err)
+	}
+
+	// Mount the filesystem
+	server, err = fs.MountFS(mountPoint, lfs, false)
+	if err != nil {
+		lfs.Close()
+		store.Close()
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("mount filesystem: %w", err)
+	}
+
+	// Use fixture team
+	testTeamID = "team-1"
+	testTeamKey = "TST"
+
+	return nil
+}
+
+// populateTestFixtures inserts test data into the SQLite database
+func populateTestFixtures(ctx context.Context, store *db.Store) error {
+	team := fixtures.FixtureAPITeam()
+	states := fixtures.FixtureAPIStates()
+	labels := fixtures.FixtureAPILabels()
+	users := fixtures.FixtureAPIUsers()
+
+	// Create issues with various configurations
+	issues := []api.Issue{
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-1", "TST-1"),
+			fixtures.WithTitle("Test Issue 1"),
+			fixtures.WithDescription("This is test issue 1"),
+			fixtures.WithState(fixtures.FixtureAPIState("started")),
+			fixtures.WithPriority(2),
+		),
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-2", "TST-2"),
+			fixtures.WithTitle("Test Issue 2"),
+			fixtures.WithDescription("This is test issue 2"),
+			fixtures.WithState(fixtures.FixtureAPIState("unstarted")),
+			fixtures.WithPriority(1),
+		),
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-3", "TST-3"),
+			fixtures.WithTitle("Test Issue 3 - High Priority"),
+			fixtures.WithDescription("This is a high priority issue"),
+			fixtures.WithState(fixtures.FixtureAPIState("backlog")),
+			fixtures.WithPriority(4),
+		),
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-4", "TST-4"),
+			fixtures.WithTitle("Test Issue 4 - With Labels"),
+			fixtures.WithDescription("This issue has labels"),
+			fixtures.WithState(fixtures.FixtureAPIState("started")),
+			fixtures.WithLabels(fixtures.FixtureAPILabels()...),
+		),
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-5", "TST-5"),
+			fixtures.WithTitle("Test Issue 5 - Completed"),
+			fixtures.WithDescription("This issue is completed"),
+			fixtures.WithState(fixtures.FixtureAPIState("completed")),
+		),
+	}
+
+	// Populate team
+	if err := fixtures.PopulateTeam(ctx, store, team, states, labels, issues); err != nil {
+		return err
+	}
+
+	// Populate users
+	if err := fixtures.PopulateUsers(ctx, store, users); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func discoverTestTeam() error {
@@ -109,3 +249,14 @@ func cleanup() {
 	}
 }
 
+// isLiveAPIMode returns true if tests are running against real Linear API
+func isLiveAPIMode() bool {
+	return liveAPIMode
+}
+
+// skipIfNotLiveAPI skips the test if not running in live API mode
+func skipIfNotLiveAPI(t *testing.T) {
+	if !liveAPIMode {
+		t.Skip("Skipping: requires live API (set LINEARFS_LIVE_API=1 and LINEAR_API_KEY)")
+	}
+}

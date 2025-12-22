@@ -18,14 +18,18 @@ var (
 )
 
 // writeTestsEnabled returns true if write tests should run
-// Set LINEARFS_WRITE_TESTS=1 to enable tests that create/modify issues
+// Write tests require live API mode
 func writeTestsEnabled() bool {
-	return os.Getenv("LINEARFS_WRITE_TESTS") == "1"
+	return liveAPIMode && os.Getenv("LINEARFS_WRITE_TESTS") == "1"
 }
 
 // skipIfNoWriteTests skips the test if write tests are not enabled
+// Write tests require live API mode with LINEARFS_WRITE_TESTS=1
 func skipIfNoWriteTests(t interface{ Skip(...any) }) {
-	if !writeTestsEnabled() {
+	if !liveAPIMode {
+		t.Skip("Skipped: requires live API (set LINEARFS_LIVE_API=1 and LINEAR_API_KEY)")
+	}
+	if os.Getenv("LINEARFS_WRITE_TESTS") != "1" {
 		t.Skip("Skipped: write tests disabled (set LINEARFS_WRITE_TESTS=1 to enable)")
 	}
 }
