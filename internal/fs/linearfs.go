@@ -12,12 +12,16 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/cache"
 	"github.com/jra3/linear-fuse/internal/config"
+	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/sync"
 	"golang.org/x/sync/singleflight"
 )
 
 type LinearFS struct {
 	client              *api.Client
 	server              *fuse.Server // FUSE server for kernel cache invalidation
+	store               *db.Store    // SQLite persistent cache (optional, nil if not enabled)
+	syncWorker          *sync.Worker // Background sync worker (optional, nil if store not enabled)
 	teamCache           *cache.Cache[[]api.Team]
 	issueCache          *cache.Cache[[]api.Issue]
 	issueByIdCache      *cache.Cache[api.Issue] // Individual issues by identifier (e.g., "ENG-123")
@@ -78,6 +82,15 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 
 // Close stops all background cache goroutines to prevent resource leaks
 func (lfs *LinearFS) Close() {
+	// Stop sync worker first
+	if lfs.syncWorker != nil {
+		lfs.syncWorker.Stop()
+	}
+	// Close SQLite store
+	if lfs.store != nil {
+		lfs.store.Close()
+	}
+	// Stop in-memory caches
 	lfs.teamCache.Stop()
 	lfs.issueCache.Stop()
 	lfs.issueByIdCache.Stop()
@@ -101,6 +114,34 @@ func (lfs *LinearFS) Close() {
 	lfs.initiativeUpdateCache.Stop()
 }
 
+// EnableSQLiteCache initializes the SQLite persistent cache and starts background sync.
+// This should be called after creating LinearFS but before mounting.
+// If dbPath is empty, uses the default path (~/.config/linearfs/cache.db).
+func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error {
+	if dbPath == "" {
+		dbPath = db.DefaultDBPath()
+	}
+
+	store, err := db.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open sqlite cache: %w", err)
+	}
+
+	lfs.store = store
+
+	// Create and start sync worker
+	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())
+	lfs.syncWorker.Start(ctx)
+
+	log.Printf("[sqlite] Enabled persistent cache at %s", dbPath)
+	return nil
+}
+
+// HasSQLiteCache returns true if SQLite cache is enabled
+func (lfs *LinearFS) HasSQLiteCache() bool {
+	return lfs.store != nil
+}
+
 func (lfs *LinearFS) GetTeams(ctx context.Context) ([]api.Team, error) {
 	if teams, ok := lfs.teamCache.Get("teams"); ok {
 		return teams, nil
@@ -116,6 +157,24 @@ func (lfs *LinearFS) GetTeams(ctx context.Context) ([]api.Team, error) {
 }
 
 func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
+	// Try SQLite first if enabled
+	if lfs.store != nil {
+		dbIssues, err := lfs.store.Queries().ListTeamIssues(ctx, teamID)
+		if err == nil && len(dbIssues) > 0 {
+			issues, convErr := db.DBIssuesToAPIIssues(dbIssues)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] GetTeamIssues %s (%d issues)", teamID, len(issues))
+				}
+				return issues, nil
+			}
+		}
+		// Fall through to API/cache if SQLite is empty (initial sync not complete)
+		if lfs.debug {
+			log.Printf("[SQLITE MISS] GetTeamIssues %s (count=%d, err=%v)", teamID, len(dbIssues), err)
+		}
+	}
+
 	cacheKey := "issues:" + teamID
 	if issues, ok := lfs.issueCache.Get(cacheKey); ok {
 		if lfs.debug {
