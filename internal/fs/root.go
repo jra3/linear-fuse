@@ -111,7 +111,9 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Add comment | ` + "`" + `echo "text" > .../comments/new.md` + "`" + ` (write-only) |
 | Create document | ` + "`" + `echo "text" > .../docs/"Title.md"` + "`" + ` (filename = title) |
 | Create issue | ` + "`" + `mkdir /teams/ENG/issues/"Title"` + "`" + ` |
+| Create project | ` + "`" + `mkdir /teams/ENG/projects/"Name"` + "`" + ` |
 | Archive issue | ` + "`" + `rmdir /teams/ENG/issues/ENG-123` + "`" + ` |
+| Archive project | ` + "`" + `rmdir /teams/ENG/projects/{slug}` + "`" + ` |
 | View sub-issues | ` + "`" + `ls /teams/ENG/issues/ENG-123/children/` + "`" + ` |
 | Post project update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
 | Post initiative update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
