@@ -26,6 +26,18 @@ query TeamIssues($teamId: String!, $after: String) {
 }
 ` + issueFieldsFragment
 
+// queryTeamIssuesByUpdatedAt fetches issues ordered by updatedAt DESC for incremental sync
+var queryTeamIssuesByUpdatedAt = `
+query TeamIssuesByUpdatedAt($teamId: String!, $first: Int!, $after: String) {
+  team(id: $teamId) {
+    issues(first: $first, after: $after, orderBy: updatedAt) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...IssueFields }
+    }
+  }
+}
+` + issueFieldsFragment
+
 var queryIssue = `
 query Issue($id: String!) {
   issue(id: $id) { ...IssueFields }

@@ -201,6 +201,35 @@ func (c *Client) GetTeamIssues(ctx context.Context, teamID string) ([]Issue, err
 	return allIssues, nil
 }
 
+// GetTeamIssuesPage fetches a single page of issues ordered by updatedAt DESC.
+// Returns the issues, page info, and any error.
+// Use cursor="" for the first page.
+func (c *Client) GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]Issue, PageInfo, error) {
+	var result struct {
+		Team struct {
+			Issues struct {
+				PageInfo PageInfo `json:"pageInfo"`
+				Nodes    []Issue  `json:"nodes"`
+			} `json:"issues"`
+		} `json:"team"`
+	}
+
+	vars := map[string]any{
+		"teamId": teamID,
+		"first":  pageSize,
+	}
+	if cursor != "" {
+		vars["after"] = cursor
+	}
+
+	err := c.query(ctx, queryTeamIssuesByUpdatedAt, vars, &result)
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+
+	return result.Team.Issues.Nodes, result.Team.Issues.PageInfo, nil
+}
+
 // GetTeamIssuesByStatus fetches issues filtered by status name
 func (c *Client) GetTeamIssuesByStatus(ctx context.Context, teamID, statusName string) ([]Issue, error) {
 	var allIssues []Issue

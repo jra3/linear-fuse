@@ -232,6 +232,19 @@ func toNullFloat64(f *float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: *f, Valid: true}
 }
 
+// ToNullTime converts a time.Time to sql.NullTime
+func ToNullTime(t time.Time) sql.NullTime {
+	if t.IsZero() {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: t, Valid: true}
+}
+
+// ToNullInt64 converts an int64 to sql.NullInt64
+func ToNullInt64(i int64) sql.NullInt64 {
+	return sql.NullInt64{Int64: i, Valid: true}
+}
+
 // DefaultDBPath returns the default database path
 func DefaultDBPath() string {
 	configDir, err := os.UserConfigDir()
