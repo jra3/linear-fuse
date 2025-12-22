@@ -9,6 +9,7 @@ import (
 
 	"github.com/jra3/linear-fuse/internal/config"
 	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/repo"
 )
 
 func TestSQLiteFilteredQueries(t *testing.T) {
@@ -37,11 +38,34 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 		t.Fatalf("db.Open failed: %v", err)
 	}
 
-	// Inject store directly (bypassing sync worker start)
+	// Create repository and inject into LinearFS
 	lfs.store = store
+	lfs.repo = repo.NewSQLiteRepository(store, nil)
+
+	// Setup: Add test states to database
+	now := time.Now()
+	testStates := []db.UpsertStateParams{
+		{ID: "st-1", TeamID: "team-1", Name: "In Progress", Type: "started", Position: sql.NullFloat64{Float64: 1, Valid: true}, SyncedAt: now, Data: []byte(`{"id":"st-1","name":"In Progress","type":"started"}`)},
+		{ID: "st-2", TeamID: "team-1", Name: "Todo", Type: "unstarted", Position: sql.NullFloat64{Float64: 0, Valid: true}, SyncedAt: now, Data: []byte(`{"id":"st-2","name":"Todo","type":"unstarted"}`)},
+	}
+	for _, state := range testStates {
+		if err := store.Queries().UpsertState(ctx, state); err != nil {
+			t.Fatalf("UpsertState failed: %v", err)
+		}
+	}
+
+	// Setup: Add test labels to database
+	testLabels := []db.UpsertLabelParams{
+		{ID: "lbl-1", TeamID: sql.NullString{String: "team-1", Valid: true}, Name: "bug", Color: sql.NullString{String: "#ff0000", Valid: true}, SyncedAt: now, Data: []byte(`{"id":"lbl-1","name":"bug","color":"#ff0000"}`)},
+		{ID: "lbl-2", TeamID: sql.NullString{String: "team-1", Valid: true}, Name: "feature", Color: sql.NullString{String: "#00ff00", Valid: true}, SyncedAt: now, Data: []byte(`{"id":"lbl-2","name":"feature","color":"#00ff00"}`)},
+	}
+	for _, label := range testLabels {
+		if err := store.Queries().UpsertLabel(ctx, label); err != nil {
+			t.Fatalf("UpsertLabel failed: %v", err)
+		}
+	}
 
 	// Setup: Add test issues to database
-	now := time.Now()
 	// Data column contains full issue JSON (mirrors api.Issue structure)
 	testIssues := []db.IssueData{
 		{
@@ -49,6 +73,7 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 			Identifier: "TST-1",
 			TeamID:     "team-1",
 			Title:      "Issue 1 - High Priority",
+			StateID:    strPtr("st-1"),
 			StateName:  strPtr("In Progress"),
 			StateType:  strPtr("started"),
 			Priority:   4, // Urgent
@@ -66,6 +91,7 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 			Identifier:    "TST-2",
 			TeamID:        "team-1",
 			Title:         "Issue 2 - Assigned",
+			StateID:       strPtr("st-2"),
 			StateName:     strPtr("Todo"),
 			StateType:     strPtr("unstarted"),
 			AssigneeID:    strPtr("user-1"),
@@ -85,6 +111,7 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 			Identifier: "TST-3",
 			TeamID:     "team-1",
 			Title:      "Issue 3 - Unassigned",
+			StateID:    strPtr("st-2"),
 			StateName:  strPtr("Todo"),
 			StateType:  strPtr("unstarted"),
 			Priority:   1, // Low
@@ -217,6 +244,7 @@ func TestSearchTeamIssues(t *testing.T) {
 		t.Fatalf("db.Open failed: %v", err)
 	}
 	lfs.store = store
+	lfs.repo = repo.NewSQLiteRepository(store, nil)
 
 	// Insert test issues with searchable content
 	now := time.Now()
@@ -415,6 +443,7 @@ func TestFetchIssueByIdentifier(t *testing.T) {
 		t.Fatalf("db.Open failed: %v", err)
 	}
 	lfs.store = store
+	lfs.repo = repo.NewSQLiteRepository(store, nil)
 
 	// Insert a test issue
 	now := time.Now()
@@ -448,8 +477,8 @@ func TestFetchIssueByIdentifier(t *testing.T) {
 		}
 	})
 
-	t.Run("FetchFromCache", func(t *testing.T) {
-		// Second fetch should hit memory cache
+	t.Run("FetchAgainFromSQLite", func(t *testing.T) {
+		// Second fetch should also read from SQLite (no in-memory cache)
 		issue, err := lfs.FetchIssueByIdentifier(ctx, "TST-123")
 		if err != nil {
 			t.Fatalf("FetchIssueByIdentifier failed: %v", err)
@@ -461,9 +490,6 @@ func TestFetchIssueByIdentifier(t *testing.T) {
 
 	t.Run("NotFoundReturnsError", func(t *testing.T) {
 		// Fetching non-existent issue should return error
-		// Note: This will try to call the API which won't work without a real key
-		// For unit tests, we just verify SQLite miss path
-		lfs.issueByIdCache.Delete("NOTEXIST-999")
 		_, err := lfs.FetchIssueByIdentifier(ctx, "NOTEXIST-999")
 		if err == nil {
 			t.Error("Expected error for non-existent issue")

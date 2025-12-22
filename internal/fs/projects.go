@@ -550,7 +550,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Invalidate caches
 	p.lfs.InvalidateTeamProjects(p.team.ID)
-	p.lfs.initiativeCache.Delete("initiatives")
+	p.lfs.InvalidateInitiatives()
 
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))

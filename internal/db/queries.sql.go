@@ -12,6 +12,83 @@ import (
 	"time"
 )
 
+const deleteComment = `-- name: DeleteComment :exec
+DELETE FROM comments WHERE id = ?
+`
+
+func (q *Queries) DeleteComment(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteComment, id)
+	return err
+}
+
+const deleteCycle = `-- name: DeleteCycle :exec
+DELETE FROM cycles WHERE id = ?
+`
+
+func (q *Queries) DeleteCycle(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteCycle, id)
+	return err
+}
+
+const deleteDocument = `-- name: DeleteDocument :exec
+DELETE FROM documents WHERE id = ?
+`
+
+func (q *Queries) DeleteDocument(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteDocument, id)
+	return err
+}
+
+const deleteInitiative = `-- name: DeleteInitiative :exec
+DELETE FROM initiatives WHERE id = ?
+`
+
+func (q *Queries) DeleteInitiative(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiative, id)
+	return err
+}
+
+const deleteInitiativeProject = `-- name: DeleteInitiativeProject :exec
+DELETE FROM initiative_projects WHERE initiative_id = ? AND project_id = ?
+`
+
+type DeleteInitiativeProjectParams struct {
+	InitiativeID string `json:"initiative_id"`
+	ProjectID    string `json:"project_id"`
+}
+
+func (q *Queries) DeleteInitiativeProject(ctx context.Context, arg DeleteInitiativeProjectParams) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiativeProject, arg.InitiativeID, arg.ProjectID)
+	return err
+}
+
+const deleteInitiativeProjects = `-- name: DeleteInitiativeProjects :exec
+DELETE FROM initiative_projects WHERE initiative_id = ?
+`
+
+func (q *Queries) DeleteInitiativeProjects(ctx context.Context, initiativeID string) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiativeProjects, initiativeID)
+	return err
+}
+
+const deleteInitiativeUpdate = `-- name: DeleteInitiativeUpdate :exec
+DELETE FROM initiative_updates WHERE id = ?
+`
+
+func (q *Queries) DeleteInitiativeUpdate(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiativeUpdate, id)
+	return err
+}
+
+const deleteInitiativeUpdates = `-- name: DeleteInitiativeUpdates :exec
+DELETE FROM initiative_updates WHERE initiative_id = ?
+`
+
+func (q *Queries) DeleteInitiativeUpdates(ctx context.Context, initiativeID string) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiativeUpdates, initiativeID)
+	return err
+}
+
 const deleteIssue = `-- name: DeleteIssue :exec
 DELETE FROM issues WHERE id = ?
 `
@@ -30,6 +107,128 @@ func (q *Queries) DeleteIssueByIdentifier(ctx context.Context, identifier string
 	return err
 }
 
+const deleteIssueComments = `-- name: DeleteIssueComments :exec
+DELETE FROM comments WHERE issue_id = ?
+`
+
+func (q *Queries) DeleteIssueComments(ctx context.Context, issueID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueComments, issueID)
+	return err
+}
+
+const deleteIssueDocuments = `-- name: DeleteIssueDocuments :exec
+DELETE FROM documents WHERE issue_id = ?
+`
+
+func (q *Queries) DeleteIssueDocuments(ctx context.Context, issueID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueDocuments, issueID)
+	return err
+}
+
+const deleteLabel = `-- name: DeleteLabel :exec
+DELETE FROM labels WHERE id = ?
+`
+
+func (q *Queries) DeleteLabel(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteLabel, id)
+	return err
+}
+
+const deleteProject = `-- name: DeleteProject :exec
+DELETE FROM projects WHERE id = ?
+`
+
+func (q *Queries) DeleteProject(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteProject, id)
+	return err
+}
+
+const deleteProjectDocuments = `-- name: DeleteProjectDocuments :exec
+DELETE FROM documents WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectDocuments(ctx context.Context, projectID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectDocuments, projectID)
+	return err
+}
+
+const deleteProjectMilestone = `-- name: DeleteProjectMilestone :exec
+DELETE FROM project_milestones WHERE id = ?
+`
+
+func (q *Queries) DeleteProjectMilestone(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectMilestone, id)
+	return err
+}
+
+const deleteProjectMilestones = `-- name: DeleteProjectMilestones :exec
+DELETE FROM project_milestones WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectMilestones(ctx context.Context, projectID string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectMilestones, projectID)
+	return err
+}
+
+const deleteProjectTeam = `-- name: DeleteProjectTeam :exec
+DELETE FROM project_teams WHERE project_id = ? AND team_id = ?
+`
+
+type DeleteProjectTeamParams struct {
+	ProjectID string `json:"project_id"`
+	TeamID    string `json:"team_id"`
+}
+
+func (q *Queries) DeleteProjectTeam(ctx context.Context, arg DeleteProjectTeamParams) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectTeam, arg.ProjectID, arg.TeamID)
+	return err
+}
+
+const deleteProjectTeams = `-- name: DeleteProjectTeams :exec
+DELETE FROM project_teams WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectTeams(ctx context.Context, projectID string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectTeams, projectID)
+	return err
+}
+
+const deleteProjectUpdate = `-- name: DeleteProjectUpdate :exec
+DELETE FROM project_updates WHERE id = ?
+`
+
+func (q *Queries) DeleteProjectUpdate(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectUpdate, id)
+	return err
+}
+
+const deleteProjectUpdates = `-- name: DeleteProjectUpdates :exec
+DELETE FROM project_updates WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectUpdates(ctx context.Context, projectID string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectUpdates, projectID)
+	return err
+}
+
+const deleteState = `-- name: DeleteState :exec
+DELETE FROM states WHERE id = ?
+`
+
+func (q *Queries) DeleteState(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteState, id)
+	return err
+}
+
+const deleteTeamCycles = `-- name: DeleteTeamCycles :exec
+DELETE FROM cycles WHERE team_id = ?
+`
+
+func (q *Queries) DeleteTeamCycles(ctx context.Context, teamID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTeamCycles, teamID)
+	return err
+}
+
 const deleteTeamIssues = `-- name: DeleteTeamIssues :exec
 DELETE FROM issues WHERE team_id = ?
 `
@@ -37,6 +236,329 @@ DELETE FROM issues WHERE team_id = ?
 func (q *Queries) DeleteTeamIssues(ctx context.Context, teamID string) error {
 	_, err := q.db.ExecContext(ctx, deleteTeamIssues, teamID)
 	return err
+}
+
+const deleteTeamLabels = `-- name: DeleteTeamLabels :exec
+DELETE FROM labels WHERE team_id = ?
+`
+
+func (q *Queries) DeleteTeamLabels(ctx context.Context, teamID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteTeamLabels, teamID)
+	return err
+}
+
+const deleteTeamMember = `-- name: DeleteTeamMember :exec
+DELETE FROM team_members WHERE team_id = ? AND user_id = ?
+`
+
+type DeleteTeamMemberParams struct {
+	TeamID string `json:"team_id"`
+	UserID string `json:"user_id"`
+}
+
+func (q *Queries) DeleteTeamMember(ctx context.Context, arg DeleteTeamMemberParams) error {
+	_, err := q.db.ExecContext(ctx, deleteTeamMember, arg.TeamID, arg.UserID)
+	return err
+}
+
+const deleteTeamMembers = `-- name: DeleteTeamMembers :exec
+DELETE FROM team_members WHERE team_id = ?
+`
+
+func (q *Queries) DeleteTeamMembers(ctx context.Context, teamID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTeamMembers, teamID)
+	return err
+}
+
+const deleteTeamStates = `-- name: DeleteTeamStates :exec
+DELETE FROM states WHERE team_id = ?
+`
+
+func (q *Queries) DeleteTeamStates(ctx context.Context, teamID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTeamStates, teamID)
+	return err
+}
+
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users WHERE id = ?
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteUser, id)
+	return err
+}
+
+const getComment = `-- name: GetComment :one
+
+SELECT id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data FROM comments WHERE id = ?
+`
+
+// =============================================================================
+// Comments queries
+// =============================================================================
+func (q *Queries) GetComment(ctx context.Context, id string) (Comment, error) {
+	row := q.db.QueryRowContext(ctx, getComment, id)
+	var i Comment
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.Body,
+		&i.BodyData,
+		&i.UserID,
+		&i.UserName,
+		&i.UserEmail,
+		&i.EditedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getCycle = `-- name: GetCycle :one
+
+SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE id = ?
+`
+
+// =============================================================================
+// Cycles queries
+// =============================================================================
+func (q *Queries) GetCycle(ctx context.Context, id string) (Cycle, error) {
+	row := q.db.QueryRowContext(ctx, getCycle, id)
+	var i Cycle
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Number,
+		&i.Name,
+		&i.Description,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.CompletedAt,
+		&i.Progress,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getCycleByName = `-- name: GetCycleByName :one
+SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? AND name = ?
+`
+
+type GetCycleByNameParams struct {
+	TeamID string         `json:"team_id"`
+	Name   sql.NullString `json:"name"`
+}
+
+func (q *Queries) GetCycleByName(ctx context.Context, arg GetCycleByNameParams) (Cycle, error) {
+	row := q.db.QueryRowContext(ctx, getCycleByName, arg.TeamID, arg.Name)
+	var i Cycle
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Number,
+		&i.Name,
+		&i.Description,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.CompletedAt,
+		&i.Progress,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getCycleByNumber = `-- name: GetCycleByNumber :one
+SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? AND number = ?
+`
+
+type GetCycleByNumberParams struct {
+	TeamID string `json:"team_id"`
+	Number int64  `json:"number"`
+}
+
+func (q *Queries) GetCycleByNumber(ctx context.Context, arg GetCycleByNumberParams) (Cycle, error) {
+	row := q.db.QueryRowContext(ctx, getCycleByNumber, arg.TeamID, arg.Number)
+	var i Cycle
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Number,
+		&i.Name,
+		&i.Description,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.CompletedAt,
+		&i.Progress,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getDocument = `-- name: GetDocument :one
+
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE id = ?
+`
+
+// =============================================================================
+// Documents queries
+// =============================================================================
+func (q *Queries) GetDocument(ctx context.Context, id string) (Document, error) {
+	row := q.db.QueryRowContext(ctx, getDocument, id)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.SlugID,
+		&i.Title,
+		&i.Icon,
+		&i.Color,
+		&i.Content,
+		&i.ContentData,
+		&i.IssueID,
+		&i.ProjectID,
+		&i.CreatorID,
+		&i.Url,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getDocumentBySlug = `-- name: GetDocumentBySlug :one
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE slug_id = ?
+`
+
+func (q *Queries) GetDocumentBySlug(ctx context.Context, slugID string) (Document, error) {
+	row := q.db.QueryRowContext(ctx, getDocumentBySlug, slugID)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.SlugID,
+		&i.Title,
+		&i.Icon,
+		&i.Color,
+		&i.Content,
+		&i.ContentData,
+		&i.IssueID,
+		&i.ProjectID,
+		&i.CreatorID,
+		&i.Url,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getInitiative = `-- name: GetInitiative :one
+
+SELECT id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data FROM initiatives WHERE id = ?
+`
+
+// =============================================================================
+// Initiatives queries
+// =============================================================================
+func (q *Queries) GetInitiative(ctx context.Context, id string) (Initiative, error) {
+	row := q.db.QueryRowContext(ctx, getInitiative, id)
+	var i Initiative
+	err := row.Scan(
+		&i.ID,
+		&i.SlugID,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.Color,
+		&i.Status,
+		&i.SortOrder,
+		&i.TargetDate,
+		&i.OwnerID,
+		&i.Url,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getInitiativeBySlug = `-- name: GetInitiativeBySlug :one
+SELECT id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data FROM initiatives WHERE slug_id = ?
+`
+
+func (q *Queries) GetInitiativeBySlug(ctx context.Context, slugID string) (Initiative, error) {
+	row := q.db.QueryRowContext(ctx, getInitiativeBySlug, slugID)
+	var i Initiative
+	err := row.Scan(
+		&i.ID,
+		&i.SlugID,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.Color,
+		&i.Status,
+		&i.SortOrder,
+		&i.TargetDate,
+		&i.OwnerID,
+		&i.Url,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getInitiativeUpdate = `-- name: GetInitiativeUpdate :one
+
+SELECT id, initiative_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM initiative_updates WHERE id = ?
+`
+
+// =============================================================================
+// Initiative Updates queries
+// =============================================================================
+func (q *Queries) GetInitiativeUpdate(ctx context.Context, id string) (InitiativeUpdate, error) {
+	row := q.db.QueryRowContext(ctx, getInitiativeUpdate, id)
+	var i InitiativeUpdate
+	err := row.Scan(
+		&i.ID,
+		&i.InitiativeID,
+		&i.Body,
+		&i.BodyData,
+		&i.Health,
+		&i.UserID,
+		&i.UserName,
+		&i.Url,
+		&i.EditedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getInitiativeUpdatesSyncedAt = `-- name: GetInitiativeUpdatesSyncedAt :one
+SELECT MAX(synced_at) FROM initiative_updates WHERE initiative_id = ?
+`
+
+func (q *Queries) GetInitiativeUpdatesSyncedAt(ctx context.Context, initiativeID string) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getInitiativeUpdatesSyncedAt, initiativeID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
 }
 
 const getIssueByID = `-- name: GetIssueByID :one
@@ -109,6 +631,28 @@ func (q *Queries) GetIssueByIdentifier(ctx context.Context, identifier string) (
 	return i, err
 }
 
+const getIssueCommentsSyncedAt = `-- name: GetIssueCommentsSyncedAt :one
+SELECT MAX(synced_at) FROM comments WHERE issue_id = ?
+`
+
+func (q *Queries) GetIssueCommentsSyncedAt(ctx context.Context, issueID string) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getIssueCommentsSyncedAt, issueID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
+const getIssueDocumentsSyncedAt = `-- name: GetIssueDocumentsSyncedAt :one
+SELECT MAX(synced_at) FROM documents WHERE issue_id = ?
+`
+
+func (q *Queries) GetIssueDocumentsSyncedAt(ctx context.Context, issueID sql.NullString) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getIssueDocumentsSyncedAt, issueID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
 const getIssueUpdatedAt = `-- name: GetIssueUpdatedAt :one
 
 
@@ -125,6 +669,59 @@ func (q *Queries) GetIssueUpdatedAt(ctx context.Context, id string) (time.Time, 
 	return updated_at, err
 }
 
+const getLabel = `-- name: GetLabel :one
+
+SELECT id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data FROM labels WHERE id = ?
+`
+
+// =============================================================================
+// Labels queries
+// =============================================================================
+func (q *Queries) GetLabel(ctx context.Context, id string) (Label, error) {
+	row := q.db.QueryRowContext(ctx, getLabel, id)
+	var i Label
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Name,
+		&i.Color,
+		&i.Description,
+		&i.ParentID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getLabelByName = `-- name: GetLabelByName :one
+SELECT id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data FROM labels WHERE (team_id = ? OR team_id IS NULL) AND name = ?
+`
+
+type GetLabelByNameParams struct {
+	TeamID sql.NullString `json:"team_id"`
+	Name   string         `json:"name"`
+}
+
+func (q *Queries) GetLabelByName(ctx context.Context, arg GetLabelByNameParams) (Label, error) {
+	row := q.db.QueryRowContext(ctx, getLabelByName, arg.TeamID, arg.Name)
+	var i Label
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Name,
+		&i.Color,
+		&i.Description,
+		&i.ParentID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
 const getLatestTeamIssueUpdatedAt = `-- name: GetLatestTeamIssueUpdatedAt :one
 SELECT MAX(updated_at) FROM issues WHERE team_id = ?
 `
@@ -134,6 +731,223 @@ func (q *Queries) GetLatestTeamIssueUpdatedAt(ctx context.Context, teamID string
 	var max interface{}
 	err := row.Scan(&max)
 	return max, err
+}
+
+const getMilestoneByName = `-- name: GetMilestoneByName :one
+SELECT id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data FROM project_milestones WHERE project_id = ? AND name = ?
+`
+
+type GetMilestoneByNameParams struct {
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+}
+
+func (q *Queries) GetMilestoneByName(ctx context.Context, arg GetMilestoneByNameParams) (ProjectMilestone, error) {
+	row := q.db.QueryRowContext(ctx, getMilestoneByName, arg.ProjectID, arg.Name)
+	var i ProjectMilestone
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Description,
+		&i.TargetDate,
+		&i.SortOrder,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getProject = `-- name: GetProject :one
+
+SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects WHERE id = ?
+`
+
+// =============================================================================
+// Projects queries
+// =============================================================================
+func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
+	row := q.db.QueryRowContext(ctx, getProject, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.SlugID,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.Color,
+		&i.State,
+		&i.Progress,
+		&i.StartDate,
+		&i.TargetDate,
+		&i.LeadID,
+		&i.Url,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getProjectBySlug = `-- name: GetProjectBySlug :one
+SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects WHERE slug_id = ?
+`
+
+func (q *Queries) GetProjectBySlug(ctx context.Context, slugID string) (Project, error) {
+	row := q.db.QueryRowContext(ctx, getProjectBySlug, slugID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.SlugID,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.Color,
+		&i.State,
+		&i.Progress,
+		&i.StartDate,
+		&i.TargetDate,
+		&i.LeadID,
+		&i.Url,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getProjectDocumentsSyncedAt = `-- name: GetProjectDocumentsSyncedAt :one
+SELECT MAX(synced_at) FROM documents WHERE project_id = ?
+`
+
+func (q *Queries) GetProjectDocumentsSyncedAt(ctx context.Context, projectID sql.NullString) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getProjectDocumentsSyncedAt, projectID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
+const getProjectMilestone = `-- name: GetProjectMilestone :one
+
+SELECT id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data FROM project_milestones WHERE id = ?
+`
+
+// =============================================================================
+// Project Milestones queries
+// =============================================================================
+func (q *Queries) GetProjectMilestone(ctx context.Context, id string) (ProjectMilestone, error) {
+	row := q.db.QueryRowContext(ctx, getProjectMilestone, id)
+	var i ProjectMilestone
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Description,
+		&i.TargetDate,
+		&i.SortOrder,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getProjectUpdate = `-- name: GetProjectUpdate :one
+
+SELECT id, project_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM project_updates WHERE id = ?
+`
+
+// =============================================================================
+// Project Updates queries
+// =============================================================================
+func (q *Queries) GetProjectUpdate(ctx context.Context, id string) (ProjectUpdate, error) {
+	row := q.db.QueryRowContext(ctx, getProjectUpdate, id)
+	var i ProjectUpdate
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Body,
+		&i.BodyData,
+		&i.Health,
+		&i.UserID,
+		&i.UserName,
+		&i.Url,
+		&i.EditedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getProjectUpdatesSyncedAt = `-- name: GetProjectUpdatesSyncedAt :one
+SELECT MAX(synced_at) FROM project_updates WHERE project_id = ?
+`
+
+func (q *Queries) GetProjectUpdatesSyncedAt(ctx context.Context, projectID string) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getProjectUpdatesSyncedAt, projectID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
+const getState = `-- name: GetState :one
+
+SELECT id, team_id, name, type, color, position, created_at, updated_at, synced_at, data FROM states WHERE id = ?
+`
+
+// =============================================================================
+// States queries
+// =============================================================================
+func (q *Queries) GetState(ctx context.Context, id string) (State, error) {
+	row := q.db.QueryRowContext(ctx, getState, id)
+	var i State
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Name,
+		&i.Type,
+		&i.Color,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getStateByName = `-- name: GetStateByName :one
+SELECT id, team_id, name, type, color, position, created_at, updated_at, synced_at, data FROM states WHERE team_id = ? AND name = ?
+`
+
+type GetStateByNameParams struct {
+	TeamID string `json:"team_id"`
+	Name   string `json:"name"`
+}
+
+func (q *Queries) GetStateByName(ctx context.Context, arg GetStateByNameParams) (State, error) {
+	row := q.db.QueryRowContext(ctx, getStateByName, arg.TeamID, arg.Name)
+	var i State
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.Name,
+		&i.Type,
+		&i.Color,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
 }
 
 const getSyncMeta = `-- name: GetSyncMeta :one
@@ -216,6 +1030,56 @@ func (q *Queries) GetTotalIssueCount(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const getUser = `-- name: GetUser :one
+
+SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users WHERE id = ?
+`
+
+// =============================================================================
+// Users queries
+// =============================================================================
+func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.DisplayName,
+		&i.AvatarUrl,
+		&i.Active,
+		&i.Admin,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
+const getUserByEmail = `-- name: GetUserByEmail :one
+SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users WHERE email = ?
+`
+
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.DisplayName,
+		&i.AvatarUrl,
+		&i.Active,
+		&i.Admin,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
+}
+
 const listAllIdentifiers = `-- name: ListAllIdentifiers :many
 
 SELECT identifier, team_id FROM issues ORDER BY identifier
@@ -252,6 +1116,652 @@ func (q *Queries) ListAllIdentifiers(ctx context.Context) ([]ListAllIdentifiersR
 	return items, nil
 }
 
+const listAllUsers = `-- name: ListAllUsers :many
+SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users ORDER BY name
+`
+
+func (q *Queries) ListAllUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listAllUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.DisplayName,
+			&i.AvatarUrl,
+			&i.Active,
+			&i.Admin,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCycleIssues = `-- name: ListCycleIssues :many
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC
+`
+
+func (q *Queries) ListCycleIssues(ctx context.Context, cycleID sql.NullString) ([]Issue, error) {
+	rows, err := q.db.QueryContext(ctx, listCycleIssues, cycleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.Identifier,
+			&i.TeamID,
+			&i.Title,
+			&i.Description,
+			&i.StateID,
+			&i.StateName,
+			&i.StateType,
+			&i.AssigneeID,
+			&i.AssigneeEmail,
+			&i.Priority,
+			&i.ProjectID,
+			&i.ProjectName,
+			&i.CycleID,
+			&i.CycleName,
+			&i.ParentID,
+			&i.DueDate,
+			&i.Estimate,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInitiativeProjectIDs = `-- name: ListInitiativeProjectIDs :many
+SELECT project_id FROM initiative_projects WHERE initiative_id = ?
+`
+
+func (q *Queries) ListInitiativeProjectIDs(ctx context.Context, initiativeID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listInitiativeProjectIDs, initiativeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var project_id string
+		if err := rows.Scan(&project_id); err != nil {
+			return nil, err
+		}
+		items = append(items, project_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInitiativeProjects = `-- name: ListInitiativeProjects :many
+SELECT p.id, p.slug_id, p.name, p.description, p.icon, p.color, p.state, p.progress, p.start_date, p.target_date, p.lead_id, p.url, p.created_at, p.updated_at, p.synced_at, p.data FROM projects p
+JOIN initiative_projects ip ON p.id = ip.project_id
+WHERE ip.initiative_id = ?
+ORDER BY p.name
+`
+
+func (q *Queries) ListInitiativeProjects(ctx context.Context, initiativeID string) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listInitiativeProjects, initiativeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Name,
+			&i.Description,
+			&i.Icon,
+			&i.Color,
+			&i.State,
+			&i.Progress,
+			&i.StartDate,
+			&i.TargetDate,
+			&i.LeadID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInitiativeUpdates = `-- name: ListInitiativeUpdates :many
+SELECT id, initiative_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM initiative_updates WHERE initiative_id = ? ORDER BY created_at DESC
+`
+
+func (q *Queries) ListInitiativeUpdates(ctx context.Context, initiativeID string) ([]InitiativeUpdate, error) {
+	rows, err := q.db.QueryContext(ctx, listInitiativeUpdates, initiativeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InitiativeUpdate{}
+	for rows.Next() {
+		var i InitiativeUpdate
+		if err := rows.Scan(
+			&i.ID,
+			&i.InitiativeID,
+			&i.Body,
+			&i.BodyData,
+			&i.Health,
+			&i.UserID,
+			&i.UserName,
+			&i.Url,
+			&i.EditedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInitiatives = `-- name: ListInitiatives :many
+SELECT id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data FROM initiatives ORDER BY sort_order, name
+`
+
+func (q *Queries) ListInitiatives(ctx context.Context) ([]Initiative, error) {
+	rows, err := q.db.QueryContext(ctx, listInitiatives)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Initiative{}
+	for rows.Next() {
+		var i Initiative
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Name,
+			&i.Description,
+			&i.Icon,
+			&i.Color,
+			&i.Status,
+			&i.SortOrder,
+			&i.TargetDate,
+			&i.OwnerID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssueComments = `-- name: ListIssueComments :many
+SELECT id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data FROM comments WHERE issue_id = ? ORDER BY created_at
+`
+
+func (q *Queries) ListIssueComments(ctx context.Context, issueID string) ([]Comment, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueComments, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Comment{}
+	for rows.Next() {
+		var i Comment
+		if err := rows.Scan(
+			&i.ID,
+			&i.IssueID,
+			&i.Body,
+			&i.BodyData,
+			&i.UserID,
+			&i.UserName,
+			&i.UserEmail,
+			&i.EditedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssueDocuments = `-- name: ListIssueDocuments :many
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE issue_id = ? ORDER BY title
+`
+
+func (q *Queries) ListIssueDocuments(ctx context.Context, issueID sql.NullString) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueDocuments, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Document{}
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Title,
+			&i.Icon,
+			&i.Color,
+			&i.Content,
+			&i.ContentData,
+			&i.IssueID,
+			&i.ProjectID,
+			&i.CreatorID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectDocuments = `-- name: ListProjectDocuments :many
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE project_id = ? ORDER BY title
+`
+
+func (q *Queries) ListProjectDocuments(ctx context.Context, projectID sql.NullString) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectDocuments, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Document{}
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Title,
+			&i.Icon,
+			&i.Color,
+			&i.Content,
+			&i.ContentData,
+			&i.IssueID,
+			&i.ProjectID,
+			&i.CreatorID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectInitiativeIDs = `-- name: ListProjectInitiativeIDs :many
+SELECT initiative_id FROM initiative_projects WHERE project_id = ?
+`
+
+func (q *Queries) ListProjectInitiativeIDs(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectInitiativeIDs, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var initiative_id string
+		if err := rows.Scan(&initiative_id); err != nil {
+			return nil, err
+		}
+		items = append(items, initiative_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectIssues = `-- name: ListProjectIssues :many
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE project_id = ? ORDER BY updated_at DESC
+`
+
+func (q *Queries) ListProjectIssues(ctx context.Context, projectID sql.NullString) ([]Issue, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectIssues, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.Identifier,
+			&i.TeamID,
+			&i.Title,
+			&i.Description,
+			&i.StateID,
+			&i.StateName,
+			&i.StateType,
+			&i.AssigneeID,
+			&i.AssigneeEmail,
+			&i.Priority,
+			&i.ProjectID,
+			&i.ProjectName,
+			&i.CycleID,
+			&i.CycleName,
+			&i.ParentID,
+			&i.DueDate,
+			&i.Estimate,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectMilestones = `-- name: ListProjectMilestones :many
+SELECT id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data FROM project_milestones WHERE project_id = ? ORDER BY sort_order
+`
+
+func (q *Queries) ListProjectMilestones(ctx context.Context, projectID string) ([]ProjectMilestone, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectMilestones, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProjectMilestone{}
+	for rows.Next() {
+		var i ProjectMilestone
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Description,
+			&i.TargetDate,
+			&i.SortOrder,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectTeamIDs = `-- name: ListProjectTeamIDs :many
+SELECT team_id FROM project_teams WHERE project_id = ?
+`
+
+func (q *Queries) ListProjectTeamIDs(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectTeamIDs, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var team_id string
+		if err := rows.Scan(&team_id); err != nil {
+			return nil, err
+		}
+		items = append(items, team_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectUpdates = `-- name: ListProjectUpdates :many
+SELECT id, project_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM project_updates WHERE project_id = ? ORDER BY created_at DESC
+`
+
+func (q *Queries) ListProjectUpdates(ctx context.Context, projectID string) ([]ProjectUpdate, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectUpdates, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProjectUpdate{}
+	for rows.Next() {
+		var i ProjectUpdate
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Body,
+			&i.BodyData,
+			&i.Health,
+			&i.UserID,
+			&i.UserName,
+			&i.Url,
+			&i.EditedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjects = `-- name: ListProjects :many
+SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects ORDER BY name
+`
+
+func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Name,
+			&i.Description,
+			&i.Icon,
+			&i.Color,
+			&i.State,
+			&i.Progress,
+			&i.StartDate,
+			&i.TargetDate,
+			&i.LeadID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectsByState = `-- name: ListProjectsByState :many
+SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects WHERE state = ? ORDER BY name
+`
+
+func (q *Queries) ListProjectsByState(ctx context.Context, state sql.NullString) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectsByState, state)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Name,
+			&i.Description,
+			&i.Icon,
+			&i.Color,
+			&i.State,
+			&i.Progress,
+			&i.StartDate,
+			&i.TargetDate,
+			&i.LeadID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSyncMeta = `-- name: ListSyncMeta :many
 SELECT team_id, last_synced_at, last_issue_updated_at, issue_count FROM sync_meta
 `
@@ -270,6 +1780,88 @@ func (q *Queries) ListSyncMeta(ctx context.Context) ([]SyncMetum, error) {
 			&i.LastSyncedAt,
 			&i.LastIssueUpdatedAt,
 			&i.IssueCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamActiveCycles = `-- name: ListTeamActiveCycles :many
+SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? AND ends_at > datetime('now') ORDER BY starts_at
+`
+
+func (q *Queries) ListTeamActiveCycles(ctx context.Context, teamID string) ([]Cycle, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamActiveCycles, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Cycle{}
+	for rows.Next() {
+		var i Cycle
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Number,
+			&i.Name,
+			&i.Description,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.CompletedAt,
+			&i.Progress,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamCycles = `-- name: ListTeamCycles :many
+SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? ORDER BY number DESC
+`
+
+func (q *Queries) ListTeamCycles(ctx context.Context, teamID string) ([]Cycle, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamCycles, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Cycle{}
+	for rows.Next() {
+		var i Cycle
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Number,
+			&i.Name,
+			&i.Description,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.CompletedAt,
+			&i.Progress,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
 		); err != nil {
 			return nil, err
 		}
@@ -1005,6 +2597,218 @@ func (q *Queries) ListTeamIssuesByStateType(ctx context.Context, arg ListTeamIss
 	return items, nil
 }
 
+const listTeamLabels = `-- name: ListTeamLabels :many
+SELECT id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data FROM labels WHERE team_id = ? OR team_id IS NULL ORDER BY name
+`
+
+func (q *Queries) ListTeamLabels(ctx context.Context, teamID sql.NullString) ([]Label, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamLabels, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Label{}
+	for rows.Next() {
+		var i Label
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Name,
+			&i.Color,
+			&i.Description,
+			&i.ParentID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamMembers = `-- name: ListTeamMembers :many
+
+SELECT u.id, u.email, u.name, u.display_name, u.avatar_url, u.active, u.admin, u.created_at, u.updated_at, u.synced_at, u.data FROM users u
+JOIN team_members tm ON u.id = tm.user_id
+WHERE tm.team_id = ?
+ORDER BY u.name
+`
+
+// =============================================================================
+// Team Members queries
+// =============================================================================
+func (q *Queries) ListTeamMembers(ctx context.Context, teamID string) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamMembers, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.DisplayName,
+			&i.AvatarUrl,
+			&i.Active,
+			&i.Admin,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamProjects = `-- name: ListTeamProjects :many
+SELECT p.id, p.slug_id, p.name, p.description, p.icon, p.color, p.state, p.progress, p.start_date, p.target_date, p.lead_id, p.url, p.created_at, p.updated_at, p.synced_at, p.data FROM projects p
+JOIN project_teams pt ON p.id = pt.project_id
+WHERE pt.team_id = ?
+ORDER BY p.name
+`
+
+func (q *Queries) ListTeamProjects(ctx context.Context, teamID string) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamProjects, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Project{}
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Name,
+			&i.Description,
+			&i.Icon,
+			&i.Color,
+			&i.State,
+			&i.Progress,
+			&i.StartDate,
+			&i.TargetDate,
+			&i.LeadID,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamStates = `-- name: ListTeamStates :many
+SELECT id, team_id, name, type, color, position, created_at, updated_at, synced_at, data FROM states WHERE team_id = ? ORDER BY position
+`
+
+func (q *Queries) ListTeamStates(ctx context.Context, teamID string) ([]State, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamStates, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []State{}
+	for rows.Next() {
+		var i State
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Name,
+			&i.Type,
+			&i.Color,
+			&i.Position,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamStatesByType = `-- name: ListTeamStatesByType :many
+SELECT id, team_id, name, type, color, position, created_at, updated_at, synced_at, data FROM states WHERE team_id = ? AND type = ? ORDER BY position
+`
+
+type ListTeamStatesByTypeParams struct {
+	TeamID string `json:"team_id"`
+	Type   string `json:"type"`
+}
+
+func (q *Queries) ListTeamStatesByType(ctx context.Context, arg ListTeamStatesByTypeParams) ([]State, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamStatesByType, arg.TeamID, arg.Type)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []State{}
+	for rows.Next() {
+		var i State
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Name,
+			&i.Type,
+			&i.Color,
+			&i.Position,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTeamUnassignedIssues = `-- name: ListTeamUnassignedIssues :many
 SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC
 `
@@ -1077,6 +2881,57 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserActiveIssues = `-- name: ListUserActiveIssues :many
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC
+`
+
+func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullString) ([]Issue, error) {
+	rows, err := q.db.QueryContext(ctx, listUserActiveIssues, assigneeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.Identifier,
+			&i.TeamID,
+			&i.Title,
+			&i.Description,
+			&i.StateID,
+			&i.StateName,
+			&i.StateType,
+			&i.AssigneeID,
+			&i.AssigneeEmail,
+			&i.Priority,
+			&i.ProjectID,
+			&i.ProjectName,
+			&i.CycleID,
+			&i.CycleName,
+			&i.ParentID,
+			&i.DueDate,
+			&i.Estimate,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
 		); err != nil {
 			return nil, err
 		}
@@ -1193,6 +3048,379 @@ func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEma
 	return items, nil
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users WHERE active = 1 ORDER BY name
+`
+
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.DisplayName,
+			&i.AvatarUrl,
+			&i.Active,
+			&i.Admin,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceLabels = `-- name: ListWorkspaceLabels :many
+SELECT id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data FROM labels WHERE team_id IS NULL ORDER BY name
+`
+
+func (q *Queries) ListWorkspaceLabels(ctx context.Context) ([]Label, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceLabels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Label{}
+	for rows.Next() {
+		var i Label
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Name,
+			&i.Color,
+			&i.Description,
+			&i.ParentID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertComment = `-- name: UpsertComment :exec
+INSERT INTO comments (id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    issue_id = excluded.issue_id,
+    body = excluded.body,
+    body_data = excluded.body_data,
+    user_id = excluded.user_id,
+    user_name = excluded.user_name,
+    user_email = excluded.user_email,
+    edited_at = excluded.edited_at,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertCommentParams struct {
+	ID        string          `json:"id"`
+	IssueID   string          `json:"issue_id"`
+	Body      string          `json:"body"`
+	BodyData  sql.NullString  `json:"body_data"`
+	UserID    sql.NullString  `json:"user_id"`
+	UserName  sql.NullString  `json:"user_name"`
+	UserEmail sql.NullString  `json:"user_email"`
+	EditedAt  sql.NullTime    `json:"edited_at"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	SyncedAt  time.Time       `json:"synced_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertComment(ctx context.Context, arg UpsertCommentParams) error {
+	_, err := q.db.ExecContext(ctx, upsertComment,
+		arg.ID,
+		arg.IssueID,
+		arg.Body,
+		arg.BodyData,
+		arg.UserID,
+		arg.UserName,
+		arg.UserEmail,
+		arg.EditedAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertCycle = `-- name: UpsertCycle :exec
+INSERT INTO cycles (id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    team_id = excluded.team_id,
+    number = excluded.number,
+    name = excluded.name,
+    description = excluded.description,
+    starts_at = excluded.starts_at,
+    ends_at = excluded.ends_at,
+    completed_at = excluded.completed_at,
+    progress = excluded.progress,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertCycleParams struct {
+	ID          string          `json:"id"`
+	TeamID      string          `json:"team_id"`
+	Number      int64           `json:"number"`
+	Name        sql.NullString  `json:"name"`
+	Description sql.NullString  `json:"description"`
+	StartsAt    sql.NullTime    `json:"starts_at"`
+	EndsAt      sql.NullTime    `json:"ends_at"`
+	CompletedAt sql.NullTime    `json:"completed_at"`
+	Progress    sql.NullFloat64 `json:"progress"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertCycle(ctx context.Context, arg UpsertCycleParams) error {
+	_, err := q.db.ExecContext(ctx, upsertCycle,
+		arg.ID,
+		arg.TeamID,
+		arg.Number,
+		arg.Name,
+		arg.Description,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.CompletedAt,
+		arg.Progress,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertDocument = `-- name: UpsertDocument :exec
+INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, creator_id, url, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    slug_id = excluded.slug_id,
+    title = excluded.title,
+    icon = excluded.icon,
+    color = excluded.color,
+    content = excluded.content,
+    content_data = excluded.content_data,
+    issue_id = excluded.issue_id,
+    project_id = excluded.project_id,
+    creator_id = excluded.creator_id,
+    url = excluded.url,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertDocumentParams struct {
+	ID          string          `json:"id"`
+	SlugID      string          `json:"slug_id"`
+	Title       string          `json:"title"`
+	Icon        sql.NullString  `json:"icon"`
+	Color       sql.NullString  `json:"color"`
+	Content     sql.NullString  `json:"content"`
+	ContentData sql.NullString  `json:"content_data"`
+	IssueID     sql.NullString  `json:"issue_id"`
+	ProjectID   sql.NullString  `json:"project_id"`
+	CreatorID   sql.NullString  `json:"creator_id"`
+	Url         sql.NullString  `json:"url"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDocument,
+		arg.ID,
+		arg.SlugID,
+		arg.Title,
+		arg.Icon,
+		arg.Color,
+		arg.Content,
+		arg.ContentData,
+		arg.IssueID,
+		arg.ProjectID,
+		arg.CreatorID,
+		arg.Url,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertInitiative = `-- name: UpsertInitiative :exec
+INSERT INTO initiatives (id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    slug_id = excluded.slug_id,
+    name = excluded.name,
+    description = excluded.description,
+    icon = excluded.icon,
+    color = excluded.color,
+    status = excluded.status,
+    sort_order = excluded.sort_order,
+    target_date = excluded.target_date,
+    owner_id = excluded.owner_id,
+    url = excluded.url,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertInitiativeParams struct {
+	ID          string          `json:"id"`
+	SlugID      string          `json:"slug_id"`
+	Name        string          `json:"name"`
+	Description sql.NullString  `json:"description"`
+	Icon        sql.NullString  `json:"icon"`
+	Color       sql.NullString  `json:"color"`
+	Status      sql.NullString  `json:"status"`
+	SortOrder   sql.NullFloat64 `json:"sort_order"`
+	TargetDate  sql.NullString  `json:"target_date"`
+	OwnerID     sql.NullString  `json:"owner_id"`
+	Url         sql.NullString  `json:"url"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertInitiative(ctx context.Context, arg UpsertInitiativeParams) error {
+	_, err := q.db.ExecContext(ctx, upsertInitiative,
+		arg.ID,
+		arg.SlugID,
+		arg.Name,
+		arg.Description,
+		arg.Icon,
+		arg.Color,
+		arg.Status,
+		arg.SortOrder,
+		arg.TargetDate,
+		arg.OwnerID,
+		arg.Url,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertInitiativeProject = `-- name: UpsertInitiativeProject :exec
+
+INSERT INTO initiative_projects (initiative_id, project_id, synced_at)
+VALUES (?, ?, ?)
+ON CONFLICT(initiative_id, project_id) DO UPDATE SET
+    synced_at = excluded.synced_at
+`
+
+type UpsertInitiativeProjectParams struct {
+	InitiativeID string    `json:"initiative_id"`
+	ProjectID    string    `json:"project_id"`
+	SyncedAt     time.Time `json:"synced_at"`
+}
+
+// =============================================================================
+// Initiative-Project associations
+// =============================================================================
+func (q *Queries) UpsertInitiativeProject(ctx context.Context, arg UpsertInitiativeProjectParams) error {
+	_, err := q.db.ExecContext(ctx, upsertInitiativeProject, arg.InitiativeID, arg.ProjectID, arg.SyncedAt)
+	return err
+}
+
+const upsertInitiativeUpdate = `-- name: UpsertInitiativeUpdate :exec
+INSERT INTO initiative_updates (id, initiative_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    initiative_id = excluded.initiative_id,
+    body = excluded.body,
+    body_data = excluded.body_data,
+    health = excluded.health,
+    user_id = excluded.user_id,
+    user_name = excluded.user_name,
+    url = excluded.url,
+    edited_at = excluded.edited_at,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertInitiativeUpdateParams struct {
+	ID           string          `json:"id"`
+	InitiativeID string          `json:"initiative_id"`
+	Body         string          `json:"body"`
+	BodyData     sql.NullString  `json:"body_data"`
+	Health       sql.NullString  `json:"health"`
+	UserID       sql.NullString  `json:"user_id"`
+	UserName     sql.NullString  `json:"user_name"`
+	Url          sql.NullString  `json:"url"`
+	EditedAt     sql.NullTime    `json:"edited_at"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertInitiativeUpdate(ctx context.Context, arg UpsertInitiativeUpdateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertInitiativeUpdate,
+		arg.ID,
+		arg.InitiativeID,
+		arg.Body,
+		arg.BodyData,
+		arg.Health,
+		arg.UserID,
+		arg.UserName,
+		arg.Url,
+		arg.EditedAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
 const upsertIssue = `-- name: UpsertIssue :exec
 INSERT INTO issues (
     id, identifier, team_id, title, description,
@@ -1288,6 +3516,275 @@ func (q *Queries) UpsertIssue(ctx context.Context, arg UpsertIssueParams) error 
 	return err
 }
 
+const upsertLabel = `-- name: UpsertLabel :exec
+INSERT INTO labels (id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    team_id = excluded.team_id,
+    name = excluded.name,
+    color = excluded.color,
+    description = excluded.description,
+    parent_id = excluded.parent_id,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertLabelParams struct {
+	ID          string          `json:"id"`
+	TeamID      sql.NullString  `json:"team_id"`
+	Name        string          `json:"name"`
+	Color       sql.NullString  `json:"color"`
+	Description sql.NullString  `json:"description"`
+	ParentID    sql.NullString  `json:"parent_id"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertLabel(ctx context.Context, arg UpsertLabelParams) error {
+	_, err := q.db.ExecContext(ctx, upsertLabel,
+		arg.ID,
+		arg.TeamID,
+		arg.Name,
+		arg.Color,
+		arg.Description,
+		arg.ParentID,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertProject = `-- name: UpsertProject :exec
+INSERT INTO projects (id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    slug_id = excluded.slug_id,
+    name = excluded.name,
+    description = excluded.description,
+    icon = excluded.icon,
+    color = excluded.color,
+    state = excluded.state,
+    progress = excluded.progress,
+    start_date = excluded.start_date,
+    target_date = excluded.target_date,
+    lead_id = excluded.lead_id,
+    url = excluded.url,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertProjectParams struct {
+	ID          string          `json:"id"`
+	SlugID      string          `json:"slug_id"`
+	Name        string          `json:"name"`
+	Description sql.NullString  `json:"description"`
+	Icon        sql.NullString  `json:"icon"`
+	Color       sql.NullString  `json:"color"`
+	State       sql.NullString  `json:"state"`
+	Progress    sql.NullFloat64 `json:"progress"`
+	StartDate   sql.NullString  `json:"start_date"`
+	TargetDate  sql.NullString  `json:"target_date"`
+	LeadID      sql.NullString  `json:"lead_id"`
+	Url         sql.NullString  `json:"url"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
+	_, err := q.db.ExecContext(ctx, upsertProject,
+		arg.ID,
+		arg.SlugID,
+		arg.Name,
+		arg.Description,
+		arg.Icon,
+		arg.Color,
+		arg.State,
+		arg.Progress,
+		arg.StartDate,
+		arg.TargetDate,
+		arg.LeadID,
+		arg.Url,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertProjectMilestone = `-- name: UpsertProjectMilestone :exec
+INSERT INTO project_milestones (id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    project_id = excluded.project_id,
+    name = excluded.name,
+    description = excluded.description,
+    target_date = excluded.target_date,
+    sort_order = excluded.sort_order,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertProjectMilestoneParams struct {
+	ID          string          `json:"id"`
+	ProjectID   string          `json:"project_id"`
+	Name        string          `json:"name"`
+	Description sql.NullString  `json:"description"`
+	TargetDate  sql.NullString  `json:"target_date"`
+	SortOrder   sql.NullFloat64 `json:"sort_order"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertProjectMilestone(ctx context.Context, arg UpsertProjectMilestoneParams) error {
+	_, err := q.db.ExecContext(ctx, upsertProjectMilestone,
+		arg.ID,
+		arg.ProjectID,
+		arg.Name,
+		arg.Description,
+		arg.TargetDate,
+		arg.SortOrder,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertProjectTeam = `-- name: UpsertProjectTeam :exec
+
+INSERT INTO project_teams (project_id, team_id, synced_at)
+VALUES (?, ?, ?)
+ON CONFLICT(project_id, team_id) DO UPDATE SET
+    synced_at = excluded.synced_at
+`
+
+type UpsertProjectTeamParams struct {
+	ProjectID string    `json:"project_id"`
+	TeamID    string    `json:"team_id"`
+	SyncedAt  time.Time `json:"synced_at"`
+}
+
+// =============================================================================
+// Project-Team associations
+// =============================================================================
+func (q *Queries) UpsertProjectTeam(ctx context.Context, arg UpsertProjectTeamParams) error {
+	_, err := q.db.ExecContext(ctx, upsertProjectTeam, arg.ProjectID, arg.TeamID, arg.SyncedAt)
+	return err
+}
+
+const upsertProjectUpdate = `-- name: UpsertProjectUpdate :exec
+INSERT INTO project_updates (id, project_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    project_id = excluded.project_id,
+    body = excluded.body,
+    body_data = excluded.body_data,
+    health = excluded.health,
+    user_id = excluded.user_id,
+    user_name = excluded.user_name,
+    url = excluded.url,
+    edited_at = excluded.edited_at,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertProjectUpdateParams struct {
+	ID        string          `json:"id"`
+	ProjectID string          `json:"project_id"`
+	Body      string          `json:"body"`
+	BodyData  sql.NullString  `json:"body_data"`
+	Health    sql.NullString  `json:"health"`
+	UserID    sql.NullString  `json:"user_id"`
+	UserName  sql.NullString  `json:"user_name"`
+	Url       sql.NullString  `json:"url"`
+	EditedAt  sql.NullTime    `json:"edited_at"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	SyncedAt  time.Time       `json:"synced_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertProjectUpdate(ctx context.Context, arg UpsertProjectUpdateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertProjectUpdate,
+		arg.ID,
+		arg.ProjectID,
+		arg.Body,
+		arg.BodyData,
+		arg.Health,
+		arg.UserID,
+		arg.UserName,
+		arg.Url,
+		arg.EditedAt,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertState = `-- name: UpsertState :exec
+INSERT INTO states (id, team_id, name, type, color, position, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    team_id = excluded.team_id,
+    name = excluded.name,
+    type = excluded.type,
+    color = excluded.color,
+    position = excluded.position,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertStateParams struct {
+	ID        string          `json:"id"`
+	TeamID    string          `json:"team_id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Color     sql.NullString  `json:"color"`
+	Position  sql.NullFloat64 `json:"position"`
+	CreatedAt sql.NullTime    `json:"created_at"`
+	UpdatedAt sql.NullTime    `json:"updated_at"`
+	SyncedAt  time.Time       `json:"synced_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertState(ctx context.Context, arg UpsertStateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertState,
+		arg.ID,
+		arg.TeamID,
+		arg.Name,
+		arg.Type,
+		arg.Color,
+		arg.Position,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
 const upsertSyncMeta = `-- name: UpsertSyncMeta :exec
 INSERT INTO sync_meta (team_id, last_synced_at, last_issue_updated_at, issue_count)
 VALUES (?, ?, ?, ?)
@@ -1345,6 +3842,71 @@ func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.SyncedAt,
+	)
+	return err
+}
+
+const upsertTeamMember = `-- name: UpsertTeamMember :exec
+INSERT INTO team_members (team_id, user_id, synced_at)
+VALUES (?, ?, ?)
+ON CONFLICT(team_id, user_id) DO UPDATE SET
+    synced_at = excluded.synced_at
+`
+
+type UpsertTeamMemberParams struct {
+	TeamID   string    `json:"team_id"`
+	UserID   string    `json:"user_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+func (q *Queries) UpsertTeamMember(ctx context.Context, arg UpsertTeamMemberParams) error {
+	_, err := q.db.ExecContext(ctx, upsertTeamMember, arg.TeamID, arg.UserID, arg.SyncedAt)
+	return err
+}
+
+const upsertUser = `-- name: UpsertUser :exec
+INSERT INTO users (id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    email = excluded.email,
+    name = excluded.name,
+    display_name = excluded.display_name,
+    avatar_url = excluded.avatar_url,
+    active = excluded.active,
+    admin = excluded.admin,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertUserParams struct {
+	ID          string          `json:"id"`
+	Email       string          `json:"email"`
+	Name        string          `json:"name"`
+	DisplayName sql.NullString  `json:"display_name"`
+	AvatarUrl   sql.NullString  `json:"avatar_url"`
+	Active      int64           `json:"active"`
+	Admin       int64           `json:"admin"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
+	_, err := q.db.ExecContext(ctx, upsertUser,
+		arg.ID,
+		arg.Email,
+		arg.Name,
+		arg.DisplayName,
+		arg.AvatarUrl,
+		arg.Active,
+		arg.Admin,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
 	)
 	return err
 }

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -14,7 +15,15 @@ import (
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
 	teams           []api.Team
-	issuesByTeam    map[string][]api.Issue // teamID -> all issues (will be paginated)
+	issuesByTeam    map[string][]api.Issue   // teamID -> all issues (will be paginated)
+	statesByTeam    map[string][]api.State   // teamID -> states
+	labelsByTeam    map[string][]api.Label   // teamID -> labels
+	cyclesByTeam    map[string][]api.Cycle   // teamID -> cycles
+	projectsByTeam  map[string][]api.Project // teamID -> projects
+	membersByTeam   map[string][]api.User    // teamID -> members
+	users           []api.User
+	initiatives     []api.Initiative
+	milestones      map[string][]api.ProjectMilestone // projectID -> milestones
 	pageSize        int
 	getTeamsCalls   int32
 	getIssuesCalls  int32
@@ -23,9 +32,15 @@ type mockAPIClient struct {
 
 func newMockAPIClient() *mockAPIClient {
 	return &mockAPIClient{
-		teams:        []api.Team{},
-		issuesByTeam: make(map[string][]api.Issue),
-		pageSize:     100,
+		teams:          []api.Team{},
+		issuesByTeam:   make(map[string][]api.Issue),
+		statesByTeam:   make(map[string][]api.State),
+		labelsByTeam:   make(map[string][]api.Label),
+		cyclesByTeam:   make(map[string][]api.Cycle),
+		projectsByTeam: make(map[string][]api.Project),
+		membersByTeam:  make(map[string][]api.User),
+		milestones:     make(map[string][]api.ProjectMilestone),
+		pageSize:       100,
 	}
 }
 
@@ -82,6 +97,62 @@ func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cu
 	}
 
 	return page, api.PageInfo{HasNextPage: hasNext, EndCursor: nextCursor}, nil
+}
+
+func (m *mockAPIClient) GetTeamStates(ctx context.Context, teamID string) ([]api.State, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.statesByTeam[teamID], nil
+}
+
+func (m *mockAPIClient) GetTeamLabels(ctx context.Context, teamID string) ([]api.Label, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.labelsByTeam[teamID], nil
+}
+
+func (m *mockAPIClient) GetTeamCycles(ctx context.Context, teamID string) ([]api.Cycle, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.cyclesByTeam[teamID], nil
+}
+
+func (m *mockAPIClient) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.projectsByTeam[teamID], nil
+}
+
+func (m *mockAPIClient) GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.membersByTeam[teamID], nil
+}
+
+func (m *mockAPIClient) GetUsers(ctx context.Context) ([]api.User, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.users, nil
+}
+
+func (m *mockAPIClient) GetInitiatives(ctx context.Context) ([]api.Initiative, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.initiatives, nil
+}
+
+func (m *mockAPIClient) GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.milestones[projectID], nil
 }
 
 func TestWorkerStartStop(t *testing.T) {
@@ -442,6 +513,143 @@ func TestSyncMetadataTracking(t *testing.T) {
 	meta, _ = store.Queries().GetSyncMeta(ctx, teamID)
 	if meta.IssueCount.Int64 != 150 {
 		t.Errorf("Updated IssueCount mismatch: got %d, want 150", meta.IssueCount.Int64)
+	}
+}
+
+func TestWorkerSyncTeamMetadata(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: teamID, Key: "TST", Name: "Test Team"}}
+
+	// Add metadata for the team
+	mock.statesByTeam[teamID] = []api.State{
+		{ID: "state-1", Name: "Todo", Type: "unstarted"},
+		{ID: "state-2", Name: "Done", Type: "completed"},
+	}
+	mock.labelsByTeam[teamID] = []api.Label{
+		{ID: "label-1", Name: "Bug", Color: "#ff0000"},
+	}
+	mock.cyclesByTeam[teamID] = []api.Cycle{
+		{ID: "cycle-1", Number: 1, Name: "Sprint 1"},
+	}
+	mock.projectsByTeam[teamID] = []api.Project{
+		{ID: "project-1", Slug: "test-project", Name: "Test Project"},
+	}
+	mock.membersByTeam[teamID] = []api.User{
+		{ID: "user-1", Email: "user1@test.com", Name: "User One"},
+	}
+	mock.milestones["project-1"] = []api.ProjectMilestone{
+		{ID: "milestone-1", Name: "Phase 1"},
+	}
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	err := worker.SyncNow(ctx)
+	if err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	// Verify states were synced
+	states, err := store.Queries().ListTeamStates(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamStates failed: %v", err)
+	}
+	if len(states) != 2 {
+		t.Errorf("Expected 2 states, got %d", len(states))
+	}
+
+	// Verify labels were synced
+	labels, err := store.Queries().ListTeamLabels(ctx, sql.NullString{String: teamID, Valid: true})
+	if err != nil {
+		t.Fatalf("ListTeamLabels failed: %v", err)
+	}
+	if len(labels) != 1 {
+		t.Errorf("Expected 1 label, got %d", len(labels))
+	}
+
+	// Verify cycles were synced
+	cycles, err := store.Queries().ListTeamCycles(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamCycles failed: %v", err)
+	}
+	if len(cycles) != 1 {
+		t.Errorf("Expected 1 cycle, got %d", len(cycles))
+	}
+
+	// Verify projects were synced
+	projects, err := store.Queries().ListTeamProjects(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamProjects failed: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Errorf("Expected 1 project, got %d", len(projects))
+	}
+
+	// Verify project milestones were synced
+	milestones, err := store.Queries().ListProjectMilestones(ctx, "project-1")
+	if err != nil {
+		t.Fatalf("ListProjectMilestones failed: %v", err)
+	}
+	if len(milestones) != 1 {
+		t.Errorf("Expected 1 milestone, got %d", len(milestones))
+	}
+
+	// Verify team members were synced
+	members, err := store.Queries().ListTeamMembers(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamMembers failed: %v", err)
+	}
+	if len(members) != 1 {
+		t.Errorf("Expected 1 team member, got %d", len(members))
+	}
+}
+
+func TestWorkerSyncWorkspace(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	// Add workspace-level entities
+	mock.users = []api.User{
+		{ID: "user-1", Email: "alice@test.com", Name: "Alice", Active: true},
+		{ID: "user-2", Email: "bob@test.com", Name: "Bob", Active: true},
+	}
+	mock.initiatives = []api.Initiative{
+		{ID: "init-1", Slug: "q1-goals", Name: "Q1 Goals"},
+	}
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	err := worker.SyncNow(ctx)
+	if err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	// Verify users were synced
+	users, err := store.Queries().ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers failed: %v", err)
+	}
+	if len(users) != 2 {
+		t.Errorf("Expected 2 users, got %d", len(users))
+	}
+
+	// Verify initiatives were synced
+	initiatives, err := store.Queries().ListInitiatives(ctx)
+	if err != nil {
+		t.Fatalf("ListInitiatives failed: %v", err)
+	}
+	if len(initiatives) != 1 {
+		t.Errorf("Expected 1 initiative, got %d", len(initiatives))
 	}
 }
 

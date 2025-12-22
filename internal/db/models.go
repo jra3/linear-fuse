@@ -10,6 +10,95 @@ import (
 	"time"
 )
 
+type Comment struct {
+	ID        string          `json:"id"`
+	IssueID   string          `json:"issue_id"`
+	Body      string          `json:"body"`
+	BodyData  sql.NullString  `json:"body_data"`
+	UserID    sql.NullString  `json:"user_id"`
+	UserName  sql.NullString  `json:"user_name"`
+	UserEmail sql.NullString  `json:"user_email"`
+	EditedAt  sql.NullTime    `json:"edited_at"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	SyncedAt  time.Time       `json:"synced_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
+type Cycle struct {
+	ID          string          `json:"id"`
+	TeamID      string          `json:"team_id"`
+	Number      int64           `json:"number"`
+	Name        sql.NullString  `json:"name"`
+	Description sql.NullString  `json:"description"`
+	StartsAt    sql.NullTime    `json:"starts_at"`
+	EndsAt      sql.NullTime    `json:"ends_at"`
+	CompletedAt sql.NullTime    `json:"completed_at"`
+	Progress    sql.NullFloat64 `json:"progress"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+type Document struct {
+	ID          string          `json:"id"`
+	SlugID      string          `json:"slug_id"`
+	Title       string          `json:"title"`
+	Icon        sql.NullString  `json:"icon"`
+	Color       sql.NullString  `json:"color"`
+	Content     sql.NullString  `json:"content"`
+	ContentData sql.NullString  `json:"content_data"`
+	IssueID     sql.NullString  `json:"issue_id"`
+	ProjectID   sql.NullString  `json:"project_id"`
+	CreatorID   sql.NullString  `json:"creator_id"`
+	Url         sql.NullString  `json:"url"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+type Initiative struct {
+	ID          string          `json:"id"`
+	SlugID      string          `json:"slug_id"`
+	Name        string          `json:"name"`
+	Description sql.NullString  `json:"description"`
+	Icon        sql.NullString  `json:"icon"`
+	Color       sql.NullString  `json:"color"`
+	Status      sql.NullString  `json:"status"`
+	SortOrder   sql.NullFloat64 `json:"sort_order"`
+	TargetDate  sql.NullString  `json:"target_date"`
+	OwnerID     sql.NullString  `json:"owner_id"`
+	Url         sql.NullString  `json:"url"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+type InitiativeProject struct {
+	InitiativeID string    `json:"initiative_id"`
+	ProjectID    string    `json:"project_id"`
+	SyncedAt     time.Time `json:"synced_at"`
+}
+
+type InitiativeUpdate struct {
+	ID           string          `json:"id"`
+	InitiativeID string          `json:"initiative_id"`
+	Body         string          `json:"body"`
+	BodyData     sql.NullString  `json:"body_data"`
+	Health       sql.NullString  `json:"health"`
+	UserID       sql.NullString  `json:"user_id"`
+	UserName     sql.NullString  `json:"user_name"`
+	Url          sql.NullString  `json:"url"`
+	EditedAt     sql.NullTime    `json:"edited_at"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
+}
+
 type Issue struct {
 	ID            string          `json:"id"`
 	Identifier    string          `json:"identifier"`
@@ -42,6 +131,86 @@ type IssuesFt struct {
 	Description string `json:"description"`
 }
 
+type Label struct {
+	ID          string          `json:"id"`
+	TeamID      sql.NullString  `json:"team_id"`
+	Name        string          `json:"name"`
+	Color       sql.NullString  `json:"color"`
+	Description sql.NullString  `json:"description"`
+	ParentID    sql.NullString  `json:"parent_id"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+type Project struct {
+	ID          string          `json:"id"`
+	SlugID      string          `json:"slug_id"`
+	Name        string          `json:"name"`
+	Description sql.NullString  `json:"description"`
+	Icon        sql.NullString  `json:"icon"`
+	Color       sql.NullString  `json:"color"`
+	State       sql.NullString  `json:"state"`
+	Progress    sql.NullFloat64 `json:"progress"`
+	StartDate   sql.NullString  `json:"start_date"`
+	TargetDate  sql.NullString  `json:"target_date"`
+	LeadID      sql.NullString  `json:"lead_id"`
+	Url         sql.NullString  `json:"url"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+type ProjectMilestone struct {
+	ID          string          `json:"id"`
+	ProjectID   string          `json:"project_id"`
+	Name        string          `json:"name"`
+	Description sql.NullString  `json:"description"`
+	TargetDate  sql.NullString  `json:"target_date"`
+	SortOrder   sql.NullFloat64 `json:"sort_order"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+type ProjectTeam struct {
+	ProjectID string    `json:"project_id"`
+	TeamID    string    `json:"team_id"`
+	SyncedAt  time.Time `json:"synced_at"`
+}
+
+type ProjectUpdate struct {
+	ID        string          `json:"id"`
+	ProjectID string          `json:"project_id"`
+	Body      string          `json:"body"`
+	BodyData  sql.NullString  `json:"body_data"`
+	Health    sql.NullString  `json:"health"`
+	UserID    sql.NullString  `json:"user_id"`
+	UserName  sql.NullString  `json:"user_name"`
+	Url       sql.NullString  `json:"url"`
+	EditedAt  sql.NullTime    `json:"edited_at"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	SyncedAt  time.Time       `json:"synced_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
+type State struct {
+	ID        string          `json:"id"`
+	TeamID    string          `json:"team_id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Color     sql.NullString  `json:"color"`
+	Position  sql.NullFloat64 `json:"position"`
+	CreatedAt sql.NullTime    `json:"created_at"`
+	UpdatedAt sql.NullTime    `json:"updated_at"`
+	SyncedAt  time.Time       `json:"synced_at"`
+	Data      json.RawMessage `json:"data"`
+}
+
 type SyncMetum struct {
 	TeamID             string        `json:"team_id"`
 	LastSyncedAt       time.Time     `json:"last_synced_at"`
@@ -57,4 +226,24 @@ type Team struct {
 	CreatedAt sql.NullTime   `json:"created_at"`
 	UpdatedAt sql.NullTime   `json:"updated_at"`
 	SyncedAt  time.Time      `json:"synced_at"`
+}
+
+type TeamMember struct {
+	TeamID   string    `json:"team_id"`
+	UserID   string    `json:"user_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+type User struct {
+	ID          string          `json:"id"`
+	Email       string          `json:"email"`
+	Name        string          `json:"name"`
+	DisplayName sql.NullString  `json:"display_name"`
+	AvatarUrl   sql.NullString  `json:"avatar_url"`
+	Active      int64           `json:"active"`
+	Admin       int64           `json:"admin"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
 }
