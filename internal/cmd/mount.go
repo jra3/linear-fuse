@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -54,6 +55,12 @@ func runMount(cmd *cobra.Command, args []string) error {
 	server, lfs, err := fs.Mount(mountpoint, cfg, debug)
 	if err != nil {
 		return fmt.Errorf("failed to mount: %w", err)
+	}
+
+	// Enable SQLite persistent cache and background sync
+	ctx := context.Background()
+	if err := lfs.EnableSQLiteCache(ctx, ""); err != nil {
+		fmt.Printf("Warning: SQLite cache disabled: %v\n", err)
 	}
 
 	// Handle signals for graceful shutdown
