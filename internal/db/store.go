@@ -123,13 +123,13 @@ func (s *Store) SearchTeamIssues(ctx context.Context, query string, teamID strin
 }
 
 // ListIssuesByLabel returns issues that have a specific label
-// Labels are stored in the JSON data column
+// Labels are stored in the JSON data column as {"labels": {"nodes": [...]}}
 func (s *Store) ListIssuesByLabel(ctx context.Context, teamID, labelName string) ([]Issue, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT * FROM issues
 		WHERE team_id = ?
 		AND EXISTS (
-			SELECT 1 FROM json_each(json_extract(data, '$.labels'))
+			SELECT 1 FROM json_each(json_extract(data, '$.labels.nodes'))
 			WHERE json_extract(value, '$.name') = ?
 		)
 		ORDER BY updated_at DESC

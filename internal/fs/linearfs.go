@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -16,6 +17,14 @@ import (
 	"github.com/jra3/linear-fuse/internal/sync"
 	"golang.org/x/sync/singleflight"
 )
+
+// toNullString converts a string pointer to sql.NullString
+func toNullString(s *string) sql.NullString {
+	if s == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
+}
 
 type LinearFS struct {
 	client              *api.Client
@@ -271,6 +280,30 @@ func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
 
 // GetFilteredIssuesByStatus fetches issues filtered by status name using server-side filtering
 func (lfs *LinearFS) GetFilteredIssuesByStatus(ctx context.Context, teamID, statusName string) ([]api.Issue, error) {
+	// Try SQLite first if enabled
+	if lfs.store != nil {
+		dbIssues, err := lfs.store.Queries().ListTeamIssuesByStateName(ctx, db.ListTeamIssuesByStateNameParams{
+			TeamID:    teamID,
+			StateName: toNullString(&statusName),
+		})
+		if err == nil && len(dbIssues) > 0 {
+			issues, convErr := db.DBIssuesToAPIIssues(dbIssues)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] GetFilteredIssuesByStatus %s/%s (%d issues)", teamID, statusName, len(issues))
+				}
+				return issues, nil
+			}
+		}
+		// Return empty result from SQLite if sync is complete (no error means valid query)
+		if err == nil {
+			if lfs.debug {
+				log.Printf("[SQLITE HIT] GetFilteredIssuesByStatus %s/%s (0 issues)", teamID, statusName)
+			}
+			return []api.Issue{}, nil
+		}
+	}
+
 	cacheKey := "status:" + teamID + ":" + statusName
 	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
 		return issues, nil
@@ -297,6 +330,29 @@ func (lfs *LinearFS) GetFilteredIssuesByStatus(ctx context.Context, teamID, stat
 
 // GetFilteredIssuesByPriority fetches issues filtered by priority using server-side filtering
 func (lfs *LinearFS) GetFilteredIssuesByPriority(ctx context.Context, teamID string, priority int) ([]api.Issue, error) {
+	// Try SQLite first if enabled
+	if lfs.store != nil {
+		dbIssues, err := lfs.store.Queries().ListTeamIssuesByPriority(ctx, db.ListTeamIssuesByPriorityParams{
+			TeamID:   teamID,
+			Priority: sql.NullInt64{Int64: int64(priority), Valid: true},
+		})
+		if err == nil && len(dbIssues) > 0 {
+			issues, convErr := db.DBIssuesToAPIIssues(dbIssues)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] GetFilteredIssuesByPriority %s/%d (%d issues)", teamID, priority, len(issues))
+				}
+				return issues, nil
+			}
+		}
+		if err == nil {
+			if lfs.debug {
+				log.Printf("[SQLITE HIT] GetFilteredIssuesByPriority %s/%d (0 issues)", teamID, priority)
+			}
+			return []api.Issue{}, nil
+		}
+	}
+
 	cacheKey := fmt.Sprintf("priority:%s:%d", teamID, priority)
 	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
 		return issues, nil
@@ -323,6 +379,26 @@ func (lfs *LinearFS) GetFilteredIssuesByPriority(ctx context.Context, teamID str
 
 // GetFilteredIssuesByLabel fetches issues filtered by label name using server-side filtering
 func (lfs *LinearFS) GetFilteredIssuesByLabel(ctx context.Context, teamID, labelName string) ([]api.Issue, error) {
+	// Try SQLite first if enabled (uses JSON query on data column)
+	if lfs.store != nil {
+		dbIssues, err := lfs.store.ListIssuesByLabel(ctx, teamID, labelName)
+		if err == nil && len(dbIssues) > 0 {
+			issues, convErr := db.DBIssuesToAPIIssues(dbIssues)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] GetFilteredIssuesByLabel %s/%s (%d issues)", teamID, labelName, len(issues))
+				}
+				return issues, nil
+			}
+		}
+		if err == nil {
+			if lfs.debug {
+				log.Printf("[SQLITE HIT] GetFilteredIssuesByLabel %s/%s (0 issues)", teamID, labelName)
+			}
+			return []api.Issue{}, nil
+		}
+	}
+
 	cacheKey := "label:" + teamID + ":" + labelName
 	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
 		return issues, nil
@@ -349,6 +425,29 @@ func (lfs *LinearFS) GetFilteredIssuesByLabel(ctx context.Context, teamID, label
 
 // GetFilteredIssuesByAssignee fetches issues filtered by assignee using server-side filtering
 func (lfs *LinearFS) GetFilteredIssuesByAssignee(ctx context.Context, teamID, assigneeID string) ([]api.Issue, error) {
+	// Try SQLite first if enabled
+	if lfs.store != nil {
+		dbIssues, err := lfs.store.Queries().ListTeamIssuesByAssignee(ctx, db.ListTeamIssuesByAssigneeParams{
+			TeamID:     teamID,
+			AssigneeID: toNullString(&assigneeID),
+		})
+		if err == nil && len(dbIssues) > 0 {
+			issues, convErr := db.DBIssuesToAPIIssues(dbIssues)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] GetFilteredIssuesByAssignee %s/%s (%d issues)", teamID, assigneeID, len(issues))
+				}
+				return issues, nil
+			}
+		}
+		if err == nil {
+			if lfs.debug {
+				log.Printf("[SQLITE HIT] GetFilteredIssuesByAssignee %s/%s (0 issues)", teamID, assigneeID)
+			}
+			return []api.Issue{}, nil
+		}
+	}
+
 	cacheKey := "assignee:" + teamID + ":" + assigneeID
 	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
 		return issues, nil
@@ -375,6 +474,26 @@ func (lfs *LinearFS) GetFilteredIssuesByAssignee(ctx context.Context, teamID, as
 
 // GetFilteredIssuesUnassigned fetches issues with no assignee using server-side filtering
 func (lfs *LinearFS) GetFilteredIssuesUnassigned(ctx context.Context, teamID string) ([]api.Issue, error) {
+	// Try SQLite first if enabled
+	if lfs.store != nil {
+		dbIssues, err := lfs.store.Queries().ListTeamUnassignedIssues(ctx, teamID)
+		if err == nil && len(dbIssues) > 0 {
+			issues, convErr := db.DBIssuesToAPIIssues(dbIssues)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] GetFilteredIssuesUnassigned %s (%d issues)", teamID, len(issues))
+				}
+				return issues, nil
+			}
+		}
+		if err == nil {
+			if lfs.debug {
+				log.Printf("[SQLITE HIT] GetFilteredIssuesUnassigned %s (0 issues)", teamID)
+			}
+			return []api.Issue{}, nil
+		}
+	}
+
 	cacheKey := "unassigned:" + teamID
 	if issues, ok := lfs.filteredIssueCache.Get(cacheKey); ok {
 		return issues, nil
