@@ -194,6 +194,164 @@ func strPtr(s string) *string {
 	return &s
 }
 
+func TestSearchTeamIssues(t *testing.T) {
+	cfg := &config.Config{
+		APIKey: "test-key",
+		Cache: config.CacheConfig{
+			TTL:        100 * time.Millisecond,
+			MaxEntries: 100,
+		},
+	}
+
+	lfs, err := NewLinearFS(cfg, true)
+	if err != nil {
+		t.Fatalf("NewLinearFS failed: %v", err)
+	}
+	defer lfs.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	ctx := context.Background()
+
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open failed: %v", err)
+	}
+	lfs.store = store
+
+	// Insert test issues with searchable content
+	now := time.Now()
+	testIssues := []db.IssueData{
+		{
+			ID:          "issue-1",
+			Identifier:  "TST-1",
+			TeamID:      "team-1",
+			Title:       "Fix login bug",
+			Description: strPtr("Users cannot login with SSO"),
+			Priority:    2,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Data:        []byte(`{"id":"issue-1","identifier":"TST-1","title":"Fix login bug","description":"Users cannot login with SSO","team":{"id":"team-1"}}`),
+		},
+		{
+			ID:          "issue-2",
+			Identifier:  "TST-2",
+			TeamID:      "team-1",
+			Title:       "Add logout button",
+			Description: strPtr("Need logout functionality"),
+			Priority:    1,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Data:        []byte(`{"id":"issue-2","identifier":"TST-2","title":"Add logout button","description":"Need logout functionality","team":{"id":"team-1"}}`),
+		},
+		{
+			ID:          "issue-3",
+			Identifier:  "TST-3",
+			TeamID:      "team-1",
+			Title:       "Database optimization",
+			Description: strPtr("Improve query performance"),
+			Priority:    3,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+			Data:        []byte(`{"id":"issue-3","identifier":"TST-3","title":"Database optimization","description":"Improve query performance","team":{"id":"team-1"}}`),
+		},
+	}
+
+	for _, issue := range testIssues {
+		if err := store.Queries().UpsertIssue(ctx, issue.ToUpsertParams()); err != nil {
+			t.Fatalf("UpsertIssue failed: %v", err)
+		}
+	}
+
+	t.Run("SearchByTitle", func(t *testing.T) {
+		issues, err := lfs.SearchTeamIssues(ctx, "team-1", "login")
+		if err != nil {
+			t.Fatalf("SearchTeamIssues failed: %v", err)
+		}
+		if len(issues) != 1 {
+			t.Errorf("Expected 1 issue matching 'login', got %d", len(issues))
+		}
+		if len(issues) > 0 && issues[0].Identifier != "TST-1" {
+			t.Errorf("Expected TST-1, got %s", issues[0].Identifier)
+		}
+	})
+
+	t.Run("SearchByDescription", func(t *testing.T) {
+		issues, err := lfs.SearchTeamIssues(ctx, "team-1", "SSO")
+		if err != nil {
+			t.Fatalf("SearchTeamIssues failed: %v", err)
+		}
+		if len(issues) != 1 {
+			t.Errorf("Expected 1 issue matching 'SSO', got %d", len(issues))
+		}
+	})
+
+	t.Run("SearchMultipleResults", func(t *testing.T) {
+		// Both "login" and "logout" contain "log"
+		issues, err := lfs.SearchTeamIssues(ctx, "team-1", "log*")
+		if err != nil {
+			t.Fatalf("SearchTeamIssues failed: %v", err)
+		}
+		if len(issues) != 2 {
+			t.Errorf("Expected 2 issues matching 'log*', got %d", len(issues))
+		}
+	})
+
+	t.Run("SearchNoResults", func(t *testing.T) {
+		issues, err := lfs.SearchTeamIssues(ctx, "team-1", "nonexistent")
+		if err != nil {
+			t.Fatalf("SearchTeamIssues failed: %v", err)
+		}
+		if len(issues) != 0 {
+			t.Errorf("Expected 0 issues, got %d", len(issues))
+		}
+	})
+
+	t.Run("SearchByIdentifierPrefix", func(t *testing.T) {
+		// Note: Full identifiers with hyphens (TST-2) need quoting in FTS5
+		// This tests prefix matching which works well
+		issues, err := lfs.SearchTeamIssues(ctx, "team-1", "TST*")
+		if err != nil {
+			t.Fatalf("SearchTeamIssues failed: %v", err)
+		}
+		if len(issues) != 3 {
+			t.Errorf("Expected 3 issues matching 'TST*', got %d", len(issues))
+		}
+	})
+
+	t.Run("SearchByQuotedIdentifier", func(t *testing.T) {
+		// Quoted phrase search for exact identifier matching
+		issues, err := lfs.SearchTeamIssues(ctx, "team-1", `"TST-2"`)
+		if err != nil {
+			t.Fatalf("SearchTeamIssues failed: %v", err)
+		}
+		if len(issues) != 1 {
+			t.Errorf("Expected 1 issue matching '\"TST-2\"', got %d", len(issues))
+		}
+	})
+}
+
+func TestDecodeSearchQuery(t *testing.T) {
+	tests := []struct {
+		encoded  string
+		expected string
+	}{
+		{"bug", "bug"},
+		{"login+error", "login error"},
+		{"fix+auth+bug", "fix auth bug"},
+		{"", ""},
+		{"no+spaces+here", "no spaces here"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.encoded, func(t *testing.T) {
+			got := decodeSearchQuery(tt.encoded)
+			if got != tt.expected {
+				t.Errorf("decodeSearchQuery(%q) = %q, want %q", tt.encoded, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestLooksLikeIdentifier(t *testing.T) {
 	tests := []struct {
 		name     string

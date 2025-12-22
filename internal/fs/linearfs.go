@@ -570,6 +570,60 @@ func (lfs *LinearFS) GetFilteredIssuesUnassigned(ctx context.Context, teamID str
 	return result.([]api.Issue), nil
 }
 
+// SearchTeamIssues performs full-text search on issues within a team
+// Requires SQLite cache to be enabled; returns empty results if not
+func (lfs *LinearFS) SearchTeamIssues(ctx context.Context, teamID, query string) ([]api.Issue, error) {
+	if lfs.store == nil {
+		return []api.Issue{}, nil
+	}
+
+	dbIssues, err := lfs.store.SearchTeamIssues(ctx, query, teamID)
+	if err != nil {
+		return nil, err
+	}
+
+	issues, err := db.DBIssuesToAPIIssues(dbIssues)
+	if err != nil {
+		return nil, err
+	}
+
+	if lfs.debug {
+		log.Printf("[SEARCH] team=%s query=%q results=%d", teamID, query, len(issues))
+	}
+
+	// Cache individual issues for fast subsequent access
+	lfs.cacheIssuesByIdentifier(issues)
+
+	return issues, nil
+}
+
+// SearchAllIssues performs full-text search across all issues
+// Requires SQLite cache to be enabled; returns empty results if not
+func (lfs *LinearFS) SearchAllIssues(ctx context.Context, query string) ([]api.Issue, error) {
+	if lfs.store == nil {
+		return []api.Issue{}, nil
+	}
+
+	dbIssues, err := lfs.store.SearchIssues(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	issues, err := db.DBIssuesToAPIIssues(dbIssues)
+	if err != nil {
+		return nil, err
+	}
+
+	if lfs.debug {
+		log.Printf("[SEARCH] query=%q results=%d", query, len(issues))
+	}
+
+	// Cache individual issues for fast subsequent access
+	lfs.cacheIssuesByIdentifier(issues)
+
+	return issues, nil
+}
+
 func (lfs *LinearFS) InvalidateMyIssues() {
 	lfs.myIssueCache.Delete("my")
 	lfs.myCreatedCache.Delete("created")
