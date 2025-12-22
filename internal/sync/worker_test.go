@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,84 +11,184 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
-// mockClient is a mock API client for testing
-type mockClient struct {
-	teams       []api.Team
-	issuePages  map[string][][]api.Issue // teamID -> pages of issues
-	pageIndex   map[string]int           // teamID -> current page index
+// mockAPIClient implements APIClient for testing
+type mockAPIClient struct {
+	teams           []api.Team
+	issuesByTeam    map[string][]api.Issue // teamID -> all issues (will be paginated)
+	pageSize        int
+	getTeamsCalls   int32
+	getIssuesCalls  int32
+	simulateError   error
 }
 
-func newMockClient() *mockClient {
-	return &mockClient{
-		teams:      []api.Team{},
-		issuePages: make(map[string][][]api.Issue),
-		pageIndex:  make(map[string]int),
+func newMockAPIClient() *mockAPIClient {
+	return &mockAPIClient{
+		teams:        []api.Team{},
+		issuesByTeam: make(map[string][]api.Issue),
+		pageSize:     100,
 	}
 }
 
-func (m *mockClient) GetTeams(ctx context.Context) ([]api.Team, error) {
+func (m *mockAPIClient) GetTeams(ctx context.Context) ([]api.Team, error) {
+	atomic.AddInt32(&m.getTeamsCalls, 1)
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
 	return m.teams, nil
 }
 
-func (m *mockClient) GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Issue, api.PageInfo, error) {
-	pages, ok := m.issuePages[teamID]
-	if !ok || len(pages) == 0 {
+func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Issue, api.PageInfo, error) {
+	atomic.AddInt32(&m.getIssuesCalls, 1)
+	if m.simulateError != nil {
+		return nil, api.PageInfo{}, m.simulateError
+	}
+
+	issues, ok := m.issuesByTeam[teamID]
+	if !ok {
 		return []api.Issue{}, api.PageInfo{}, nil
 	}
 
-	// Reset page index if no cursor
-	if cursor == "" {
-		m.pageIndex[teamID] = 0
+	// Use mock's pageSize if set, otherwise use the passed pageSize
+	effectivePageSize := pageSize
+	if m.pageSize > 0 {
+		effectivePageSize = m.pageSize
 	}
 
-	idx := m.pageIndex[teamID]
-	if idx >= len(pages) {
+	// Parse cursor to get offset
+	offset := 0
+	if cursor != "" {
+		for i := 0; i < len(cursor); i++ {
+			if cursor[i] >= '0' && cursor[i] <= '9' {
+				offset = offset*10 + int(cursor[i]-'0')
+			}
+		}
+	}
+
+	// Get page
+	end := offset + effectivePageSize
+	if end > len(issues) {
+		end = len(issues)
+	}
+
+	if offset >= len(issues) {
 		return []api.Issue{}, api.PageInfo{}, nil
 	}
 
-	issues := pages[idx]
-	hasNext := idx < len(pages)-1
+	page := issues[offset:end]
+	hasNext := end < len(issues)
 	nextCursor := ""
 	if hasNext {
-		nextCursor = "cursor-" + string(rune('0'+idx+1))
-		m.pageIndex[teamID] = idx + 1
+		nextCursor = string(rune('0' + end))
 	}
 
-	return issues, api.PageInfo{HasNextPage: hasNext, EndCursor: nextCursor}, nil
+	return page, api.PageInfo{HasNextPage: hasNext, EndCursor: nextCursor}, nil
 }
 
 func TestWorkerStartStop(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 
-	mock := newMockClient()
+	mock := newMockAPIClient()
 	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
 
-	// Use a custom config that doesn't implement the api.Client interface
-	// We need to test with a real client or create an interface
-	// For now, skip this test as it requires more refactoring
-	t.Skip("Requires API client interface refactoring")
+	cfg := Config{Interval: 100 * time.Millisecond}
+	worker := NewWorker(mock, store, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start worker
+	worker.Start(ctx)
+	if !worker.Running() {
+		t.Error("Worker should be running after Start()")
+	}
+
+	// Wait for initial sync
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop worker
+	worker.Stop()
+	if worker.Running() {
+		t.Error("Worker should not be running after Stop()")
+	}
+
+	// Verify GetTeams was called at least once
+	if atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
+		t.Error("GetTeams should have been called")
+	}
 }
 
-func TestSyncTeamIssues(t *testing.T) {
-	// This test verifies the "sync until unchanged" algorithm
-	// We simulate a scenario where:
-	// 1. First sync: all issues are new
-	// 2. Second sync: only 2 issues changed, should stop early
-
+func TestWorkerSyncAllTeams(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
 
-	// Simulate initial state: 5 issues already in DB with known updatedAt times
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{
+		{ID: "team-1", Key: "ENG", Name: "Engineering"},
+		{ID: "team-2", Key: "DSN", Name: "Design"},
+	}
+
+	// Add issues to each team
+	now := time.Now()
+	mock.issuesByTeam["team-1"] = []api.Issue{
+		{ID: "issue-1", Identifier: "ENG-1", Title: "Issue 1", Team: &api.Team{ID: "team-1"}, UpdatedAt: now},
+		{ID: "issue-2", Identifier: "ENG-2", Title: "Issue 2", Team: &api.Team{ID: "team-1"}, UpdatedAt: now.Add(-time.Minute)},
+	}
+	mock.issuesByTeam["team-2"] = []api.Issue{
+		{ID: "issue-3", Identifier: "DSN-1", Title: "Design Issue", Team: &api.Team{ID: "team-2"}, UpdatedAt: now},
+	}
+
+	cfg := Config{Interval: time.Hour} // Long interval, we'll call SyncNow manually
+	worker := NewWorker(mock, store, cfg)
+
+	// Trigger sync manually
+	err := worker.SyncNow(ctx)
+	if err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	// Verify issues were synced
+	engIssues, err := store.Queries().ListTeamIssues(ctx, "team-1")
+	if err != nil {
+		t.Fatalf("ListTeamIssues failed: %v", err)
+	}
+	if len(engIssues) != 2 {
+		t.Errorf("Expected 2 ENG issues, got %d", len(engIssues))
+	}
+
+	dsnIssues, err := store.Queries().ListTeamIssues(ctx, "team-2")
+	if err != nil {
+		t.Fatalf("ListTeamIssues failed: %v", err)
+	}
+	if len(dsnIssues) != 1 {
+		t.Errorf("Expected 1 DSN issue, got %d", len(dsnIssues))
+	}
+
+	// Verify teams were synced
+	teams, err := store.Queries().ListTeams(ctx)
+	if err != nil {
+		t.Fatalf("ListTeams failed: %v", err)
+	}
+	if len(teams) != 2 {
+		t.Errorf("Expected 2 teams, got %d", len(teams))
+	}
+}
+
+func TestWorkerSyncUntilUnchanged(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
 	teamID := "team-1"
 	baseTime := time.Now().Add(-time.Hour)
 
+	// Pre-populate database with "old" issues
 	for i := 0; i < 5; i++ {
 		data := &db.IssueData{
-			ID:         "issue-" + string(rune('A'+i)),
+			ID:         "old-issue-" + string(rune('A'+i)),
 			Identifier: "TST-" + string(rune('1'+i)),
-			Title:      "Existing Issue " + string(rune('1'+i)),
+			Title:      "Old Issue " + string(rune('1'+i)),
 			TeamID:     teamID,
 			CreatedAt:  baseTime,
 			UpdatedAt:  baseTime.Add(time.Duration(i) * time.Minute),
@@ -98,100 +199,249 @@ func TestSyncTeamIssues(t *testing.T) {
 		}
 	}
 
-	// Verify initial state
-	issues, err := store.Queries().ListTeamIssues(ctx, teamID)
-	if err != nil {
-		t.Fatalf("list issues failed: %v", err)
-	}
-	if len(issues) != 5 {
-		t.Errorf("expected 5 initial issues, got %d", len(issues))
+	// Update sync metadata with the last known update time
+	lastUpdate := baseTime.Add(4 * time.Minute)
+	if err := store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
+		TeamID:             teamID,
+		LastSyncedAt:       time.Now().Add(-10 * time.Minute),
+		LastIssueUpdatedAt: db.ToNullTime(lastUpdate),
+		IssueCount:         db.ToNullInt64(5),
+	}); err != nil {
+		t.Fatalf("setup sync meta failed: %v", err)
 	}
 
-	// Verify they're ordered by updated_at DESC
-	for i := 1; i < len(issues); i++ {
-		if issues[i-1].UpdatedAt.Before(issues[i].UpdatedAt) {
-			t.Error("Issues not ordered by updated_at DESC")
-		}
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: teamID, Key: "TST", Name: "Test"}}
+
+	// API returns: 2 new issues, then 3 unchanged issues
+	// Worker should stop after hitting unchanged issues
+	newTime := time.Now()
+	mock.issuesByTeam[teamID] = []api.Issue{
+		// New issues (updatedAt > lastUpdate)
+		{ID: "new-1", Identifier: "TST-NEW1", Title: "New 1", Team: &api.Team{ID: teamID}, UpdatedAt: newTime},
+		{ID: "new-2", Identifier: "TST-NEW2", Title: "New 2", Team: &api.Team{ID: teamID}, UpdatedAt: newTime.Add(-time.Second)},
+		// Old unchanged issues (updatedAt <= lastUpdate)
+		{ID: "old-issue-E", Identifier: "TST-5", Title: "Old 5", Team: &api.Team{ID: teamID}, UpdatedAt: lastUpdate},
+		{ID: "old-issue-D", Identifier: "TST-4", Title: "Old 4", Team: &api.Team{ID: teamID}, UpdatedAt: lastUpdate.Add(-time.Minute)},
+		{ID: "old-issue-C", Identifier: "TST-3", Title: "Old 3", Team: &api.Team{ID: teamID}, UpdatedAt: lastUpdate.Add(-2 * time.Minute)},
+	}
+	mock.pageSize = 10 // All in one page
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	// Sync
+	err := worker.SyncNow(ctx)
+	if err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	// Verify new issues were added
+	issue1, err := store.Queries().GetIssueByIdentifier(ctx, "TST-NEW1")
+	if err != nil {
+		t.Errorf("New issue TST-NEW1 should exist: %v", err)
+	}
+	if issue1.Title != "New 1" {
+		t.Errorf("Issue title mismatch: got %s", issue1.Title)
+	}
+
+	issue2, err := store.Queries().GetIssueByIdentifier(ctx, "TST-NEW2")
+	if err != nil {
+		t.Errorf("New issue TST-NEW2 should exist: %v", err)
+	}
+	if issue2.Title != "New 2" {
+		t.Errorf("Issue title mismatch: got %s", issue2.Title)
+	}
+
+	// Total should be 7 (5 old + 2 new)
+	issues, _ := store.Queries().ListTeamIssues(ctx, teamID)
+	if len(issues) != 7 {
+		t.Errorf("Expected 7 total issues, got %d", len(issues))
 	}
 }
 
-func TestSyncMetadata(t *testing.T) {
+func TestWorkerPagination(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
 
 	teamID := "team-1"
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: teamID, Key: "TST", Name: "Test"}}
+	mock.pageSize = 2 // Small page size to test pagination
 
-	// Update sync metadata
+	// Create 5 issues - should require 3 pages
+	now := time.Now()
+	issues := make([]api.Issue, 5)
+	for i := 0; i < 5; i++ {
+		issues[i] = api.Issue{
+			ID:         "issue-" + string(rune('A'+i)),
+			Identifier: "TST-" + string(rune('1'+i)),
+			Title:      "Issue " + string(rune('1'+i)),
+			Team:       &api.Team{ID: teamID},
+			UpdatedAt:  now.Add(-time.Duration(i) * time.Minute),
+		}
+	}
+	mock.issuesByTeam[teamID] = issues
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	err := worker.SyncNow(ctx)
+	if err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	// Verify all issues were synced
+	dbIssues, err := store.Queries().ListTeamIssues(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamIssues failed: %v", err)
+	}
+	if len(dbIssues) != 5 {
+		t.Errorf("Expected 5 issues, got %d", len(dbIssues))
+	}
+
+	// Verify multiple pages were fetched
+	calls := atomic.LoadInt32(&mock.getIssuesCalls)
+	if calls < 3 {
+		t.Errorf("Expected at least 3 GetTeamIssuesPage calls for 5 issues with pageSize 2, got %d", calls)
+	}
+}
+
+func TestWorkerLastSync(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	// Initially no sync
+	if !worker.LastSync().IsZero() {
+		t.Error("LastSync should be zero before any sync")
+	}
+
+	// Trigger sync
+	err := worker.SyncNow(ctx)
+	if err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	// LastSync should be recent
+	if worker.LastSync().IsZero() {
+		t.Error("LastSync should not be zero after sync")
+	}
+	if time.Since(worker.LastSync()) > time.Second {
+		t.Error("LastSync should be within last second")
+	}
+}
+
+func TestWorkerContextCancellation(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	cfg := Config{Interval: 50 * time.Millisecond}
+	worker := NewWorker(mock, store, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	worker.Start(ctx)
+	time.Sleep(20 * time.Millisecond)
+
+	// Cancel context should stop worker
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	if worker.Running() {
+		t.Error("Worker should stop when context is cancelled")
+	}
+}
+
+func TestWorkerMultipleStartStop(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	ctx := context.Background()
+
+	// Start multiple times should be safe
+	worker.Start(ctx)
+	worker.Start(ctx) // Should be no-op
+
+	if !worker.Running() {
+		t.Error("Worker should be running")
+	}
+
+	// Stop multiple times should be safe
+	worker.Stop()
+	worker.Stop() // Should be no-op
+
+	if worker.Running() {
+		t.Error("Worker should not be running")
+	}
+}
+
+func TestSyncMetadataTracking(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+	now := time.Now()
+
+	// Upsert sync metadata
 	err := store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
 		TeamID:             teamID,
-		LastSyncedAt:       time.Now(),
-		LastIssueUpdatedAt: db.ToNullTime(time.Now().Add(-5 * time.Minute)),
+		LastSyncedAt:       now,
+		LastIssueUpdatedAt: db.ToNullTime(now.Add(-5 * time.Minute)),
 		IssueCount:         db.ToNullInt64(100),
 	})
 	if err != nil {
-		t.Fatalf("upsert sync meta failed: %v", err)
+		t.Fatalf("UpsertSyncMeta failed: %v", err)
 	}
 
 	// Retrieve and verify
 	meta, err := store.Queries().GetSyncMeta(ctx, teamID)
 	if err != nil {
-		t.Fatalf("get sync meta failed: %v", err)
+		t.Fatalf("GetSyncMeta failed: %v", err)
 	}
 
+	if meta.TeamID != teamID {
+		t.Errorf("TeamID mismatch: got %s, want %s", meta.TeamID, teamID)
+	}
 	if meta.IssueCount.Int64 != 100 {
-		t.Errorf("expected issue count 100, got %d", meta.IssueCount.Int64)
+		t.Errorf("IssueCount mismatch: got %d, want 100", meta.IssueCount.Int64)
 	}
-
 	if !meta.LastIssueUpdatedAt.Valid {
 		t.Error("LastIssueUpdatedAt should be valid")
 	}
-}
 
-func TestDetectUnchangedIssues(t *testing.T) {
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-1"
-	oldTime := time.Now().Add(-time.Hour)
-	newTime := time.Now()
-
-	// Insert an old issue
-	oldData := &db.IssueData{
-		ID:         "old-issue",
-		Identifier: "TST-OLD",
-		Title:      "Old Issue",
-		TeamID:     teamID,
-		CreatedAt:  oldTime,
-		UpdatedAt:  oldTime,
-		Data:       []byte("{}"),
-	}
-	if err := store.Queries().UpsertIssue(ctx, oldData.ToUpsertParams()); err != nil {
-		t.Fatalf("insert old issue failed: %v", err)
-	}
-
-	// Retrieve it
-	issue, err := store.Queries().GetIssueByIdentifier(ctx, "TST-OLD")
+	// Update with new values
+	err = store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
+		TeamID:             teamID,
+		LastSyncedAt:       now.Add(time.Hour),
+		LastIssueUpdatedAt: db.ToNullTime(now),
+		IssueCount:         db.ToNullInt64(150),
+	})
 	if err != nil {
-		t.Fatalf("get issue failed: %v", err)
+		t.Fatalf("UpsertSyncMeta update failed: %v", err)
 	}
 
-	// Check if we can detect it's unchanged by comparing updatedAt
-	apiUpdatedAt := oldTime // Simulate API returning same time
-	if !apiUpdatedAt.After(issue.UpdatedAt) {
-		// This is the condition for "unchanged"
-		t.Log("Correctly detected unchanged issue")
-	} else {
-		t.Error("Failed to detect unchanged issue")
-	}
-
-	// Now simulate an updated issue
-	apiUpdatedAt = newTime
-	if apiUpdatedAt.After(issue.UpdatedAt) {
-		t.Log("Correctly detected changed issue")
-	} else {
-		t.Error("Failed to detect changed issue")
+	// Verify update
+	meta, _ = store.Queries().GetSyncMeta(ctx, teamID)
+	if meta.IssueCount.Int64 != 150 {
+		t.Errorf("Updated IssueCount mismatch: got %d, want 150", meta.IssueCount.Int64)
 	}
 }
 

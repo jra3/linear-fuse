@@ -16,9 +16,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
+// APIClient defines the interface for API operations needed by the sync worker
+type APIClient interface {
+	GetTeams(ctx context.Context) ([]api.Team, error)
+	GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Issue, api.PageInfo, error)
+}
+
 // Worker handles background synchronization of Linear issues to SQLite
 type Worker struct {
-	client   *api.Client
+	client   APIClient
 	store    *db.Store
 	interval time.Duration
 	stopCh   chan struct{}
@@ -45,7 +51,7 @@ func DefaultConfig() Config {
 }
 
 // NewWorker creates a new sync worker
-func NewWorker(client *api.Client, store *db.Store, cfg Config) *Worker {
+func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 	if cfg.Interval == 0 {
 		cfg.Interval = 2 * time.Minute
 	}

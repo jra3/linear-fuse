@@ -338,6 +338,502 @@ func TestWithTransaction(t *testing.T) {
 	}
 }
 
+func TestListTeamIssuesByAssignee(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+	assigneeID := "user-1"
+	assigneeEmail := "user@example.com"
+
+	// Insert issues with different assignees
+	for i, aid := range []string{assigneeID, assigneeID, "user-2"} {
+		aEmail := "user" + string(rune('1'+i)) + "@example.com"
+		if aid == assigneeID {
+			aEmail = assigneeEmail
+		}
+		data := &IssueData{
+			ID:            "issue-" + string(rune('a'+i)),
+			Identifier:    "TST-" + string(rune('1'+i)),
+			Title:         "Issue " + string(rune('1'+i)),
+			TeamID:        teamID,
+			AssigneeID:    &aid,
+			AssigneeEmail: &aEmail,
+			CreatedAt:     time.Now(),
+			UpdatedAt:     time.Now(),
+			Data:          json.RawMessage("{}"),
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
+	// Query by assignee ID
+	issues, err := store.Queries().ListTeamIssuesByAssignee(ctx, ListTeamIssuesByAssigneeParams{
+		TeamID:     teamID,
+		AssigneeID: toNullString(&assigneeID),
+	})
+	if err != nil {
+		t.Fatalf("ListTeamIssuesByAssignee failed: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Errorf("Expected 2 issues for assignee, got %d", len(issues))
+	}
+
+	// Query by assignee email
+	issuesByEmail, err := store.Queries().ListTeamIssuesByAssigneeEmail(ctx, ListTeamIssuesByAssigneeEmailParams{
+		TeamID:        teamID,
+		AssigneeEmail: toNullString(&assigneeEmail),
+	})
+	if err != nil {
+		t.Fatalf("ListTeamIssuesByAssigneeEmail failed: %v", err)
+	}
+	if len(issuesByEmail) != 2 {
+		t.Errorf("Expected 2 issues for assignee email, got %d", len(issuesByEmail))
+	}
+}
+
+func TestListTeamUnassignedIssues(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+	assigneeID := "user-1"
+
+	// Insert issues: 2 unassigned, 1 assigned
+	for i := 0; i < 3; i++ {
+		data := &IssueData{
+			ID:         "issue-" + string(rune('a'+i)),
+			Identifier: "TST-" + string(rune('1'+i)),
+			Title:      "Issue " + string(rune('1'+i)),
+			TeamID:     teamID,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+			Data:       json.RawMessage("{}"),
+		}
+		if i == 2 {
+			data.AssigneeID = &assigneeID
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
+	// Query unassigned issues
+	issues, err := store.Queries().ListTeamUnassignedIssues(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamUnassignedIssues failed: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Errorf("Expected 2 unassigned issues, got %d", len(issues))
+	}
+}
+
+func TestListTeamIssuesByPriority(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+
+	// Insert issues with different priorities
+	priorities := []int{1, 2, 2, 3, 0} // 1=urgent, 2=high, 3=medium, 0=none
+	for i, p := range priorities {
+		data := &IssueData{
+			ID:         "issue-" + string(rune('a'+i)),
+			Identifier: "TST-" + string(rune('1'+i)),
+			Title:      "Issue " + string(rune('1'+i)),
+			TeamID:     teamID,
+			Priority:   p,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+			Data:       json.RawMessage("{}"),
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
+	// Query by priority 2 (high)
+	issues, err := store.Queries().ListTeamIssuesByPriority(ctx, ListTeamIssuesByPriorityParams{
+		TeamID:   teamID,
+		Priority: toNullInt64(2),
+	})
+	if err != nil {
+		t.Fatalf("ListTeamIssuesByPriority failed: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Errorf("Expected 2 high priority issues, got %d", len(issues))
+	}
+}
+
+func TestListIssuesByParent(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+	parentID := "parent-issue"
+
+	// Insert parent issue
+	parentData := &IssueData{
+		ID:         parentID,
+		Identifier: "TST-PARENT",
+		Title:      "Parent Issue",
+		TeamID:     teamID,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		Data:       json.RawMessage("{}"),
+	}
+	if err := store.Queries().UpsertIssue(ctx, parentData.ToUpsertParams()); err != nil {
+		t.Fatalf("Insert parent failed: %v", err)
+	}
+
+	// Insert child issues
+	for i := 0; i < 3; i++ {
+		data := &IssueData{
+			ID:         "child-" + string(rune('a'+i)),
+			Identifier: "TST-CHILD-" + string(rune('1'+i)),
+			Title:      "Child " + string(rune('1'+i)),
+			TeamID:     teamID,
+			ParentID:   &parentID,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+			Data:       json.RawMessage("{}"),
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("Insert child failed: %v", err)
+		}
+	}
+
+	// Query by parent
+	children, err := store.Queries().ListTeamIssuesByParent(ctx, toNullString(&parentID))
+	if err != nil {
+		t.Fatalf("ListTeamIssuesByParent failed: %v", err)
+	}
+	if len(children) != 3 {
+		t.Errorf("Expected 3 children, got %d", len(children))
+	}
+}
+
+func TestSearchTeamIssues(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// Insert issues in two different teams
+	team1 := "team-1"
+	team2 := "team-2"
+
+	issues := []struct {
+		id     string
+		teamID string
+		title  string
+	}{
+		{"1", team1, "Fix login bug"},
+		{"2", team1, "Add feature"},
+		{"3", team2, "Login redesign"},
+	}
+
+	for i, iss := range issues {
+		data := &IssueData{
+			ID:         iss.id,
+			Identifier: "TST-" + string(rune('1'+i)),
+			Title:      iss.title,
+			TeamID:     iss.teamID,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+			Data:       json.RawMessage("{}"),
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("Insert failed: %v", err)
+		}
+	}
+
+	// Search team1 for "login" - should find 1
+	results, err := store.SearchTeamIssues(ctx, "login", team1)
+	if err != nil {
+		t.Fatalf("SearchTeamIssues failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("Expected 1 result for team1, got %d", len(results))
+	}
+
+	// Search all for "login" - should find 2
+	allResults, err := store.SearchIssues(ctx, "login")
+	if err != nil {
+		t.Fatalf("SearchIssues failed: %v", err)
+	}
+	if len(allResults) != 2 {
+		t.Errorf("Expected 2 results total, got %d", len(allResults))
+	}
+}
+
+func TestAPIIssueConversion(t *testing.T) {
+	issue := api.Issue{
+		ID:          "test-id",
+		Identifier:  "TST-123",
+		Title:       "Test Issue",
+		Description: "A description",
+		Priority:    2,
+		State: api.State{
+			ID:   "state-1",
+			Name: "Todo",
+			Type: "unstarted",
+		},
+		Assignee: &api.User{
+			ID:    "user-1",
+			Email: "test@example.com",
+			Name:  "Test User",
+		},
+		Team: &api.Team{
+			ID:  "team-1",
+			Key: "TST",
+		},
+		Project: &api.Project{
+			ID:   "project-1",
+			Name: "Test Project",
+		},
+		Cycle: &api.IssueCycle{
+			ID:   "cycle-1",
+			Name: "Sprint 1",
+		},
+		Parent: &api.ParentIssue{
+			ID:         "parent-1",
+			Identifier: "TST-100",
+		},
+		DueDate:   strPtr("2025-01-15"),
+		Estimate:  float64Ptr(3.0),
+		URL:       "https://linear.app/test",
+		CreatedAt: time.Now().Add(-24 * time.Hour),
+		UpdatedAt: time.Now(),
+	}
+
+	// Convert to DB
+	data, err := APIIssueToDBIssue(issue)
+	if err != nil {
+		t.Fatalf("APIIssueToDBIssue failed: %v", err)
+	}
+
+	// Verify fields
+	if data.ID != issue.ID {
+		t.Errorf("ID mismatch")
+	}
+	if data.TeamID != issue.Team.ID {
+		t.Errorf("TeamID mismatch")
+	}
+	if *data.StateID != issue.State.ID {
+		t.Errorf("StateID mismatch")
+	}
+	if *data.AssigneeID != issue.Assignee.ID {
+		t.Errorf("AssigneeID mismatch")
+	}
+	if *data.ProjectID != issue.Project.ID {
+		t.Errorf("ProjectID mismatch")
+	}
+	if *data.CycleID != issue.Cycle.ID {
+		t.Errorf("CycleID mismatch")
+	}
+	if *data.ParentID != issue.Parent.ID {
+		t.Errorf("ParentID mismatch")
+	}
+	if *data.DueDate != *issue.DueDate {
+		t.Errorf("DueDate mismatch")
+	}
+	if *data.Estimate != *issue.Estimate {
+		t.Errorf("Estimate mismatch")
+	}
+}
+
+func TestAPIIssueConversionWithNils(t *testing.T) {
+	// Issue with minimal fields (nil optionals)
+	issue := api.Issue{
+		ID:         "test-id",
+		Identifier: "TST-123",
+		Title:      "Minimal Issue",
+		Team:       &api.Team{ID: "team-1"},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+
+	data, err := APIIssueToDBIssue(issue)
+	if err != nil {
+		t.Fatalf("APIIssueToDBIssue failed: %v", err)
+	}
+
+	// Nil fields should remain nil
+	if data.AssigneeID != nil {
+		t.Error("AssigneeID should be nil")
+	}
+	if data.ProjectID != nil {
+		t.Error("ProjectID should be nil")
+	}
+	if data.CycleID != nil {
+		t.Error("CycleID should be nil")
+	}
+	if data.ParentID != nil {
+		t.Error("ParentID should be nil")
+	}
+	if data.DueDate != nil {
+		t.Error("DueDate should be nil")
+	}
+}
+
+func TestDBIssuesToAPIIssues(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+
+	// Insert issues
+	for i := 0; i < 3; i++ {
+		issue := api.Issue{
+			ID:         "issue-" + string(rune('a'+i)),
+			Identifier: "TST-" + string(rune('1'+i)),
+			Title:      "Issue " + string(rune('1'+i)),
+			Team:       &api.Team{ID: teamID},
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		}
+		data, _ := APIIssueToDBIssue(issue)
+		store.Queries().UpsertIssue(ctx, data.ToUpsertParams())
+	}
+
+	// List and convert back
+	dbIssues, err := store.Queries().ListTeamIssues(ctx, teamID)
+	if err != nil {
+		t.Fatalf("ListTeamIssues failed: %v", err)
+	}
+
+	apiIssues, err := DBIssuesToAPIIssues(dbIssues)
+	if err != nil {
+		t.Fatalf("DBIssuesToAPIIssues failed: %v", err)
+	}
+
+	if len(apiIssues) != 3 {
+		t.Errorf("Expected 3 API issues, got %d", len(apiIssues))
+	}
+
+	for _, issue := range apiIssues {
+		if issue.ID == "" {
+			t.Error("Converted issue has empty ID")
+		}
+		if issue.Identifier == "" {
+			t.Error("Converted issue has empty Identifier")
+		}
+	}
+}
+
+func TestAPITeamConversion(t *testing.T) {
+	team := api.Team{
+		ID:        "team-1",
+		Key:       "TST",
+		Name:      "Test Team",
+		Icon:      "icon",
+		CreatedAt: time.Now().Add(-24 * time.Hour),
+		UpdatedAt: time.Now(),
+	}
+
+	params := APITeamToDBTeam(team)
+
+	if params.ID != team.ID {
+		t.Errorf("ID mismatch")
+	}
+	if params.Key != team.Key {
+		t.Errorf("Key mismatch")
+	}
+	if params.Icon.String != team.Icon {
+		t.Errorf("Icon mismatch")
+	}
+}
+
+func TestDefaultDBPath(t *testing.T) {
+	path := DefaultDBPath()
+	if path == "" {
+		t.Error("DefaultDBPath should not be empty")
+	}
+	if !filepath.IsAbs(path) {
+		t.Error("DefaultDBPath should be absolute")
+	}
+}
+
+func TestDeleteIssue(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// Insert an issue
+	data := &IssueData{
+		ID:         "to-delete",
+		Identifier: "TST-DEL",
+		Title:      "To Delete",
+		TeamID:     "team-1",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		Data:       json.RawMessage("{}"),
+	}
+	if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Verify it exists
+	_, err := store.Queries().GetIssueByIdentifier(ctx, "TST-DEL")
+	if err != nil {
+		t.Fatalf("Issue should exist: %v", err)
+	}
+
+	// Delete by identifier
+	if err := store.Queries().DeleteIssueByIdentifier(ctx, "TST-DEL"); err != nil {
+		t.Fatalf("DeleteIssueByIdentifier failed: %v", err)
+	}
+
+	// Verify it's gone
+	_, err = store.Queries().GetIssueByIdentifier(ctx, "TST-DEL")
+	if err == nil {
+		t.Error("Issue should be deleted")
+	}
+}
+
+func TestGetTeamIssueCount(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+
+	// Initially empty
+	count, err := store.Queries().GetTeamIssueCount(ctx, teamID)
+	if err != nil {
+		t.Fatalf("GetTeamIssueCount failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected 0 issues initially, got %d", count)
+	}
+
+	// Insert some issues
+	for i := 0; i < 5; i++ {
+		data := &IssueData{
+			ID:         "issue-" + string(rune('a'+i)),
+			Identifier: "TST-" + string(rune('1'+i)),
+			Title:      "Issue",
+			TeamID:     teamID,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+			Data:       json.RawMessage("{}"),
+		}
+		store.Queries().UpsertIssue(ctx, data.ToUpsertParams())
+	}
+
+	// Check count
+	count, _ = store.Queries().GetTeamIssueCount(ctx, teamID)
+	if count != 5 {
+		t.Errorf("Expected 5 issues, got %d", count)
+	}
+}
+
 // Helpers
 
 func openTestStore(t *testing.T) *Store {
@@ -348,4 +844,16 @@ func openTestStore(t *testing.T) *Store {
 		t.Fatalf("Open failed: %v", err)
 	}
 	return store
+}
+
+func strPtr(s string) *string {
+	return &s
+}
+
+func float64Ptr(f float64) *float64 {
+	return &f
+}
+
+func toNullInt64(i int) sql.NullInt64 {
+	return sql.NullInt64{Int64: int64(i), Valid: true}
 }
