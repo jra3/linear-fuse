@@ -51,6 +51,14 @@ var _ fs.NodeReaddirer = (*ProjectsNode)(nil)
 var _ fs.NodeLookuper = (*ProjectsNode)(nil)
 var _ fs.NodeMkdirer = (*ProjectsNode)(nil)
 var _ fs.NodeRmdirer = (*ProjectsNode)(nil)
+var _ fs.NodeGetattrer = (*ProjectsNode)(nil)
+
+func (p *ProjectsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0777 | syscall.S_IFDIR // Writable for mkdir
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
 
 func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)

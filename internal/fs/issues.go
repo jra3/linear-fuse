@@ -53,6 +53,14 @@ var _ fs.NodeReaddirer = (*IssuesNode)(nil)
 var _ fs.NodeLookuper = (*IssuesNode)(nil)
 var _ fs.NodeMkdirer = (*IssuesNode)(nil)
 var _ fs.NodeRmdirer = (*IssuesNode)(nil)
+var _ fs.NodeGetattrer = (*IssuesNode)(nil)
+
+func (n *IssuesNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0777 | syscall.S_IFDIR // Writable for mkdir
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
 
 func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
