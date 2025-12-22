@@ -117,6 +117,8 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Post initiative update | ` + "`" + `echo "text" > .../updates/new.md` + "`" + ` (write-only) |
 | Edit existing comment | Edit ` + "`" + `comments/{id}.md` + "`" + ` directly |
 | Edit existing document | Edit ` + "`" + `docs/{slug}.md` + "`" + ` directly |
+| Search issues | ` + "`" + `ls /teams/ENG/search/bug/` + "`" + ` |
+| Multi-word search | ` + "`" + `ls /teams/ENG/search/login+error/` + "`" + ` (+ = space) |
 
 ## File Permissions
 
@@ -138,6 +140,7 @@ write to new.md to update existing content.
 /teams/{KEY}/
 ├── team.md, states.md, labels.md  # read-only metadata
 ├── by/status|label|assignee/      # symlinks to issues
+├── search/{query}/                # full-text search results
 ├── issues/{ID}/
 │   ├── issue.md                   # EDITABLE
 │   ├── comments/
@@ -245,6 +248,28 @@ Title priority:
 1. ` + "`" + `title:` + "`" + ` in YAML frontmatter (if present in content)
 2. First ` + "`" + `# Heading` + "`" + ` in content (if present)
 3. Filename (minus .md, dashes become spaces)
+
+## Search
+
+Search issues using virtual directories under ` + "`" + `/teams/{KEY}/search/` + "`" + `:
+
+` + "```" + `bash
+# Single word search
+ls /teams/ENG/search/bug/
+
+# Multi-word search (+ = space)
+ls /teams/ENG/search/login+error/
+
+# Prefix search (matches ENG-1, ENG-10, ENG-123, etc.)
+ls /teams/ENG/search/ENG-1*/
+` + "```" + `
+
+Search queries match against issue identifier, title, and description.
+Results are symlinks pointing to the actual issue directories.
+
+**Query encoding:**
+- Use ` + "`" + `+` + "`" + ` for spaces: ` + "`" + `auth+token` + "`" + ` searches for "auth token"
+- Use ` + "`" + `*` + "`" + ` for prefix matching: ` + "`" + `ENG-12*` + "`" + ` matches ENG-12, ENG-120, ENG-123
 
 ## Notes
 
