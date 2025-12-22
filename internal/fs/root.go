@@ -119,6 +119,8 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Edit existing document | Edit ` + "`" + `docs/{slug}.md` + "`" + ` directly |
 | Search issues | ` + "`" + `ls /teams/ENG/search/bug/` + "`" + ` |
 | Multi-word search | ` + "`" + `ls /teams/ENG/search/login+error/` + "`" + ` (+ = space) |
+| Search my issues | ` + "`" + `ls /my/assigned/search/experiment/` + "`" + ` |
+| Search filtered view | ` + "`" + `ls /teams/ENG/by/status/Todo/search/bug/` + "`" + ` |
 
 ## File Permissions
 
@@ -251,17 +253,17 @@ Title priority:
 
 ## Search
 
-Search issues using virtual directories under ` + "`" + `/teams/{KEY}/search/` + "`" + `:
+Search issues using virtual directories:
 
 ` + "```" + `bash
-# Single word search
+# Team-wide search (uses SQLite FTS5)
 ls /teams/ENG/search/bug/
+ls /teams/ENG/search/login+error/   # + = space
 
-# Multi-word search (+ = space)
-ls /teams/ENG/search/login+error/
-
-# Prefix search (matches ENG-1, ENG-10, ENG-123, etc.)
-ls /teams/ENG/search/ENG-1*/
+# Scoped search within filtered views
+ls /my/assigned/search/experiment/
+ls /teams/ENG/by/status/Todo/search/urgent/
+ls /teams/ENG/by/label/Bug/search/login/
 ` + "```" + `
 
 Search queries match against issue identifier, title, and description.
