@@ -12,6 +12,18 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
+// IssueSource provides issues for scoped search
+type IssueSource interface {
+	GetIssues(ctx context.Context) ([]api.Issue, error)
+}
+
+// IssueSourceFunc adapts a function to IssueSource
+type IssueSourceFunc func(ctx context.Context) ([]api.Issue, error)
+
+func (f IssueSourceFunc) GetIssues(ctx context.Context) ([]api.Issue, error) {
+	return f(ctx)
+}
+
 // SearchNode represents the /teams/{KEY}/search/ directory
 // Lookups create dynamic SearchResultsNode for each query
 type SearchNode struct {
@@ -153,6 +165,172 @@ func decodeSearchQuery(encoded string) string {
 	}
 	// Replace + with space
 	return strings.ReplaceAll(encoded, "+", " ")
+}
+
+// ScopedSearchNode represents a search/ directory within a filtered view
+// (e.g., /my/assigned/search/, /teams/ENG/by/status/Todo/search/)
+type ScopedSearchNode struct {
+	fs.Inode
+	source       IssueSource
+	symlinkDepth int // how many "../" to reach teams/
+}
+
+var _ fs.NodeReaddirer = (*ScopedSearchNode)(nil)
+var _ fs.NodeLookuper = (*ScopedSearchNode)(nil)
+var _ fs.NodeGetattrer = (*ScopedSearchNode)(nil)
+
+func (n *ScopedSearchNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
+
+func (n *ScopedSearchNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return fs.NewListDirStream([]fuse.DirEntry{}), 0
+}
+
+func (n *ScopedSearchNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	query := decodeSearchQuery(name)
+	if query == "" {
+		return nil, syscall.ENOENT
+	}
+
+	now := time.Now()
+	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&now, &now, &now)
+	out.SetAttrTimeout(10 * time.Second)
+	out.SetEntryTimeout(10 * time.Second)
+
+	node := &ScopedSearchResultsNode{
+		source:       n.source,
+		query:        query,
+		symlinkDepth: n.symlinkDepth + 1, // +1 for the query directory
+	}
+	return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+}
+
+// ScopedSearchResultsNode shows search results within a scoped view
+type ScopedSearchResultsNode struct {
+	fs.Inode
+	source       IssueSource
+	query        string
+	symlinkDepth int
+}
+
+var _ fs.NodeReaddirer = (*ScopedSearchResultsNode)(nil)
+var _ fs.NodeLookuper = (*ScopedSearchResultsNode)(nil)
+var _ fs.NodeGetattrer = (*ScopedSearchResultsNode)(nil)
+
+func (n *ScopedSearchResultsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
+
+func (n *ScopedSearchResultsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	issues, err := n.searchIssues(ctx)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	entries := make([]fuse.DirEntry, len(issues))
+	for i, issue := range issues {
+		entries[i] = fuse.DirEntry{
+			Name: issue.Identifier,
+			Mode: syscall.S_IFLNK,
+		}
+	}
+	return fs.NewListDirStream(entries), 0
+}
+
+func (n *ScopedSearchResultsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if !looksLikeIdentifier(name) {
+		return nil, syscall.ENOENT
+	}
+
+	issues, err := n.searchIssues(ctx)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	for _, issue := range issues {
+		if issue.Identifier == name {
+			teamKey := ""
+			if issue.Team != nil {
+				teamKey = issue.Team.Key
+			}
+			node := &ScopedSearchSymlink{
+				teamKey:      teamKey,
+				identifier:   issue.Identifier,
+				symlinkDepth: n.symlinkDepth,
+			}
+			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+		}
+	}
+	return nil, syscall.ENOENT
+}
+
+func (n *ScopedSearchResultsNode) searchIssues(ctx context.Context) ([]api.Issue, error) {
+	issues, err := n.source.GetIssues(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := strings.ToLower(n.query)
+	var results []api.Issue
+	for _, issue := range issues {
+		if matchesQuery(issue, query) {
+			results = append(results, issue)
+		}
+	}
+	return results, nil
+}
+
+// matchesQuery performs case-insensitive search on issue fields
+func matchesQuery(issue api.Issue, query string) bool {
+	// Check identifier
+	if strings.Contains(strings.ToLower(issue.Identifier), query) {
+		return true
+	}
+	// Check title
+	if strings.Contains(strings.ToLower(issue.Title), query) {
+		return true
+	}
+	// Check description
+	if strings.Contains(strings.ToLower(issue.Description), query) {
+		return true
+	}
+	return false
+}
+
+// ScopedSearchSymlink points to the actual issue location
+type ScopedSearchSymlink struct {
+	fs.Inode
+	teamKey      string
+	identifier   string
+	symlinkDepth int // number of directories to go up
+}
+
+var _ fs.NodeReadlinker = (*ScopedSearchSymlink)(nil)
+var _ fs.NodeGetattrer = (*ScopedSearchSymlink)(nil)
+
+func (s *ScopedSearchSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+	return []byte(s.target()), 0
+}
+
+func (s *ScopedSearchSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0777 | syscall.S_IFLNK
+	out.Size = uint64(len(s.target()))
+	return 0
+}
+
+func (s *ScopedSearchSymlink) target() string {
+	// Build path: go up symlinkDepth levels, then into teams/{key}/issues/{id}
+	up := strings.Repeat("../", s.symlinkDepth)
+	return fmt.Sprintf("%steams/%s/issues/%s", up, s.teamKey, s.identifier)
 }
 
 // encodeSearchQuery converts a search string to a directory-safe name

@@ -206,9 +206,14 @@ func (f *FilterValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, len(issues))
+	// +1 for search directory
+	entries := make([]fuse.DirEntry, len(issues)+1)
+	entries[0] = fuse.DirEntry{
+		Name: "search",
+		Mode: syscall.S_IFDIR,
+	}
 	for i, issue := range issues {
-		entries[i] = fuse.DirEntry{
+		entries[i+1] = fuse.DirEntry{
 			Name: issue.Identifier,
 			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
@@ -217,6 +222,18 @@ func (f *FilterValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 }
 
 func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// Handle search directory
+	if name == "search" {
+		now := time.Now()
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.SetTimes(&now, &now, &now)
+		node := &ScopedSearchNode{
+			source:       IssueSourceFunc(f.getFilteredIssues),
+			symlinkDepth: 6, // /teams/ENG/by/status/Todo/search/{query}/ -> need 7 "../" to reach root
+		}
+		return f.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	}
+
 	issues, err := f.getFilteredIssues(ctx)
 	if err != nil {
 		return nil, syscall.EIO
