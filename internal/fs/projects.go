@@ -55,7 +55,9 @@ var _ fs.NodeGetattrer = (*ProjectsNode)(nil)
 
 func (p *ProjectsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
-	out.Mode = 0777 | syscall.S_IFDIR // Writable for mkdir
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = p.lfs.uid
+	out.Gid = p.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	return 0
 }

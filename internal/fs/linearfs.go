@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -54,6 +55,8 @@ type LinearFS struct {
 	initiativeUpdateCache  *cache.Cache[[]api.InitiativeUpdate]
 	debug                  bool
 	sfGroup             singleflight.Group // Deduplicates concurrent requests for same data
+	uid                 uint32 // Owner UID for files/dirs
+	gid                 uint32 // Owner GID for files/dirs
 }
 
 func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
@@ -61,8 +64,14 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		return nil, fmt.Errorf("LINEAR_API_KEY not set - set env var or add api_key to config file")
 	}
 
+	// Get current user's UID/GID for file ownership
+	uid := uint32(os.Getuid())
+	gid := uint32(os.Getgid())
+
 	maxEntries := cfg.Cache.MaxEntries
 	return &LinearFS{
+		uid: uid,
+		gid: gid,
 		client:               api.NewClient(cfg.APIKey),
 		teamCache:            cache.New[[]api.Team](cfg.Cache.TTL, maxEntries),
 		issueCache:           cache.New[[]api.Issue](cfg.Cache.TTL, maxEntries),
