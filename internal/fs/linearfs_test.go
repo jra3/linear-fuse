@@ -193,3 +193,122 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 func strPtr(s string) *string {
 	return &s
 }
+
+func TestLooksLikeIdentifier(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Valid identifiers
+		{"simple", "ENG-123", true},
+		{"short key", "A-1", true},
+		{"long key", "ABCDE-99999", true},
+		{"two letter", "AB-1", true},
+
+		// Invalid identifiers
+		{"lowercase", "eng-123", false},
+		{"no dash", "ENG123", false},
+		{"no number", "ENG-", false},
+		{"no key", "-123", false},
+		{"too long key", "ABCDEF-123", false},
+		{"spaces", "ENG 123", false},
+		{"empty", "", false},
+		{"just letters", "ENG", false},
+		{"just numbers", "123", false},
+		{"double dash", "ENG--123", false},
+		{"letter after dash", "ENG-ABC", false},
+		{"mixed case", "Eng-123", false},
+		{"underscore", "ENG_123", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := looksLikeIdentifier(tt.input)
+			if got != tt.expected {
+				t.Errorf("looksLikeIdentifier(%q) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFetchIssueByIdentifier(t *testing.T) {
+	// Create a LinearFS with SQLite enabled
+	cfg := &config.Config{
+		APIKey: "test-key",
+		Cache: config.CacheConfig{
+			TTL:        100 * time.Millisecond,
+			MaxEntries: 100,
+		},
+	}
+
+	lfs, err := NewLinearFS(cfg, true)
+	if err != nil {
+		t.Fatalf("NewLinearFS failed: %v", err)
+	}
+	defer lfs.Close()
+
+	// Enable SQLite with temp database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	ctx := context.Background()
+
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open failed: %v", err)
+	}
+	lfs.store = store
+
+	// Insert a test issue
+	now := time.Now()
+	testIssue := db.IssueData{
+		ID:         "issue-123",
+		Identifier: "TST-123",
+		TeamID:     "team-1",
+		Title:      "Test Issue",
+		StateName:  strPtr("Todo"),
+		Priority:   2,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Data: []byte(`{
+			"id":"issue-123","identifier":"TST-123","title":"Test Issue",
+			"priority":2,"state":{"id":"st-1","name":"Todo","type":"unstarted"},
+			"team":{"id":"team-1"}
+		}`),
+	}
+	if err := store.Queries().UpsertIssue(ctx, testIssue.ToUpsertParams()); err != nil {
+		t.Fatalf("UpsertIssue failed: %v", err)
+	}
+
+	t.Run("FetchFromSQLite", func(t *testing.T) {
+		// Fetch should find it in SQLite
+		issue, err := lfs.FetchIssueByIdentifier(ctx, "TST-123")
+		if err != nil {
+			t.Fatalf("FetchIssueByIdentifier failed: %v", err)
+		}
+		if issue.Identifier != "TST-123" {
+			t.Errorf("Expected TST-123, got %s", issue.Identifier)
+		}
+	})
+
+	t.Run("FetchFromCache", func(t *testing.T) {
+		// Second fetch should hit memory cache
+		issue, err := lfs.FetchIssueByIdentifier(ctx, "TST-123")
+		if err != nil {
+			t.Fatalf("FetchIssueByIdentifier failed: %v", err)
+		}
+		if issue.Identifier != "TST-123" {
+			t.Errorf("Expected TST-123, got %s", issue.Identifier)
+		}
+	})
+
+	t.Run("NotFoundReturnsError", func(t *testing.T) {
+		// Fetching non-existent issue should return error
+		// Note: This will try to call the API which won't work without a real key
+		// For unit tests, we just verify SQLite miss path
+		lfs.issueByIdCache.Delete("NOTEXIST-999")
+		_, err := lfs.FetchIssueByIdentifier(ctx, "NOTEXIST-999")
+		if err == nil {
+			t.Error("Expected error for non-existent issue")
+		}
+	})
+}

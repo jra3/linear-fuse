@@ -72,47 +72,62 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// First, check if we have this issue cached individually (from user/my issue fetches)
-	// This avoids expensive GetTeamIssues calls when following symlinks
-	if issue := n.lfs.GetIssueByIdentifier(name); issue != nil {
-		node := &IssueDirectoryNode{
-			lfs:   n.lfs,
-			issue: *issue,
-		}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  issueDirIno(issue.ID),
-		}), 0
+	// Check if name looks like a valid issue identifier (e.g., "ENG-123")
+	// to avoid unnecessary API calls for invalid names
+	if !looksLikeIdentifier(name) {
+		return nil, syscall.ENOENT
 	}
 
-	// Fall back to fetching all team issues if not in individual cache
-	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	// Use FetchIssueByIdentifier which checks: cache -> SQLite -> direct API
+	// This avoids loading ALL team issues just to access a single issue
+	issue, err := n.lfs.FetchIssueByIdentifier(ctx, name)
 	if err != nil {
-		return nil, syscall.EIO
+		// If API returns not found, return ENOENT
+		return nil, syscall.ENOENT
 	}
 
-	for _, issue := range issues {
-		if issue.Identifier == name {
-			node := &IssueDirectoryNode{
-				lfs:   n.lfs,
-				issue: issue,
-			}
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFDIR,
-				Ino:  issueDirIno(issue.ID),
-			}), 0
+	node := &IssueDirectoryNode{
+		lfs:   n.lfs,
+		issue: *issue,
+	}
+	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.SetAttrTimeout(30 * time.Second)
+	out.SetEntryTimeout(30 * time.Second)
+	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+		Ino:  issueDirIno(issue.ID),
+	}), 0
+}
+
+// looksLikeIdentifier checks if a name looks like a Linear issue identifier
+// Valid formats: "ABC-123", "AB-1", etc. (1-5 uppercase letters, dash, 1+ digits)
+func looksLikeIdentifier(name string) bool {
+	dashIdx := -1
+	for i, c := range name {
+		if c == '-' {
+			dashIdx = i
+			break
+		}
+		// Before dash: must be uppercase letter
+		if c < 'A' || c > 'Z' {
+			return false
 		}
 	}
-
-	return nil, syscall.ENOENT
+	// Must have dash with 1-5 chars before it
+	if dashIdx < 1 || dashIdx > 5 {
+		return false
+	}
+	// After dash: must be digits
+	if dashIdx >= len(name)-1 {
+		return false
+	}
+	for _, c := range name[dashIdx+1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // Mkdir creates a new issue from a directory name

@@ -278,6 +278,58 @@ func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
 	return nil
 }
 
+// FetchIssueByIdentifier retrieves an issue by identifier with on-demand fetching.
+// Checks: 1) in-memory cache, 2) SQLite, 3) direct API fetch
+// This avoids loading ALL team issues just to access a single issue.
+func (lfs *LinearFS) FetchIssueByIdentifier(ctx context.Context, identifier string) (*api.Issue, error) {
+	// 1. Check in-memory cache
+	if issue, ok := lfs.issueByIdCache.Get(identifier); ok {
+		if lfs.debug {
+			log.Printf("[CACHE HIT] FetchIssueByIdentifier %s", identifier)
+		}
+		return &issue, nil
+	}
+
+	// 2. Check SQLite if enabled
+	if lfs.store != nil {
+		dbIssue, err := lfs.store.Queries().GetIssueByIdentifier(ctx, identifier)
+		if err == nil {
+			apiIssue, convErr := db.DBIssueToAPIIssue(dbIssue)
+			if convErr == nil {
+				if lfs.debug {
+					log.Printf("[SQLITE HIT] FetchIssueByIdentifier %s", identifier)
+				}
+				lfs.issueByIdCache.Set(identifier, apiIssue)
+				return &apiIssue, nil
+			}
+		}
+	}
+
+	// 3. Direct API fetch - Linear API accepts identifier (e.g., "ENG-123") in the id field
+	if lfs.debug {
+		log.Printf("[API FETCH] FetchIssueByIdentifier %s", identifier)
+	}
+	issue, err := lfs.client.GetIssue(ctx, identifier)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache in memory
+	lfs.issueByIdCache.Set(identifier, *issue)
+
+	// Store in SQLite for persistence
+	if lfs.store != nil {
+		data, convErr := db.APIIssueToDBIssue(*issue)
+		if convErr == nil {
+			if upsertErr := lfs.store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); upsertErr != nil {
+				log.Printf("[WARN] Failed to cache issue %s in SQLite: %v", identifier, upsertErr)
+			}
+		}
+	}
+
+	return issue, nil
+}
+
 // GetFilteredIssuesByStatus fetches issues filtered by status name using server-side filtering
 func (lfs *LinearFS) GetFilteredIssuesByStatus(ctx context.Context, teamID, statusName string) ([]api.Issue, error) {
 	// Try SQLite first if enabled
