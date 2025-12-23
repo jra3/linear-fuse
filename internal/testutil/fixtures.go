@@ -324,3 +324,339 @@ func IssueDocumentsResponse(docs ...map[string]any) map[string]any {
 		},
 	}
 }
+
+// FilteredIssuesResponse returns a response for filtered issue queries (status, label, assignee, unassigned).
+func FilteredIssuesResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"team": map[string]any{
+			"issues": map[string]any{
+				"pageInfo": map[string]any{
+					"hasNextPage": false,
+					"endCursor":   "",
+				},
+				"nodes": issues,
+			},
+		},
+	}
+}
+
+// IssuesByPriorityResponse returns a response for GetTeamIssuesByPriority (uses issues root).
+func IssuesByPriorityResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"issues": map[string]any{
+			"pageInfo": map[string]any{
+				"hasNextPage": false,
+				"endCursor":   "",
+			},
+			"nodes": issues,
+		},
+	}
+}
+
+// MyIssuesResponse returns a response for GetMyIssues.
+func MyIssuesResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"viewer": map[string]any{
+			"assignedIssues": map[string]any{
+				"pageInfo": map[string]any{
+					"hasNextPage": false,
+					"endCursor":   "",
+				},
+				"nodes": issues,
+			},
+		},
+	}
+}
+
+// MyCreatedIssuesResponse returns a response for GetMyCreatedIssues.
+func MyCreatedIssuesResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"viewer": map[string]any{
+			"createdIssues": map[string]any{
+				"pageInfo": map[string]any{
+					"hasNextPage": false,
+					"endCursor":   "",
+				},
+				"nodes": issues,
+			},
+		},
+	}
+}
+
+// ArchiveIssueResponse returns a response for ArchiveIssue mutation.
+func ArchiveIssueResponse(success bool) map[string]any {
+	return map[string]any{
+		"issueArchive": map[string]any{
+			"success": success,
+		},
+	}
+}
+
+// CreateIssueResponse returns a response for CreateIssue mutation.
+func CreateIssueResponse(issue map[string]any) map[string]any {
+	return map[string]any{
+		"issueCreate": map[string]any{
+			"success": true,
+			"issue":   issue,
+		},
+	}
+}
+
+// TeamProjectsResponse returns a response for GetTeamProjects.
+func TeamProjectsResponse(projects ...map[string]any) map[string]any {
+	return map[string]any{
+		"team": map[string]any{
+			"projects": map[string]any{
+				"nodes": projects,
+			},
+		},
+	}
+}
+
+// ProjectIssuesResponse returns a response for GetProjectIssues.
+func ProjectIssuesResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"project": map[string]any{
+			"issues": map[string]any{
+				"pageInfo": map[string]any{
+					"hasNextPage": false,
+					"endCursor":   "",
+				},
+				"nodes": issues,
+			},
+		},
+	}
+}
+
+// FixtureProjectMilestone returns a test project milestone as a map.
+func FixtureProjectMilestone() map[string]any {
+	return map[string]any{
+		"id":          "milestone-123",
+		"name":        "Alpha Release",
+		"description": "First alpha release",
+		"targetDate":  "2024-03-31",
+		"sortOrder":   1.0,
+	}
+}
+
+// ProjectMilestonesResponse returns a response for GetProjectMilestones.
+func ProjectMilestonesResponse(milestones ...map[string]any) map[string]any {
+	return map[string]any{
+		"project": map[string]any{
+			"projectMilestones": map[string]any{
+				"nodes": milestones,
+			},
+		},
+	}
+}
+
+// ProjectUpdatesResponse returns a response for GetProjectUpdates.
+func ProjectUpdatesResponse(updates ...map[string]any) map[string]any {
+	return map[string]any{
+		"project": map[string]any{
+			"projectUpdates": map[string]any{
+				"nodes": updates,
+			},
+		},
+	}
+}
+
+// CreateProjectUpdateResponse returns a response for CreateProjectUpdate mutation.
+func CreateProjectUpdateResponse(update map[string]any) map[string]any {
+	return map[string]any{
+		"projectUpdateCreate": map[string]any{
+			"success":       true,
+			"projectUpdate": update,
+		},
+	}
+}
+
+// TeamCyclesResponse returns a response for GetTeamCycles.
+func TeamCyclesResponse(cycles ...map[string]any) map[string]any {
+	return map[string]any{
+		"team": map[string]any{
+			"cycles": map[string]any{
+				"nodes": cycles,
+			},
+		},
+	}
+}
+
+// FixtureCycleIssue returns a minimal cycle issue as a map.
+func FixtureCycleIssue() map[string]any {
+	return map[string]any{
+		"id":         "issue-cycle-123",
+		"identifier": "TST-789",
+		"title":      "Cycle Issue",
+		"state":      FixtureState("started"),
+	}
+}
+
+// CycleIssuesResponse returns a response for GetCycleIssues.
+func CycleIssuesResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"cycle": map[string]any{
+			"issues": map[string]any{
+				"pageInfo": map[string]any{
+					"hasNextPage": false,
+					"endCursor":   "",
+				},
+				"nodes": issues,
+			},
+		},
+	}
+}
+
+// CreateLabelResponse returns a response for CreateLabel mutation.
+func CreateLabelResponse(label map[string]any) map[string]any {
+	return map[string]any{
+		"issueLabelCreate": map[string]any{
+			"success":    true,
+			"issueLabel": label,
+		},
+	}
+}
+
+// UpdateLabelResponse returns a response for UpdateLabel mutation.
+func UpdateLabelResponse(label map[string]any) map[string]any {
+	return map[string]any{
+		"issueLabelUpdate": map[string]any{
+			"success":    true,
+			"issueLabel": label,
+		},
+	}
+}
+
+// DeleteLabelResponse returns a response for DeleteLabel mutation.
+func DeleteLabelResponse(success bool) map[string]any {
+	return map[string]any{
+		"issueLabelDelete": map[string]any{
+			"success": success,
+		},
+	}
+}
+
+// UpdateCommentResponse returns a response for UpdateComment mutation.
+func UpdateCommentResponse(comment map[string]any) map[string]any {
+	return map[string]any{
+		"commentUpdate": map[string]any{
+			"success": true,
+			"comment": comment,
+		},
+	}
+}
+
+// DeleteCommentResponse returns a response for DeleteComment mutation.
+func DeleteCommentResponse(success bool) map[string]any {
+	return map[string]any{
+		"commentDelete": map[string]any{
+			"success": success,
+		},
+	}
+}
+
+// CreateDocumentResponse returns a response for CreateDocument mutation.
+func CreateDocumentResponse(doc map[string]any) map[string]any {
+	return map[string]any{
+		"documentCreate": map[string]any{
+			"success":  true,
+			"document": doc,
+		},
+	}
+}
+
+// UpdateDocumentResponse returns a response for UpdateDocument mutation.
+func UpdateDocumentResponse(doc map[string]any) map[string]any {
+	return map[string]any{
+		"documentUpdate": map[string]any{
+			"success":  true,
+			"document": doc,
+		},
+	}
+}
+
+// DeleteDocumentResponse returns a response for DeleteDocument mutation.
+func DeleteDocumentResponse(success bool) map[string]any {
+	return map[string]any{
+		"documentDelete": map[string]any{
+			"success": success,
+		},
+	}
+}
+
+// InitiativesResponse returns a response for GetInitiatives.
+func InitiativesResponse(initiatives ...map[string]any) map[string]any {
+	return map[string]any{
+		"initiatives": map[string]any{
+			"nodes": initiatives,
+		},
+	}
+}
+
+// FixtureInitiativeUpdate returns a test initiative update as a map.
+func FixtureInitiativeUpdate() map[string]any {
+	return map[string]any{
+		"id":        "init-update-123",
+		"body":      "Initiative on track",
+		"health":    "onTrack",
+		"createdAt": time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		"updatedAt": time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		"user":      FixtureUser(),
+	}
+}
+
+// InitiativeUpdatesResponse returns a response for GetInitiativeUpdates.
+func InitiativeUpdatesResponse(updates ...map[string]any) map[string]any {
+	return map[string]any{
+		"initiative": map[string]any{
+			"initiativeUpdates": map[string]any{
+				"nodes": updates,
+			},
+		},
+	}
+}
+
+// CreateInitiativeUpdateResponse returns a response for CreateInitiativeUpdate mutation.
+func CreateInitiativeUpdateResponse(update map[string]any) map[string]any {
+	return map[string]any{
+		"initiativeUpdateCreate": map[string]any{
+			"success":          true,
+			"initiativeUpdate": update,
+		},
+	}
+}
+
+// ProjectDocumentsResponse returns a response for GetProjectDocuments.
+func ProjectDocumentsResponse(docs ...map[string]any) map[string]any {
+	return map[string]any{
+		"documents": map[string]any{
+			"nodes": docs,
+		},
+	}
+}
+
+// UserIssuesResponse returns a response for GetUserIssues.
+func UserIssuesResponse(issues ...map[string]any) map[string]any {
+	return map[string]any{
+		"user": map[string]any{
+			"assignedIssues": map[string]any{
+				"pageInfo": map[string]any{
+					"hasNextPage": false,
+					"endCursor":   "",
+				},
+				"nodes": issues,
+			},
+		},
+	}
+}
+
+// TeamMembersResponse returns a response for GetTeamMembers.
+func TeamMembersResponse(users ...map[string]any) map[string]any {
+	return map[string]any{
+		"team": map[string]any{
+			"members": map[string]any{
+				"nodes": users,
+			},
+		},
+	}
+}

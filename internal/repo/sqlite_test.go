@@ -519,3 +519,1285 @@ func TestSQLiteRepository_CurrentUser(t *testing.T) {
 		t.Errorf("Expected user ID 'u1', got %q", user.ID)
 	}
 }
+
+func TestSQLiteRepository_IssueChildren(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert parent issue
+	parentIssue := api.Issue{
+		ID:         "parent-1",
+		Identifier: "TST-1",
+		Title:      "Parent Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Name: "Todo", Type: "unstarted"},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	parentData, _ := db.APIIssueToDBIssue(parentIssue)
+	store.Queries().UpsertIssue(ctx, parentData.ToUpsertParams())
+
+	// Insert child issues
+	child1 := api.Issue{
+		ID:         "child-1",
+		Identifier: "TST-2",
+		Title:      "Child Issue 1",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Name: "Todo", Type: "unstarted"},
+		Parent:     &api.ParentIssue{ID: "parent-1", Identifier: "TST-1"},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	child2 := api.Issue{
+		ID:         "child-2",
+		Identifier: "TST-3",
+		Title:      "Child Issue 2",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Name: "Todo", Type: "unstarted"},
+		Parent:     &api.ParentIssue{ID: "parent-1", Identifier: "TST-1"},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	childData1, _ := db.APIIssueToDBIssue(child1)
+	childData2, _ := db.APIIssueToDBIssue(child2)
+	store.Queries().UpsertIssue(ctx, childData1.ToUpsertParams())
+	store.Queries().UpsertIssue(ctx, childData2.ToUpsertParams())
+
+	// Test GetIssueChildren
+	children, err := repo.GetIssueChildren(ctx, "parent-1")
+	if err != nil {
+		t.Fatalf("GetIssueChildren failed: %v", err)
+	}
+	if len(children) != 2 {
+		t.Errorf("Expected 2 children, got %d", len(children))
+	}
+}
+
+func TestSQLiteRepository_IssuesByLabel(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert label
+	label := api.Label{ID: "label-1", Name: "Bug", Color: "#ff0000"}
+	labelParams, _ := db.APILabelToDBLabel(label, "team-1")
+	store.Queries().UpsertLabel(ctx, labelParams)
+
+	// Insert issues with labels (labels are stored in JSON data field)
+	issue1 := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "Bug Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		Labels:     api.Labels{Nodes: []api.Label{label}},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	issue2 := api.Issue{
+		ID:         "issue-2",
+		Identifier: "TST-2",
+		Title:      "No Label Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		Labels:     api.Labels{Nodes: []api.Label{}},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+
+	issueData1, _ := db.APIIssueToDBIssue(issue1)
+	issueData2, _ := db.APIIssueToDBIssue(issue2)
+	store.Queries().UpsertIssue(ctx, issueData1.ToUpsertParams())
+	store.Queries().UpsertIssue(ctx, issueData2.ToUpsertParams())
+
+	// Test GetIssuesByLabel (labels are stored in issue JSON data)
+	issues, err := repo.GetIssuesByLabel(ctx, "team-1", "label-1")
+	if err != nil {
+		t.Fatalf("GetIssuesByLabel failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 issue with label, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_IssuesByProject(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert project
+	project := api.Project{ID: "project-1", Name: "Project Alpha", Slug: "alpha", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	projectParams, _ := db.APIProjectToDBProject(project)
+	store.Queries().UpsertProject(ctx, projectParams)
+
+	// Insert issues with project
+	issue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "Project Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		Project:    &project,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	issueData, _ := db.APIIssueToDBIssue(issue)
+	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+
+	// Test GetIssuesByProject
+	issues, err := repo.GetIssuesByProject(ctx, "project-1")
+	if err != nil {
+		t.Fatalf("GetIssuesByProject failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 issue in project, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_IssuesByCycle(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert cycle
+	cycle := api.Cycle{ID: "cycle-1", Number: 1, Name: "Sprint 1", StartsAt: time.Now(), EndsAt: time.Now().Add(14 * 24 * time.Hour)}
+	cycleParams, _ := db.APICycleToDBCycle(cycle, "team-1")
+	store.Queries().UpsertCycle(ctx, cycleParams)
+
+	// Insert issue with cycle
+	issueCycle := api.IssueCycle{ID: "cycle-1", Number: 1, Name: "Sprint 1"}
+	issue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "Cycle Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		Cycle:      &issueCycle,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	issueData, _ := db.APIIssueToDBIssue(issue)
+	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+
+	// Test GetIssuesByCycle
+	issues, err := repo.GetIssuesByCycle(ctx, "cycle-1")
+	if err != nil {
+		t.Fatalf("GetIssuesByCycle failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 issue in cycle, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_MyIssues(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert users
+	user1 := api.User{ID: "user-1", Name: "Me", Email: "me@example.com", Active: true}
+	user2 := api.User{ID: "user-2", Name: "Other", Email: "other@example.com", Active: true}
+	userParams1, _ := db.APIUserToDBUser(user1)
+	userParams2, _ := db.APIUserToDBUser(user2)
+	store.Queries().UpsertUser(ctx, userParams1)
+	store.Queries().UpsertUser(ctx, userParams2)
+
+	// Set current user
+	repo.SetCurrentUser(&user1)
+
+	// Insert issues
+	myIssue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "My Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Type: "started"},
+		Assignee:   &user1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	otherIssue := api.Issue{
+		ID:         "issue-2",
+		Identifier: "TST-2",
+		Title:      "Other Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Type: "started"},
+		Assignee:   &user2,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	myIssueData, _ := db.APIIssueToDBIssue(myIssue)
+	otherIssueData, _ := db.APIIssueToDBIssue(otherIssue)
+	store.Queries().UpsertIssue(ctx, myIssueData.ToUpsertParams())
+	store.Queries().UpsertIssue(ctx, otherIssueData.ToUpsertParams())
+
+	// Test GetMyIssues
+	issues, err := repo.GetMyIssues(ctx)
+	if err != nil {
+		t.Fatalf("GetMyIssues failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 issue assigned to me, got %d", len(issues))
+	}
+	if len(issues) > 0 && issues[0].ID != "issue-1" {
+		t.Errorf("Expected issue ID 'issue-1', got %q", issues[0].ID)
+	}
+}
+
+func TestSQLiteRepository_MyActiveIssues(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert user and set as current
+	user := api.User{ID: "user-1", Name: "Me", Email: "me@example.com", Active: true}
+	userParams, _ := db.APIUserToDBUser(user)
+	store.Queries().UpsertUser(ctx, userParams)
+	repo.SetCurrentUser(&user)
+
+	// Insert issues with different states
+	activeIssue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "Active Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Type: "started"},
+		Assignee:   &user,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	completedIssue := api.Issue{
+		ID:         "issue-2",
+		Identifier: "TST-2",
+		Title:      "Completed Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-2", Type: "completed"},
+		Assignee:   &user,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	canceledIssue := api.Issue{
+		ID:         "issue-3",
+		Identifier: "TST-3",
+		Title:      "Canceled Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-3", Type: "canceled"},
+		Assignee:   &user,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+
+	activeData, _ := db.APIIssueToDBIssue(activeIssue)
+	completedData, _ := db.APIIssueToDBIssue(completedIssue)
+	canceledData, _ := db.APIIssueToDBIssue(canceledIssue)
+	store.Queries().UpsertIssue(ctx, activeData.ToUpsertParams())
+	store.Queries().UpsertIssue(ctx, completedData.ToUpsertParams())
+	store.Queries().UpsertIssue(ctx, canceledData.ToUpsertParams())
+
+	// Test GetMyActiveIssues - should only return non-completed, non-canceled
+	issues, err := repo.GetMyActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("GetMyActiveIssues failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 active issue, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_UserIssues(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert user
+	user := api.User{ID: "user-1", Name: "User", Email: "user@example.com", Active: true}
+	userParams, _ := db.APIUserToDBUser(user)
+	store.Queries().UpsertUser(ctx, userParams)
+
+	// Insert issues
+	issue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "User Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		Assignee:   &user,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	issueData, _ := db.APIIssueToDBIssue(issue)
+	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+
+	// Test GetUserIssues
+	issues, err := repo.GetUserIssues(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("GetUserIssues failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 issue for user, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_TeamMembers(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert users
+	user1 := api.User{ID: "user-1", Name: "Alice", Email: "alice@example.com", Active: true}
+	user2 := api.User{ID: "user-2", Name: "Bob", Email: "bob@example.com", Active: true}
+	userParams1, _ := db.APIUserToDBUser(user1)
+	userParams2, _ := db.APIUserToDBUser(user2)
+	store.Queries().UpsertUser(ctx, userParams1)
+	store.Queries().UpsertUser(ctx, userParams2)
+
+	// Add team memberships
+	store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
+		TeamID:   "team-1",
+		UserID:   "user-1",
+		SyncedAt: time.Now(),
+	})
+	store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
+		TeamID:   "team-1",
+		UserID:   "user-2",
+		SyncedAt: time.Now(),
+	})
+
+	// Test GetTeamMembers
+	members, err := repo.GetTeamMembers(ctx, "team-1")
+	if err != nil {
+		t.Fatalf("GetTeamMembers failed: %v", err)
+	}
+	if len(members) != 2 {
+		t.Errorf("Expected 2 team members, got %d", len(members))
+	}
+}
+
+func TestSQLiteRepository_Milestones(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert project
+	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	projectParams, _ := db.APIProjectToDBProject(project)
+	store.Queries().UpsertProject(ctx, projectParams)
+
+	// Insert milestones
+	targetDate := "2024-03-31"
+	milestone1 := api.ProjectMilestone{ID: "ms-1", Name: "Alpha", Description: "Alpha release", TargetDate: &targetDate, SortOrder: 1.0}
+	milestone2 := api.ProjectMilestone{ID: "ms-2", Name: "Beta", Description: "Beta release", TargetDate: &targetDate, SortOrder: 2.0}
+
+	ms1Params, _ := db.APIProjectMilestoneToDBMilestone(milestone1, "project-1")
+	ms2Params, _ := db.APIProjectMilestoneToDBMilestone(milestone2, "project-1")
+	store.Queries().UpsertProjectMilestone(ctx, ms1Params)
+	store.Queries().UpsertProjectMilestone(ctx, ms2Params)
+
+	// Test GetProjectMilestones
+	milestones, err := repo.GetProjectMilestones(ctx, "project-1")
+	if err != nil {
+		t.Fatalf("GetProjectMilestones failed: %v", err)
+	}
+	if len(milestones) != 2 {
+		t.Errorf("Expected 2 milestones, got %d", len(milestones))
+	}
+
+	// Test GetMilestoneByName
+	milestone, err := repo.GetMilestoneByName(ctx, "project-1", "Alpha")
+	if err != nil {
+		t.Fatalf("GetMilestoneByName failed: %v", err)
+	}
+	if milestone == nil {
+		t.Fatal("Expected milestone, got nil")
+	}
+	if milestone.Name != "Alpha" {
+		t.Errorf("Expected milestone name 'Alpha', got %q", milestone.Name)
+	}
+
+	// Test not found
+	milestone, err = repo.GetMilestoneByName(ctx, "project-1", "NotFound")
+	if err != nil {
+		t.Fatalf("GetMilestoneByName failed: %v", err)
+	}
+	if milestone != nil {
+		t.Error("Expected nil for non-existent milestone")
+	}
+}
+
+func TestSQLiteRepository_Comments(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team and issue
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	issue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "Test Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	issueData, _ := db.APIIssueToDBIssue(issue)
+	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+
+	// Insert comments
+	user := api.User{ID: "user-1", Name: "Commenter", Email: "commenter@example.com"}
+	comment1 := api.Comment{ID: "comment-1", Body: "First comment", CreatedAt: time.Now(), UpdatedAt: time.Now(), User: &user}
+	comment2 := api.Comment{ID: "comment-2", Body: "Second comment", CreatedAt: time.Now(), UpdatedAt: time.Now(), User: &user}
+
+	c1Params, _ := db.APICommentToDBComment(comment1, "issue-1")
+	c2Params, _ := db.APICommentToDBComment(comment2, "issue-1")
+	store.Queries().UpsertComment(ctx, c1Params)
+	store.Queries().UpsertComment(ctx, c2Params)
+
+	// Test GetIssueComments
+	comments, err := repo.GetIssueComments(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("GetIssueComments failed: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Errorf("Expected 2 comments, got %d", len(comments))
+	}
+
+	// Test GetCommentByID
+	comment, err := repo.GetCommentByID(ctx, "comment-1")
+	if err != nil {
+		t.Fatalf("GetCommentByID failed: %v", err)
+	}
+	if comment == nil {
+		t.Fatal("Expected comment, got nil")
+	}
+	if comment.Body != "First comment" {
+		t.Errorf("Expected body 'First comment', got %q", comment.Body)
+	}
+
+	// Test not found
+	comment, err = repo.GetCommentByID(ctx, "not-found")
+	if err != nil {
+		t.Fatalf("GetCommentByID failed: %v", err)
+	}
+	if comment != nil {
+		t.Error("Expected nil for non-existent comment")
+	}
+}
+
+func TestSQLiteRepository_IssueDocuments(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team and issue
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	issue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "Test Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1"},
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	issueData, _ := db.APIIssueToDBIssue(issue)
+	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+
+	// Insert documents
+	user := api.User{ID: "user-1", Name: "Author", Email: "author@example.com"}
+	doc := api.Document{
+		ID:        "doc-1",
+		Title:     "Test Doc",
+		Content:   "Document content",
+		SlugID:    "test-doc",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Creator:   &user,
+		Issue:     &api.Issue{ID: "issue-1"},
+	}
+	docParams, _ := db.APIDocumentToDBDocument(doc)
+	store.Queries().UpsertDocument(ctx, docParams)
+
+	// Test GetIssueDocuments
+	docs, err := repo.GetIssueDocuments(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("GetIssueDocuments failed: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Errorf("Expected 1 document, got %d", len(docs))
+	}
+
+	// Test GetDocumentBySlug
+	doc2, err := repo.GetDocumentBySlug(ctx, "test-doc")
+	if err != nil {
+		t.Fatalf("GetDocumentBySlug failed: %v", err)
+	}
+	if doc2 == nil {
+		t.Fatal("Expected document, got nil")
+	}
+	if doc2.Title != "Test Doc" {
+		t.Errorf("Expected title 'Test Doc', got %q", doc2.Title)
+	}
+}
+
+func TestSQLiteRepository_ProjectDocuments(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert project
+	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	projectParams, _ := db.APIProjectToDBProject(project)
+	store.Queries().UpsertProject(ctx, projectParams)
+
+	// Insert document
+	user := api.User{ID: "user-1", Name: "Author", Email: "author@example.com"}
+	doc := api.Document{
+		ID:        "doc-1",
+		Title:     "Project Doc",
+		Content:   "Project document content",
+		SlugID:    "project-doc",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Creator:   &user,
+		Project:   &api.Project{ID: "project-1"},
+	}
+	docParams, _ := db.APIDocumentToDBDocument(doc)
+	store.Queries().UpsertDocument(ctx, docParams)
+
+	// Test GetProjectDocuments
+	docs, err := repo.GetProjectDocuments(ctx, "project-1")
+	if err != nil {
+		t.Fatalf("GetProjectDocuments failed: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Errorf("Expected 1 document, got %d", len(docs))
+	}
+}
+
+func TestSQLiteRepository_Initiatives(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert initiatives
+	initiative := api.Initiative{
+		ID:          "init-1",
+		Name:        "Test Initiative",
+		Slug:        "test-initiative",
+		Description: "A test initiative",
+		Status:      "active",
+		Color:       "#0000ff",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
+	store.Queries().UpsertInitiative(ctx, initParams)
+
+	// Test GetInitiatives
+	initiatives, err := repo.GetInitiatives(ctx)
+	if err != nil {
+		t.Fatalf("GetInitiatives failed: %v", err)
+	}
+	if len(initiatives) != 1 {
+		t.Errorf("Expected 1 initiative, got %d", len(initiatives))
+	}
+
+	// Test GetInitiativeBySlug
+	init, err := repo.GetInitiativeBySlug(ctx, "test-initiative")
+	if err != nil {
+		t.Fatalf("GetInitiativeBySlug failed: %v", err)
+	}
+	if init == nil {
+		t.Fatal("Expected initiative, got nil")
+	}
+	if init.Name != "Test Initiative" {
+		t.Errorf("Expected name 'Test Initiative', got %q", init.Name)
+	}
+
+	// Test not found
+	init, err = repo.GetInitiativeBySlug(ctx, "not-found")
+	if err != nil {
+		t.Fatalf("GetInitiativeBySlug failed: %v", err)
+	}
+	if init != nil {
+		t.Error("Expected nil for non-existent initiative")
+	}
+}
+
+func TestSQLiteRepository_InitiativeProjects(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert initiative
+	initiative := api.Initiative{
+		ID:        "init-1",
+		Name:      "Test Initiative",
+		Slug:      "test-initiative",
+		Status:    "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
+	store.Queries().UpsertInitiative(ctx, initParams)
+
+	// Insert project
+	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	projectParams, _ := db.APIProjectToDBProject(project)
+	store.Queries().UpsertProject(ctx, projectParams)
+
+	// Link project to initiative
+	store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+		InitiativeID: "init-1",
+		ProjectID:    "project-1",
+		SyncedAt:     time.Now(),
+	})
+
+	// Test GetInitiativeProjects
+	projects, err := repo.GetInitiativeProjects(ctx, "init-1")
+	if err != nil {
+		t.Fatalf("GetInitiativeProjects failed: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Errorf("Expected 1 project, got %d", len(projects))
+	}
+}
+
+func TestSQLiteRepository_ProjectUpdates(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert project
+	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	projectParams, _ := db.APIProjectToDBProject(project)
+	store.Queries().UpsertProject(ctx, projectParams)
+
+	// Insert project update
+	user := api.User{ID: "user-1", Name: "User", Email: "user@example.com"}
+	update := api.ProjectUpdate{
+		ID:        "update-1",
+		Body:      "Sprint completed",
+		Health:    "onTrack",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		User:      &user,
+	}
+	updateParams, _ := db.APIProjectUpdateToDBUpdate(update, "project-1")
+	store.Queries().UpsertProjectUpdate(ctx, updateParams)
+
+	// Test GetProjectUpdates
+	updates, err := repo.GetProjectUpdates(ctx, "project-1")
+	if err != nil {
+		t.Fatalf("GetProjectUpdates failed: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Errorf("Expected 1 update, got %d", len(updates))
+	}
+	if updates[0].Health != "onTrack" {
+		t.Errorf("Expected health 'onTrack', got %q", updates[0].Health)
+	}
+}
+
+func TestSQLiteRepository_InitiativeUpdates(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert initiative
+	initiative := api.Initiative{
+		ID:        "init-1",
+		Name:      "Test Initiative",
+		Slug:      "test-initiative",
+		Status:    "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
+	store.Queries().UpsertInitiative(ctx, initParams)
+
+	// Insert initiative update
+	user := api.User{ID: "user-1", Name: "User", Email: "user@example.com"}
+	update := api.InitiativeUpdate{
+		ID:        "update-1",
+		Body:      "Initiative on track",
+		Health:    "onTrack",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		User:      &user,
+	}
+	updateParams, _ := db.APIInitiativeUpdateToDBUpdate(update, "init-1")
+	store.Queries().UpsertInitiativeUpdate(ctx, updateParams)
+
+	// Test GetInitiativeUpdates
+	updates, err := repo.GetInitiativeUpdates(ctx, "init-1")
+	if err != nil {
+		t.Fatalf("GetInitiativeUpdates failed: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Errorf("Expected 1 update, got %d", len(updates))
+	}
+}
+
+func TestSQLiteRepository_StoreAndClose(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+
+	// Test Store returns the store
+	s := repo.Store()
+	if s != store {
+		t.Error("Store() should return the underlying store")
+	}
+
+	// Test Close (doesn't return error)
+	repo.Close()
+}
+
+func TestSQLiteRepository_SetStalenessThreshold(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Default threshold should be 5 minutes
+	if repo.stalenessThreshold != 5*time.Minute {
+		t.Errorf("Expected default threshold of 5m, got %v", repo.stalenessThreshold)
+	}
+
+	// Set custom threshold
+	repo.SetStalenessThreshold(10 * time.Minute)
+	if repo.stalenessThreshold != 10*time.Minute {
+		t.Errorf("Expected threshold of 10m, got %v", repo.stalenessThreshold)
+	}
+
+	// Set to 0
+	repo.SetStalenessThreshold(0)
+	if repo.stalenessThreshold != 0 {
+		t.Errorf("Expected threshold of 0, got %v", repo.stalenessThreshold)
+	}
+}
+
+func TestSQLiteRepository_ParseTime(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input interface{}
+		want  bool // whether result should be zero
+	}{
+		{"nil", nil, true},
+		{"time.Time", time.Now(), false},
+		{"string RFC3339", "2024-01-15T10:30:00Z", false},
+		{"empty string", "", true},
+		{"invalid string", "not a date", true},
+		{"int (unsupported)", 12345, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseTime(tt.input)
+			if tt.want && !result.IsZero() {
+				t.Errorf("Expected zero time for %v, got %v", tt.input, result)
+			}
+			if !tt.want && result.IsZero() {
+				t.Errorf("Expected non-zero time for %v, got zero", tt.input)
+			}
+		})
+	}
+}
+
+func TestSQLiteRepository_GetIssueByID_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	issue, err := repo.GetIssueByID(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetIssueByID should not error on not found: %v", err)
+	}
+	if issue != nil {
+		t.Error("Expected nil for non-existent issue")
+	}
+}
+
+func TestSQLiteRepository_GetIssueByIdentifier_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	issue, err := repo.GetIssueByIdentifier(ctx, "NOTFOUND-999")
+	if err != nil {
+		t.Fatalf("GetIssueByIdentifier should not error on not found: %v", err)
+	}
+	if issue != nil {
+		t.Error("Expected nil for non-existent issue")
+	}
+}
+
+func TestSQLiteRepository_GetProjectBySlug_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	project, err := repo.GetProjectBySlug(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetProjectBySlug should not error on not found: %v", err)
+	}
+	if project != nil {
+		t.Error("Expected nil for non-existent project")
+	}
+}
+
+func TestSQLiteRepository_GetProjectByID_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	project, err := repo.GetProjectByID(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetProjectByID should not error on not found: %v", err)
+	}
+	if project != nil {
+		t.Error("Expected nil for non-existent project")
+	}
+}
+
+func TestSQLiteRepository_GetDocumentBySlug_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	doc, err := repo.GetDocumentBySlug(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetDocumentBySlug should not error on not found: %v", err)
+	}
+	if doc != nil {
+		t.Error("Expected nil for non-existent document")
+	}
+}
+
+func TestSQLiteRepository_GetLabelByName_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	label, err := repo.GetLabelByName(ctx, "team-1", "NonexistentLabel")
+	if err != nil {
+		t.Fatalf("GetLabelByName should not error on not found: %v", err)
+	}
+	if label != nil {
+		t.Error("Expected nil for non-existent label")
+	}
+}
+
+func TestSQLiteRepository_GetUserByID_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	user, err := repo.GetUserByID(ctx, "nonexistent")
+	if err != nil {
+		t.Fatalf("GetUserByID should not error on not found: %v", err)
+	}
+	if user != nil {
+		t.Error("Expected nil for non-existent user")
+	}
+}
+
+func TestSQLiteRepository_GetUserByEmail_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	user, err := repo.GetUserByEmail(ctx, "nonexistent@example.com")
+	if err != nil {
+		t.Fatalf("GetUserByEmail should not error on not found: %v", err)
+	}
+	if user != nil {
+		t.Error("Expected nil for non-existent user")
+	}
+}
+
+func TestSQLiteRepository_GetCycleByName_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	cycle, err := repo.GetCycleByName(ctx, "team-1", "NonexistentCycle")
+	if err != nil {
+		t.Fatalf("GetCycleByName should not error on not found: %v", err)
+	}
+	if cycle != nil {
+		t.Error("Expected nil for non-existent cycle")
+	}
+}
+
+func TestSQLiteRepository_GetStateByName_NotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test not found
+	state, err := repo.GetStateByName(ctx, "team-1", "NonexistentState")
+	if err != nil {
+		t.Fatalf("GetStateByName should not error on not found: %v", err)
+	}
+	if state != nil {
+		t.Error("Expected nil for non-existent state")
+	}
+}
+
+func TestSQLiteRepository_GetIssuesByLabel_LabelNotFound(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Test with non-existent label - should return empty slice, not error
+	issues, err := repo.GetIssuesByLabel(ctx, "team-1", "nonexistent-label")
+	if err != nil {
+		t.Fatalf("GetIssuesByLabel should not error for non-existent label: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("Expected 0 issues for non-existent label, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_MyCreatedIssues(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test team
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+
+	// Insert users
+	user1 := api.User{ID: "user-1", Name: "Me", Email: "me@example.com", Active: true}
+	user2 := api.User{ID: "user-2", Name: "Other", Email: "other@example.com", Active: true}
+	userParams1, _ := db.APIUserToDBUser(user1)
+	userParams2, _ := db.APIUserToDBUser(user2)
+	store.Queries().UpsertUser(ctx, userParams1)
+	store.Queries().UpsertUser(ctx, userParams2)
+
+	// Set current user
+	repo.SetCurrentUser(&user1)
+
+	// Insert issues - one created by me, one by other
+	myCreatedIssue := api.Issue{
+		ID:         "issue-1",
+		Identifier: "TST-1",
+		Title:      "My Created Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Type: "unstarted"},
+		Creator:    &user1,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	otherCreatedIssue := api.Issue{
+		ID:         "issue-2",
+		Identifier: "TST-2",
+		Title:      "Other Created Issue",
+		Team:       &team,
+		State:      api.State{ID: "state-1", Type: "unstarted"},
+		Creator:    &user2,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	myData, _ := db.APIIssueToDBIssue(myCreatedIssue)
+	otherData, _ := db.APIIssueToDBIssue(otherCreatedIssue)
+	store.Queries().UpsertIssue(ctx, myData.ToUpsertParams())
+	store.Queries().UpsertIssue(ctx, otherData.ToUpsertParams())
+
+	// Test GetMyCreatedIssues
+	issues, err := repo.GetMyCreatedIssues(ctx)
+	if err != nil {
+		t.Fatalf("GetMyCreatedIssues failed: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("Expected 1 issue created by me, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_MyCreatedIssues_NoCurrentUser(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Don't set current user - should return empty slice
+	issues, err := repo.GetMyCreatedIssues(ctx)
+	if err != nil {
+		t.Fatalf("GetMyCreatedIssues failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("Expected 0 issues when no current user, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_MyIssues_NoCurrentUser(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Don't set current user - should return empty slice
+	issues, err := repo.GetMyIssues(ctx)
+	if err != nil {
+		t.Fatalf("GetMyIssues failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("Expected 0 issues when no current user, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_MyActiveIssues_NoCurrentUser(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Don't set current user - should return empty slice
+	issues, err := repo.GetMyActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("GetMyActiveIssues failed: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Errorf("Expected 0 issues when no current user, got %d", len(issues))
+	}
+}
+
+func TestSQLiteRepository_TriggerBackgroundRefresh_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op with nil client
+	called := false
+	repo.triggerBackgroundRefresh("test-key", func(ctx context.Context) error {
+		called = true
+		return nil
+	})
+
+	// Give a moment for any goroutine to run
+	time.Sleep(10 * time.Millisecond)
+
+	if called {
+		t.Error("triggerBackgroundRefresh should not call refreshFn when client is nil")
+	}
+}
+
+func TestSQLiteRepository_MaybeRefreshComments_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op - no panic
+	repo.maybeRefreshComments("issue-1", true)
+	repo.maybeRefreshComments("issue-2", false)
+}
+
+func TestSQLiteRepository_MaybeRefreshIssueDocuments_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op - no panic
+	repo.maybeRefreshIssueDocuments("issue-1", true)
+	repo.maybeRefreshIssueDocuments("issue-2", false)
+}
+
+func TestSQLiteRepository_MaybeRefreshProjectDocuments_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op - no panic
+	repo.maybeRefreshProjectDocuments("project-1", true)
+	repo.maybeRefreshProjectDocuments("project-2", false)
+}
+
+func TestSQLiteRepository_MaybeRefreshProjectUpdates_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op - no panic
+	repo.maybeRefreshProjectUpdates("project-1", true)
+	repo.maybeRefreshProjectUpdates("project-2", false)
+}
+
+func TestSQLiteRepository_MaybeRefreshInitiativeUpdates_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op - no panic
+	repo.maybeRefreshInitiativeUpdates("init-1", true)
+	repo.maybeRefreshInitiativeUpdates("init-2", false)
+}

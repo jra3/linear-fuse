@@ -44,21 +44,9 @@ lint:
 	golangci-lint run
 
 # Generate full coverage report (unit + integration tests)
-# Integration tests need -coverpkg to measure coverage of packages they exercise
+# Uses -coverpkg to measure cross-package coverage from integration tests
 coverage:
-	@echo "Running unit tests with coverage..."
-	@go test ./internal/api/... ./internal/cache/... ./internal/config/... ./internal/db/... \
-		./internal/marshal/... ./internal/repo/... ./internal/sync/... \
-		-coverprofile=coverage-unit.out -covermode=atomic
-	@echo "Running integration tests with cross-package coverage..."
-	@go test ./internal/integration/... \
-		-coverpkg=./internal/fs/...,./internal/repo/...,./internal/db/...,./internal/api/...,./internal/marshal/...,./internal/sync/...,./internal/cache/...,./internal/config/... \
-		-coverprofile=coverage-integration.out -covermode=atomic
-	@echo "Merging coverage profiles..."
-	@echo "mode: atomic" > coverage.out
-	@tail -n +2 coverage-unit.out >> coverage.out
-	@tail -n +2 coverage-integration.out >> coverage.out
-	@rm coverage-unit.out coverage-integration.out
+	@go test ./... -coverprofile=coverage.out -coverpkg=./internal/...
 	@go tool cover -func=coverage.out | tail -1
 	@echo "Full report: make coverage-html"
 

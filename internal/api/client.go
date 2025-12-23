@@ -24,6 +24,7 @@ type Client struct {
 	apiURL     string
 	httpClient *http.Client
 	limiter    *rate.Limiter
+	stats      *APIStats
 }
 
 func NewClient(apiKey string) *Client {
@@ -36,6 +37,14 @@ func NewClient(apiKey string) *Client {
 		apiURL:     defaultAPIURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		limiter:    limiter,
+		stats:      NewAPIStats(),
+	}
+}
+
+// Close shuts down the client and stops any background goroutines.
+func (c *Client) Close() {
+	if c.stats != nil {
+		c.stats.Close()
 	}
 }
 
@@ -57,27 +66,9 @@ type graphQLResponse struct {
 }
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
-	// Extract operation name for logging (first word after "query" or "mutation")
-	var opName string
+	// Extract operation name for stats and logging
+	opName := extractOpName(query)
 	if debugAPI {
-		// Simple extraction: find first { and take word before it
-		for i, ch := range query {
-			if ch == '{' || ch == '(' {
-				// Walk backwards to find operation name
-				end := i - 1
-				for end > 0 && (query[end] == ' ' || query[end] == '\n') {
-					end--
-				}
-				start := end
-				for start > 0 && query[start-1] != ' ' && query[start-1] != '\n' {
-					start--
-				}
-				if start < end {
-					opName = query[start : end+1]
-				}
-				break
-			}
-		}
 		log.Printf("[API] Calling %s vars=%v", opName, variables)
 	}
 
@@ -90,13 +81,24 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		}
 		reservation.Cancel() // Cancel and use Wait() instead for proper blocking
 	}
-	start := time.Now()
+	rateLimitStart := time.Now()
 	if err := c.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait cancelled: %w", err)
 	}
-	if debugRateLimit && time.Since(start) > 100*time.Millisecond {
-		log.Printf("[RATE] Waited %v for rate limit", time.Since(start))
+	rateLimitWait := time.Since(rateLimitStart)
+	if rateLimitWait > time.Millisecond {
+		c.stats.RecordRateLimitWait(rateLimitWait)
 	}
+	if debugRateLimit && rateLimitWait > 100*time.Millisecond {
+		log.Printf("[RATE] Waited %v for rate limit", rateLimitWait)
+	}
+
+	// Track request duration for stats
+	reqStart := time.Now()
+	var queryErr error
+	defer func() {
+		c.stats.Record(opName, time.Since(reqStart), queryErr)
+	}()
 
 	reqBody := graphQLRequest{
 		Query:     query,
@@ -105,12 +107,14 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
+		queryErr = fmt.Errorf("failed to marshal request: %w", err)
+		return queryErr
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.apiURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		queryErr = fmt.Errorf("failed to create request: %w", err)
+		return queryErr
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -118,30 +122,36 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
+		queryErr = fmt.Errorf("failed to execute request: %w", err)
+		return queryErr
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
+		queryErr = fmt.Errorf("failed to read response: %w", err)
+		return queryErr
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return queryErr
 	}
 
 	var gqlResp graphQLResponse
 	if err := json.Unmarshal(respBody, &gqlResp); err != nil {
-		return fmt.Errorf("failed to parse response: %w", err)
+		queryErr = fmt.Errorf("failed to parse response: %w", err)
+		return queryErr
 	}
 
 	if len(gqlResp.Errors) > 0 {
-		return fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+		queryErr = fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+		return queryErr
 	}
 
 	if err := json.Unmarshal(gqlResp.Data, result); err != nil {
-		return fmt.Errorf("failed to parse data: %w", err)
+		queryErr = fmt.Errorf("failed to parse data: %w", err)
+		return queryErr
 	}
 
 	return nil

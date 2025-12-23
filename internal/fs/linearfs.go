@@ -64,6 +64,10 @@ func (lfs *LinearFS) Close() {
 	if lfs.store != nil {
 		lfs.store.Close()
 	}
+	// Close API client (stops stats logger)
+	if lfs.client != nil {
+		lfs.client.Close()
+	}
 }
 
 // EnableSQLiteCache initializes the SQLite backend and starts background sync.
