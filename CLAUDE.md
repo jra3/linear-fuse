@@ -8,6 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make build          # Build binary to bin/linearfs
 make install        # Build and copy to ~/bin
 make test           # Run all tests
+make test-cover     # Run tests with coverage summary
+make coverage       # Generate full coverage report (unit + integration)
+make coverage-html  # Open coverage report in browser
 make run            # Build and mount to /tmp/linear
 make fmt            # Format code
 make lint           # Run golangci-lint

@@ -33,3 +33,4 @@ go.work.sum
 # .vscode/
 .claude/
 docs/
+coverage.out
