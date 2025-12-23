@@ -110,6 +110,8 @@ type Issue struct {
 	StateType     sql.NullString  `json:"state_type"`
 	AssigneeID    sql.NullString  `json:"assignee_id"`
 	AssigneeEmail sql.NullString  `json:"assignee_email"`
+	CreatorID     sql.NullString  `json:"creator_id"`
+	CreatorEmail  sql.NullString  `json:"creator_email"`
 	Priority      sql.NullInt64   `json:"priority"`
 	ProjectID     sql.NullString  `json:"project_id"`
 	ProjectName   sql.NullString  `json:"project_name"`

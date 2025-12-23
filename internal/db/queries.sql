@@ -43,6 +43,9 @@ SELECT * FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DE
 -- name: ListTeamIssuesByParent :many
 SELECT * FROM issues WHERE parent_id = ? ORDER BY updated_at DESC;
 
+-- name: SetIssueParent :exec
+UPDATE issues SET parent_id = ? WHERE id = ?;
+
 -- name: ListUserAssignedIssues :many
 SELECT * FROM issues WHERE assignee_id = ? ORDER BY updated_at DESC;
 
@@ -51,6 +54,9 @@ SELECT * FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC;
 
 -- name: ListUserActiveIssues :many
 SELECT * FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC;
+
+-- name: ListUserCreatedIssues :many
+SELECT * FROM issues WHERE creator_id = ? ORDER BY updated_at DESC;
 
 -- name: ListProjectIssues :many
 SELECT * FROM issues WHERE project_id = ? ORDER BY updated_at DESC;
@@ -62,14 +68,14 @@ SELECT * FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC;
 INSERT INTO issues (
     id, identifier, team_id, title, description,
     state_id, state_name, state_type,
-    assignee_id, assignee_email, priority,
+    assignee_id, assignee_email, creator_id, creator_email, priority,
     project_id, project_name, cycle_id, cycle_name,
     parent_id, due_date, estimate, url,
     created_at, updated_at, synced_at, data
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?,
-    ?, ?, ?,
+    ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?
@@ -83,6 +89,8 @@ INSERT INTO issues (
     state_type = excluded.state_type,
     assignee_id = excluded.assignee_id,
     assignee_email = excluded.assignee_email,
+    creator_id = excluded.creator_id,
+    creator_email = excluded.creator_email,
     priority = excluded.priority,
     project_id = excluded.project_id,
     project_name = excluded.project_name,

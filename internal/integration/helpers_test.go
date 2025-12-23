@@ -72,18 +72,6 @@ func newDocPath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "docs", "new.md")
 }
 
-func projectDocsPath(teamKey, projectSlug string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, "projects", projectSlug, "docs")
-}
-
-func projectDocFilePath(teamKey, projectSlug, filename string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, "projects", projectSlug, "docs", filename)
-}
-
-func newProjectDocPath(teamKey, projectSlug string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, "projects", projectSlug, "docs", "new.md")
-}
-
 func cyclesPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "cycles")
 }
@@ -120,10 +108,6 @@ func userPath(username string) string {
 	return filepath.Join(mountPoint, "users", username)
 }
 
-func userInfoPath(username string) string {
-	return filepath.Join(mountPoint, "users", username, "user.md")
-}
-
 // Retry helpers
 
 func readFileWithRetry(path string, maxWait time.Duration) ([]byte, error) {
@@ -140,32 +124,6 @@ func readFileWithRetry(path string, maxWait time.Duration) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("failed to read %s after %v: %w", path, maxWait, lastErr)
-}
-
-func waitForFile(path string, maxWait time.Duration) error {
-	deadline := time.Now().Add(maxWait)
-
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	return fmt.Errorf("file %s not found after %v", path, maxWait)
-}
-
-func waitForFileGone(path string, maxWait time.Duration) error {
-	deadline := time.Now().Add(maxWait)
-
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	return fmt.Errorf("file %s still exists after %v", path, maxWait)
 }
 
 func waitForDirEntry(dir, name string, maxWait time.Duration) error {
@@ -229,20 +187,6 @@ func parseFrontmatter(content []byte) (*Document, error) {
 	}, nil
 }
 
-func extractField(content []byte, field string) (any, error) {
-	doc, err := parseFrontmatter(content)
-	if err != nil {
-		return nil, err
-	}
-
-	val, ok := doc.Frontmatter[field]
-	if !ok {
-		return nil, fmt.Errorf("field %q not found", field)
-	}
-
-	return val, nil
-}
-
 func modifyFrontmatter(content []byte, field string, value any) ([]byte, error) {
 	doc, err := parseFrontmatter(content)
 	if err != nil {
@@ -278,29 +222,7 @@ func removeFrontmatterField(content []byte, field string) ([]byte, error) {
 	return []byte(fmt.Sprintf("---\n%s---\n%s", string(yamlBytes), doc.Body)), nil
 }
 
-func formatWithFrontmatter(doc *Document) ([]byte, error) {
-	yamlBytes, err := yaml.Marshal(doc.Frontmatter)
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(fmt.Sprintf("---\n%s---\n%s", string(yamlBytes), doc.Body)), nil
-}
-
 // Directory listing helpers
-
-func listDirNames(path string) ([]string, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, err
-	}
-
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name()
-	}
-	return names, nil
-}
 
 func dirContains(path, name string) bool {
 	entries, err := os.ReadDir(path)

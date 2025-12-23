@@ -77,6 +77,8 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 			teamID: n.teamID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -103,6 +105,8 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 				contentReady: true,
 			}
 			out.Attr.Mode = 0644 | syscall.S_IFREG
+			out.Attr.Uid = n.lfs.uid
+			out.Attr.Gid = n.lfs.gid
 			out.Attr.Size = uint64(len(content))
 			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
 			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
@@ -186,10 +190,14 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	for _, label := range labels {
 		if labelFilename(label) == name {
 			// Update label name
-			err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
+			updatedLabel, err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
 			if err != nil {
 				log.Printf("Failed to rename label: %v", err)
 				return syscall.EIO
+			}
+			// Upsert to SQLite so it's immediately visible
+			if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
+				log.Printf("Warning: failed to upsert label to SQLite: %v", err)
 			}
 			if n.lfs.debug {
 				log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
@@ -286,6 +294,8 @@ func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	defer n.mu.Unlock()
 
 	out.Mode = 0644
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -386,10 +396,15 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		log.Printf("Updating label %s", n.label.ID)
 	}
 
-	err = n.lfs.UpdateLabel(ctx, n.label.ID, update, n.teamID)
+	updatedLabel, err := n.lfs.UpdateLabel(ctx, n.label.ID, update, n.teamID)
 	if err != nil {
 		log.Printf("Failed to update label: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
+		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
 	}
 
 	n.dirty = false
@@ -433,6 +448,8 @@ func (n *NewLabelNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	defer n.mu.Unlock()
 
 	out.Mode = 0200
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -525,10 +542,15 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		input["description"] = description
 	}
 
-	_, err = n.lfs.CreateLabel(ctx, input)
+	label, err := n.lfs.CreateLabel(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create label: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertLabel(ctx, n.teamID, *label); err != nil {
+		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
 	}
 
 	n.created = true

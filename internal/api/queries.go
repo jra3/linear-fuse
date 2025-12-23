@@ -54,6 +54,7 @@ fragment IssueFields on Issue {
   description
   state { id name type }
   assignee { id name email }
+  creator { id name email }
   priority
   labels { nodes { id name color description } }
   dueDate
@@ -574,21 +575,14 @@ mutation CreateDocument($input: DocumentCreateInput!) {
 }
 ` + documentFieldsFragment
 
-const mutationUpdateDocument = `
+var mutationUpdateDocument = `
 mutation UpdateDocument($id: String!, $input: DocumentUpdateInput!) {
   documentUpdate(id: $id, input: $input) {
     success
-    document {
-      id
-      title
-      content
-      slugId
-      url
-      updatedAt
-    }
+    document { ...DocumentFields }
   }
 }
-`
+` + documentFieldsFragment
 
 const mutationDeleteDocument = `
 mutation DeleteDocument($id: String!) {

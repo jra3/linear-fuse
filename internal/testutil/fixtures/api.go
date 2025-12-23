@@ -271,6 +271,57 @@ func FixtureAPIDocument() api.Document {
 	}
 }
 
+// FixtureAPIDocuments returns n test documents with sequential IDs.
+func FixtureAPIDocuments(n int) []api.Document {
+	docs := make([]api.Document, n)
+	user := FixtureAPIUser()
+	for i := 0; i < n; i++ {
+		docs[i] = api.Document{
+			ID:        fmt.Sprintf("doc-%d", i+1),
+			Title:     fmt.Sprintf("Test Document %d", i+1),
+			Content:   fmt.Sprintf("# Test Document %d\n\nThis is test content for document %d.", i+1, i+1),
+			SlugID:    fmt.Sprintf("test-document-%d", i+1),
+			URL:       fmt.Sprintf("https://linear.app/test/document/test-document-%d", i+1),
+			CreatedAt: fixtureTime.Add(time.Duration(i) * time.Hour),
+			UpdatedAt: fixtureTime.Add(time.Duration(i) * time.Hour),
+			Creator:   &user,
+		}
+	}
+	return docs
+}
+
+// FixtureAPIIssueDocument returns a document attached to an issue.
+func FixtureAPIIssueDocument(issueID string, n int) api.Document {
+	user := FixtureAPIUser()
+	return api.Document{
+		ID:        fmt.Sprintf("doc-issue-%s-%d", issueID, n),
+		Title:     fmt.Sprintf("Issue Document %d", n),
+		Content:   fmt.Sprintf("# Issue Document %d\n\nDocument attached to issue %s.", n, issueID),
+		SlugID:    fmt.Sprintf("issue-doc-%s-%d", issueID, n),
+		URL:       fmt.Sprintf("https://linear.app/test/document/issue-doc-%s-%d", issueID, n),
+		CreatedAt: fixtureTime,
+		UpdatedAt: fixtureTime,
+		Creator:   &user,
+		Issue:     &api.Issue{ID: issueID},
+	}
+}
+
+// FixtureAPIProjectDocument returns a document attached to a project.
+func FixtureAPIProjectDocument(projectID string, n int) api.Document {
+	user := FixtureAPIUser()
+	return api.Document{
+		ID:        fmt.Sprintf("doc-project-%s-%d", projectID, n),
+		Title:     fmt.Sprintf("Project Document %d", n),
+		Content:   fmt.Sprintf("# Project Document %d\n\nDocument attached to project %s.", n, projectID),
+		SlugID:    fmt.Sprintf("project-doc-%s-%d", projectID, n),
+		URL:       fmt.Sprintf("https://linear.app/test/document/project-doc-%s-%d", projectID, n),
+		CreatedAt: fixtureTime,
+		UpdatedAt: fixtureTime,
+		Creator:   &user,
+		Project:   &api.Project{ID: projectID},
+	}
+}
+
 // FixtureAPIProject returns a test project.
 func FixtureAPIProject() api.Project {
 	user := FixtureAPIUser()

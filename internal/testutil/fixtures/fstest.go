@@ -2,6 +2,7 @@ package fixtures
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -234,6 +235,99 @@ func PopulateUsers(ctx context.Context, store *db.Store, users []api.User) error
 		}
 	}
 	return nil
+}
+
+// PopulateComments inserts comments for an issue into the SQLite store.
+func PopulateComments(ctx context.Context, store *db.Store, issueID string, comments []api.Comment) error {
+	q := store.Queries()
+	for _, comment := range comments {
+		params, err := db.APICommentToDBComment(comment, issueID)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertComment(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateDocuments inserts documents into the SQLite store.
+func PopulateDocuments(ctx context.Context, store *db.Store, docs []api.Document) error {
+	q := store.Queries()
+	for _, doc := range docs {
+		params, err := db.APIDocumentToDBDocument(doc)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertDocument(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateProject inserts a project into the SQLite store.
+func PopulateProject(ctx context.Context, store *db.Store, project api.Project, teamID string) error {
+	q := store.Queries()
+	params, err := db.APIProjectToDBProject(project)
+	if err != nil {
+		return err
+	}
+	if err := q.UpsertProject(ctx, params); err != nil {
+		return err
+	}
+	// Link project to team
+	if err := q.UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
+		ProjectID: project.ID,
+		TeamID:    teamID,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// PopulateCycle inserts a cycle into the SQLite store.
+func PopulateCycle(ctx context.Context, store *db.Store, cycle api.Cycle, teamID string) error {
+	q := store.Queries()
+	params, err := db.APICycleToDBCycle(cycle, teamID)
+	if err != nil {
+		return err
+	}
+	return q.UpsertCycle(ctx, params)
+}
+
+// PopulateInitiative inserts an initiative into the SQLite store.
+func PopulateInitiative(ctx context.Context, store *db.Store, initiative api.Initiative) error {
+	q := store.Queries()
+	params, err := db.APIInitiativeToDBInitiative(initiative)
+	if err != nil {
+		return err
+	}
+	if err := q.UpsertInitiative(ctx, params); err != nil {
+		return err
+	}
+	// Link projects to initiative
+	for _, proj := range initiative.Projects.Nodes {
+		if err := q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+			InitiativeID: initiative.ID,
+			ProjectID:    proj.ID,
+			SyncedAt:     time.Now(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateParentChildIssues sets up a parent-child relationship between issues.
+func PopulateParentChildIssues(ctx context.Context, store *db.Store, parentID, childID string) error {
+	q := store.Queries()
+	// Update child issue to have parent reference
+	return q.SetIssueParent(ctx, db.SetIssueParentParams{
+		ID:       childID,
+		ParentID: sql.NullString{String: parentID, Valid: true},
+	})
 }
 
 // TestConfig returns a config suitable for testing.

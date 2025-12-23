@@ -288,26 +288,6 @@ func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error)
 	return "", fmt.Errorf("unknown assignee: %s", f.value)
 }
 
-func (f *FilterValueNode) matchesFilter(issue api.Issue) bool {
-	switch f.category {
-	case "status":
-		return issue.State.Name == f.value
-	case "label":
-		for _, label := range issue.Labels.Nodes {
-			if label.Name == f.value {
-				return true
-			}
-		}
-		return false
-	case "assignee":
-		if f.value == "unassigned" {
-			return issue.Assignee == nil
-		}
-		return issue.Assignee != nil && assigneeHandle(issue.Assignee) == f.value
-	}
-	return false
-}
-
 // FilterIssueSymlink is a symlink pointing to an issue directory
 // Path from by/category/value/ to issues/ is ../../../issues/
 type FilterIssueSymlink struct {

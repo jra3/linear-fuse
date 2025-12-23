@@ -140,6 +140,80 @@ func (lfs *LinearFS) InvalidateIssueById(identifier string) {
 	// No-op: SQLite is source of truth
 }
 
+// UpsertIssue inserts or updates an issue in SQLite.
+// This is primarily for testing - allows tests to make API-created issues
+// immediately visible in the filesystem without waiting for sync.
+func (lfs *LinearFS) UpsertIssue(ctx context.Context, issue api.Issue) error {
+	if lfs.store == nil {
+		return fmt.Errorf("SQLite not enabled")
+	}
+	issueData, err := db.APIIssueToDBIssue(issue)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+}
+
+// UpsertComment inserts or updates a comment in SQLite.
+func (lfs *LinearFS) UpsertComment(ctx context.Context, issueID string, comment api.Comment) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APICommentToDBComment(comment, issueID)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertComment(ctx, params)
+}
+
+// UpsertDocument inserts or updates a document in SQLite.
+func (lfs *LinearFS) UpsertDocument(ctx context.Context, document api.Document) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIDocumentToDBDocument(document)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertDocument(ctx, params)
+}
+
+// UpsertLabel inserts or updates a label in SQLite.
+func (lfs *LinearFS) UpsertLabel(ctx context.Context, teamID string, label api.Label) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APILabelToDBLabel(label, teamID)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertLabel(ctx, params)
+}
+
+// UpsertProjectUpdate inserts or updates a project update in SQLite.
+func (lfs *LinearFS) UpsertProjectUpdate(ctx context.Context, projectID string, update api.ProjectUpdate) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIProjectUpdateToDBUpdate(update, projectID)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertProjectUpdate(ctx, params)
+}
+
+// UpsertInitiativeUpdate inserts or updates an initiative update in SQLite.
+func (lfs *LinearFS) UpsertInitiativeUpdate(ctx context.Context, initiativeID string, update api.InitiativeUpdate) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIInitiativeUpdateToDBUpdate(update, initiativeID)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertInitiativeUpdate(ctx, params)
+}
+
 // GetIssueByIdentifier returns an issue by identifier (e.g., "ENG-123")
 func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
 	issue, err := lfs.repo.GetIssueByIdentifier(context.Background(), identifier)
@@ -245,9 +319,22 @@ func (lfs *LinearFS) GetTeamCycles(ctx context.Context, teamID string) ([]api.Cy
 }
 
 // GetCycleIssues returns issues in a cycle as CycleIssue
-// Uses API directly since CycleIssue has sortOrder which isn't stored in SQLite
+// Uses repository and converts to CycleIssue for symlink display
 func (lfs *LinearFS) GetCycleIssues(ctx context.Context, cycleID string) ([]api.CycleIssue, error) {
-	return lfs.client.GetCycleIssues(ctx, cycleID)
+	issues, err := lfs.repo.GetIssuesByCycle(ctx, cycleID)
+	if err != nil {
+		return nil, err
+	}
+	// Convert to CycleIssue (minimal type for directory listing)
+	result := make([]api.CycleIssue, len(issues))
+	for i, issue := range issues {
+		result[i] = api.CycleIssue{
+			ID:         issue.ID,
+			Identifier: issue.Identifier,
+			Title:      issue.Title,
+		}
+	}
+	return result, nil
 }
 
 func (lfs *LinearFS) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {
@@ -275,9 +362,23 @@ func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamI
 }
 
 // GetProjectIssues returns issues in a project as ProjectIssue
-// Uses API directly since ProjectIssue has sortOrder which isn't stored in SQLite
+// Uses repository and converts to ProjectIssue for symlink display
 func (lfs *LinearFS) GetProjectIssues(ctx context.Context, projectID string) ([]api.ProjectIssue, error) {
-	return lfs.client.GetProjectIssues(ctx, projectID)
+	issues, err := lfs.repo.GetIssuesByProject(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	// Convert to ProjectIssue (minimal type for directory listing)
+	result := make([]api.ProjectIssue, len(issues))
+	for i, issue := range issues {
+		result[i] = api.ProjectIssue{
+			ID:         issue.ID,
+			Identifier: issue.Identifier,
+			Title:      issue.Title,
+			Team:       issue.Team,
+		}
+	}
+	return result, nil
 }
 
 func (lfs *LinearFS) GetUsers(ctx context.Context) ([]api.User, error) {
@@ -291,6 +392,11 @@ func (lfs *LinearFS) GetTeamMembers(ctx context.Context, teamID string) ([]api.U
 // GetUserIssues returns issues assigned to a user across all teams
 func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
 	return lfs.repo.GetUserIssues(ctx, userID)
+}
+
+// GetIssueChildren returns child issues of a parent issue
+func (lfs *LinearFS) GetIssueChildren(ctx context.Context, parentID string) ([]api.Issue, error) {
+	return lfs.repo.GetIssueChildren(ctx, parentID)
 }
 
 // InvalidateUserIssues is a no-op; SQLite is the source of truth
@@ -348,24 +454,6 @@ func (lfs *LinearFS) InvalidateIssueDocuments(issueID string) {
 	// No-op: SQLite is source of truth
 }
 
-// TryGetCachedIssueDocuments returns documents from SQLite
-func (lfs *LinearFS) TryGetCachedIssueDocuments(issueID string) ([]api.Document, bool) {
-	docs, err := lfs.repo.GetIssueDocuments(context.Background(), issueID)
-	if err != nil {
-		return nil, false
-	}
-	return docs, len(docs) > 0
-}
-
-// TryGetCachedProjectDocuments returns documents from SQLite
-func (lfs *LinearFS) TryGetCachedProjectDocuments(projectID string) ([]api.Document, bool) {
-	docs, err := lfs.repo.GetProjectDocuments(context.Background(), projectID)
-	if err != nil {
-		return nil, false
-	}
-	return docs, len(docs) > 0
-}
-
 // InvalidateTeamDocuments is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateTeamDocuments(teamID string) {
 	// No-op: SQLite is source of truth
@@ -380,7 +468,7 @@ func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (
 	return lfs.client.CreateDocument(ctx, input)
 }
 
-func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) error {
+func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
 	return lfs.client.UpdateDocument(ctx, documentID, input)
 }
 
@@ -638,9 +726,8 @@ func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*ap
 }
 
 // UpdateLabel updates a label
-func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) error {
-	_, err := lfs.client.UpdateLabel(ctx, labelID, input)
-	return err
+func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) (*api.Label, error) {
+	return lfs.client.UpdateLabel(ctx, labelID, input)
 }
 
 // DeleteLabel deletes a label
@@ -731,4 +818,9 @@ func (lfs *LinearFS) InjectTestStore(store *db.Store) error {
 	lfs.store = store
 	lfs.repo = repo.NewSQLiteRepository(store, nil)
 	return nil
+}
+
+// GetStore returns the SQLite store for direct database access in tests.
+func (lfs *LinearFS) GetStore() *db.Store {
+	return lfs.store
 }

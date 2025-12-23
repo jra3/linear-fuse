@@ -332,9 +332,3 @@ func (s *ScopedSearchSymlink) target() string {
 	up := strings.Repeat("../", s.symlinkDepth)
 	return fmt.Sprintf("%steams/%s/issues/%s", up, s.teamKey, s.identifier)
 }
-
-// encodeSearchQuery converts a search string to a directory-safe name
-// Spaces are replaced with +
-func encodeSearchQuery(query string) string {
-	return strings.ReplaceAll(query, " ", "+")
-}

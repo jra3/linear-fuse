@@ -18,6 +18,7 @@ type Issue struct {
 	Description      string            `json:"description"`
 	State            State             `json:"state"`
 	Assignee         *User             `json:"assignee"`
+	Creator          *User             `json:"creator"`
 	Priority         int               `json:"priority"`
 	Labels           Labels            `json:"labels"`
 	DueDate          *string           `json:"dueDate"`

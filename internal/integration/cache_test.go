@@ -69,15 +69,24 @@ func TestIssueEditInvalidatesTeamCache(t *testing.T) {
 		t.Fatalf("Failed to write: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	// Verify the write worked via API
-	updated, err := getTestIssue(issue.ID)
+	// Verify the write worked via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.Title != newTitle {
-		t.Errorf("Write didn't persist, expected %q, got %q", newTitle, updated.Title)
+	if fsIssue.Title != newTitle {
+		t.Errorf("Filesystem title mismatch, expected %q, got %q", newTitle, fsIssue.Title)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Title != newTitle {
+		t.Errorf("SQLite title mismatch, expected %q, got %q", newTitle, sqliteIssue.Title)
 	}
 }
 

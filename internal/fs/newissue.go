@@ -142,6 +142,11 @@ func (n *NewIssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		return syscall.EIO
 	}
 
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
+		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+	}
+
 	if n.lfs.debug {
 		log.Printf("Created issue: %s", issue.Identifier)
 	}

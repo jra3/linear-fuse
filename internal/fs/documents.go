@@ -92,18 +92,6 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(entries), 0
 }
 
-// tryGetCachedDocuments returns cached documents if available, without making API calls
-func (n *DocsNode) tryGetCachedDocuments() ([]api.Document, bool) {
-	if n.issueID != "" {
-		return n.lfs.TryGetCachedIssueDocuments(n.issueID)
-	}
-	if n.projectID != "" {
-		return n.lfs.TryGetCachedProjectDocuments(n.projectID)
-	}
-	// Team documents always return empty (API doesn't support team-level docs)
-	return []api.Document{}, true
-}
-
 func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle new.md for creating documents
 	if name == "new.md" {
@@ -115,6 +103,8 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 			projectID: n.projectID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -147,6 +137,8 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 				contentReady: true,
 			}
 			out.Attr.Mode = 0644 | syscall.S_IFREG
+			out.Attr.Uid = n.lfs.uid
+			out.Attr.Gid = n.lfs.gid
 			out.Attr.Size = uint64(len(content))
 			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
 			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
@@ -230,10 +222,14 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	for _, doc := range docs {
 		if documentFilename(doc) == name {
 			// Update document title
-			err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
+			updatedDoc, err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
 			if err != nil {
 				log.Printf("Failed to rename document: %v", err)
 				return syscall.EIO
+			}
+			// Upsert to SQLite so it's immediately visible
+			if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
+				log.Printf("Warning: failed to upsert document to SQLite: %v", err)
 			}
 			if n.lfs.debug {
 				log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
@@ -312,6 +308,8 @@ func (n *DocumentFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fu
 	defer n.mu.Unlock()
 
 	out.Mode = 0644
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&n.document.UpdatedAt, &n.document.UpdatedAt, &n.document.CreatedAt)
 	return 0
@@ -413,10 +411,15 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		log.Printf("Updating document %s", n.document.ID)
 	}
 
-	err = n.lfs.UpdateDocument(ctx, n.document.ID, update, n.issueID, n.teamID, n.projectID)
+	updatedDoc, err := n.lfs.UpdateDocument(ctx, n.document.ID, update, n.issueID, n.teamID, n.projectID)
 	if err != nil {
 		log.Printf("Failed to update document: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
+		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
 	}
 
 	// Invalidate kernel cache for this document file
@@ -464,6 +467,8 @@ func (n *NewDocumentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 	defer n.mu.Unlock()
 
 	out.Mode = 0200
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -570,10 +575,15 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		input["projectId"] = n.projectID
 	}
 
-	_, err = n.lfs.CreateDocument(ctx, input)
+	doc, err := n.lfs.CreateDocument(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create document: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertDocument(ctx, *doc); err != nil {
+		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
 	}
 
 	n.created = true

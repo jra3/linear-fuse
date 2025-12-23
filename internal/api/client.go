@@ -1351,10 +1351,11 @@ func (c *Client) CreateDocument(ctx context.Context, input map[string]any) (*Doc
 }
 
 // UpdateDocument updates an existing document
-func (c *Client) UpdateDocument(ctx context.Context, documentID string, input map[string]any) error {
+func (c *Client) UpdateDocument(ctx context.Context, documentID string, input map[string]any) (*Document, error) {
 	var result struct {
 		DocumentUpdate struct {
-			Success bool `json:"success"`
+			Success  bool     `json:"success"`
+			Document Document `json:"document"`
 		} `json:"documentUpdate"`
 	}
 
@@ -1365,14 +1366,14 @@ func (c *Client) UpdateDocument(ctx context.Context, documentID string, input ma
 
 	err := c.query(ctx, mutationUpdateDocument, vars, &result)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if !result.DocumentUpdate.Success {
-		return fmt.Errorf("document update failed")
+		return nil, fmt.Errorf("document update failed")
 	}
 
-	return nil
+	return &result.DocumentUpdate.Document, nil
 }
 
 // DeleteDocument deletes a document

@@ -77,6 +77,14 @@ func setupLiveAPI(apiKey string) error {
 		return fmt.Errorf("mount filesystem: %w", err)
 	}
 
+	// Enable SQLite cache for repository access
+	ctx := context.Background()
+	if err := lfs.EnableSQLiteCache(ctx, ""); err != nil {
+		server.Unmount()
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("enable sqlite cache: %w", err)
+	}
+
 	apiClient = api.NewClient(apiKey)
 
 	if err := discoverTestTeam(); err != nil {
@@ -157,6 +165,9 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 	labels := fixtures.FixtureAPILabels()
 	users := fixtures.FixtureAPIUsers()
 
+	// Create a project
+	project := fixtures.FixtureAPIProject()
+
 	// Create issues with various configurations
 	issues := []api.Issue{
 		fixtures.FixtureAPIIssue(
@@ -193,15 +204,84 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 			fixtures.WithDescription("This issue is completed"),
 			fixtures.WithState(fixtures.FixtureAPIState("completed")),
 		),
+		// Issue with project assignment
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-6", "TST-6"),
+			fixtures.WithTitle("Test Issue 6 - In Project"),
+			fixtures.WithDescription("This issue is assigned to a project"),
+			fixtures.WithState(fixtures.FixtureAPIState("started")),
+			fixtures.WithProject(&project),
+		),
+		// Issue without assignee
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-7", "TST-7"),
+			fixtures.WithTitle("Test Issue 7 - Unassigned"),
+			fixtures.WithDescription("This issue has no assignee"),
+			fixtures.WithState(fixtures.FixtureAPIState("unstarted")),
+			fixtures.WithAssignee(nil),
+		),
+		// Issue with cycle assignment
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-8", "TST-8"),
+			fixtures.WithTitle("Test Issue 8 - In Sprint"),
+			fixtures.WithDescription("This issue is in a sprint/cycle"),
+			fixtures.WithState(fixtures.FixtureAPIState("started")),
+			fixtures.WithCycle(&api.IssueCycle{ID: "cycle-1", Name: "Sprint 42", Number: 42}),
+		),
 	}
 
-	// Populate team
+	// Populate team with issues
 	if err := fixtures.PopulateTeam(ctx, store, team, states, labels, issues); err != nil {
 		return err
 	}
 
 	// Populate users
 	if err := fixtures.PopulateUsers(ctx, store, users); err != nil {
+		return err
+	}
+
+	// Populate project
+	if err := fixtures.PopulateProject(ctx, store, project, team.ID); err != nil {
+		return err
+	}
+
+	// Populate comments for issue-1
+	comments := fixtures.FixtureAPIComments(3)
+	if err := fixtures.PopulateComments(ctx, store, "issue-1", comments); err != nil {
+		return err
+	}
+
+	// Populate documents for issue-1
+	issueDocs := []api.Document{
+		fixtures.FixtureAPIIssueDocument("issue-1", 1),
+		fixtures.FixtureAPIIssueDocument("issue-1", 2),
+	}
+	if err := fixtures.PopulateDocuments(ctx, store, issueDocs); err != nil {
+		return err
+	}
+
+	// Populate documents for project
+	projectDocs := []api.Document{
+		fixtures.FixtureAPIProjectDocument(project.ID, 1),
+	}
+	if err := fixtures.PopulateDocuments(ctx, store, projectDocs); err != nil {
+		return err
+	}
+
+	// Populate cycle
+	cycle := fixtures.FixtureAPICycle()
+	if err := fixtures.PopulateCycle(ctx, store, cycle, team.ID); err != nil {
+		return err
+	}
+
+	// Populate initiative (links to the project)
+	initiative := fixtures.FixtureAPIInitiative()
+	if err := fixtures.PopulateInitiative(ctx, store, initiative); err != nil {
+		return err
+	}
+
+	// Set up parent-child relationship: TST-1 is parent of TST-2
+	if err := fixtures.PopulateParentChildIssues(ctx, store, "issue-1", "issue-2"); err != nil {
 		return err
 	}
 
@@ -246,17 +326,5 @@ func cleanup() {
 	}
 	if mountPoint != "" {
 		os.RemoveAll(mountPoint)
-	}
-}
-
-// isLiveAPIMode returns true if tests are running against real Linear API
-func isLiveAPIMode() bool {
-	return liveAPIMode
-}
-
-// skipIfNotLiveAPI skips the test if not running in live API mode
-func skipIfNotLiveAPI(t *testing.T) {
-	if !liveAPIMode {
-		t.Skip("Skipping: requires live API (set LINEARFS_LIVE_API=1 and LINEAR_API_KEY)")
 	}
 }

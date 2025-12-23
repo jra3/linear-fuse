@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -325,14 +324,4 @@ func (c *CycleFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, 
 func isCurrent(cycle api.Cycle) bool {
 	now := time.Now()
 	return now.After(cycle.StartsAt) && now.Before(cycle.EndsAt)
-}
-
-// sortCyclesByNumber returns cycles sorted by number descending (most recent first)
-func sortCyclesByNumber(cycles []api.Cycle) []api.Cycle {
-	sorted := make([]api.Cycle, len(cycles))
-	copy(sorted, cycles)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Number > sorted[j].Number
-	})
-	return sorted
 }

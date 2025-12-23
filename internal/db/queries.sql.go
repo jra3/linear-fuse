@@ -562,7 +562,7 @@ func (q *Queries) GetInitiativeUpdatesSyncedAt(ctx context.Context, initiativeID
 }
 
 const getIssueByID = `-- name: GetIssueByID :one
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE id = ?
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE id = ?
 `
 
 func (q *Queries) GetIssueByID(ctx context.Context, id string) (Issue, error) {
@@ -579,6 +579,8 @@ func (q *Queries) GetIssueByID(ctx context.Context, id string) (Issue, error) {
 		&i.StateType,
 		&i.AssigneeID,
 		&i.AssigneeEmail,
+		&i.CreatorID,
+		&i.CreatorEmail,
 		&i.Priority,
 		&i.ProjectID,
 		&i.ProjectName,
@@ -597,7 +599,7 @@ func (q *Queries) GetIssueByID(ctx context.Context, id string) (Issue, error) {
 }
 
 const getIssueByIdentifier = `-- name: GetIssueByIdentifier :one
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE identifier = ?
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE identifier = ?
 `
 
 func (q *Queries) GetIssueByIdentifier(ctx context.Context, identifier string) (Issue, error) {
@@ -614,6 +616,8 @@ func (q *Queries) GetIssueByIdentifier(ctx context.Context, identifier string) (
 		&i.StateType,
 		&i.AssigneeID,
 		&i.AssigneeEmail,
+		&i.CreatorID,
+		&i.CreatorEmail,
 		&i.Priority,
 		&i.ProjectID,
 		&i.ProjectName,
@@ -1156,7 +1160,7 @@ func (q *Queries) ListAllUsers(ctx context.Context) ([]User, error) {
 }
 
 const listCycleIssues = `-- name: ListCycleIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListCycleIssues(ctx context.Context, cycleID sql.NullString) ([]Issue, error) {
@@ -1179,6 +1183,8 @@ func (q *Queries) ListCycleIssues(ctx context.Context, cycleID sql.NullString) (
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -1518,7 +1524,7 @@ func (q *Queries) ListProjectInitiativeIDs(ctx context.Context, projectID string
 }
 
 const listProjectIssues = `-- name: ListProjectIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE project_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE project_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListProjectIssues(ctx context.Context, projectID sql.NullString) ([]Issue, error) {
@@ -1541,6 +1547,8 @@ func (q *Queries) ListProjectIssues(ctx context.Context, projectID sql.NullStrin
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -1936,7 +1944,7 @@ func (q *Queries) ListTeamIssueIDs(ctx context.Context, teamID string) ([]ListTe
 }
 
 const listTeamIssues = `-- name: ListTeamIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamIssues(ctx context.Context, teamID string) ([]Issue, error) {
@@ -1959,6 +1967,8 @@ func (q *Queries) ListTeamIssues(ctx context.Context, teamID string) ([]Issue, e
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -1987,7 +1997,7 @@ func (q *Queries) ListTeamIssues(ctx context.Context, teamID string) ([]Issue, e
 }
 
 const listTeamIssuesByAssignee = `-- name: ListTeamIssuesByAssignee :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByAssigneeParams struct {
@@ -2015,6 +2025,8 @@ func (q *Queries) ListTeamIssuesByAssignee(ctx context.Context, arg ListTeamIssu
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2043,7 +2055,7 @@ func (q *Queries) ListTeamIssuesByAssignee(ctx context.Context, arg ListTeamIssu
 }
 
 const listTeamIssuesByAssigneeEmail = `-- name: ListTeamIssuesByAssigneeEmail :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_email = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_email = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByAssigneeEmailParams struct {
@@ -2071,6 +2083,8 @@ func (q *Queries) ListTeamIssuesByAssigneeEmail(ctx context.Context, arg ListTea
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2099,7 +2113,7 @@ func (q *Queries) ListTeamIssuesByAssigneeEmail(ctx context.Context, arg ListTea
 }
 
 const listTeamIssuesByCycle = `-- name: ListTeamIssuesByCycle :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByCycleParams struct {
@@ -2127,6 +2141,8 @@ func (q *Queries) ListTeamIssuesByCycle(ctx context.Context, arg ListTeamIssuesB
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2155,7 +2171,7 @@ func (q *Queries) ListTeamIssuesByCycle(ctx context.Context, arg ListTeamIssuesB
 }
 
 const listTeamIssuesByCycleName = `-- name: ListTeamIssuesByCycleName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByCycleNameParams struct {
@@ -2183,6 +2199,8 @@ func (q *Queries) ListTeamIssuesByCycleName(ctx context.Context, arg ListTeamIss
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2211,7 +2229,7 @@ func (q *Queries) ListTeamIssuesByCycleName(ctx context.Context, arg ListTeamIss
 }
 
 const listTeamIssuesByParent = `-- name: ListTeamIssuesByParent :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE parent_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE parent_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullString) ([]Issue, error) {
@@ -2234,6 +2252,8 @@ func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullS
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2262,7 +2282,7 @@ func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullS
 }
 
 const listTeamIssuesByPriority = `-- name: ListTeamIssuesByPriority :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND priority = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND priority = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByPriorityParams struct {
@@ -2290,6 +2310,8 @@ func (q *Queries) ListTeamIssuesByPriority(ctx context.Context, arg ListTeamIssu
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2318,7 +2340,7 @@ func (q *Queries) ListTeamIssuesByPriority(ctx context.Context, arg ListTeamIssu
 }
 
 const listTeamIssuesByProject = `-- name: ListTeamIssuesByProject :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByProjectParams struct {
@@ -2346,6 +2368,8 @@ func (q *Queries) ListTeamIssuesByProject(ctx context.Context, arg ListTeamIssue
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2374,7 +2398,7 @@ func (q *Queries) ListTeamIssuesByProject(ctx context.Context, arg ListTeamIssue
 }
 
 const listTeamIssuesByProjectName = `-- name: ListTeamIssuesByProjectName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND project_name = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND project_name = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByProjectNameParams struct {
@@ -2402,6 +2426,8 @@ func (q *Queries) ListTeamIssuesByProjectName(ctx context.Context, arg ListTeamI
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2430,7 +2456,7 @@ func (q *Queries) ListTeamIssuesByProjectName(ctx context.Context, arg ListTeamI
 }
 
 const listTeamIssuesByState = `-- name: ListTeamIssuesByState :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByStateParams struct {
@@ -2458,6 +2484,8 @@ func (q *Queries) ListTeamIssuesByState(ctx context.Context, arg ListTeamIssuesB
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2486,7 +2514,7 @@ func (q *Queries) ListTeamIssuesByState(ctx context.Context, arg ListTeamIssuesB
 }
 
 const listTeamIssuesByStateName = `-- name: ListTeamIssuesByStateName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_name = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_name = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByStateNameParams struct {
@@ -2514,6 +2542,8 @@ func (q *Queries) ListTeamIssuesByStateName(ctx context.Context, arg ListTeamIss
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2542,7 +2572,7 @@ func (q *Queries) ListTeamIssuesByStateName(ctx context.Context, arg ListTeamIss
 }
 
 const listTeamIssuesByStateType = `-- name: ListTeamIssuesByStateType :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_type = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_type = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByStateTypeParams struct {
@@ -2570,6 +2600,8 @@ func (q *Queries) ListTeamIssuesByStateType(ctx context.Context, arg ListTeamIss
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2810,7 +2842,7 @@ func (q *Queries) ListTeamStatesByType(ctx context.Context, arg ListTeamStatesBy
 }
 
 const listTeamUnassignedIssues = `-- name: ListTeamUnassignedIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) ([]Issue, error) {
@@ -2833,6 +2865,8 @@ func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) (
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2896,7 +2930,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 }
 
 const listUserActiveIssues = `-- name: ListUserActiveIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullString) ([]Issue, error) {
@@ -2919,6 +2953,8 @@ func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullS
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2947,7 +2983,7 @@ func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullS
 }
 
 const listUserAssignedIssues = `-- name: ListUserAssignedIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.NullString) ([]Issue, error) {
@@ -2970,6 +3006,8 @@ func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.Nul
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -2998,7 +3036,7 @@ func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.Nul
 }
 
 const listUserAssignedIssuesByEmail = `-- name: ListUserAssignedIssuesByEmail :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEmail sql.NullString) ([]Issue, error) {
@@ -3021,6 +3059,61 @@ func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEma
 			&i.StateType,
 			&i.AssigneeID,
 			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
+			&i.Priority,
+			&i.ProjectID,
+			&i.ProjectName,
+			&i.CycleID,
+			&i.CycleName,
+			&i.ParentID,
+			&i.DueDate,
+			&i.Estimate,
+			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserCreatedIssues = `-- name: ListUserCreatedIssues :many
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE creator_id = ? ORDER BY updated_at DESC
+`
+
+func (q *Queries) ListUserCreatedIssues(ctx context.Context, creatorID sql.NullString) ([]Issue, error) {
+	rows, err := q.db.QueryContext(ctx, listUserCreatedIssues, creatorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.Identifier,
+			&i.TeamID,
+			&i.Title,
+			&i.Description,
+			&i.StateID,
+			&i.StateName,
+			&i.StateType,
+			&i.AssigneeID,
+			&i.AssigneeEmail,
+			&i.CreatorID,
+			&i.CreatorEmail,
 			&i.Priority,
 			&i.ProjectID,
 			&i.ProjectName,
@@ -3123,6 +3216,20 @@ func (q *Queries) ListWorkspaceLabels(ctx context.Context) ([]Label, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const setIssueParent = `-- name: SetIssueParent :exec
+UPDATE issues SET parent_id = ? WHERE id = ?
+`
+
+type SetIssueParentParams struct {
+	ParentID sql.NullString `json:"parent_id"`
+	ID       string         `json:"id"`
+}
+
+func (q *Queries) SetIssueParent(ctx context.Context, arg SetIssueParentParams) error {
+	_, err := q.db.ExecContext(ctx, setIssueParent, arg.ParentID, arg.ID)
+	return err
 }
 
 const upsertComment = `-- name: UpsertComment :exec
@@ -3425,14 +3532,14 @@ const upsertIssue = `-- name: UpsertIssue :exec
 INSERT INTO issues (
     id, identifier, team_id, title, description,
     state_id, state_name, state_type,
-    assignee_id, assignee_email, priority,
+    assignee_id, assignee_email, creator_id, creator_email, priority,
     project_id, project_name, cycle_id, cycle_name,
     parent_id, due_date, estimate, url,
     created_at, updated_at, synced_at, data
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?,
-    ?, ?, ?,
+    ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?,
     ?, ?, ?, ?
@@ -3446,6 +3553,8 @@ INSERT INTO issues (
     state_type = excluded.state_type,
     assignee_id = excluded.assignee_id,
     assignee_email = excluded.assignee_email,
+    creator_id = excluded.creator_id,
+    creator_email = excluded.creator_email,
     priority = excluded.priority,
     project_id = excluded.project_id,
     project_name = excluded.project_name,
@@ -3472,6 +3581,8 @@ type UpsertIssueParams struct {
 	StateType     sql.NullString  `json:"state_type"`
 	AssigneeID    sql.NullString  `json:"assignee_id"`
 	AssigneeEmail sql.NullString  `json:"assignee_email"`
+	CreatorID     sql.NullString  `json:"creator_id"`
+	CreatorEmail  sql.NullString  `json:"creator_email"`
 	Priority      sql.NullInt64   `json:"priority"`
 	ProjectID     sql.NullString  `json:"project_id"`
 	ProjectName   sql.NullString  `json:"project_name"`
@@ -3499,6 +3610,8 @@ func (q *Queries) UpsertIssue(ctx context.Context, arg UpsertIssueParams) error 
 		arg.StateType,
 		arg.AssigneeID,
 		arg.AssigneeEmail,
+		arg.CreatorID,
+		arg.CreatorEmail,
 		arg.Priority,
 		arg.ProjectID,
 		arg.ProjectName,

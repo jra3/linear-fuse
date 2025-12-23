@@ -3,7 +3,6 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
-	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
@@ -47,6 +46,12 @@ func APIIssueToDBIssue(issue api.Issue) (*IssueData, error) {
 	if issue.Assignee != nil {
 		d.AssigneeID = &issue.Assignee.ID
 		d.AssigneeEmail = &issue.Assignee.Email
+	}
+
+	// Creator
+	if issue.Creator != nil {
+		d.CreatorID = &issue.Creator.ID
+		d.CreatorEmail = &issue.Creator.Email
 	}
 
 	// Project
@@ -113,7 +118,7 @@ func APITeamToDBTeam(team api.Team) UpsertTeamParams {
 			Time:  team.UpdatedAt,
 			Valid: !team.UpdatedAt.IsZero(),
 		},
-		SyncedAt: time.Now(),
+		SyncedAt: Now(),
 	}
 }
 
@@ -169,7 +174,7 @@ func APIStateToDBState(state api.State, teamID string) (UpsertStateParams, error
 		TeamID:   teamID,
 		Name:     state.Name,
 		Type:     state.Type,
-		SyncedAt: time.Now(),
+		SyncedAt: Now(),
 		Data:     data,
 	}, nil
 }
@@ -208,7 +213,7 @@ func APILabelToDBLabel(label api.Label, teamID string) (UpsertLabelParams, error
 		Name:        label.Name,
 		Color:       sql.NullString{String: label.Color, Valid: label.Color != ""},
 		Description: sql.NullString{String: label.Description, Valid: label.Description != ""},
-		SyncedAt:    time.Now(),
+		SyncedAt:    Now(),
 		Data:        data,
 	}, nil
 }
@@ -252,7 +257,7 @@ func APIUserToDBUser(user api.User) (UpsertUserParams, error) {
 		Name:        user.Name,
 		DisplayName: sql.NullString{String: user.DisplayName, Valid: user.DisplayName != ""},
 		Active:      active,
-		SyncedAt:    time.Now(),
+		SyncedAt:    Now(),
 		Data:        data,
 	}, nil
 }
@@ -294,7 +299,7 @@ func APICycleToDBCycle(cycle api.Cycle, teamID string) (UpsertCycleParams, error
 		Name:     sql.NullString{String: cycle.Name, Valid: cycle.Name != ""},
 		StartsAt: sql.NullTime{Time: cycle.StartsAt, Valid: !cycle.StartsAt.IsZero()},
 		EndsAt:   sql.NullTime{Time: cycle.EndsAt, Valid: !cycle.EndsAt.IsZero()},
-		SyncedAt: time.Now(),
+		SyncedAt: Now(),
 		Data:     data,
 	}, nil
 }
@@ -338,7 +343,7 @@ func APIProjectToDBProject(project api.Project) (UpsertProjectParams, error) {
 		Url:         sql.NullString{String: project.URL, Valid: project.URL != ""},
 		CreatedAt:   sql.NullTime{Time: project.CreatedAt, Valid: !project.CreatedAt.IsZero()},
 		UpdatedAt:   sql.NullTime{Time: project.UpdatedAt, Valid: !project.UpdatedAt.IsZero()},
-		SyncedAt:    time.Now(),
+		SyncedAt:    Now(),
 		Data:        data,
 	}
 	if project.StartDate != nil {
@@ -391,7 +396,7 @@ func APICommentToDBComment(comment api.Comment, issueID string) (UpsertCommentPa
 		Body:      comment.Body,
 		CreatedAt: comment.CreatedAt,
 		UpdatedAt: comment.UpdatedAt,
-		SyncedAt:  time.Now(),
+		SyncedAt:  Now(),
 		Data:      data,
 	}
 	if comment.User != nil {
@@ -447,7 +452,7 @@ func APIDocumentToDBDocument(document api.Document) (UpsertDocumentParams, error
 		Url:       sql.NullString{String: document.URL, Valid: document.URL != ""},
 		CreatedAt: sql.NullTime{Time: document.CreatedAt, Valid: !document.CreatedAt.IsZero()},
 		UpdatedAt: sql.NullTime{Time: document.UpdatedAt, Valid: !document.UpdatedAt.IsZero()},
-		SyncedAt:  time.Now(),
+		SyncedAt:  Now(),
 		Data:      data,
 	}
 	if document.Issue != nil {
@@ -505,7 +510,7 @@ func APIInitiativeToDBInitiative(initiative api.Initiative) (UpsertInitiativePar
 		Url:         sql.NullString{String: initiative.URL, Valid: initiative.URL != ""},
 		CreatedAt:   sql.NullTime{Time: initiative.CreatedAt, Valid: !initiative.CreatedAt.IsZero()},
 		UpdatedAt:   sql.NullTime{Time: initiative.UpdatedAt, Valid: !initiative.UpdatedAt.IsZero()},
-		SyncedAt:    time.Now(),
+		SyncedAt:    Now(),
 		Data:        data,
 	}
 	if initiative.TargetDate != nil {
@@ -555,7 +560,7 @@ func APIProjectMilestoneToDBMilestone(milestone api.ProjectMilestone, projectID 
 		Name:        milestone.Name,
 		Description: sql.NullString{String: milestone.Description, Valid: milestone.Description != ""},
 		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
-		SyncedAt:    time.Now(),
+		SyncedAt:    Now(),
 		Data:        data,
 	}
 	if milestone.TargetDate != nil {
@@ -601,7 +606,7 @@ func APIProjectUpdateToDBUpdate(update api.ProjectUpdate, projectID string) (Ups
 		Health:    sql.NullString{String: update.Health, Valid: update.Health != ""},
 		CreatedAt: update.CreatedAt,
 		UpdatedAt: update.UpdatedAt,
-		SyncedAt:  time.Now(),
+		SyncedAt:  Now(),
 		Data:      data,
 	}
 	if update.User != nil {
@@ -650,7 +655,7 @@ func APIInitiativeUpdateToDBUpdate(update api.InitiativeUpdate, initiativeID str
 		Health:       sql.NullString{String: update.Health, Valid: update.Health != ""},
 		CreatedAt:    update.CreatedAt,
 		UpdatedAt:    update.UpdatedAt,
-		SyncedAt:     time.Now(),
+		SyncedAt:     Now(),
 		Data:         data,
 	}
 	if update.User != nil {

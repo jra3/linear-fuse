@@ -223,6 +223,8 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		node := &ProjectInfoNode{lfs: p.lfs, team: p.team, project: p.project}
 		content := node.generateContent()
 		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Uid = p.lfs.uid
+		out.Attr.Gid = p.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 		return p.NewInode(ctx, node, fs.StableAttr{
@@ -375,6 +377,8 @@ func (p *ProjectInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 		size = len(p.generateContent())
 	}
 	out.Mode = 0644 | syscall.S_IFREG
+	out.Uid = p.lfs.uid
+	out.Gid = p.lfs.gid
 	out.Size = uint64(size)
 	out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 	return 0
@@ -618,6 +622,8 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 			projectID: n.projectID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -737,6 +743,8 @@ func (n *NewUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 
 	now := time.Now()
 	out.Mode = 0200
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -812,10 +820,15 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		log.Printf("Creating project update: health=%s body=%s", health, body[:min(50, len(body))])
 	}
 
-	_, err := n.lfs.CreateProjectUpdate(ctx, n.projectID, body, health)
+	update, err := n.lfs.CreateProjectUpdate(ctx, n.projectID, body, health)
 	if err != nil {
 		log.Printf("Failed to create project update: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertProjectUpdate(ctx, n.projectID, *update); err != nil {
+		log.Printf("Warning: failed to upsert project update to SQLite: %v", err)
 	}
 
 	n.created = true

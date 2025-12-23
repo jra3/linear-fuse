@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS issues (
     state_type TEXT,
     assignee_id TEXT,
     assignee_email TEXT,
+    creator_id TEXT,
+    creator_email TEXT,
     priority INTEGER DEFAULT 0,
     project_id TEXT,
     project_name TEXT,
@@ -31,6 +33,7 @@ CREATE INDEX IF NOT EXISTS idx_issues_identifier ON issues(identifier);
 CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_issues_state ON issues(team_id, state_id);
 CREATE INDEX IF NOT EXISTS idx_issues_assignee ON issues(team_id, assignee_id);
+CREATE INDEX IF NOT EXISTS idx_issues_creator ON issues(creator_id);
 CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project_id);
 CREATE INDEX IF NOT EXISTS idx_issues_cycle ON issues(cycle_id);
 CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);

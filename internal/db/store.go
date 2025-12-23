@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -30,7 +31,11 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// Use file: URI format to properly handle paths with spaces and query params
+	// Escape spaces in path for URI format
+	escapedPath := strings.ReplaceAll(dbPath, " ", "%20")
+	connStr := "file:" + escapedPath + "?_time_format=sqlite"
+	db, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -150,7 +155,7 @@ func scanIssues(rows *sql.Rows) ([]Issue, error) {
 		if err := rows.Scan(
 			&i.ID, &i.Identifier, &i.TeamID, &i.Title, &i.Description,
 			&i.StateID, &i.StateName, &i.StateType,
-			&i.AssigneeID, &i.AssigneeEmail, &i.Priority,
+			&i.AssigneeID, &i.AssigneeEmail, &i.CreatorID, &i.CreatorEmail, &i.Priority,
 			&i.ProjectID, &i.ProjectName, &i.CycleID, &i.CycleName,
 			&i.ParentID, &i.DueDate, &i.Estimate, &i.Url,
 			&i.CreatedAt, &i.UpdatedAt, &i.SyncedAt, &i.Data,
@@ -175,6 +180,8 @@ type IssueData struct {
 	StateType     *string
 	AssigneeID    *string
 	AssigneeEmail *string
+	CreatorID     *string
+	CreatorEmail  *string
 	Priority      int
 	ProjectID     *string
 	ProjectName   *string
@@ -202,6 +209,8 @@ func (d *IssueData) ToUpsertParams() UpsertIssueParams {
 		StateType:     toNullString(d.StateType),
 		AssigneeID:    toNullString(d.AssigneeID),
 		AssigneeEmail: toNullString(d.AssigneeEmail),
+		CreatorID:     toNullString(d.CreatorID),
+		CreatorEmail:  toNullString(d.CreatorEmail),
 		Priority:      sql.NullInt64{Int64: int64(d.Priority), Valid: true},
 		ProjectID:     toNullString(d.ProjectID),
 		ProjectName:   toNullString(d.ProjectName),
@@ -213,7 +222,7 @@ func (d *IssueData) ToUpsertParams() UpsertIssueParams {
 		Url:           toNullString(d.URL),
 		CreatedAt:     d.CreatedAt,
 		UpdatedAt:     d.UpdatedAt,
-		SyncedAt:      time.Now(),
+		SyncedAt:      Now(),
 		Data:          d.Data,
 	}
 }
@@ -238,6 +247,13 @@ func ToNullTime(t time.Time) sql.NullTime {
 		return sql.NullTime{}
 	}
 	return sql.NullTime{Time: t, Valid: true}
+}
+
+// Now returns the current time formatted for SQLite storage.
+// It uses UTC and strips the monotonic clock reading to produce
+// clean RFC3339 timestamps that SQLite datetime functions understand.
+func Now() time.Time {
+	return time.Now().UTC().Round(0)
 }
 
 // ToNullInt64 converts an int64 to sql.NullInt64

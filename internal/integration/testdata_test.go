@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,12 +17,6 @@ var (
 	lastAPICall   time.Time
 	apiCallDelay  = 1 * time.Second // Minimum delay between API write operations
 )
-
-// writeTestsEnabled returns true if write tests should run
-// Write tests require live API mode
-func writeTestsEnabled() bool {
-	return liveAPIMode && os.Getenv("LINEARFS_WRITE_TESTS") == "1"
-}
 
 // skipIfNoWriteTests skips the test if write tests are not enabled
 // Write tests require live API mode with LINEARFS_WRITE_TESTS=1
@@ -90,60 +85,63 @@ func WithStateID(stateID string) IssueOption {
 	}
 }
 
-// createTestIssue creates an issue via API for testing.
+// createTestIssue creates an issue via filesystem mkdir for testing.
 // The title is prefixed with [TEST] and a timestamp.
 // Returns the issue and a cleanup function (currently no-op since Linear doesn't have delete).
 func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), error) {
 	rateLimitWait() // Prevent API rate limiting
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	fullTitle := fmt.Sprintf("[TEST] %s %d", title, time.Now().UnixMilli())
+	issuePath := fmt.Sprintf("%s/teams/%s/issues/%s", mountPoint, testTeamKey, fullTitle)
 
-	input := map[string]any{
-		"teamId": testTeamID,
-		"title":  fmt.Sprintf("[TEST] %s %d", title, time.Now().UnixMilli()),
+	// Create issue via filesystem mkdir - this goes through FUSE and syncs to SQLite
+	if err := os.Mkdir(issuePath, 0755); err != nil {
+		return nil, nil, fmt.Errorf("failed to create test issue via mkdir: %w", err)
 	}
 
-	for _, opt := range opts {
-		opt(input)
-	}
-
-	issue, err := apiClient.CreateIssue(ctx, input)
+	// Read the created issue to get its identifier
+	entries, err := os.ReadDir(fmt.Sprintf("%s/teams/%s/issues", mountPoint, testTeamKey))
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create test issue: %w", err)
+		return nil, nil, fmt.Errorf("failed to read issues directory: %w", err)
 	}
 
-	// Cleanup function - Linear doesn't have delete, so we just log
-	// In a real scenario, we could archive or cancel the issue
-	cleanup := func() {
-		// No-op for now - test issues stay in workspace with [TEST] prefix
+	// Find the issue we just created by matching title
+	for _, entry := range entries {
+		issueMdPath := fmt.Sprintf("%s/teams/%s/issues/%s/issue.md", mountPoint, testTeamKey, entry.Name())
+		content, err := os.ReadFile(issueMdPath)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(content), fullTitle) {
+			// Parse frontmatter to get the ID
+			doc, err := parseFrontmatter(content)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to parse issue.md frontmatter: %w", err)
+			}
+
+			identifier := entry.Name()
+			id, _ := doc.Frontmatter["id"].(string)
+
+			issue := &api.Issue{
+				ID:         id,
+				Identifier: identifier,
+				Title:      fullTitle,
+				Team:       &api.Team{Key: testTeamKey, ID: testTeamID},
+			}
+
+			cleanup := func() {
+				// No-op for now - test issues stay in workspace with [TEST] prefix
+			}
+
+			return &TestIssue{Issue: issue}, cleanup, nil
+		}
 	}
 
-	return &TestIssue{Issue: issue}, cleanup, nil
-}
-
-// createTestComment creates a comment on an issue for testing.
-func createTestComment(issueID, body string) (*api.Comment, func(), error) {
-	rateLimitWait() // Prevent API rate limiting
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	comment, err := apiClient.CreateComment(ctx, issueID, fmt.Sprintf("[TEST] %s", body))
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create test comment: %w", err)
-	}
-
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = apiClient.DeleteComment(ctx, comment.ID)
-	}
-
-	return comment, cleanup, nil
+	return nil, nil, fmt.Errorf("created issue not found in filesystem")
 }
 
 // getTestIssue fetches an issue by ID via API (for verification)
+// DEPRECATED: Prefer getIssueFromFilesystem or getIssueFromSQLite for write test verification
 func getTestIssue(issueID string) (*api.Issue, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -151,14 +149,129 @@ func getTestIssue(issueID string) (*api.Issue, error) {
 	return apiClient.GetIssue(ctx, issueID)
 }
 
-// updateTestIssue updates an issue via API
-func updateTestIssue(issueID string, updates map[string]any) error {
-	rateLimitWait() // Prevent API rate limiting
+// FilesystemIssue represents an issue as read from the filesystem
+type FilesystemIssue struct {
+	ID          string
+	Identifier  string
+	Title       string
+	Description string
+	Status      string
+	Priority    string
+	Assignee    string
+	DueDate     string
+	Estimate    int
+	Cycle       string
+	Project     string
+	Labels      []string
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// getIssueFromFilesystem reads and parses an issue from the mounted filesystem.
+// This is the preferred way to verify issue state in write tests.
+func getIssueFromFilesystem(identifier string) (*FilesystemIssue, error) {
+	path := fmt.Sprintf("%s/teams/%s/issues/%s/issue.md", mountPoint, testTeamKey, identifier)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read issue.md: %w", err)
+	}
+
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse frontmatter: %w", err)
+	}
+
+	issue := &FilesystemIssue{
+		Description: doc.Body,
+	}
+
+	// Extract frontmatter fields
+	if v, ok := doc.Frontmatter["id"].(string); ok {
+		issue.ID = v
+	}
+	if v, ok := doc.Frontmatter["identifier"].(string); ok {
+		issue.Identifier = v
+	}
+	if v, ok := doc.Frontmatter["title"].(string); ok {
+		issue.Title = v
+	}
+	if v, ok := doc.Frontmatter["status"].(string); ok {
+		issue.Status = v
+	}
+	if v, ok := doc.Frontmatter["priority"].(string); ok {
+		issue.Priority = v
+	}
+	if v, ok := doc.Frontmatter["assignee"].(string); ok {
+		issue.Assignee = v
+	}
+	if v, ok := doc.Frontmatter["due"].(string); ok {
+		issue.DueDate = v
+	}
+	if v, ok := doc.Frontmatter["estimate"].(int); ok {
+		issue.Estimate = v
+	}
+	if v, ok := doc.Frontmatter["cycle"].(string); ok {
+		issue.Cycle = v
+	}
+	if v, ok := doc.Frontmatter["project"].(string); ok {
+		issue.Project = v
+	}
+	if labels, ok := doc.Frontmatter["labels"].([]interface{}); ok {
+		for _, l := range labels {
+			if s, ok := l.(string); ok {
+				issue.Labels = append(issue.Labels, s)
+			}
+		}
+	}
+
+	return issue, nil
+}
+
+// getIssueFromSQLite fetches an issue directly from the SQLite database.
+// This verifies that the write was persisted to the database layer.
+func getIssueFromSQLite(issueID string) (*api.Issue, error) {
+	if lfs == nil || lfs.GetStore() == nil {
+		return nil, fmt.Errorf("SQLite store not available")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	return apiClient.UpdateIssue(ctx, issueID, updates)
+	dbIssue, err := lfs.GetStore().Queries().GetIssueByID(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("issue not found in SQLite: %w", err)
+	}
+
+	// Convert db.Issue to api.Issue (basic fields)
+	issue := &api.Issue{
+		ID:          dbIssue.ID,
+		Identifier:  dbIssue.Identifier,
+		Title:       dbIssue.Title,
+		Priority:    int(dbIssue.Priority.Int64),
+	}
+
+	if dbIssue.Description.Valid {
+		issue.Description = dbIssue.Description.String
+	}
+	if dbIssue.StateName.Valid {
+		issue.State = api.State{Name: dbIssue.StateName.String}
+		if dbIssue.StateType.Valid {
+			issue.State.Type = dbIssue.StateType.String
+		}
+	}
+	if dbIssue.DueDate.Valid {
+		issue.DueDate = &dbIssue.DueDate.String
+	}
+	if dbIssue.Estimate.Valid {
+		est := dbIssue.Estimate.Float64
+		issue.Estimate = &est
+	}
+	if dbIssue.CycleName.Valid {
+		issue.Cycle = &api.IssueCycle{Name: dbIssue.CycleName.String}
+		if dbIssue.CycleID.Valid {
+			issue.Cycle.ID = dbIssue.CycleID.String
+		}
+	}
+
+	return issue, nil
 }
 
 // getTeamStates fetches workflow states for the test team
@@ -167,51 +280,6 @@ func getTeamStates() ([]api.State, error) {
 	defer cancel()
 
 	return apiClient.GetTeamStates(ctx, testTeamID)
-}
-
-// findStateByName finds a state by name (case-insensitive)
-func findStateByName(name string) (*api.State, error) {
-	states, err := getTeamStates()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, s := range states {
-		if s.Name == name {
-			return &s, nil
-		}
-	}
-
-	return nil, fmt.Errorf("state %q not found", name)
-}
-
-// getUsers fetches all users
-func getUsers() ([]api.User, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	return apiClient.GetUsers(ctx)
-}
-
-// findFirstActiveUser finds the first active user for testing
-func findFirstActiveUser() (*api.User, error) {
-	users, err := getUsers()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, u := range users {
-		if u.Active {
-			return &u, nil
-		}
-	}
-
-	return nil, fmt.Errorf("no active users found")
-}
-
-// updateTestIssueTitle updates just the title of an issue
-func updateTestIssueTitle(issueID, newTitle string) error {
-	return updateTestIssue(issueID, map[string]any{"title": newTitle})
 }
 
 // createTestDocument creates a document attached to an issue for testing.
@@ -225,33 +293,6 @@ func createTestDocument(issueID, title, content string) (*api.Document, func(), 
 		"title":   fmt.Sprintf("[TEST] %s %d", title, time.Now().UnixMilli()),
 		"content": content,
 		"issueId": issueID,
-	}
-
-	doc, err := apiClient.CreateDocument(ctx, input)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create test document: %w", err)
-	}
-
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = apiClient.DeleteDocument(ctx, doc.ID)
-	}
-
-	return doc, cleanup, nil
-}
-
-// createTestProjectDocument creates a document attached to a project for testing.
-func createTestProjectDocument(projectID, title, content string) (*api.Document, func(), error) {
-	rateLimitWait() // Prevent API rate limiting
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	input := map[string]any{
-		"title":     fmt.Sprintf("[TEST] %s %d", title, time.Now().UnixMilli()),
-		"content":   content,
-		"projectId": projectID,
 	}
 
 	doc, err := apiClient.CreateDocument(ctx, input)

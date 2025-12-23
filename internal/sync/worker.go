@@ -233,7 +233,7 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 
 	if err := w.store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
 		TeamID:             team.ID,
-		LastSyncedAt:       time.Now(),
+		LastSyncedAt:       db.Now(),
 		LastIssueUpdatedAt: db.ToNullTime(lastIssueUpdatedAt),
 		IssueCount:         db.ToNullInt64(count),
 	}); err != nil {
@@ -406,7 +406,7 @@ func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Init
 		if err := w.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 			InitiativeID: initiative.ID,
 			ProjectID:    project.ID,
-			SyncedAt:     time.Now(),
+			SyncedAt:     db.Now(),
 		}); err != nil {
 			return fmt.Errorf("upsert initiative-project %s-%s: %w", initiative.ID, project.ID, err)
 		}
@@ -534,7 +534,7 @@ func (w *Worker) syncTeamProjects(ctx context.Context, teamID string) error {
 		if err := w.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
 			ProjectID: project.ID,
 			TeamID:    teamID,
-			SyncedAt:  time.Now(),
+			SyncedAt:  db.Now(),
 		}); err != nil {
 			log.Printf("[sync] upsert project-team %s-%s failed: %v", project.ID, teamID, err)
 		}
@@ -590,7 +590,7 @@ func (w *Worker) syncTeamMembers(ctx context.Context, teamID string) error {
 		if err := w.store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
 			TeamID:   teamID,
 			UserID:   member.ID,
-			SyncedAt: time.Now(),
+			SyncedAt: db.Now(),
 		}); err != nil {
 			log.Printf("[sync] upsert team member %s failed: %v", member.Email, err)
 		}

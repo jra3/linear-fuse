@@ -39,14 +39,24 @@ func TestEditIssueTitle(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// Verify via API (no wait needed - filesystem write is synchronous)
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem (re-read the file)
+	updated, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
 	if updated.Title != newTitle {
 		t.Errorf("Expected title %q, got %q", newTitle, updated.Title)
+	}
+
+	// Also verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Title != newTitle {
+		t.Errorf("SQLite title mismatch: expected %q, got %q", newTitle, sqliteIssue.Title)
 	}
 }
 
@@ -91,14 +101,24 @@ func TestEditIssueDescription(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.Description != newDesc {
-		t.Errorf("Expected description %q, got %q", newDesc, updated.Description)
+	if fsIssue.Description != newDesc {
+		t.Errorf("Expected description %q, got %q", newDesc, fsIssue.Description)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Description != newDesc {
+		t.Errorf("SQLite description mismatch: expected %q, got %q", newDesc, sqliteIssue.Description)
 	}
 }
 
@@ -128,15 +148,24 @@ func TestEditIssuePriority(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	// Priority 2 = high in Linear
-	if updated.Priority != 2 {
-		t.Errorf("Expected priority 2 (high), got %d", updated.Priority)
+	if fsIssue.Priority != "high" {
+		t.Errorf("Expected priority 'high', got %q", fsIssue.Priority)
+	}
+
+	// Verify SQLite state (priority 2 = high in Linear)
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Priority != 2 {
+		t.Errorf("SQLite priority mismatch: expected 2 (high), got %d", sqliteIssue.Priority)
 	}
 }
 
@@ -182,14 +211,24 @@ func TestEditIssueStatus(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.State.Name != *inProgressState {
-		t.Errorf("Expected status %q, got %q", *inProgressState, updated.State.Name)
+	if fsIssue.Status != *inProgressState {
+		t.Errorf("Expected status %q, got %q", *inProgressState, fsIssue.Status)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.State.Name != *inProgressState {
+		t.Errorf("SQLite status mismatch: expected %q, got %q", *inProgressState, sqliteIssue.State.Name)
 	}
 }
 
@@ -219,14 +258,24 @@ func TestEditIssueDueDate(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.DueDate == nil || *updated.DueDate != dueDate {
-		t.Errorf("Expected due date %q, got %v", dueDate, updated.DueDate)
+	if fsIssue.DueDate != dueDate {
+		t.Errorf("Expected due date %q, got %q", dueDate, fsIssue.DueDate)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.DueDate == nil || *sqliteIssue.DueDate != dueDate {
+		t.Errorf("SQLite due date mismatch: expected %q, got %v", dueDate, sqliteIssue.DueDate)
 	}
 }
 
@@ -256,14 +305,24 @@ func TestClearIssueDueDate(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.DueDate != nil {
-		t.Errorf("Expected due date to be cleared, got %v", *updated.DueDate)
+	if fsIssue.DueDate != "" {
+		t.Errorf("Expected due date to be cleared, got %q", fsIssue.DueDate)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.DueDate != nil {
+		t.Errorf("SQLite due date should be nil, got %v", *sqliteIssue.DueDate)
 	}
 }
 
@@ -292,16 +351,26 @@ func TestEditIssueEstimate(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.Estimate == nil {
-		t.Error("Expected estimate 4, got nil")
-	} else if *updated.Estimate != 4 {
-		t.Errorf("Expected estimate 4, got %v", *updated.Estimate)
+	if fsIssue.Estimate != 4 {
+		t.Errorf("Expected estimate 4, got %d", fsIssue.Estimate)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Estimate == nil {
+		t.Error("SQLite estimate should not be nil")
+	} else if *sqliteIssue.Estimate != 4 {
+		t.Errorf("SQLite estimate mismatch: expected 4, got %v", *sqliteIssue.Estimate)
 	}
 }
 
@@ -335,17 +404,30 @@ func TestEditMultipleFields(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// No wait needed - filesystem write is synchronous
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.Title != "[TEST] Updated Multiple" {
-		t.Errorf("Title not updated: %s", updated.Title)
+	if fsIssue.Title != "[TEST] Updated Multiple" {
+		t.Errorf("Title not updated: %s", fsIssue.Title)
 	}
-	if updated.Priority != 3 { // 3 = medium
-		t.Errorf("Priority not updated: %d", updated.Priority)
+	if fsIssue.Priority != "medium" {
+		t.Errorf("Priority not updated: %s", fsIssue.Priority)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Title != "[TEST] Updated Multiple" {
+		t.Errorf("SQLite title not updated: %s", sqliteIssue.Title)
+	}
+	if sqliteIssue.Priority != 3 { // 3 = medium
+		t.Errorf("SQLite priority not updated: %d", sqliteIssue.Priority)
 	}
 }
 
@@ -500,18 +582,28 @@ func TestSetIssueCycle(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// Verify via API
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.Cycle == nil {
-		t.Fatal("Issue should have a cycle after update")
+	if fsIssue.Cycle != cycle.Name {
+		t.Errorf("Expected cycle %q, got %q", cycle.Name, fsIssue.Cycle)
 	}
 
-	if updated.Cycle.ID != cycle.ID {
-		t.Errorf("Expected cycle ID %q, got %q", cycle.ID, updated.Cycle.ID)
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Cycle == nil {
+		t.Fatal("SQLite issue should have a cycle after update")
+	}
+
+	if sqliteIssue.Cycle.ID != cycle.ID {
+		t.Errorf("SQLite cycle ID mismatch: expected %q, got %q", cycle.ID, sqliteIssue.Cycle.ID)
 	}
 }
 
@@ -561,13 +653,23 @@ func TestRemoveIssueCycle(t *testing.T) {
 		t.Fatalf("Failed to write issue: %v", err)
 	}
 
-	// Verify via API
-	updated, err := getTestIssue(issue.ID)
+	// Verify via filesystem
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
-		t.Fatalf("Failed to get issue from API: %v", err)
+		t.Fatalf("Failed to get issue from filesystem: %v", err)
 	}
 
-	if updated.Cycle != nil {
-		t.Errorf("Issue should not have a cycle after removal, got %q", updated.Cycle.Name)
+	if fsIssue.Cycle != "" {
+		t.Errorf("Issue should not have a cycle after removal, got %q", fsIssue.Cycle)
+	}
+
+	// Verify SQLite state
+	sqliteIssue, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("Failed to get issue from SQLite: %v", err)
+	}
+
+	if sqliteIssue.Cycle != nil {
+		t.Errorf("SQLite issue should not have a cycle after removal, got %q", sqliteIssue.Cycle.Name)
 	}
 }

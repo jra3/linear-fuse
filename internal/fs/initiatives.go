@@ -367,6 +367,8 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 			initiativeID: n.initiativeID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -486,6 +488,8 @@ func (n *NewInitiativeUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, 
 
 	now := time.Now()
 	out.Mode = 0200
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -561,10 +565,15 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 		log.Printf("Creating initiative update: health=%s body=%s", health, body[:min(50, len(body))])
 	}
 
-	_, err := n.lfs.CreateInitiativeUpdate(ctx, n.initiativeID, body, health)
+	update, err := n.lfs.CreateInitiativeUpdate(ctx, n.initiativeID, body, health)
 	if err != nil {
 		log.Printf("Failed to create initiative update: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertInitiativeUpdate(ctx, n.initiativeID, *update); err != nil {
+		log.Printf("Warning: failed to upsert initiative update to SQLite: %v", err)
 	}
 
 	n.created = true

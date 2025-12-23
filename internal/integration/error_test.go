@@ -195,8 +195,8 @@ func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
 	// Should either fail or be handled gracefully
 	_ = err
 
-	// Verify via API that issue still exists
-	apiIssue, err := getTestIssue(issue.ID)
+	// Verify via filesystem that issue still exists
+	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
 	if err != nil {
 		t.Fatalf("Issue became inaccessible after empty write: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
 	// Original title should still be there (empty write shouldn't corrupt)
 	doc, _ := parseFrontmatter(original)
 	originalTitle, _ := doc.Frontmatter["title"].(string)
-	if apiIssue.Title != originalTitle {
-		t.Logf("Note: Empty write may have affected issue (original: %q, current: %q)", originalTitle, apiIssue.Title)
+	if fsIssue.Title != originalTitle {
+		t.Logf("Note: Empty write may have affected issue (original: %q, current: %q)", originalTitle, fsIssue.Title)
 	}
 }

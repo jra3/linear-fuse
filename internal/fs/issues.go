@@ -158,6 +158,12 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		return nil, syscall.EIO
 	}
 
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
+		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+		// Don't fail - the issue was created in Linear, sync will eventually pick it up
+	}
+
 	// Invalidate caches
 	n.lfs.InvalidateTeamIssues(n.team.ID)
 	n.lfs.InvalidateMyIssues()
@@ -255,6 +261,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			contentReady: true,
 		}
 		out.Attr.Mode = 0644 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
 		out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
@@ -358,6 +366,8 @@ func (i *IssueFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	}
 
 	out.Mode = 0644
+	out.Uid = i.lfs.uid
+	out.Gid = i.lfs.gid
 	out.Size = uint64(len(i.content))
 	out.SetTimes(nil, &i.issue.UpdatedAt, &i.issue.CreatedAt)
 
@@ -480,6 +490,9 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return 0
 	}
 
+	// Track state name for updating i.issue after API call
+	var newStateName string
+
 	// Resolve status name to state ID if needed
 	if stateName, ok := updates["stateId"].(string); ok {
 		if i.issue.Team == nil {
@@ -491,6 +504,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			log.Printf("Failed to resolve state '%s': %v", stateName, err)
 			return syscall.EIO
 		}
+		newStateName = stateName // Capture name before replacing with ID
 		updates["stateId"] = stateID
 	}
 
@@ -639,6 +653,9 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	// Update i.issue with the new values so next read sees them
 	// (otherwise generateContent would serialize the old i.issue data)
+	if newStateName != "" {
+		i.issue.State.Name = newStateName
+	}
 	if title, ok := updates["title"].(string); ok {
 		i.issue.Title = title
 	}
@@ -658,6 +675,12 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		i.issue.Estimate = &est
 	} else if updates["estimate"] == nil {
 		i.issue.Estimate = nil
+	}
+
+	// Upsert the updated issue to SQLite so it's immediately visible
+	if err := i.lfs.UpsertIssue(ctx, i.issue); err != nil {
+		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+		// Don't fail - the issue was updated in Linear, sync will eventually pick it up
 	}
 
 	i.dirty = false
@@ -682,8 +705,13 @@ var _ fs.NodeReaddirer = (*ChildrenNode)(nil)
 var _ fs.NodeLookuper = (*ChildrenNode)(nil)
 
 func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	entries := make([]fuse.DirEntry, len(n.issue.Children.Nodes))
-	for i, child := range n.issue.Children.Nodes {
+	// Query children from database by parent_id
+	children, err := n.lfs.GetIssueChildren(ctx, n.issue.ID)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	entries := make([]fuse.DirEntry, len(children))
+	for i, child := range children {
 		entries[i] = fuse.DirEntry{
 			Name: child.Identifier,
 			Mode: syscall.S_IFLNK,
@@ -693,10 +721,19 @@ func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 }
 
 func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	for _, child := range n.issue.Children.Nodes {
+	// Query children from database by parent_id
+	children, err := n.lfs.GetIssueChildren(ctx, n.issue.ID)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	for _, child := range children {
 		if child.Identifier == name {
 			node := &ChildSymlinkNode{
-				child: child,
+				child: api.ChildIssue{
+					ID:         child.ID,
+					Identifier: child.Identifier,
+					Title:      child.Title,
+				},
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
 			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0

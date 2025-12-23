@@ -262,12 +262,18 @@ func (r *SQLiteRepository) GetMyIssues(ctx context.Context) ([]api.Issue, error)
 }
 
 func (r *SQLiteRepository) GetMyCreatedIssues(ctx context.Context) ([]api.Issue, error) {
-	// Note: creator_id isn't in our schema, so we need to query from JSON
-	// For now, fallback to API if available
-	if r.client != nil {
-		return r.client.GetMyCreatedIssues(ctx)
+	user, err := r.GetCurrentUser(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return []api.Issue{}, nil
+	if user == nil {
+		return []api.Issue{}, nil
+	}
+	issues, err := r.store.Queries().ListUserCreatedIssues(ctx, sql.NullString{String: user.ID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list user created issues: %w", err)
+	}
+	return db.DBIssuesToAPIIssues(issues)
 }
 
 func (r *SQLiteRepository) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {

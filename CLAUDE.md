@@ -169,9 +169,12 @@ When adding new fields to an entity, update the corresponding fragment.
 
 1. User edits file → `Write()` buffers changes
 2. On save → `Flush()` parses content, calls Linear API
-3. Internal caches invalidated (`InvalidateTeamIssues`, `InvalidateFilteredIssues`, etc.)
-4. Kernel cache invalidated via `server.InodeNotify()` / `server.EntryNotify()`
-5. Subsequent reads see fresh data immediately
+3. **Flush handler upserts to SQLite** for immediate visibility
+4. Internal caches invalidated (`InvalidateTeamIssues`, `InvalidateFilteredIssues`, etc.)
+5. Kernel cache invalidated via `server.InodeNotify()` / `server.EntryNotify()`
+6. Subsequent reads see fresh data immediately
+
+**Architecture principle**: API and DB layers are intentionally decoupled. The `api.Client` methods only call the Linear API; they do not touch SQLite. Write handlers (`Flush`, `Mkdir`, etc.) are responsible for upserting to SQLite after successful API calls. This keeps concerns separated and makes the data flow explicit.
 
 ### Cache Invalidation
 

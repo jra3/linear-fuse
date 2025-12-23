@@ -95,6 +95,8 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 			teamID:  n.teamID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
 		out.SetAttrTimeout(1 * time.Second)
@@ -128,6 +130,8 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 				contentReady: true,
 			}
 			out.Attr.Mode = 0644 | syscall.S_IFREG // Read-write
+			out.Attr.Uid = n.lfs.uid
+			out.Attr.Gid = n.lfs.gid
 			out.Attr.Size = uint64(len(content))
 			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
 			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
@@ -231,6 +235,8 @@ func (n *CommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 	defer n.mu.Unlock()
 
 	out.Mode = 0644
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&n.comment.UpdatedAt, &n.comment.UpdatedAt, &n.comment.CreatedAt)
 	return 0
@@ -336,10 +342,15 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		log.Printf("Updating comment %s", n.comment.ID)
 	}
 
-	_, err := n.lfs.UpdateComment(ctx, n.issueID, n.comment.ID, body)
+	updatedComment, err := n.lfs.UpdateComment(ctx, n.issueID, n.comment.ID, body)
 	if err != nil {
 		log.Printf("Failed to update comment: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertComment(ctx, n.issueID, *updatedComment); err != nil {
+		log.Printf("Warning: failed to upsert comment to SQLite: %v", err)
 	}
 
 	// Invalidate kernel cache for this comment file
@@ -401,6 +412,8 @@ func (n *NewCommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 
 	now := time.Now()
 	out.Mode = 0200
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -475,10 +488,15 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 		log.Printf("Creating comment on issue %s: %s", n.issueID, body)
 	}
 
-	_, err := n.lfs.CreateComment(ctx, n.issueID, body)
+	comment, err := n.lfs.CreateComment(ctx, n.issueID, body)
 	if err != nil {
 		log.Printf("Failed to create comment: %v", err)
 		return syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertComment(ctx, n.issueID, *comment); err != nil {
+		log.Printf("Warning: failed to upsert comment to SQLite: %v", err)
 	}
 
 	n.created = true
