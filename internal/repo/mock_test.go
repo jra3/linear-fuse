@@ -9,6 +9,7 @@ import (
 )
 
 func TestMockRepository_Teams(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -50,6 +51,7 @@ func TestMockRepository_Teams(t *testing.T) {
 }
 
 func TestMockRepository_Issues(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -108,6 +110,7 @@ func TestMockRepository_Issues(t *testing.T) {
 }
 
 func TestMockRepository_FilteredIssues(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -145,6 +148,7 @@ func TestMockRepository_FilteredIssues(t *testing.T) {
 }
 
 func TestMockRepository_MyIssues(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -173,6 +177,7 @@ func TestMockRepository_MyIssues(t *testing.T) {
 }
 
 func TestMockRepository_Search(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -202,6 +207,7 @@ func TestMockRepository_Search(t *testing.T) {
 }
 
 func TestMockRepository_States(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -234,6 +240,7 @@ func TestMockRepository_States(t *testing.T) {
 }
 
 func TestMockRepository_Labels(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -259,6 +266,7 @@ func TestMockRepository_Labels(t *testing.T) {
 }
 
 func TestMockRepository_Users(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -287,6 +295,7 @@ func TestMockRepository_Users(t *testing.T) {
 }
 
 func TestMockRepository_Projects(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -315,6 +324,7 @@ func TestMockRepository_Projects(t *testing.T) {
 }
 
 func TestMockRepository_Cycles(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -337,6 +347,7 @@ func TestMockRepository_Cycles(t *testing.T) {
 }
 
 func TestMockRepository_Comments(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -359,6 +370,7 @@ func TestMockRepository_Comments(t *testing.T) {
 }
 
 func TestMockRepository_Documents(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -389,6 +401,7 @@ func TestMockRepository_Documents(t *testing.T) {
 }
 
 func TestMockRepository_Initiatives(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -420,6 +433,7 @@ func TestMockRepository_Initiatives(t *testing.T) {
 }
 
 func TestMockRepository_StatusUpdates(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -444,6 +458,7 @@ func TestMockRepository_StatusUpdates(t *testing.T) {
 }
 
 func TestMockRepository_IssueChildren(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -466,6 +481,7 @@ func TestMockRepository_IssueChildren(t *testing.T) {
 }
 
 func TestMockRepository_IssuesByProjectAndCycle(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 
@@ -492,6 +508,7 @@ func TestMockRepository_IssuesByProjectAndCycle(t *testing.T) {
 }
 
 func TestMockRepository_IssuesByLabel(t *testing.T) {
+	t.Parallel()
 	repo := NewMockRepository()
 	ctx := context.Background()
 

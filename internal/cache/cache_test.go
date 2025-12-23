@@ -8,6 +8,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
+	t.Parallel()
 	c := New[string](time.Minute, 100)
 	if c == nil {
 		t.Fatal("New() returned nil")
@@ -24,6 +25,7 @@ func TestNew(t *testing.T) {
 }
 
 func TestGetSet(t *testing.T) {
+	t.Parallel()
 	c := New[string](time.Minute, 0)
 
 	// Test missing key
@@ -57,6 +59,7 @@ func TestGetSet(t *testing.T) {
 }
 
 func TestGetExpired(t *testing.T) {
+	t.Parallel()
 	// Use very short TTL for testing expiration
 	c := New[string](50*time.Millisecond, 0)
 
@@ -85,6 +88,7 @@ func TestGetExpired(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
+	t.Parallel()
 	c := New[string](time.Minute, 0)
 
 	c.Set("key1", "value1")
@@ -113,6 +117,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestClear(t *testing.T) {
+	t.Parallel()
 	c := New[string](time.Minute, 0)
 
 	c.Set("key1", "value1")
@@ -141,6 +146,7 @@ func TestClear(t *testing.T) {
 }
 
 func TestCacheWithDifferentTypes(t *testing.T) {
+	t.Parallel()
 	t.Run("int cache", func(t *testing.T) {
 		c := New[int](time.Minute, 0)
 		c.Set("count", 42)
@@ -196,6 +202,7 @@ func TestCacheWithDifferentTypes(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
+	t.Parallel()
 	c := New[int](time.Minute, 0)
 	var wg sync.WaitGroup
 	numGoroutines := 100
@@ -251,6 +258,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestZeroValueTypes(t *testing.T) {
+	t.Parallel()
 	t.Run("string zero value", func(t *testing.T) {
 		c := New[string](time.Minute, 0)
 		val, ok := c.Get("missing")
@@ -300,6 +308,7 @@ func TestZeroValueTypes(t *testing.T) {
 }
 
 func TestMultipleKeys(t *testing.T) {
+	t.Parallel()
 	c := New[string](time.Minute, 0)
 
 	// Set multiple keys
@@ -347,6 +356,7 @@ func TestMultipleKeys(t *testing.T) {
 }
 
 func TestMaxEntriesEviction(t *testing.T) {
+	t.Parallel()
 	// Create cache with max 3 entries
 	c := New[string](time.Minute, 3)
 
@@ -381,6 +391,7 @@ func TestMaxEntriesEviction(t *testing.T) {
 }
 
 func TestMaxEntriesOverwriteNoEviction(t *testing.T) {
+	t.Parallel()
 	// Create cache with max 2 entries
 	c := New[string](time.Minute, 2)
 
@@ -403,6 +414,7 @@ func TestMaxEntriesOverwriteNoEviction(t *testing.T) {
 }
 
 func TestMaxEntriesZeroMeansUnlimited(t *testing.T) {
+	t.Parallel()
 	// maxEntries=0 should mean unlimited
 	c := New[string](time.Minute, 0)
 

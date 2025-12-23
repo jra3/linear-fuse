@@ -3,6 +3,7 @@ package api
 import "testing"
 
 func TestPriorityName(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		priority int
 		want     string
@@ -28,6 +29,7 @@ func TestPriorityName(t *testing.T) {
 }
 
 func TestPriorityValue(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		want int
@@ -54,6 +56,7 @@ func TestPriorityValue(t *testing.T) {
 }
 
 func TestPriorityRoundtrip(t *testing.T) {
+	t.Parallel()
 	// Test that valid priorities roundtrip correctly
 	validPriorities := []int{0, 1, 2, 3, 4}
 

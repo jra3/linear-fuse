@@ -156,6 +156,7 @@ func (m *mockAPIClient) GetProjectMilestones(ctx context.Context, projectID stri
 }
 
 func TestWorkerStartStop(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 
@@ -190,6 +191,7 @@ func TestWorkerStartStop(t *testing.T) {
 }
 
 func TestWorkerSyncAllTeams(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -247,6 +249,7 @@ func TestWorkerSyncAllTeams(t *testing.T) {
 }
 
 func TestWorkerSyncUntilUnchanged(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -332,6 +335,7 @@ func TestWorkerSyncUntilUnchanged(t *testing.T) {
 }
 
 func TestWorkerPagination(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -380,6 +384,7 @@ func TestWorkerPagination(t *testing.T) {
 }
 
 func TestWorkerLastSync(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -411,6 +416,7 @@ func TestWorkerLastSync(t *testing.T) {
 }
 
 func TestWorkerContextCancellation(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 
@@ -435,6 +441,7 @@ func TestWorkerContextCancellation(t *testing.T) {
 }
 
 func TestWorkerMultipleStartStop(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 
@@ -464,6 +471,7 @@ func TestWorkerMultipleStartStop(t *testing.T) {
 }
 
 func TestSyncMetadataTracking(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -517,6 +525,7 @@ func TestSyncMetadataTracking(t *testing.T) {
 }
 
 func TestWorkerSyncTeamMetadata(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -610,6 +619,7 @@ func TestWorkerSyncTeamMetadata(t *testing.T) {
 }
 
 func TestWorkerSyncWorkspace(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()

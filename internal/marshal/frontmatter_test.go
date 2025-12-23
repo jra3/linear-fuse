@@ -6,6 +6,7 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name           string
 		content        string
@@ -142,6 +143,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		doc         *Document
@@ -214,6 +216,7 @@ func TestRender(t *testing.T) {
 }
 
 func TestParseRenderRoundtrip(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string

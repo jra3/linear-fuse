@@ -21,6 +21,7 @@ func setupTestDB(t *testing.T) (*db.Store, func()) {
 }
 
 func TestSQLiteRepository_Teams(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -72,6 +73,7 @@ func TestSQLiteRepository_Teams(t *testing.T) {
 }
 
 func TestSQLiteRepository_Issues(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -146,6 +148,7 @@ func TestSQLiteRepository_Issues(t *testing.T) {
 }
 
 func TestSQLiteRepository_FilteredIssues(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -211,6 +214,7 @@ func TestSQLiteRepository_FilteredIssues(t *testing.T) {
 }
 
 func TestSQLiteRepository_States(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -252,6 +256,7 @@ func TestSQLiteRepository_States(t *testing.T) {
 }
 
 func TestSQLiteRepository_Labels(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -291,6 +296,7 @@ func TestSQLiteRepository_Labels(t *testing.T) {
 }
 
 func TestSQLiteRepository_Users(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -342,6 +348,7 @@ func TestSQLiteRepository_Users(t *testing.T) {
 }
 
 func TestSQLiteRepository_Cycles(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -381,6 +388,7 @@ func TestSQLiteRepository_Cycles(t *testing.T) {
 }
 
 func TestSQLiteRepository_Projects(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -438,6 +446,7 @@ func TestSQLiteRepository_Projects(t *testing.T) {
 }
 
 func TestSQLiteRepository_Search(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -478,6 +487,7 @@ func TestSQLiteRepository_Search(t *testing.T) {
 }
 
 func TestSQLiteRepository_CurrentUser(t *testing.T) {
+	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 

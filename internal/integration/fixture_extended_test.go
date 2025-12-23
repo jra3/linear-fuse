@@ -71,8 +71,7 @@ func TestFixtureCycleDirectoryContents(t *testing.T) {
 // =============================================================================
 
 func TestFixtureInitiativesDirectoryExists(t *testing.T) {
-	initiativesPath := filepath.Join(mountPoint, "initiatives")
-	info, err := os.Stat(initiativesPath)
+	info, err := os.Stat(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to stat initiatives directory: %v", err)
 	}
@@ -82,8 +81,7 @@ func TestFixtureInitiativesDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureInitiativesDirectoryListing(t *testing.T) {
-	initiativesPath := filepath.Join(mountPoint, "initiatives")
-	entries, err := os.ReadDir(initiativesPath)
+	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
 	}
@@ -95,8 +93,7 @@ func TestFixtureInitiativesDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureInitiativeDirectoryContents(t *testing.T) {
-	initiativesPath := filepath.Join(mountPoint, "initiatives")
-	entries, err := os.ReadDir(initiativesPath)
+	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
 	}
@@ -106,7 +103,7 @@ func TestFixtureInitiativeDirectoryContents(t *testing.T) {
 	}
 
 	// Check first initiative directory
-	initDir := filepath.Join(initiativesPath, entries[0].Name())
+	initDir := initiativePath(entries[0].Name())
 	initEntries, err := os.ReadDir(initDir)
 	if err != nil {
 		t.Fatalf("Failed to read initiative directory: %v", err)
@@ -132,8 +129,7 @@ func TestFixtureInitiativeDirectoryContents(t *testing.T) {
 }
 
 func TestFixtureInitiativeInfoFile(t *testing.T) {
-	initiativesPath := filepath.Join(mountPoint, "initiatives")
-	entries, err := os.ReadDir(initiativesPath)
+	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
 	}
@@ -143,19 +139,23 @@ func TestFixtureInitiativeInfoFile(t *testing.T) {
 	}
 
 	// Read initiative.md
-	initInfoPath := filepath.Join(initiativesPath, entries[0].Name(), "initiative.md")
+	initInfoPath := filepath.Join(initiativePath(entries[0].Name()), "initiative.md")
 	content, err := os.ReadFile(initInfoPath)
 	if err != nil {
 		t.Fatalf("Failed to read initiative.md: %v", err)
 	}
 
-	// Should have frontmatter with key fields
-	contentStr := string(content)
-	if !strings.Contains(contentStr, "id:") {
-		t.Error("initiative.md should contain id field")
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
-	if !strings.Contains(contentStr, "name:") {
-		t.Error("initiative.md should contain name field")
+
+	// Check required fields
+	requiredFields := []string{"id", "name", "slug", "status"}
+	for _, field := range requiredFields {
+		if _, ok := doc.Frontmatter[field]; !ok {
+			t.Errorf("Missing required field %q in initiative.md", field)
+		}
 	}
 }
 
@@ -164,8 +164,7 @@ func TestFixtureInitiativeInfoFile(t *testing.T) {
 // =============================================================================
 
 func TestFixtureLabelsDirectoryExists(t *testing.T) {
-	labelsPath := filepath.Join(teamPath(testTeamKey), "labels")
-	info, err := os.Stat(labelsPath)
+	info, err := os.Stat(labelsPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat labels directory: %v", err)
 	}
@@ -175,8 +174,7 @@ func TestFixtureLabelsDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureLabelsDirectoryListing(t *testing.T) {
-	labelsPath := filepath.Join(teamPath(testTeamKey), "labels")
-	entries, err := os.ReadDir(labelsPath)
+	entries, err := os.ReadDir(labelsPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read labels directory: %v", err)
 	}
@@ -187,14 +185,13 @@ func TestFixtureLabelsDirectoryListing(t *testing.T) {
 	}
 }
 
-func TestFixtureLabelFileReadable(t *testing.T) {
-	labelsPath := filepath.Join(teamPath(testTeamKey), "labels")
-	entries, err := os.ReadDir(labelsPath)
+func TestFixtureLabelFileContents(t *testing.T) {
+	entries, err := os.ReadDir(labelsPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read labels directory: %v", err)
 	}
 
-	// Find a label file (not new.md)
+	testedCount := 0
 	for _, entry := range entries {
 		if entry.Name() == "new.md" {
 			continue
@@ -203,19 +200,33 @@ func TestFixtureLabelFileReadable(t *testing.T) {
 			continue
 		}
 
-		labelPath := filepath.Join(labelsPath, entry.Name())
-		content, err := os.ReadFile(labelPath)
+		content, err := os.ReadFile(labelFilePath(testTeamKey, entry.Name()))
 		if err != nil {
 			t.Fatalf("Failed to read label file %s: %v", entry.Name(), err)
 		}
 
-		// Should have frontmatter with color
-		if !strings.Contains(string(content), "color:") {
-			t.Errorf("Label file %s should contain color field", entry.Name())
+		doc, err := parseFrontmatter(content)
+		if err != nil {
+			t.Fatalf("Failed to parse label frontmatter: %v", err)
 		}
-		return
+
+		// Check required fields
+		if _, ok := doc.Frontmatter["id"]; !ok {
+			t.Errorf("Label %s missing id field", entry.Name())
+		}
+		if _, ok := doc.Frontmatter["name"]; !ok {
+			t.Errorf("Label %s missing name field", entry.Name())
+		}
+		if _, ok := doc.Frontmatter["color"]; !ok {
+			t.Errorf("Label %s missing color field", entry.Name())
+		}
+
+		testedCount++
 	}
-	t.Skip("No label files found to test")
+
+	if testedCount == 0 {
+		t.Skip("No label files found to test")
+	}
 }
 
 // =============================================================================
@@ -223,8 +234,7 @@ func TestFixtureLabelFileReadable(t *testing.T) {
 // =============================================================================
 
 func TestFixtureByAssigneeDirectoryExists(t *testing.T) {
-	byPath := filepath.Join(teamPath(testTeamKey), "by", "assignee")
-	info, err := os.Stat(byPath)
+	info, err := os.Stat(byAssigneePath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat by/assignee directory: %v", err)
 	}
@@ -234,8 +244,7 @@ func TestFixtureByAssigneeDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureByAssigneeListing(t *testing.T) {
-	byPath := filepath.Join(teamPath(testTeamKey), "by", "assignee")
-	entries, err := os.ReadDir(byPath)
+	entries, err := os.ReadDir(byAssigneePath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read by/assignee directory: %v", err)
 	}
@@ -247,8 +256,7 @@ func TestFixtureByAssigneeListing(t *testing.T) {
 }
 
 func TestFixtureByLabelDirectoryExists(t *testing.T) {
-	byPath := filepath.Join(teamPath(testTeamKey), "by", "label")
-	info, err := os.Stat(byPath)
+	info, err := os.Stat(byLabelPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat by/label directory: %v", err)
 	}
@@ -258,8 +266,7 @@ func TestFixtureByLabelDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureByLabelListing(t *testing.T) {
-	byPath := filepath.Join(teamPath(testTeamKey), "by", "label")
-	entries, err := os.ReadDir(byPath)
+	entries, err := os.ReadDir(byLabelPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read by/label directory: %v", err)
 	}
@@ -272,7 +279,7 @@ func TestFixtureByLabelListing(t *testing.T) {
 
 func TestFixtureByLabelContainsIssues(t *testing.T) {
 	// TST-4 has Bug label
-	bugPath := filepath.Join(teamPath(testTeamKey), "by", "label", "Bug")
+	bugPath := filepath.Join(byLabelPath(testTeamKey), "Bug")
 	entries, err := os.ReadDir(bugPath)
 	if err != nil {
 		t.Fatalf("Failed to read by/label/Bug directory: %v", err)
@@ -291,7 +298,7 @@ func TestFixtureByLabelContainsIssues(t *testing.T) {
 }
 
 func TestFixtureUnassignedDirectoryExists(t *testing.T) {
-	unassignedPath := filepath.Join(teamPath(testTeamKey), "by", "assignee", "unassigned")
+	unassignedPath := filepath.Join(byAssigneePath(testTeamKey), "unassigned")
 	info, err := os.Stat(unassignedPath)
 	if err != nil {
 		t.Fatalf("Failed to stat by/assignee/unassigned directory: %v", err)
@@ -303,7 +310,7 @@ func TestFixtureUnassignedDirectoryExists(t *testing.T) {
 
 func TestFixtureUnassignedContainsIssues(t *testing.T) {
 	// TST-7 is unassigned
-	unassignedPath := filepath.Join(teamPath(testTeamKey), "by", "assignee", "unassigned")
+	unassignedPath := filepath.Join(byAssigneePath(testTeamKey), "unassigned")
 	entries, err := os.ReadDir(unassignedPath)
 	if err != nil {
 		t.Fatalf("Failed to read by/assignee/unassigned directory: %v", err)
@@ -382,8 +389,7 @@ func TestFixtureChildSymlinkTarget(t *testing.T) {
 // =============================================================================
 
 func TestFixtureSearchDirectoryExists(t *testing.T) {
-	searchPath := filepath.Join(teamPath(testTeamKey), "search")
-	info, err := os.Stat(searchPath)
+	info, err := os.Stat(searchPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat search directory: %v", err)
 	}
@@ -392,33 +398,12 @@ func TestFixtureSearchDirectoryExists(t *testing.T) {
 	}
 }
 
-
 // =============================================================================
 // Additional Filter Tests
 // =============================================================================
 
-func TestFixtureByStatusInProgressContainsIssues(t *testing.T) {
-	// Multiple issues have "started" state
-	inProgressPath := filepath.Join(teamPath(testTeamKey), "by", "status", "In Progress")
-	entries, err := os.ReadDir(inProgressPath)
-	if err != nil {
-		t.Fatalf("Failed to read In Progress directory: %v", err)
-	}
-
-	// TST-1, TST-4, TST-6, TST-8 are in started state
-	issueCount := 0
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "TST-") {
-			issueCount++
-		}
-	}
-	if issueCount < 3 {
-		t.Errorf("Expected at least 3 issues in In Progress, got %d", issueCount)
-	}
-}
-
 func TestFixtureByStatusBacklogContainsIssues(t *testing.T) {
-	backlogPath := filepath.Join(teamPath(testTeamKey), "by", "status", "Backlog")
+	backlogPath := byStatusPath(testTeamKey, "Backlog")
 	entries, err := os.ReadDir(backlogPath)
 	if err != nil {
 		t.Fatalf("Failed to read Backlog directory: %v", err)
@@ -439,12 +424,13 @@ func TestFixtureByStatusBacklogContainsIssues(t *testing.T) {
 
 func TestFixtureFilterSymlinksResolve(t *testing.T) {
 	// Pick a symlink from by/status and verify it resolves
-	inProgressPath := filepath.Join(teamPath(testTeamKey), "by", "status", "In Progress")
+	inProgressPath := byStatusPath(testTeamKey, "In Progress")
 	entries, err := os.ReadDir(inProgressPath)
 	if err != nil {
 		t.Fatalf("Failed to read In Progress directory: %v", err)
 	}
 
+	testedCount := 0
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), "TST-") {
 			continue
@@ -467,6 +453,10 @@ func TestFixtureFilterSymlinksResolve(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("Symlink %s should resolve to a directory", entry.Name())
 		}
-		return // Just test one
+		testedCount++
+	}
+
+	if testedCount == 0 {
+		t.Error("No symlinks found to test")
 	}
 }

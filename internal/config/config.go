@@ -47,11 +47,18 @@ func DefaultConfig() *Config {
 	}
 }
 
+// Load loads configuration using the real environment.
 func Load() (*Config, error) {
+	return LoadWithEnv(os.Getenv)
+}
+
+// LoadWithEnv loads configuration using the provided environment lookup function.
+// This allows tests to provide isolated environment values.
+func LoadWithEnv(getenv func(string) string) (*Config, error) {
 	cfg := DefaultConfig()
 
 	// Try to load from config file
-	configPath := getConfigPath()
+	configPath := getConfigPathWithEnv(getenv)
 	if data, err := os.ReadFile(configPath); err == nil {
 		if err := yaml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file: %w", err)
@@ -59,7 +66,7 @@ func Load() (*Config, error) {
 	}
 
 	// Environment variables override config file
-	if apiKey := os.Getenv("LINEAR_API_KEY"); apiKey != "" {
+	if apiKey := getenv("LINEAR_API_KEY"); apiKey != "" {
 		cfg.APIKey = apiKey
 	}
 
@@ -67,8 +74,12 @@ func Load() (*Config, error) {
 }
 
 func getConfigPath() string {
+	return getConfigPathWithEnv(os.Getenv)
+}
+
+func getConfigPathWithEnv(getenv func(string) string) string {
 	// Check XDG_CONFIG_HOME first
-	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+	if xdgConfig := getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
 		return filepath.Join(xdgConfig, "linearfs", "config.yaml")
 	}
 

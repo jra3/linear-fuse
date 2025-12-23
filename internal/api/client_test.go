@@ -9,6 +9,7 @@ import (
 )
 
 func TestGetTeams(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -37,6 +38,7 @@ func TestGetTeams(t *testing.T) {
 }
 
 func TestGetIssue(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -79,6 +81,7 @@ func TestGetIssue(t *testing.T) {
 }
 
 func TestGetTeamIssues(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -109,6 +112,7 @@ func TestGetTeamIssues(t *testing.T) {
 }
 
 func TestUpdateIssue(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -142,6 +146,7 @@ func TestUpdateIssue(t *testing.T) {
 }
 
 func TestUpdateIssueFailure(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -159,6 +164,7 @@ func TestUpdateIssueFailure(t *testing.T) {
 }
 
 func TestCreateComment(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -188,6 +194,7 @@ func TestCreateComment(t *testing.T) {
 }
 
 func TestGraphQLError(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -207,6 +214,7 @@ func TestGraphQLError(t *testing.T) {
 }
 
 func TestGetTeamStates(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -238,6 +246,7 @@ func TestGetTeamStates(t *testing.T) {
 }
 
 func TestGetTeamLabels(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -260,6 +269,7 @@ func TestGetTeamLabels(t *testing.T) {
 }
 
 func TestGetUsers(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -282,6 +292,7 @@ func TestGetUsers(t *testing.T) {
 }
 
 func TestGetIssueComments(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -306,6 +317,7 @@ func TestGetIssueComments(t *testing.T) {
 }
 
 func TestGetIssueDocuments(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -330,6 +342,7 @@ func TestGetIssueDocuments(t *testing.T) {
 }
 
 func TestCallRecording(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 
@@ -358,6 +371,7 @@ func TestCallRecording(t *testing.T) {
 }
 
 func TestMockReset(t *testing.T) {
+	t.Parallel()
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
 

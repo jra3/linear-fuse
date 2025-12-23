@@ -9,6 +9,7 @@ import (
 )
 
 func TestDocumentToMarkdown(t *testing.T) {
+	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 	updateTime := time.Date(2025, 1, 16, 14, 0, 0, 0, time.UTC)
 
@@ -117,6 +118,7 @@ func TestDocumentToMarkdown(t *testing.T) {
 }
 
 func TestMarkdownToDocumentUpdate(t *testing.T) {
+	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 
 	original := &api.Document{
@@ -250,6 +252,7 @@ Updated content here.`,
 }
 
 func TestParseNewDocument(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		content   string
@@ -359,6 +362,7 @@ Body.`,
 }
 
 func TestDocumentRoundtrip(t *testing.T) {
+	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 
 	original := &api.Document{

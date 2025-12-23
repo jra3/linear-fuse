@@ -9,6 +9,7 @@ import (
 )
 
 func TestIssueToMarkdown(t *testing.T) {
+	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 	updateTime := time.Date(2025, 1, 16, 14, 0, 0, 0, time.UTC)
 	dueDate := "2025-02-01"
@@ -145,6 +146,7 @@ func TestIssueToMarkdown(t *testing.T) {
 }
 
 func TestMarkdownToIssueUpdate(t *testing.T) {
+	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 	dueDate := "2025-02-01"
 	estimate := 5.0
@@ -453,6 +455,7 @@ New description`,
 }
 
 func TestMarkdownToIssueUpdateNoAssignee(t *testing.T) {
+	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 
 	// Original issue with no assignee
@@ -489,6 +492,7 @@ Original description`
 }
 
 func TestStringSlicesEqual(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		a    []string

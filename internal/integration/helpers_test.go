@@ -108,6 +108,38 @@ func userPath(username string) string {
 	return filepath.Join(mountPoint, "users", username)
 }
 
+func initiativesPath() string {
+	return filepath.Join(mountPoint, "initiatives")
+}
+
+func initiativePath(slug string) string {
+	return filepath.Join(mountPoint, "initiatives", slug)
+}
+
+func labelsPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "labels")
+}
+
+func labelFilePath(teamKey, filename string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "labels", filename)
+}
+
+func byPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "by")
+}
+
+func byAssigneePath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "by", "assignee")
+}
+
+func byLabelPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "by", "label")
+}
+
+func searchPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "search")
+}
+
 // Retry helpers
 
 func readFileWithRetry(path string, maxWait time.Duration) ([]byte, error) {

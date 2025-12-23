@@ -13,6 +13,7 @@ import (
 )
 
 func TestSQLiteFilteredQueries(t *testing.T) {
+	t.Parallel()
 	// Create a LinearFS with SQLite enabled
 	cfg := &config.Config{
 		APIKey: "test-key",
@@ -222,6 +223,7 @@ func strPtr(s string) *string {
 }
 
 func TestSearchTeamIssues(t *testing.T) {
+	t.Parallel()
 	cfg := &config.Config{
 		APIKey: "test-key",
 		Cache: config.CacheConfig{
@@ -359,6 +361,7 @@ func TestSearchTeamIssues(t *testing.T) {
 }
 
 func TestDecodeSearchQuery(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		encoded  string
 		expected string
@@ -381,6 +384,7 @@ func TestDecodeSearchQuery(t *testing.T) {
 }
 
 func TestLooksLikeIdentifier(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		input    string
@@ -419,6 +423,7 @@ func TestLooksLikeIdentifier(t *testing.T) {
 }
 
 func TestFetchIssueByIdentifier(t *testing.T) {
+	t.Parallel()
 	// Create a LinearFS with SQLite enabled
 	cfg := &config.Config{
 		APIKey: "test-key",

@@ -8,6 +8,7 @@ import (
 )
 
 func TestLabelFilename(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		label api.Label
@@ -56,6 +57,7 @@ func TestLabelFilename(t *testing.T) {
 }
 
 func TestLabelToMarkdown(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		label       *api.Label
@@ -122,6 +124,7 @@ func TestLabelToMarkdown(t *testing.T) {
 }
 
 func TestParseLabelMarkdown(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		content    string
@@ -273,6 +276,7 @@ description: "New desc"
 }
 
 func TestParseNewLabelMarkdown(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		content         string
@@ -362,6 +366,7 @@ color: #0000FF
 }
 
 func TestParseYAMLFrontmatter(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -477,6 +482,7 @@ key2:value2
 }
 
 func TestLabelsDirIno(t *testing.T) {
+	t.Parallel()
 	// Same team ID should produce same inode
 	ino1 := labelsDirIno("team-123")
 	ino2 := labelsDirIno("team-123")
@@ -492,6 +498,7 @@ func TestLabelsDirIno(t *testing.T) {
 }
 
 func TestLabelIno(t *testing.T) {
+	t.Parallel()
 	// Same label ID should produce same inode
 	ino1 := labelIno("label-123")
 	ino2 := labelIno("label-123")

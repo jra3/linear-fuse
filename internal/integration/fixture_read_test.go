@@ -173,38 +173,46 @@ func TestFixtureCommentFileContents(t *testing.T) {
 		t.Fatalf("Failed to read comments directory: %v", err)
 	}
 
+	testedCount := 0
 	for _, entry := range entries {
 		if entry.Name() == "new.md" {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 
 		content, err := os.ReadFile(commentFilePath(testTeamKey, "TST-1", entry.Name()))
 		if err != nil {
-			t.Fatalf("Failed to read comment file: %v", err)
+			t.Fatalf("Failed to read comment file %s: %v", entry.Name(), err)
 		}
 
 		doc, err := parseFrontmatter(content)
 		if err != nil {
-			t.Fatalf("Failed to parse comment frontmatter: %v", err)
+			t.Fatalf("Failed to parse comment frontmatter for %s: %v", entry.Name(), err)
 		}
 
 		// Check required fields
 		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Error("Comment missing id field")
+			t.Errorf("Comment %s missing id field", entry.Name())
 		}
 		if _, ok := doc.Frontmatter["author"]; !ok {
-			t.Error("Comment missing author field")
+			t.Errorf("Comment %s missing author field", entry.Name())
 		}
 		if _, ok := doc.Frontmatter["created"]; !ok {
-			t.Error("Comment missing created field")
+			t.Errorf("Comment %s missing created field", entry.Name())
 		}
 
 		// Body should contain "Test comment"
 		if !strings.Contains(doc.Body, "Test comment") {
-			t.Errorf("Comment body should contain 'Test comment', got: %q", doc.Body)
+			t.Errorf("Comment %s body should contain 'Test comment', got: %q", entry.Name(), doc.Body)
 		}
 
-		break // Only check first comment
+		testedCount++
+	}
+
+	if testedCount == 0 {
+		t.Skip("No comment files found to test")
 	}
 }
 
@@ -276,35 +284,43 @@ func TestFixtureDocumentFileContents(t *testing.T) {
 		t.Fatalf("Failed to read docs directory: %v", err)
 	}
 
+	testedCount := 0
 	for _, entry := range entries {
 		if entry.Name() == "new.md" {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 
 		content, err := os.ReadFile(docFilePath(testTeamKey, "TST-1", entry.Name()))
 		if err != nil {
-			t.Fatalf("Failed to read document file: %v", err)
+			t.Fatalf("Failed to read document file %s: %v", entry.Name(), err)
 		}
 
 		doc, err := parseFrontmatter(content)
 		if err != nil {
-			t.Fatalf("Failed to parse document frontmatter: %v", err)
+			t.Fatalf("Failed to parse document frontmatter for %s: %v", entry.Name(), err)
 		}
 
 		// Check required fields
 		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Error("Document missing id field")
+			t.Errorf("Document %s missing id field", entry.Name())
 		}
 		if _, ok := doc.Frontmatter["title"]; !ok {
-			t.Error("Document missing title field")
+			t.Errorf("Document %s missing title field", entry.Name())
 		}
 
 		// Body should have content
 		if len(doc.Body) == 0 {
-			t.Error("Document body should not be empty")
+			t.Errorf("Document %s body should not be empty", entry.Name())
 		}
 
-		break // Only check first document
+		testedCount++
+	}
+
+	if testedCount == 0 {
+		t.Skip("No document files found to test")
 	}
 }
 
@@ -407,6 +423,7 @@ func TestFixtureMyAssignedSymlinkTarget(t *testing.T) {
 	}
 
 	// Check that symlinks point to correct location
+	testedCount := 0
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink == 0 {
 			continue
@@ -421,9 +438,13 @@ func TestFixtureMyAssignedSymlinkTarget(t *testing.T) {
 
 		// Target should be relative path to teams/<KEY>/issues/<ID>
 		if !strings.Contains(target, "teams/") || !strings.Contains(target, "/issues/") {
-			t.Errorf("Symlink target should point to teams/*/issues/*, got: %s", target)
+			t.Errorf("Symlink %s target should point to teams/*/issues/*, got: %s", entry.Name(), target)
 		}
-		break
+		testedCount++
+	}
+
+	if testedCount == 0 {
+		t.Skip("No symlinks found to test")
 	}
 }
 
@@ -437,7 +458,8 @@ func TestFixtureMyAssignedSymlinkResolvable(t *testing.T) {
 		t.Skip("No assigned issues to test")
 	}
 
-	// Verify symlink can be resolved
+	// Verify symlinks can be resolved
+	testedCount := 0
 	for _, entry := range entries {
 		if entry.Type()&os.ModeSymlink == 0 {
 			continue
@@ -454,7 +476,11 @@ func TestFixtureMyAssignedSymlinkResolvable(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("Symlink %s should resolve to a directory", entry.Name())
 		}
-		break
+		testedCount++
+	}
+
+	if testedCount == 0 {
+		t.Skip("No symlinks found to test")
 	}
 }
 
@@ -470,13 +496,14 @@ func TestFixtureUserIssueSymlinkResolvable(t *testing.T) {
 	}
 
 	// Read user directory
-	userDir := filepath.Join(usersPath(), userEntries[0].Name())
+	userDir := userPath(userEntries[0].Name())
 	entries, err := os.ReadDir(userDir)
 	if err != nil {
 		t.Fatalf("Failed to read user directory: %v", err)
 	}
 
-	// Find a symlink and verify it resolves
+	// Verify all symlinks resolve
+	testedCount := 0
 	for _, entry := range entries {
 		if entry.Name() == "user.md" {
 			continue
@@ -495,7 +522,11 @@ func TestFixtureUserIssueSymlinkResolvable(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("User issue symlink %s should resolve to a directory", entry.Name())
 		}
-		break
+		testedCount++
+	}
+
+	if testedCount == 0 {
+		t.Skip("No symlinks found to test")
 	}
 }
 
@@ -504,8 +535,8 @@ func TestFixtureUserIssueSymlinkResolvable(t *testing.T) {
 // =============================================================================
 
 func TestFixtureByStatusListing(t *testing.T) {
-	byPath := filepath.Join(teamPath(testTeamKey), "by", "status")
-	entries, err := os.ReadDir(byPath)
+	byStatusBasePath := filepath.Join(byPath(testTeamKey), "status")
+	entries, err := os.ReadDir(byStatusBasePath)
 	if err != nil {
 		t.Fatalf("Failed to read by/status: %v", err)
 	}
@@ -534,7 +565,7 @@ func TestFixtureByStatusListing(t *testing.T) {
 
 func TestFixtureByStatusContainsIssues(t *testing.T) {
 	// "In Progress" should contain TST-1, TST-4, TST-6
-	inProgressPath := filepath.Join(teamPath(testTeamKey), "by", "status", "In Progress")
+	inProgressPath := byStatusPath(testTeamKey, "In Progress")
 	entries, err := os.ReadDir(inProgressPath)
 	if err != nil {
 		t.Fatalf("Failed to read by/status/In Progress: %v", err)

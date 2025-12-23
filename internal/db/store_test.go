@@ -13,6 +13,7 @@ import (
 )
 
 func TestOpenAndClose(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 
 	store, err := Open(dbPath)
@@ -28,6 +29,7 @@ func TestOpenAndClose(t *testing.T) {
 }
 
 func TestUpsertAndGetIssue(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -96,6 +98,7 @@ func TestUpsertAndGetIssue(t *testing.T) {
 }
 
 func TestListTeamIssues(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -144,6 +147,7 @@ func TestListTeamIssues(t *testing.T) {
 }
 
 func TestListTeamIssuesByState(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -193,6 +197,7 @@ func TestListTeamIssuesByState(t *testing.T) {
 }
 
 func TestSyncMeta(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -222,6 +227,7 @@ func TestSyncMeta(t *testing.T) {
 }
 
 func TestTeams(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -263,6 +269,7 @@ func TestTeams(t *testing.T) {
 }
 
 func TestSearchIssues(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -308,6 +315,7 @@ func TestSearchIssues(t *testing.T) {
 }
 
 func TestWithTransaction(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -339,6 +347,7 @@ func TestWithTransaction(t *testing.T) {
 }
 
 func TestListTeamIssuesByAssignee(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -395,6 +404,7 @@ func TestListTeamIssuesByAssignee(t *testing.T) {
 }
 
 func TestListTeamUnassignedIssues(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -432,6 +442,7 @@ func TestListTeamUnassignedIssues(t *testing.T) {
 }
 
 func TestListTeamIssuesByPriority(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -470,6 +481,7 @@ func TestListTeamIssuesByPriority(t *testing.T) {
 }
 
 func TestListIssuesByParent(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -519,6 +531,7 @@ func TestListIssuesByParent(t *testing.T) {
 }
 
 func TestSearchTeamIssues(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -572,6 +585,7 @@ func TestSearchTeamIssues(t *testing.T) {
 }
 
 func TestAPIIssueConversion(t *testing.T) {
+	t.Parallel()
 	issue := api.Issue{
 		ID:          "test-id",
 		Identifier:  "TST-123",
@@ -648,6 +662,7 @@ func TestAPIIssueConversion(t *testing.T) {
 }
 
 func TestAPIIssueConversionWithNils(t *testing.T) {
+	t.Parallel()
 	// Issue with minimal fields (nil optionals)
 	issue := api.Issue{
 		ID:         "test-id",
@@ -682,6 +697,7 @@ func TestAPIIssueConversionWithNils(t *testing.T) {
 }
 
 func TestDBIssuesToAPIIssues(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -728,6 +744,7 @@ func TestDBIssuesToAPIIssues(t *testing.T) {
 }
 
 func TestAPITeamConversion(t *testing.T) {
+	t.Parallel()
 	team := api.Team{
 		ID:        "team-1",
 		Key:       "TST",
@@ -751,6 +768,7 @@ func TestAPITeamConversion(t *testing.T) {
 }
 
 func TestDefaultDBPath(t *testing.T) {
+	t.Parallel()
 	path := DefaultDBPath()
 	if path == "" {
 		t.Error("DefaultDBPath should not be empty")
@@ -761,6 +779,7 @@ func TestDefaultDBPath(t *testing.T) {
 }
 
 func TestDeleteIssue(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
@@ -798,6 +817,7 @@ func TestDeleteIssue(t *testing.T) {
 }
 
 func TestGetTeamIssueCount(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
