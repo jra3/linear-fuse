@@ -42,8 +42,7 @@ func updatesDirIno(projectID string) uint64 {
 
 // ProjectsNode represents the /teams/{KEY}/projects directory
 type ProjectsNode struct {
-	fs.Inode
-	lfs  *LinearFS
+	BaseNode
 	team api.Team
 }
 
@@ -56,8 +55,7 @@ var _ fs.NodeGetattrer = (*ProjectsNode)(nil)
 func (p *ProjectsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = p.lfs.uid
-	out.Gid = p.lfs.gid
+	p.SetOwner(out)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -87,7 +85,7 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 	for _, project := range projects {
 		if projectDirName(project) == name {
-			node := &ProjectNode{lfs: p.lfs, team: p.team, project: project}
+			node := &ProjectNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: project}
 			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
 	}
@@ -119,9 +117,9 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	p.lfs.InvalidateKernelEntry(projectsDirIno(p.team.ID), name)
 
 	node := &ProjectNode{
-		lfs:     p.lfs,
-		team:    p.team,
-		project: *project,
+		BaseNode: BaseNode{lfs: p.lfs},
+		team:     p.team,
+		project:  *project,
 	}
 
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -178,8 +176,7 @@ func projectDirName(project api.Project) string {
 
 // ProjectNode represents a single project directory
 type ProjectNode struct {
-	fs.Inode
-	lfs     *LinearFS
+	BaseNode
 	team    api.Team
 	project api.Project
 }
@@ -220,7 +217,7 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle project.md metadata file
 	if name == "project.md" {
-		node := &ProjectInfoNode{lfs: p.lfs, team: p.team, project: p.project}
+		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: p.project}
 		content := node.generateContent()
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Uid = p.lfs.uid
@@ -235,13 +232,13 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 
 	// Handle docs/ directory
 	if name == "docs" {
-		node := &DocsNode{lfs: p.lfs, projectID: p.project.ID}
+		node := &DocsNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID}
 		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
 	// Handle updates/ directory
 	if name == "updates" {
-		node := &UpdatesNode{lfs: p.lfs, projectID: p.project.ID, projectUpdatedAt: p.project.UpdatedAt}
+		node := &UpdatesNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID, projectUpdatedAt: p.project.UpdatedAt}
 		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
@@ -286,8 +283,7 @@ func (s *ProjectIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out 
 
 // ProjectInfoNode is a virtual file containing project metadata
 type ProjectInfoNode struct {
-	fs.Inode
-	lfs          *LinearFS
+	BaseNode
 	team         api.Team
 	project      api.Project
 	mu           sync.Mutex
@@ -377,8 +373,7 @@ func (p *ProjectInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 		size = len(p.generateContent())
 	}
 	out.Mode = 0644 | syscall.S_IFREG
-	out.Uid = p.lfs.uid
-	out.Gid = p.lfs.gid
+	p.SetOwner(out)
 	out.Size = uint64(size)
 	out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 	return 0
@@ -567,8 +562,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 // UpdatesNode represents /teams/{KEY}/projects/{slug}/updates/
 type UpdatesNode struct {
-	fs.Inode
-	lfs              *LinearFS
+	BaseNode
 	projectID        string
 	projectUpdatedAt time.Time
 }
@@ -580,6 +574,7 @@ var _ fs.NodeGetattrer = (*UpdatesNode)(nil)
 
 func (n *UpdatesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
+	n.SetOwner(out)
 	out.SetTimes(&n.projectUpdatedAt, &n.projectUpdatedAt, &n.projectUpdatedAt)
 	return 0
 }
@@ -618,7 +613,7 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if name == "new.md" {
 		now := time.Now()
 		node := &NewUpdateNode{
-			lfs:       n.lfs,
+			BaseNode:  BaseNode{lfs: n.lfs},
 			projectID: n.projectID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
@@ -675,7 +670,7 @@ func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mod
 	}
 
 	node := &NewUpdateNode{
-		lfs:       n.lfs,
+		BaseNode:  BaseNode{lfs: n.lfs},
 		projectID: n.projectID,
 	}
 
@@ -720,8 +715,7 @@ func (n *UpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 
 // NewUpdateNode handles creating new project updates
 type NewUpdateNode struct {
-	fs.Inode
-	lfs       *LinearFS
+	BaseNode
 	projectID string
 
 	mu      sync.Mutex
@@ -743,8 +737,7 @@ func (n *NewUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 
 	now := time.Now()
 	out.Mode = 0200
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0

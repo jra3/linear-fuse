@@ -31,8 +31,7 @@ func labelIno(labelID string) uint64 {
 
 // LabelsNode represents the /teams/{KEY}/labels/ directory
 type LabelsNode struct {
-	fs.Inode
-	lfs    *LinearFS
+	BaseNode
 	teamID string
 }
 
@@ -73,8 +72,8 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	if name == "new.md" {
 		now := time.Now()
 		node := &NewLabelNode{
-			lfs:    n.lfs,
-			teamID: n.teamID,
+			BaseNode: BaseNode{lfs: n.lfs},
+			teamID:   n.teamID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Uid = n.lfs.uid
@@ -98,7 +97,7 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		if labelFilename(label) == name {
 			content := labelToMarkdown(&label)
 			node := &LabelFileNode{
-				lfs:          n.lfs,
+				BaseNode:     BaseNode{lfs: n.lfs},
 				label:        label,
 				teamID:       n.teamID,
 				content:      content,
@@ -223,8 +222,8 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 	}
 
 	node := &NewLabelNode{
-		lfs:    n.lfs,
-		teamID: n.teamID,
+		BaseNode: BaseNode{lfs: n.lfs},
+		teamID:   n.teamID,
 	}
 
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
@@ -270,8 +269,7 @@ description: %q
 
 // LabelFileNode represents a single label file (read-write)
 type LabelFileNode struct {
-	fs.Inode
-	lfs    *LinearFS
+	BaseNode
 	label  api.Label
 	teamID string
 
@@ -294,8 +292,7 @@ func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	defer n.mu.Unlock()
 
 	out.Mode = 0644
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -426,8 +423,7 @@ func (n *LabelFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32
 
 // NewLabelNode handles creating new labels
 type NewLabelNode struct {
-	fs.Inode
-	lfs    *LinearFS
+	BaseNode
 	teamID string
 
 	mu      sync.Mutex
@@ -448,8 +444,7 @@ func (n *NewLabelNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	defer n.mu.Unlock()
 
 	out.Mode = 0200
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	return 0
 }

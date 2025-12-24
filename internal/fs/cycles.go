@@ -23,8 +23,7 @@ func cycleDirName(cycle api.Cycle) string {
 
 // CyclesNode represents the /teams/{KEY}/cycles directory
 type CyclesNode struct {
-	fs.Inode
-	lfs  *LinearFS
+	BaseNode
 	team api.Team
 }
 
@@ -35,6 +34,7 @@ var _ fs.NodeGetattrer = (*CyclesNode)(nil)
 func (c *CyclesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	c.SetOwner(out)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -92,7 +92,7 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Match by cycle directory name
 	for _, cycle := range cycles {
 		if cycleDirName(cycle) == name {
-			node := &CycleDirNode{lfs: c.lfs, team: c.team, cycle: cycle}
+			node := &CycleDirNode{BaseNode: BaseNode{lfs: c.lfs}, team: c.team, cycle: cycle}
 			out.Attr.Mode = 0755 | syscall.S_IFDIR
 			out.Attr.SetTimes(&cycle.EndsAt, &cycle.StartsAt, &cycle.StartsAt)
 			return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
@@ -123,8 +123,7 @@ func (s *CurrentCycleSymlink) Getattr(ctx context.Context, f fs.FileHandle, out 
 
 // CycleDirNode represents a cycle directory (e.g., /teams/ENG/cycles/71/)
 type CycleDirNode struct {
-	fs.Inode
-	lfs   *LinearFS
+	BaseNode
 	team  api.Team
 	cycle api.Cycle
 }
@@ -135,6 +134,7 @@ var _ fs.NodeGetattrer = (*CycleDirNode)(nil)
 
 func (c *CycleDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
+	c.SetOwner(out)
 	out.Attr.SetTimes(&c.cycle.EndsAt, &c.cycle.StartsAt, &c.cycle.StartsAt)
 	return 0
 }

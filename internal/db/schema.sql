@@ -359,3 +359,45 @@ CREATE TABLE IF NOT EXISTS initiative_updates (
 
 CREATE INDEX IF NOT EXISTS idx_initiative_updates_initiative ON initiative_updates(initiative_id);
 CREATE INDEX IF NOT EXISTS idx_initiative_updates_created ON initiative_updates(initiative_id, created_at DESC);
+
+-- =============================================================================
+-- Attachments (external links: GitHub PRs, Slack, etc.)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS attachments (
+    id TEXT PRIMARY KEY,
+    issue_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    url TEXT NOT NULL,
+    source_type TEXT,  -- github, slack, zendesk, etc.
+    metadata JSON,
+    creator_id TEXT,
+    creator_name TEXT,
+    creator_email TEXT,
+    created_at DATETIME,
+    updated_at DATETIME,
+    synced_at DATETIME NOT NULL,
+    data JSON NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_url ON attachments(url);
+
+-- =============================================================================
+-- Embedded Files (images, PDFs uploaded to Linear CDN)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS embedded_files (
+    id TEXT PRIMARY KEY,        -- SHA256 hash of URL
+    issue_id TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,   -- Linear CDN URL
+    filename TEXT NOT NULL,     -- Derived filename
+    mime_type TEXT,
+    file_size INTEGER,          -- Bytes (NULL until downloaded)
+    cache_path TEXT,            -- Local filesystem path when cached
+    source TEXT NOT NULL,       -- "description" or "comment:{id}"
+    created_at DATETIME NOT NULL,
+    synced_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_embedded_files_issue ON embedded_files(issue_id);
+CREATE INDEX IF NOT EXISTS idx_embedded_files_cached ON embedded_files(cache_path) WHERE cache_path IS NOT NULL;

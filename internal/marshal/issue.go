@@ -7,8 +7,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
+// AttachmentLink represents an external link attachment for frontmatter
+type AttachmentLink struct {
+	Type  string `yaml:"type"`
+	Title string `yaml:"title"`
+	URL   string `yaml:"url"`
+}
+
 // IssueToMarkdown converts a Linear issue to markdown with YAML frontmatter
-func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
+func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, error) {
 	fm := make(map[string]any)
 
 	// Read-only fields
@@ -63,6 +70,19 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 
 	if issue.Cycle != nil {
 		fm["cycle"] = issue.Cycle.Name
+	}
+
+	// Add external link attachments
+	if len(attachments) > 0 {
+		links := make([]AttachmentLink, 0, len(attachments))
+		for _, a := range attachments {
+			links = append(links, AttachmentLink{
+				Type:  a.SourceType,
+				Title: a.Title,
+				URL:   a.URL,
+			})
+		}
+		fm["links"] = links
 	}
 
 	// Body is just the description

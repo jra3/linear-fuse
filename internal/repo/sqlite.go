@@ -888,3 +888,70 @@ func (r *SQLiteRepository) Store() *db.Store {
 func (r *SQLiteRepository) SetCurrentUser(user *api.User) {
 	r.currentUser = user
 }
+
+// =============================================================================
+// Attachments
+// =============================================================================
+
+func (r *SQLiteRepository) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	attachments, err := r.store.Queries().ListIssueAttachments(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("list issue attachments: %w", err)
+	}
+
+	// Check staleness and trigger background refresh if needed
+	r.maybeRefreshAttachments(issueID, len(attachments) == 0)
+
+	return db.DBAttachmentsToAPIAttachments(attachments)
+}
+
+// maybeRefreshAttachments checks if attachments need refreshing
+func (r *SQLiteRepository) maybeRefreshAttachments(issueID string, isEmpty bool) {
+	if r.client == nil {
+		return
+	}
+
+	syncedAt, err := r.store.Queries().GetIssueAttachmentsSyncedAt(context.Background(), issueID)
+	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+
+	if isStale {
+		r.triggerBackgroundRefresh("attachments:"+issueID, func(ctx context.Context) error {
+			return r.refreshAttachments(ctx, issueID)
+		})
+	}
+}
+
+// refreshAttachments fetches attachments from API and stores in SQLite
+func (r *SQLiteRepository) refreshAttachments(ctx context.Context, issueID string) error {
+	attachments, err := r.client.GetIssueAttachments(ctx, issueID)
+	if err != nil {
+		return err
+	}
+
+	for _, attachment := range attachments {
+		params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
+		if err != nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertAttachment(ctx, params); err != nil {
+			log.Printf("[repo] upsert attachment %s failed: %v", attachment.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error) {
+	files, err := r.store.Queries().ListIssueEmbeddedFiles(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("list issue embedded files: %w", err)
+	}
+	return db.DBEmbeddedFilesToAPIFiles(files), nil
+}
+
+func (r *SQLiteRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cachePath string, size int64) error {
+	return r.store.Queries().UpdateEmbeddedFileCache(ctx, db.UpdateEmbeddedFileCacheParams{
+		CachePath: sql.NullString{String: cachePath, Valid: cachePath != ""},
+		FileSize:  sql.NullInt64{Int64: size, Valid: true},
+		ID:        id,
+	})
+}

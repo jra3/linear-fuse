@@ -211,4 +211,19 @@ type Repository interface {
 
 	// GetInitiativeUpdates returns status updates for an initiative
 	GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]api.InitiativeUpdate, error)
+
+	// ==========================================================================
+	// Attachments
+	// ==========================================================================
+
+	// GetIssueAttachments returns external link attachments for an issue
+	// (GitHub PRs, Slack messages, etc. - shown in issue.md frontmatter)
+	GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error)
+
+	// GetIssueEmbeddedFiles returns embedded files for an issue
+	// (images, PDFs uploaded to Linear CDN - shown in /attachments/ directory)
+	GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error)
+
+	// UpdateEmbeddedFileCache updates the cache path and size for an embedded file
+	UpdateEmbeddedFileCache(ctx context.Context, id, cachePath string, size int64) error
 }

@@ -260,3 +260,29 @@ func PriorityValue(name string) int {
 		return 0
 	}
 }
+
+// Attachment represents an external link attachment (GitHub PR, Slack message, etc.)
+type Attachment struct {
+	ID         string                 `json:"id"`
+	Title      string                 `json:"title"`
+	Subtitle   string                 `json:"subtitle"`
+	URL        string                 `json:"url"`
+	SourceType string                 `json:"sourceType"`
+	Metadata   map[string]interface{} `json:"metadata"`
+	Creator    *User                  `json:"creator"`
+	CreatedAt  time.Time              `json:"createdAt"`
+	UpdatedAt  time.Time              `json:"updatedAt"`
+}
+
+// EmbeddedFile represents a file uploaded to Linear's CDN (image, PDF, etc.)
+type EmbeddedFile struct {
+	ID        string    // SHA256 hash of URL
+	IssueID   string    // Issue this file belongs to
+	URL       string    // Linear CDN URL
+	Filename  string    // Derived filename
+	MimeType  string    // MIME type (e.g., "image/png")
+	FileSize  int64     // File size in bytes (0 if unknown)
+	CachePath string    // Local cache path (empty if not cached)
+	Source    string    // Where found: "description" or "comment:{id}"
+	SyncedAt  time.Time // When metadata was synced
+}

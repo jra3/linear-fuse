@@ -34,8 +34,7 @@ func commentIno(commentID string) uint64 {
 
 // CommentsNode represents /teams/{KEY}/issues/{ID}/comments/
 type CommentsNode struct {
-	fs.Inode
-	lfs            *LinearFS
+	BaseNode
 	issueID        string
 	teamID         string
 	issueUpdatedAt time.Time
@@ -49,6 +48,7 @@ var _ fs.NodeGetattrer = (*CommentsNode)(nil)
 
 func (n *CommentsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
+	n.SetOwner(out)
 	out.SetTimes(&n.issueUpdatedAt, &n.issueUpdatedAt, &n.issueUpdatedAt)
 	return 0
 }
@@ -90,9 +90,9 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	if name == "new.md" {
 		now := time.Now()
 		node := &NewCommentNode{
-			lfs:     n.lfs,
-			issueID: n.issueID,
-			teamID:  n.teamID,
+			BaseNode: BaseNode{lfs: n.lfs},
+			issueID:  n.issueID,
+			teamID:   n.teamID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Uid = n.lfs.uid
@@ -123,7 +123,7 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		if expectedName == name {
 			content := commentToMarkdown(&comment)
 			node := &CommentNode{
-				lfs:          n.lfs,
+				BaseNode:     BaseNode{lfs: n.lfs},
 				issueID:      n.issueID,
 				comment:      comment,
 				content:      content,
@@ -177,7 +177,8 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				log.Printf("Failed to delete comment: %v", err)
 				return syscall.EIO
 			}
-			// Invalidate kernel cache for this entry
+			// Invalidate kernel cache - both directory inode and entry
+			n.lfs.InvalidateKernelInode(commentsDirIno(n.issueID))
 			n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), name)
 			if n.lfs.debug {
 				log.Printf("Comment deleted successfully")
@@ -200,9 +201,9 @@ func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mo
 	}
 
 	node := &NewCommentNode{
-		lfs:     n.lfs,
-		issueID: n.issueID,
-		teamID:  n.teamID,
+		BaseNode: BaseNode{lfs: n.lfs},
+		issueID:  n.issueID,
+		teamID:   n.teamID,
 	}
 
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
@@ -212,8 +213,7 @@ func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mo
 
 // CommentNode represents a single comment file (read-write)
 type CommentNode struct {
-	fs.Inode
-	lfs     *LinearFS
+	BaseNode
 	issueID string
 	comment api.Comment
 
@@ -235,8 +235,7 @@ func (n *CommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 	defer n.mu.Unlock()
 
 	out.Mode = 0644
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&n.comment.UpdatedAt, &n.comment.UpdatedAt, &n.comment.CreatedAt)
 	return 0
@@ -388,8 +387,7 @@ func extractCommentBody(content []byte) string {
 
 // NewCommentNode handles creating new comments
 type NewCommentNode struct {
-	fs.Inode
-	lfs     *LinearFS
+	BaseNode
 	issueID string
 	teamID  string
 
@@ -412,8 +410,7 @@ func (n *NewCommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 
 	now := time.Now()
 	out.Mode = 0200
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&now, &now, &now)
 	return 0
@@ -501,7 +498,8 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 
 	n.created = true
 
-	// Invalidate kernel cache for comments directory
+	// Invalidate kernel cache - directory inode so listing is refreshed
+	n.lfs.InvalidateKernelInode(commentsDirIno(n.issueID))
 	n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), "new.md")
 
 	if n.lfs.debug {

@@ -44,8 +44,7 @@ func childrenDirIno(issueID string) uint64 {
 
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
-	fs.Inode
-	lfs  *LinearFS
+	BaseNode
 	team api.Team
 }
 
@@ -58,8 +57,7 @@ var _ fs.NodeGetattrer = (*IssuesNode)(nil)
 func (n *IssuesNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -97,8 +95,8 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	node := &IssueDirectoryNode{
-		lfs:   n.lfs,
-		issue: *issue,
+		BaseNode: BaseNode{lfs: n.lfs},
+		issue:    *issue,
 	}
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
 	out.Attr.Uid = n.lfs.uid
@@ -173,8 +171,8 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	n.lfs.InvalidateKernelEntry(issuesDirIno(n.team.ID), issue.Identifier)
 
 	node := &IssueDirectoryNode{
-		lfs:   n.lfs,
-		issue: *issue,
+		BaseNode: BaseNode{lfs: n.lfs},
+		issue:    *issue,
 	}
 
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -231,8 +229,7 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 // IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory
 type IssueDirectoryNode struct {
-	fs.Inode
-	lfs   *LinearFS
+	BaseNode
 	issue api.Issue
 }
 
@@ -242,8 +239,7 @@ var _ fs.NodeGetattrer = (*IssueDirectoryNode)(nil)
 
 func (n *IssueDirectoryNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 	return 0
 }
@@ -254,6 +250,7 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 		{Name: "comments", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "children", Mode: syscall.S_IFDIR},
+		{Name: "attachments", Mode: syscall.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
 }
@@ -261,12 +258,14 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "issue.md":
-		content, err := marshal.IssueToMarkdown(&n.issue)
+		// Fetch attachments for the issue
+		attachments, _ := n.lfs.GetIssueAttachments(ctx, n.issue.ID)
+		content, err := marshal.IssueToMarkdown(&n.issue, attachments...)
 		if err != nil {
 			return nil, syscall.EIO
 		}
 		node := &IssueFileNode{
-			lfs:          n.lfs,
+			BaseNode:     BaseNode{lfs: n.lfs},
 			issue:        n.issue,
 			content:      content,
 			contentReady: true,
@@ -289,7 +288,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			teamID = n.issue.Team.ID
 		}
 		node := &CommentsNode{
-			lfs:            n.lfs,
+			BaseNode:       BaseNode{lfs: n.lfs},
 			issueID:        n.issue.ID,
 			teamID:         teamID,
 			issueUpdatedAt: n.issue.UpdatedAt,
@@ -307,8 +306,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 
 	case "docs":
 		node := &DocsNode{
-			lfs:     n.lfs,
-			issueID: n.issue.ID,
+			BaseNode: BaseNode{lfs: n.lfs},
+			issueID:  n.issue.ID,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = n.lfs.uid
@@ -322,8 +321,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 
 	case "children":
 		node := &ChildrenNode{
-			lfs:   n.lfs,
-			issue: n.issue,
+			BaseNode: BaseNode{lfs: n.lfs},
+			issue:    n.issue,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = n.lfs.uid
@@ -334,6 +333,21 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			Mode: syscall.S_IFDIR,
 			Ino:  childrenDirIno(n.issue.ID),
 		}), 0
+
+	case "attachments":
+		node := &AttachmentsNode{
+			BaseNode: BaseNode{lfs: n.lfs},
+			issueID:  n.issue.ID,
+		}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  attachmentsDirIno(n.issue.ID),
+		}), 0
 	}
 
 	return nil, syscall.ENOENT
@@ -341,8 +355,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 
 // IssueFileNode represents an issue.md file inside /teams/{KEY}/issues/{ID}/
 type IssueFileNode struct {
-	fs.Inode
-	lfs   *LinearFS
+	BaseNode
 	issue api.Issue
 
 	// Write buffer and cached content
@@ -365,7 +378,9 @@ func (i *IssueFileNode) ensureContent() error {
 	if i.contentReady {
 		return nil
 	}
-	content, err := marshal.IssueToMarkdown(&i.issue)
+	// Fetch attachments for the issue
+	attachments, _ := i.lfs.GetIssueAttachments(context.Background(), i.issue.ID)
+	content, err := marshal.IssueToMarkdown(&i.issue, attachments...)
 	if err != nil {
 		return err
 	}
@@ -383,8 +398,7 @@ func (i *IssueFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	}
 
 	out.Mode = 0644
-	out.Uid = i.lfs.uid
-	out.Gid = i.lfs.gid
+	i.SetOwner(out)
 	out.Size = uint64(len(i.content))
 	out.SetTimes(nil, &i.issue.UpdatedAt, &i.issue.CreatedAt)
 
@@ -713,13 +727,19 @@ func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32
 
 // ChildrenNode represents the /teams/{KEY}/issues/{ID}/children/ directory
 type ChildrenNode struct {
-	fs.Inode
-	lfs   *LinearFS
+	BaseNode
 	issue api.Issue
 }
 
 var _ fs.NodeReaddirer = (*ChildrenNode)(nil)
 var _ fs.NodeLookuper = (*ChildrenNode)(nil)
+var _ fs.NodeGetattrer = (*ChildrenNode)(nil)
+
+func (n *ChildrenNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	n.SetOwner(out)
+	return 0
+}
 
 func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Query children from database by parent_id

@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -1800,4 +1801,201 @@ func TestSQLiteRepository_MaybeRefreshInitiativeUpdates_NoClient(t *testing.T) {
 	// Should be a no-op - no panic
 	repo.maybeRefreshInitiativeUpdates("init-1", true)
 	repo.maybeRefreshInitiativeUpdates("init-2", false)
+}
+
+// =============================================================================
+// Attachment Tests
+// =============================================================================
+
+func TestSQLiteRepository_Attachments(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	// Insert test attachment
+	attachment := api.Attachment{
+		ID:         "attach-1",
+		Title:      "GitHub PR #123",
+		URL:        "https://github.com/org/repo/pull/123",
+		SourceType: "github",
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+
+	issueID := "issue-123"
+	params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
+	if err != nil {
+		t.Fatalf("APIAttachmentToDBAttachment failed: %v", err)
+	}
+	err = store.Queries().UpsertAttachment(ctx, params)
+	if err != nil {
+		t.Fatalf("UpsertAttachment failed: %v", err)
+	}
+
+	// Test GetIssueAttachments
+	attachments, err := repo.GetIssueAttachments(ctx, issueID)
+	if err != nil {
+		t.Fatalf("GetIssueAttachments failed: %v", err)
+	}
+	if len(attachments) != 1 {
+		t.Errorf("Expected 1 attachment, got %d", len(attachments))
+	}
+	if len(attachments) > 0 {
+		if attachments[0].Title != "GitHub PR #123" {
+			t.Errorf("Expected title 'GitHub PR #123', got %q", attachments[0].Title)
+		}
+		if attachments[0].SourceType != "github" {
+			t.Errorf("Expected sourceType 'github', got %q", attachments[0].SourceType)
+		}
+	}
+
+	// Test GetIssueAttachments - no attachments
+	attachments, err = repo.GetIssueAttachments(ctx, "nonexistent-issue")
+	if err != nil {
+		t.Fatalf("GetIssueAttachments failed: %v", err)
+	}
+	if len(attachments) != 0 {
+		t.Errorf("Expected 0 attachments, got %d", len(attachments))
+	}
+}
+
+func TestSQLiteRepository_EmbeddedFiles(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	issueID := "issue-456"
+
+	// Insert test embedded files
+	err := store.Queries().UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
+		ID:       "file-1",
+		IssueID:  issueID,
+		Url:      "https://uploads.linear.app/workspace/file1/screenshot.png",
+		Filename: "screenshot.png",
+		MimeType: sql.NullString{String: "image/png", Valid: true},
+		Source:   "description",
+		CreatedAt: time.Now(),
+		SyncedAt:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEmbeddedFile failed: %v", err)
+	}
+
+	err = store.Queries().UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
+		ID:       "file-2",
+		IssueID:  issueID,
+		Url:      "https://uploads.linear.app/workspace/file2/design.pdf",
+		Filename: "design.pdf",
+		MimeType: sql.NullString{String: "application/pdf", Valid: true},
+		Source:   "comment:abc123",
+		CreatedAt: time.Now(),
+		SyncedAt:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEmbeddedFile failed: %v", err)
+	}
+
+	// Test GetIssueEmbeddedFiles
+	files, err := repo.GetIssueEmbeddedFiles(ctx, issueID)
+	if err != nil {
+		t.Fatalf("GetIssueEmbeddedFiles failed: %v", err)
+	}
+	if len(files) != 2 {
+		t.Errorf("Expected 2 embedded files, got %d", len(files))
+	}
+
+	// Verify file contents
+	for _, f := range files {
+		if f.Filename == "screenshot.png" {
+			if f.MimeType != "image/png" {
+				t.Errorf("Expected MIME type 'image/png', got %q", f.MimeType)
+			}
+		}
+		if f.Filename == "design.pdf" {
+			if f.Source != "comment:abc123" {
+				t.Errorf("Expected source 'comment:abc123', got %q", f.Source)
+			}
+		}
+	}
+
+	// Test GetIssueEmbeddedFiles - no files
+	files, err = repo.GetIssueEmbeddedFiles(ctx, "nonexistent-issue")
+	if err != nil {
+		t.Fatalf("GetIssueEmbeddedFiles failed: %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("Expected 0 files, got %d", len(files))
+	}
+}
+
+func TestSQLiteRepository_UpdateEmbeddedFileCache(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	issueID := "issue-789"
+	fileID := "file-cache-test"
+
+	// Insert test embedded file
+	err := store.Queries().UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
+		ID:       fileID,
+		IssueID:  issueID,
+		Url:      "https://uploads.linear.app/workspace/test/image.png",
+		Filename: "image.png",
+		MimeType: sql.NullString{String: "image/png", Valid: true},
+		Source:   "description",
+		CreatedAt: time.Now(),
+		SyncedAt:  time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertEmbeddedFile failed: %v", err)
+	}
+
+	// Update cache path
+	cachePath := "/tmp/linearfs/cache/file-cache-test"
+	fileSize := int64(12345)
+
+	err = repo.UpdateEmbeddedFileCache(ctx, fileID, cachePath, fileSize)
+	if err != nil {
+		t.Fatalf("UpdateEmbeddedFileCache failed: %v", err)
+	}
+
+	// Verify the update
+	files, err := repo.GetIssueEmbeddedFiles(ctx, issueID)
+	if err != nil {
+		t.Fatalf("GetIssueEmbeddedFiles failed: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	if files[0].CachePath != cachePath {
+		t.Errorf("Expected cache path %q, got %q", cachePath, files[0].CachePath)
+	}
+	if files[0].FileSize != fileSize {
+		t.Errorf("Expected file size %d, got %d", fileSize, files[0].FileSize)
+	}
+}
+
+func TestSQLiteRepository_MaybeRefreshAttachments_NoClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create repo without API client
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	// Should be a no-op - no panic
+	repo.maybeRefreshAttachments("issue-1", true)
+	repo.maybeRefreshAttachments("issue-2", false)
 }

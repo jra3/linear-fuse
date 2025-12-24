@@ -668,3 +668,78 @@ DELETE FROM initiative_updates WHERE initiative_id = ?;
 
 -- name: GetInitiativeUpdatesSyncedAt :one
 SELECT MAX(synced_at) FROM initiative_updates WHERE initiative_id = ?;
+
+-- =============================================================================
+-- Attachments queries (external links: GitHub PRs, Slack, etc.)
+-- =============================================================================
+
+-- name: GetAttachment :one
+SELECT * FROM attachments WHERE id = ?;
+
+-- name: ListIssueAttachments :many
+SELECT * FROM attachments WHERE issue_id = ? ORDER BY created_at;
+
+-- name: UpsertAttachment :exec
+INSERT INTO attachments (id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    issue_id = excluded.issue_id,
+    title = excluded.title,
+    subtitle = excluded.subtitle,
+    url = excluded.url,
+    source_type = excluded.source_type,
+    metadata = excluded.metadata,
+    creator_id = excluded.creator_id,
+    creator_name = excluded.creator_name,
+    creator_email = excluded.creator_email,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data;
+
+-- name: DeleteAttachment :exec
+DELETE FROM attachments WHERE id = ?;
+
+-- name: DeleteIssueAttachments :exec
+DELETE FROM attachments WHERE issue_id = ?;
+
+-- name: GetIssueAttachmentsSyncedAt :one
+SELECT MAX(synced_at) FROM attachments WHERE issue_id = ?;
+
+-- =============================================================================
+-- Embedded Files queries (images, PDFs from Linear CDN)
+-- =============================================================================
+
+-- name: GetEmbeddedFile :one
+SELECT * FROM embedded_files WHERE id = ?;
+
+-- name: GetEmbeddedFileByURL :one
+SELECT * FROM embedded_files WHERE url = ?;
+
+-- name: ListIssueEmbeddedFiles :many
+SELECT * FROM embedded_files WHERE issue_id = ? ORDER BY filename;
+
+-- name: UpsertEmbeddedFile :exec
+INSERT INTO embedded_files (id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    issue_id = excluded.issue_id,
+    url = excluded.url,
+    filename = excluded.filename,
+    mime_type = excluded.mime_type,
+    file_size = COALESCE(excluded.file_size, embedded_files.file_size),
+    cache_path = COALESCE(excluded.cache_path, embedded_files.cache_path),
+    source = excluded.source,
+    synced_at = excluded.synced_at;
+
+-- name: UpdateEmbeddedFileCache :exec
+UPDATE embedded_files SET cache_path = ?, file_size = ? WHERE id = ?;
+
+-- name: DeleteEmbeddedFile :exec
+DELETE FROM embedded_files WHERE id = ?;
+
+-- name: DeleteIssueEmbeddedFiles :exec
+DELETE FROM embedded_files WHERE issue_id = ?;
+
+-- name: ListCachedEmbeddedFiles :many
+SELECT * FROM embedded_files WHERE cache_path IS NOT NULL;

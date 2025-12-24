@@ -12,8 +12,7 @@ import (
 
 // MyNode represents the /my directory (personal views)
 type MyNode struct {
-	fs.Inode
-	lfs *LinearFS
+	BaseNode
 }
 
 var _ fs.NodeReaddirer = (*MyNode)(nil)
@@ -23,8 +22,7 @@ var _ fs.NodeGetattrer = (*MyNode)(nil)
 func (m *MyNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = m.lfs.uid
-	out.Gid = m.lfs.gid
+	m.SetOwner(out)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -47,13 +45,13 @@ func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*
 
 	switch name {
 	case "assigned":
-		node := &MyIssuesNode{lfs: m.lfs, issueType: "assigned"}
+		node := &MyIssuesNode{BaseNode: BaseNode{lfs: m.lfs}, issueType: "assigned"}
 		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	case "created":
-		node := &MyIssuesNode{lfs: m.lfs, issueType: "created"}
+		node := &MyIssuesNode{BaseNode: BaseNode{lfs: m.lfs}, issueType: "created"}
 		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	case "active":
-		node := &MyIssuesNode{lfs: m.lfs, issueType: "active"}
+		node := &MyIssuesNode{BaseNode: BaseNode{lfs: m.lfs}, issueType: "active"}
 		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	default:
 		return nil, syscall.ENOENT
@@ -62,8 +60,7 @@ func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*
 
 // MyIssuesNode represents /my/{assigned,created,active} directories
 type MyIssuesNode struct {
-	fs.Inode
-	lfs       *LinearFS
+	BaseNode
 	issueType string // "assigned", "created", or "active"
 }
 
@@ -74,8 +71,7 @@ var _ fs.NodeGetattrer = (*MyIssuesNode)(nil)
 func (m *MyIssuesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = m.lfs.uid
-	out.Gid = m.lfs.gid
+	m.SetOwner(out)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -122,7 +118,7 @@ func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		out.Attr.Gid = m.lfs.gid
 		out.SetTimes(&now, &now, &now)
 		node := &ScopedSearchNode{
-			lfs:          m.lfs,
+			BaseNode:     BaseNode{lfs: m.lfs},
 			source:       IssueSourceFunc(m.getIssues),
 			symlinkDepth: 3, // /my/assigned/search/{query}/ -> need 4 "../" to reach root
 		}
@@ -141,7 +137,7 @@ func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 				teamKey = issue.Team.Key
 			}
 			node := &IssueDirSymlink{
-				lfs:        m.lfs,
+				BaseNode:   BaseNode{lfs: m.lfs},
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
 			}

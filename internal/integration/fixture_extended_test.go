@@ -975,3 +975,120 @@ func TestFixtureMyAssignedSearchQuery(t *testing.T) {
 		t.Error("my/assigned/search query should return a directory")
 	}
 }
+
+// =============================================================================
+// Attachments Directory Tests
+// =============================================================================
+
+func TestFixtureAttachmentsDirectoryExists(t *testing.T) {
+	// TST-1 has embedded files in the fixtures
+	attachPath := attachmentsPath(testTeamKey, "TST-1")
+	info, err := os.Stat(attachPath)
+	if err != nil {
+		t.Fatalf("Failed to stat attachments directory: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("attachments should be a directory")
+	}
+}
+
+func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
+	// TST-1 has 2 embedded files: screenshot.png and design.pdf
+	attachPath := attachmentsPath(testTeamKey, "TST-1")
+	entries, err := os.ReadDir(attachPath)
+	if err != nil {
+		t.Fatalf("Failed to read attachments directory: %v", err)
+	}
+
+	if len(entries) != 2 {
+		t.Errorf("Expected 2 attachments, got %d", len(entries))
+	}
+
+	// Check for expected files
+	hasScreenshot := false
+	hasDesign := false
+	for _, entry := range entries {
+		if entry.Name() == "screenshot.png" {
+			hasScreenshot = true
+		}
+		if entry.Name() == "design.pdf" {
+			hasDesign = true
+		}
+	}
+
+	if !hasScreenshot {
+		t.Error("Expected screenshot.png in attachments")
+	}
+	if !hasDesign {
+		t.Error("Expected design.pdf in attachments")
+	}
+}
+
+func TestFixtureAttachmentsAreFiles(t *testing.T) {
+	attachPath := attachmentsPath(testTeamKey, "TST-1")
+	entries, err := os.ReadDir(attachPath)
+	if err != nil {
+		t.Fatalf("Failed to read attachments directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			t.Errorf("Attachment %s should be a file, not a directory", entry.Name())
+		}
+	}
+}
+
+func TestFixtureAttachmentFileInfo(t *testing.T) {
+	// Check file info for screenshot.png
+	filePath := attachmentFilePath(testTeamKey, "TST-1", "screenshot.png")
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("Failed to stat attachment file: %v", err)
+	}
+
+	if info.IsDir() {
+		t.Error("Attachment should be a file, not a directory")
+	}
+
+	// Mode should be readable
+	if info.Mode().Perm()&0400 == 0 {
+		t.Error("Attachment should be readable")
+	}
+}
+
+func TestFixtureIssueDirectoryContainsAttachments(t *testing.T) {
+	// Verify attachments shows up in issue directory listing
+	issuePath := issueDirPath(testTeamKey, "TST-1")
+	entries, err := os.ReadDir(issuePath)
+	if err != nil {
+		t.Fatalf("Failed to read issue directory: %v", err)
+	}
+
+	hasAttachments := false
+	for _, entry := range entries {
+		if entry.Name() == "attachments" {
+			hasAttachments = true
+			if !entry.IsDir() {
+				t.Error("attachments should be a directory")
+			}
+			break
+		}
+	}
+
+	if !hasAttachments {
+		t.Error("Issue directory should contain attachments/")
+	}
+}
+
+func TestFixtureEmptyAttachmentsDirectory(t *testing.T) {
+	// TST-2 has no embedded files
+	attachPath := attachmentsPath(testTeamKey, "TST-2")
+	entries, err := os.ReadDir(attachPath)
+	if err != nil {
+		t.Fatalf("Failed to read attachments directory: %v", err)
+	}
+
+	if len(entries) != 0 {
+		t.Errorf("Expected 0 attachments for TST-2, got %d", len(entries))
+	}
+}

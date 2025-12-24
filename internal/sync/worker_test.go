@@ -193,6 +193,13 @@ func (m *mockAPIClient) GetIssueDocuments(ctx context.Context, issueID string) (
 	return []api.Document{}, nil
 }
 
+func (m *mockAPIClient) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return []api.Attachment{}, nil
+}
+
 func TestWorkerStartStop(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -710,4 +717,218 @@ func openTestStore(t *testing.T) *db.Store {
 		t.Fatalf("Open failed: %v", err)
 	}
 	return store
+}
+
+// =============================================================================
+// Embedded File Extraction Tests
+// =============================================================================
+
+func TestExtractFilename(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		url      string
+		expected string
+	}{
+		{
+			name:     "simple filename",
+			url:      "https://uploads.linear.app/abc123/def456/screenshot.png",
+			expected: "screenshot.png",
+		},
+		{
+			name:     "filename with query params",
+			url:      "https://uploads.linear.app/abc123/def456/image.jpg?token=xyz",
+			expected: "image.jpg",
+		},
+		{
+			name:     "UUID-prefixed filename",
+			url:      "https://uploads.linear.app/abc123/def456/a1b2c3d4-e5f6-7890-abcd-ef1234567890-screenshot.png",
+			expected: "screenshot.png",
+		},
+		{
+			name:     "simple filename without UUID",
+			url:      "https://uploads.linear.app/abc123/design.pdf",
+			expected: "design.pdf",
+		},
+		{
+			name:     "empty path segment",
+			url:      "https://uploads.linear.app/",
+			expected: "file",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractFilename(tt.url)
+			if got != tt.expected {
+				t.Errorf("extractFilename(%q) = %q, want %q", tt.url, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDetectMIMEType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		filename string
+		expected string
+	}{
+		{"image.png", "image/png"},
+		{"photo.jpg", "image/jpeg"},
+		{"photo.jpeg", "image/jpeg"},
+		{"animation.gif", "image/gif"},
+		{"icon.webp", "image/webp"},
+		{"logo.svg", "image/svg+xml"},
+		{"document.pdf", "application/pdf"},
+		{"report.doc", "application/msword"},
+		{"report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+		{"data.xls", "application/vnd.ms-excel"},
+		{"data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+		{"archive.zip", "application/zip"},
+		{"video.mp4", "video/mp4"},
+		{"video.mov", "video/quicktime"},
+		{"audio.mp3", "audio/mpeg"},
+		{"unknown.xyz", "application/octet-stream"},
+		{"noextension", "application/octet-stream"},
+		{"IMAGE.PNG", "image/png"}, // Case insensitive
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			got := detectMIMEType(tt.filename)
+			if got != tt.expected {
+				t.Errorf("detectMIMEType(%q) = %q, want %q", tt.filename, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestLinearCDNPattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		content  string
+		expected []string
+	}{
+		{
+			name:    "single URL in markdown",
+			content: "Check out this image: ![screenshot](https://uploads.linear.app/abc123/def456/screenshot.png)",
+			expected: []string{
+				"https://uploads.linear.app/abc123/def456/screenshot.png",
+			},
+		},
+		{
+			name: "multiple URLs",
+			content: `Here are the designs:
+![design1](https://uploads.linear.app/org1/file1/design1.png)
+![design2](https://uploads.linear.app/org2/file2/design2.jpg)`,
+			expected: []string{
+				"https://uploads.linear.app/org1/file1/design1.png",
+				"https://uploads.linear.app/org2/file2/design2.jpg",
+			},
+		},
+		{
+			name:     "URL with query params",
+			content:  "Image: https://uploads.linear.app/abc/def/image.png?token=xyz123",
+			expected: []string{"https://uploads.linear.app/abc/def/image.png?token=xyz123"},
+		},
+		{
+			name:     "no Linear CDN URLs",
+			content:  "Regular text with https://example.com/image.png",
+			expected: nil,
+		},
+		{
+			name:     "empty content",
+			content:  "",
+			expected: nil,
+		},
+		{
+			name:    "URL in angle brackets",
+			content: "See <https://uploads.linear.app/abc/def/file.pdf>",
+			expected: []string{
+				"https://uploads.linear.app/abc/def/file.pdf",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := linearCDNPattern.FindAllString(tt.content, -1)
+
+			if len(got) != len(tt.expected) {
+				t.Errorf("Found %d URLs, want %d\nGot: %v\nWant: %v", len(got), len(tt.expected), got, tt.expected)
+				return
+			}
+
+			for i, url := range tt.expected {
+				if got[i] != url {
+					t.Errorf("URL[%d] = %q, want %q", i, got[i], url)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractAndStoreEmbeddedFiles(t *testing.T) {
+	t.Parallel()
+
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	ctx := context.Background()
+	issueID := "test-issue-123"
+
+	// Content with embedded files
+	content := `Here's a screenshot of the bug:
+![bug](https://uploads.linear.app/workspace1/issue1/bug-screenshot.png)
+
+And here's the design spec:
+https://uploads.linear.app/workspace1/issue1/design-spec.pdf`
+
+	worker.extractAndStoreEmbeddedFiles(ctx, issueID, content, "description")
+
+	// Verify files were stored
+	files, err := store.Queries().ListIssueEmbeddedFiles(ctx, issueID)
+	if err != nil {
+		t.Fatalf("ListIssueEmbeddedFiles failed: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("Expected 2 embedded files, got %d", len(files))
+	}
+
+	// Verify file details
+	foundPNG := false
+	foundPDF := false
+	for _, f := range files {
+		if f.Filename == "bug-screenshot.png" {
+			foundPNG = true
+			if f.MimeType.String != "image/png" {
+				t.Errorf("Expected MIME type image/png, got %s", f.MimeType.String)
+			}
+			if f.Source != "description" {
+				t.Errorf("Expected source 'description', got %s", f.Source)
+			}
+		}
+		if f.Filename == "design-spec.pdf" {
+			foundPDF = true
+			if f.MimeType.String != "application/pdf" {
+				t.Errorf("Expected MIME type application/pdf, got %s", f.MimeType.String)
+			}
+		}
+	}
+
+	if !foundPNG {
+		t.Error("Did not find bug-screenshot.png in stored files")
+	}
+	if !foundPDF {
+		t.Error("Did not find design-spec.pdf in stored files")
+	}
 }

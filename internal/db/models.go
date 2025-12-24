@@ -10,6 +10,23 @@ import (
 	"time"
 )
 
+type Attachment struct {
+	ID           string          `json:"id"`
+	IssueID      string          `json:"issue_id"`
+	Title        string          `json:"title"`
+	Subtitle     sql.NullString  `json:"subtitle"`
+	Url          string          `json:"url"`
+	SourceType   sql.NullString  `json:"source_type"`
+	Metadata     json.RawMessage `json:"metadata"`
+	CreatorID    sql.NullString  `json:"creator_id"`
+	CreatorName  sql.NullString  `json:"creator_name"`
+	CreatorEmail sql.NullString  `json:"creator_email"`
+	CreatedAt    sql.NullTime    `json:"created_at"`
+	UpdatedAt    sql.NullTime    `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
+}
+
 type Comment struct {
 	ID        string          `json:"id"`
 	IssueID   string          `json:"issue_id"`
@@ -57,6 +74,19 @@ type Document struct {
 	UpdatedAt   sql.NullTime    `json:"updated_at"`
 	SyncedAt    time.Time       `json:"synced_at"`
 	Data        json.RawMessage `json:"data"`
+}
+
+type EmbeddedFile struct {
+	ID        string         `json:"id"`
+	IssueID   string         `json:"issue_id"`
+	Url       string         `json:"url"`
+	Filename  string         `json:"filename"`
+	MimeType  sql.NullString `json:"mime_type"`
+	FileSize  sql.NullInt64  `json:"file_size"`
+	CachePath sql.NullString `json:"cache_path"`
+	Source    string         `json:"source"`
+	CreatedAt time.Time      `json:"created_at"`
+	SyncedAt  time.Time      `json:"synced_at"`
 }
 
 type Initiative struct {

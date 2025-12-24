@@ -491,6 +491,154 @@ Original description`
 	}
 }
 
+func TestIssueToMarkdownWithAttachments(t *testing.T) {
+	t.Parallel()
+	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		issue       *api.Issue
+		attachments []api.Attachment
+		wantContain []string
+		wantMissing []string
+	}{
+		{
+			name: "issue with github PR attachment",
+			issue: &api.Issue{
+				ID:          "issue-123",
+				Identifier:  "ENG-456",
+				Title:       "Fix bug",
+				Description: "Description here",
+				State:       api.State{ID: "state-1", Name: "In Progress"},
+				Priority:    2,
+				Labels:      api.Labels{Nodes: []api.Label{}},
+				CreatedAt:   baseTime,
+				UpdatedAt:   baseTime,
+				URL:         "https://linear.app/team/issue/ENG-456",
+			},
+			attachments: []api.Attachment{
+				{
+					ID:         "attach-1",
+					Title:      "feat: Fix auth flow",
+					URL:        "https://github.com/org/repo/pull/456",
+					SourceType: "github",
+				},
+			},
+			wantContain: []string{
+				"links:",
+				"type: github",
+				"feat: Fix auth flow", // YAML may use single or double quotes
+				"url: https://github.com/org/repo/pull/456",
+			},
+		},
+		{
+			name: "issue with multiple attachments",
+			issue: &api.Issue{
+				ID:          "issue-multi",
+				Identifier:  "ENG-789",
+				Title:       "Integration work",
+				Description: "Connecting services",
+				State:       api.State{ID: "state-1", Name: "Todo"},
+				Priority:    3,
+				Labels:      api.Labels{Nodes: []api.Label{}},
+				CreatedAt:   baseTime,
+				UpdatedAt:   baseTime,
+				URL:         "https://linear.app/team/issue/ENG-789",
+			},
+			attachments: []api.Attachment{
+				{
+					ID:         "attach-1",
+					Title:      "PR: Add API endpoint",
+					URL:        "https://github.com/org/repo/pull/100",
+					SourceType: "github",
+				},
+				{
+					ID:         "attach-2",
+					Title:      "Discussion thread",
+					URL:        "https://slack.com/archives/C123/p456",
+					SourceType: "slack",
+				},
+			},
+			wantContain: []string{
+				"links:",
+				"type: github",
+				"type: slack",
+				"url: https://github.com/org/repo/pull/100",
+				"url: https://slack.com/archives/C123/p456",
+			},
+		},
+		{
+			name: "issue without attachments - no links field",
+			issue: &api.Issue{
+				ID:          "issue-no-attach",
+				Identifier:  "ENG-999",
+				Title:       "Simple task",
+				Description: "No attachments",
+				State:       api.State{ID: "state-1", Name: "Backlog"},
+				Priority:    0,
+				Labels:      api.Labels{Nodes: []api.Label{}},
+				CreatedAt:   baseTime,
+				UpdatedAt:   baseTime,
+				URL:         "https://linear.app/team/issue/ENG-999",
+			},
+			attachments: []api.Attachment{}, // Empty attachments
+			wantContain: []string{
+				"identifier: ENG-999",
+			},
+			wantMissing: []string{
+				"links:", // Should NOT have links field when no attachments
+			},
+		},
+		{
+			name: "issue with nil attachments - no links field",
+			issue: &api.Issue{
+				ID:          "issue-nil-attach",
+				Identifier:  "ENG-888",
+				Title:       "Another task",
+				Description: "Nil attachments",
+				State:       api.State{ID: "state-1", Name: "Backlog"},
+				Priority:    0,
+				Labels:      api.Labels{Nodes: []api.Label{}},
+				CreatedAt:   baseTime,
+				UpdatedAt:   baseTime,
+				URL:         "https://linear.app/team/issue/ENG-888",
+			},
+			attachments: nil, // Nil attachments
+			wantContain: []string{
+				"identifier: ENG-888",
+			},
+			wantMissing: []string{
+				"links:",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IssueToMarkdown(tt.issue, tt.attachments...)
+			if err != nil {
+				t.Fatalf("IssueToMarkdown() error: %v", err)
+			}
+
+			result := string(got)
+
+			// Check expected content is present
+			for _, want := range tt.wantContain {
+				if !strings.Contains(result, want) {
+					t.Errorf("IssueToMarkdown() missing %q\nGot:\n%s", want, result)
+				}
+			}
+
+			// Check unwanted content is absent
+			for _, notWant := range tt.wantMissing {
+				if strings.Contains(result, notWant) {
+					t.Errorf("IssueToMarkdown() should not contain %q\nGot:\n%s", notWant, result)
+				}
+			}
+		})
+	}
+}
+
 func TestStringSlicesEqual(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

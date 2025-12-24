@@ -52,15 +52,24 @@ func runMount(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Mounting Linear filesystem at %s\n", mountpoint)
 
-	server, lfs, err := fs.Mount(mountpoint, cfg, debug)
+	// Create LinearFS instance
+	lfs, err := fs.NewLinearFS(cfg, debug)
 	if err != nil {
-		return fmt.Errorf("failed to mount: %w", err)
+		return fmt.Errorf("failed to create filesystem: %w", err)
 	}
 
-	// Enable SQLite persistent cache and background sync
+	// Enable SQLite persistent cache and background sync BEFORE mounting
+	// This must complete before the filesystem is accessible to prevent nil repo panics
 	ctx := context.Background()
 	if err := lfs.EnableSQLiteCache(ctx, ""); err != nil {
 		fmt.Printf("Warning: SQLite cache disabled: %v\n", err)
+	}
+
+	// Now mount the filesystem
+	server, err := fs.MountFS(mountpoint, lfs, debug)
+	if err != nil {
+		lfs.Close()
+		return fmt.Errorf("failed to mount: %w", err)
 	}
 
 	// Handle signals for graceful shutdown

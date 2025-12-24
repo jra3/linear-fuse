@@ -31,8 +31,7 @@ func documentIno(docID string) uint64 {
 
 // DocsNode represents a docs/ directory within issues, teams, or projects
 type DocsNode struct {
-	fs.Inode
-	lfs       *LinearFS
+	BaseNode
 	issueID   string // Set if issue docs
 	teamID    string // Set if team docs
 	projectID string // Set if project docs
@@ -43,6 +42,13 @@ var _ fs.NodeLookuper = (*DocsNode)(nil)
 var _ fs.NodeCreater = (*DocsNode)(nil)
 var _ fs.NodeUnlinker = (*DocsNode)(nil)
 var _ fs.NodeRenamer = (*DocsNode)(nil)
+var _ fs.NodeGetattrer = (*DocsNode)(nil)
+
+func (n *DocsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	n.SetOwner(out)
+	return 0
+}
 
 func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 	if n.issueID != "" {
@@ -97,7 +103,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	if name == "new.md" {
 		now := time.Now()
 		node := &NewDocumentNode{
-			lfs:       n.lfs,
+			BaseNode:  BaseNode{lfs: n.lfs},
 			issueID:   n.issueID,
 			teamID:    n.teamID,
 			projectID: n.projectID,
@@ -128,7 +134,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 				return nil, syscall.EIO
 			}
 			node := &DocumentFileNode{
-				lfs:          n.lfs,
+				BaseNode:     BaseNode{lfs: n.lfs},
 				document:     doc,
 				issueID:      n.issueID,
 				teamID:       n.teamID,
@@ -176,7 +182,8 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				log.Printf("Failed to delete document: %v", err)
 				return syscall.EIO
 			}
-			// Invalidate kernel cache for this entry
+			// Invalidate kernel cache - both directory inode and entry
+			n.lfs.InvalidateKernelInode(docsDirIno(n.parentID()))
 			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), name)
 			if n.lfs.debug {
 				log.Printf("Document deleted successfully")
@@ -255,7 +262,7 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 	}
 
 	node := &NewDocumentNode{
-		lfs:       n.lfs,
+		BaseNode:  BaseNode{lfs: n.lfs},
 		issueID:   n.issueID,
 		teamID:    n.teamID,
 		projectID: n.projectID,
@@ -282,8 +289,7 @@ func documentFilename(doc api.Document) string {
 
 // DocumentFileNode represents a single document file (read-write)
 type DocumentFileNode struct {
-	fs.Inode
-	lfs       *LinearFS
+	BaseNode
 	document  api.Document
 	issueID   string
 	teamID    string
@@ -308,8 +314,7 @@ func (n *DocumentFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fu
 	defer n.mu.Unlock()
 
 	out.Mode = 0644
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&n.document.UpdatedAt, &n.document.UpdatedAt, &n.document.CreatedAt)
 	return 0
@@ -442,8 +447,7 @@ func (n *DocumentFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uin
 
 // NewDocumentNode handles creating new documents
 type NewDocumentNode struct {
-	fs.Inode
-	lfs       *LinearFS
+	BaseNode
 	issueID   string
 	teamID    string
 	projectID string
@@ -467,8 +471,7 @@ func (n *NewDocumentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 	defer n.mu.Unlock()
 
 	out.Mode = 0200
-	out.Uid = n.lfs.uid
-	out.Gid = n.lfs.gid
+	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
 	return 0
 }
@@ -596,7 +599,11 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	if parentID == "" {
 		parentID = n.projectID
 	}
+	// Invalidate the directory inode so the kernel re-reads the listing
+	n.lfs.InvalidateKernelInode(docsDirIno(parentID))
+	// Also invalidate specific entries
 	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), "new.md")
+	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), documentFilename(*doc))
 
 	if n.lfs.debug {
 		log.Printf("Document created successfully")

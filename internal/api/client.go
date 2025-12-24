@@ -58,6 +58,11 @@ func (c *Client) Close() {
 	}
 }
 
+// AuthHeader returns the Authorization header value for API requests.
+func (c *Client) AuthHeader() string {
+	return c.apiKey
+}
+
 // SetAPIURL overrides the API URL (for testing).
 func (c *Client) SetAPIURL(url string) {
 	c.apiURL = url
@@ -1213,13 +1218,14 @@ func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue,
 	return &result.IssueCreate.Issue, nil
 }
 
-// IssueDetails contains both comments and documents for an issue
+// IssueDetails contains comments, documents, and attachments for an issue
 type IssueDetails struct {
-	Comments  []Comment
-	Documents []Document
+	Comments    []Comment
+	Documents   []Document
+	Attachments []Attachment
 }
 
-// GetIssueDetails fetches both comments and documents for an issue in a single query
+// GetIssueDetails fetches comments, documents, and attachments for an issue in a single query
 func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDetails, error) {
 	var result struct {
 		Issue struct {
@@ -1229,6 +1235,9 @@ func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDet
 			Documents struct {
 				Nodes []Document `json:"nodes"`
 			} `json:"documents"`
+			Attachments struct {
+				Nodes []Attachment `json:"nodes"`
+			} `json:"attachments"`
 		} `json:"issue"`
 	}
 
@@ -1242,12 +1251,13 @@ func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDet
 	}
 
 	return &IssueDetails{
-		Comments:  result.Issue.Comments.Nodes,
-		Documents: result.Issue.Documents.Nodes,
+		Comments:    result.Issue.Comments.Nodes,
+		Documents:   result.Issue.Documents.Nodes,
+		Attachments: result.Issue.Attachments.Nodes,
 	}, nil
 }
 
-// GetIssueDetailsBatch fetches comments and documents for multiple issues in a single query.
+// GetIssueDetailsBatch fetches comments, documents, and attachments for multiple issues in a single query.
 // Returns a map of issueID -> IssueDetails. Uses GraphQL aliases to batch requests.
 func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*IssueDetails, error) {
 	if len(issueIDs) == 0 {
@@ -1265,6 +1275,7 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 		queryParts = append(queryParts, fmt.Sprintf(`%s: issue(id: $%s) {
 			comments(first: 100) { nodes { ...CommentFields } }
 			documents(first: 100) { nodes { ...DocumentFields } }
+			attachments(first: 100) { nodes { ...AttachmentFields } }
 		}`, alias, varName))
 		vars[varName] = id
 	}
@@ -1275,11 +1286,12 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 		varDecls = append(varDecls, fmt.Sprintf("$id%d: String!", i))
 	}
 
-	query := fmt.Sprintf(`query IssueDetailsBatch(%s) { %s } %s %s`,
+	query := fmt.Sprintf(`query IssueDetailsBatch(%s) { %s } %s %s %s`,
 		strings.Join(varDecls, ", "),
 		strings.Join(queryParts, " "),
 		CommentFieldsFragment,
 		DocumentFieldsFragment,
+		AttachmentFieldsFragment,
 	)
 
 	// Result will be a map of alias -> issue data
@@ -1305,14 +1317,18 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 			Documents struct {
 				Nodes []Document `json:"nodes"`
 			} `json:"documents"`
+			Attachments struct {
+				Nodes []Attachment `json:"nodes"`
+			} `json:"attachments"`
 		}
 		if err := json.Unmarshal(raw, &issueData); err != nil {
 			continue
 		}
 
 		result[id] = &IssueDetails{
-			Comments:  issueData.Comments.Nodes,
-			Documents: issueData.Documents.Nodes,
+			Comments:    issueData.Comments.Nodes,
+			Documents:   issueData.Documents.Nodes,
+			Attachments: issueData.Attachments.Nodes,
 		}
 	}
 
@@ -1437,6 +1453,28 @@ func (c *Client) GetIssueDocuments(ctx context.Context, issueID string) ([]Docum
 	}
 
 	return result.Issue.Documents.Nodes, nil
+}
+
+// GetIssueAttachments fetches attachments (external links) for an issue
+func (c *Client) GetIssueAttachments(ctx context.Context, issueID string) ([]Attachment, error) {
+	var result struct {
+		Issue struct {
+			Attachments struct {
+				Nodes []Attachment `json:"nodes"`
+			} `json:"attachments"`
+		} `json:"issue"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+	}
+
+	err := c.query(ctx, queryIssueAttachments, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Issue.Attachments.Nodes, nil
 }
 
 // GetTeamDocuments returns an empty list since Linear API doesn't support team-level documents

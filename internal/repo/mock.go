@@ -26,6 +26,8 @@ type MockRepository struct {
 	InitiativeProjects map[string][]api.Project // keyed by initiativeID
 	ProjectUpdates map[string][]api.ProjectUpdate // keyed by projectID
 	InitiativeUpdates map[string][]api.InitiativeUpdate // keyed by initiativeID
+	Attachments    map[string][]api.Attachment   // keyed by issueID
+	EmbeddedFiles  map[string][]api.EmbeddedFile // keyed by issueID
 
 	// Current user
 	CurrentUser *api.User
@@ -50,6 +52,8 @@ func NewMockRepository() *MockRepository {
 		InitiativeProjects: make(map[string][]api.Project),
 		ProjectUpdates:     make(map[string][]api.ProjectUpdate),
 		InitiativeUpdates:  make(map[string][]api.InitiativeUpdate),
+		Attachments:        make(map[string][]api.Attachment),
+		EmbeddedFiles:      make(map[string][]api.EmbeddedFile),
 		issuesByID:         make(map[string]*api.Issue),
 		issuesByIdentifier: make(map[string]*api.Issue),
 	}
@@ -487,6 +491,32 @@ func (m *MockRepository) GetProjectUpdates(ctx context.Context, projectID string
 
 func (m *MockRepository) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]api.InitiativeUpdate, error) {
 	return m.InitiativeUpdates[initiativeID], nil
+}
+
+// =============================================================================
+// Attachments
+// =============================================================================
+
+func (m *MockRepository) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	return m.Attachments[issueID], nil
+}
+
+func (m *MockRepository) GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error) {
+	return m.EmbeddedFiles[issueID], nil
+}
+
+func (m *MockRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cachePath string, size int64) error {
+	// In mock, find and update the file
+	for issueID, files := range m.EmbeddedFiles {
+		for i, f := range files {
+			if f.ID == id {
+				m.EmbeddedFiles[issueID][i].CachePath = cachePath
+				m.EmbeddedFiles[issueID][i].FileSize = size
+				return nil
+			}
+		}
+	}
+	return nil
 }
 
 // Ensure MockRepository implements Repository

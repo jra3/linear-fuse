@@ -3,9 +3,13 @@ package fs
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -29,6 +33,34 @@ type LinearFS struct {
 	debug      bool
 	uid        uint32 // Owner UID for files/dirs
 	gid        uint32 // Owner GID for files/dirs
+
+	// File cache for embedded files
+	fileCacheDir  string
+	fileCacheMu   gosync.RWMutex
+	fileCache     map[string][]byte // in-memory cache (file ID -> content)
+	fileCacheInit gosync.Once
+}
+
+// BaseNode provides common functionality for all LinearFS nodes.
+// All node types should embed this instead of fs.Inode directly.
+// This ensures consistent UID/GID ownership across the filesystem.
+type BaseNode struct {
+	fs.Inode
+	lfs *LinearFS
+}
+
+// SetOwner sets the UID and GID on the given AttrOut.
+// Call this in every Getattr implementation.
+func (b *BaseNode) SetOwner(out *fuse.AttrOut) {
+	if b.lfs != nil {
+		out.Uid = b.lfs.uid
+		out.Gid = b.lfs.gid
+	}
+}
+
+// LFS returns the LinearFS instance.
+func (b *BaseNode) LFS() *LinearFS {
+	return b.lfs
 }
 
 func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
@@ -44,11 +76,19 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		APIStatsEnabled: cfg.Log.APIStats,
 	})
 
+	// Initialize file cache directory
+	cacheDir := filepath.Join(os.Getenv("HOME"), "Library", "Caches", "linearfs", "files")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		log.Printf("[linearfs] Warning: failed to create cache dir: %v", err)
+	}
+
 	return &LinearFS{
-		uid:    uid,
-		gid:    gid,
-		client: client,
-		debug:  debug,
+		uid:          uid,
+		gid:          gid,
+		client:       client,
+		debug:        debug,
+		fileCacheDir: cacheDir,
+		fileCache:    make(map[string][]byte),
 	}, nil
 }
 
@@ -118,6 +158,14 @@ func (lfs *LinearFS) GetTeams(ctx context.Context) ([]api.Team, error) {
 
 func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
 	return lfs.repo.GetTeamIssues(ctx, teamID)
+}
+
+func (lfs *LinearFS) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	return lfs.repo.GetIssueAttachments(ctx, issueID)
+}
+
+func (lfs *LinearFS) GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error) {
+	return lfs.repo.GetIssueEmbeddedFiles(ctx, issueID)
 }
 
 func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
@@ -446,7 +494,12 @@ func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentI
 }
 
 func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
-	return lfs.client.DeleteComment(ctx, commentID)
+	// Delete from API
+	if err := lfs.client.DeleteComment(ctx, commentID); err != nil {
+		return err
+	}
+	// Delete from SQLite so it's immediately removed from listings
+	return lfs.store.Queries().DeleteComment(ctx, commentID)
 }
 
 // Document methods
@@ -488,7 +541,12 @@ func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, inpu
 }
 
 func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
-	return lfs.client.DeleteDocument(ctx, documentID)
+	// Delete from API
+	if err := lfs.client.DeleteDocument(ctx, documentID); err != nil {
+		return err
+	}
+	// Delete from SQLite so it's immediately removed from listings
+	return lfs.store.Queries().DeleteDocument(ctx, documentID)
 }
 
 // ResolveUserID converts an email or name to a user ID
@@ -766,7 +824,7 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *Li
 		return nil, nil, err
 	}
 
-	root := &RootNode{lfs: lfs}
+	root := &RootNode{BaseNode: BaseNode{lfs: lfs}}
 
 	// Use longer timeouts to reduce kernel→userspace calls
 	// AttrTimeout: how long kernel caches file attributes (size, mtime, etc.)
@@ -802,7 +860,7 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *Li
 // MountFS mounts an existing LinearFS instance at the given path.
 // This is useful for testing when you need to configure LinearFS before mounting.
 func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error) {
-	root := &RootNode{lfs: lfs}
+	root := &RootNode{BaseNode: BaseNode{lfs: lfs}}
 
 	// Use longer timeouts to reduce kernel→userspace calls
 	attrTimeout := 60 * time.Second
@@ -838,4 +896,80 @@ func (lfs *LinearFS) InjectTestStore(store *db.Store) error {
 // GetStore returns the SQLite store for direct database access in tests.
 func (lfs *LinearFS) GetStore() *db.Store {
 	return lfs.store
+}
+
+// =============================================================================
+// File Cache for Embedded Files
+// =============================================================================
+
+// FetchEmbeddedFile downloads an embedded file from Linear's CDN, caching it locally.
+// Returns the file content. Files are cached both in memory and on disk.
+func (lfs *LinearFS) FetchEmbeddedFile(ctx context.Context, file api.EmbeddedFile) ([]byte, error) {
+	// Check in-memory cache first
+	lfs.fileCacheMu.RLock()
+	if content, ok := lfs.fileCache[file.ID]; ok {
+		lfs.fileCacheMu.RUnlock()
+		return content, nil
+	}
+	lfs.fileCacheMu.RUnlock()
+
+	// Check disk cache
+	diskPath := filepath.Join(lfs.fileCacheDir, file.ID)
+	if file.CachePath != "" {
+		diskPath = file.CachePath
+	}
+
+	if content, err := os.ReadFile(diskPath); err == nil {
+		// Found on disk, add to in-memory cache
+		lfs.fileCacheMu.Lock()
+		lfs.fileCache[file.ID] = content
+		lfs.fileCacheMu.Unlock()
+		return content, nil
+	}
+
+	// Download from Linear CDN
+	content, err := lfs.downloadFile(ctx, file.URL)
+	if err != nil {
+		return nil, fmt.Errorf("download file: %w", err)
+	}
+
+	// Cache to disk
+	if err := os.WriteFile(diskPath, content, 0644); err != nil {
+		log.Printf("[cache] Warning: failed to cache file %s: %v", file.Filename, err)
+	} else {
+		// Update database with cache path
+		if err := lfs.repo.UpdateEmbeddedFileCache(ctx, file.ID, diskPath, int64(len(content))); err != nil {
+			log.Printf("[cache] Warning: failed to update cache path: %v", err)
+		}
+	}
+
+	// Cache in memory
+	lfs.fileCacheMu.Lock()
+	lfs.fileCache[file.ID] = content
+	lfs.fileCacheMu.Unlock()
+
+	return content, nil
+}
+
+// downloadFile fetches a file from Linear's CDN
+func (lfs *LinearFS) downloadFile(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Linear CDN requires authentication for private files
+	req.Header.Set("Authorization", lfs.client.AuthHeader())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	return io.ReadAll(resp.Body)
 }

@@ -340,3 +340,44 @@ func TestConfig() *config.Config {
 		},
 	}
 }
+
+// PopulateEmbeddedFiles inserts embedded files for an issue into the SQLite store.
+func PopulateEmbeddedFiles(ctx context.Context, store *db.Store, issueID string, files []api.EmbeddedFile) error {
+	q := store.Queries()
+	for _, file := range files {
+		params := db.UpsertEmbeddedFileParams{
+			ID:        file.ID,
+			IssueID:   issueID,
+			Url:       file.URL,
+			Filename:  file.Filename,
+			MimeType:  sql.NullString{String: file.MimeType, Valid: file.MimeType != ""},
+			Source:    file.Source,
+			CreatedAt: time.Now(),
+			SyncedAt:  time.Now(),
+		}
+		if err := q.UpsertEmbeddedFile(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// FixtureAPIEmbeddedFiles returns a set of embedded files for testing.
+func FixtureAPIEmbeddedFiles() []api.EmbeddedFile {
+	return []api.EmbeddedFile{
+		{
+			ID:       "file-1",
+			URL:      "https://uploads.linear.app/workspace1/file1/screenshot.png",
+			Filename: "screenshot.png",
+			MimeType: "image/png",
+			Source:   "description",
+		},
+		{
+			ID:       "file-2",
+			URL:      "https://uploads.linear.app/workspace1/file2/design.pdf",
+			Filename: "design.pdf",
+			MimeType: "application/pdf",
+			Source:   "description",
+		},
+	}
+}

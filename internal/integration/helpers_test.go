@@ -128,6 +128,14 @@ func byPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "by")
 }
 
+func attachmentsPath(teamKey, issueID string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "attachments")
+}
+
+func attachmentFilePath(teamKey, issueID, filename string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "attachments", filename)
+}
+
 func byAssigneePath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "by", "assignee")
 }

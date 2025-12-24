@@ -300,6 +300,14 @@ func createTestDocument(issueID, title, content string) (*api.Document, func(), 
 		return nil, nil, fmt.Errorf("failed to create test document: %w", err)
 	}
 
+	// Upsert to SQLite so document is immediately visible in filesystem
+	if lfs != nil {
+		if err := lfs.UpsertDocument(ctx, *doc); err != nil {
+			// Log warning but don't fail - sync worker will pick it up eventually
+			fmt.Printf("Warning: failed to upsert document to SQLite: %v\n", err)
+		}
+	}
+
 	cleanup := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

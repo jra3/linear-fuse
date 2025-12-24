@@ -7,8 +7,14 @@ package sync
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
+	"net/http"
+	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -37,11 +43,15 @@ type APIClient interface {
 	// Project details
 	GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error)
 
-	// Issue details (comments and documents)
+	// Issue details (comments, documents, attachments)
 	GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error)
 	GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error)
 	GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error)
 	GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error)
+	GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error)
+
+	// Auth
+	AuthHeader() string
 }
 
 const detailsBatchSize = 20 // Number of issues to fetch details for in one API call (Linear has 10k complexity limit)
@@ -332,6 +342,11 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 			if upsertErr := w.store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); upsertErr != nil {
 				log.Printf("[sync] upsert issue %s failed: %v", issue.Identifier, upsertErr)
 				continue
+			}
+
+			// Extract embedded files from issue description
+			if issue.Description != "" {
+				w.extractAndStoreEmbeddedFiles(ctx, issue.ID, issue.Description, "description")
 			}
 
 			// Queue for batch details sync
@@ -736,6 +751,9 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 			if err := w.store.Queries().UpsertComment(ctx, params); err != nil {
 				log.Printf("[sync] upsert comment %s failed: %v", comment.ID, err)
 			}
+
+			// Extract embedded files from comment body
+			w.extractAndStoreEmbeddedFiles(ctx, issueID, comment.Body, "comment:"+comment.ID)
 		}
 
 		// Store documents
@@ -746,6 +764,17 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 			}
 			if err := w.store.Queries().UpsertDocument(ctx, params); err != nil {
 				log.Printf("[sync] upsert document %s failed: %v", doc.ID, err)
+			}
+		}
+
+		// Store attachments
+		for _, attachment := range details.Attachments {
+			params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
+			if err != nil {
+				continue
+			}
+			if err := w.store.Queries().UpsertAttachment(ctx, params); err != nil {
+				log.Printf("[sync] upsert attachment %s failed: %v", attachment.ID, err)
 			}
 		}
 	}
@@ -854,4 +883,151 @@ func (w *Worker) syncIssueDocuments(ctx context.Context, issueID string) error {
 	}
 
 	return nil
+}
+
+// =============================================================================
+// Embedded Files Extraction
+// =============================================================================
+
+// linearCDNPattern matches Linear CDN URLs for uploaded files
+var linearCDNPattern = regexp.MustCompile(`https://uploads\.linear\.app/[^\s\)\]"'<>]+`)
+
+// extractAndStoreEmbeddedFiles extracts Linear CDN URLs from content and stores them
+func (w *Worker) extractAndStoreEmbeddedFiles(ctx context.Context, issueID, content, source string) {
+	urls := linearCDNPattern.FindAllString(content, -1)
+	if len(urls) == 0 {
+		return
+	}
+
+	for _, url := range urls {
+		// Clean up URL (remove trailing punctuation that might have been captured)
+		url = strings.TrimRight(url, ".,;:!?")
+
+		// Generate stable ID from URL
+		hash := sha256.Sum256([]byte(url))
+		id := hex.EncodeToString(hash[:16]) // Use first 16 bytes for shorter ID
+
+		// Extract filename from URL path
+		filename := extractFilename(url)
+
+		// Detect MIME type from extension
+		mimeType := detectMIMEType(filename)
+
+		// Fetch file size via HEAD request (doesn't download the file)
+		fileSize := w.fetchFileSize(ctx, url)
+
+		params := db.UpsertEmbeddedFileParams{
+			ID:        id,
+			IssueID:   issueID,
+			Url:       url,
+			Filename:  filename,
+			MimeType:  sql.NullString{String: mimeType, Valid: mimeType != ""},
+			FileSize:  sql.NullInt64{Int64: fileSize, Valid: fileSize > 0},
+			Source:    source,
+			CreatedAt: db.Now(),
+			SyncedAt:  db.Now(),
+		}
+
+		if err := w.store.Queries().UpsertEmbeddedFile(ctx, params); err != nil {
+			log.Printf("[sync] upsert embedded file %s failed: %v", filename, err)
+		}
+	}
+}
+
+// fetchFileSize gets the file size via HTTP HEAD request without downloading
+func (w *Worker) fetchFileSize(ctx context.Context, url string) int64 {
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Authorization", w.client.AuthHeader())
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+
+	return resp.ContentLength
+}
+
+// extractFilename extracts a clean filename from a Linear CDN URL
+func extractFilename(url string) string {
+	// Linear CDN URLs look like:
+	// https://uploads.linear.app/abc123/def456/filename.png
+	// or with UUID-prefixed filenames
+
+	// Get the last path segment
+	parts := strings.Split(url, "/")
+	if len(parts) == 0 {
+		return "file"
+	}
+	filename := parts[len(parts)-1]
+
+	// Remove query parameters
+	if idx := strings.Index(filename, "?"); idx != -1 {
+		filename = filename[:idx]
+	}
+
+	// If the filename looks like a UUID-prefixed file, try to clean it up
+	// e.g., "abc123-def456-screenshot.png" -> "screenshot.png"
+	// But keep it if it seems intentional
+	if len(filename) > 40 && strings.Count(filename, "-") >= 4 {
+		// This might be a UUID-prefixed filename, extract just the meaningful part
+		lastDash := strings.LastIndex(filename, "-")
+		if lastDash > 0 && lastDash < len(filename)-1 {
+			potentialName := filename[lastDash+1:]
+			if strings.Contains(potentialName, ".") {
+				filename = potentialName
+			}
+		}
+	}
+
+	// Ensure we have at least some filename
+	if filename == "" {
+		filename = "file"
+	}
+
+	return filename
+}
+
+// detectMIMEType detects MIME type from filename extension
+func detectMIMEType(filename string) string {
+	ext := strings.ToLower(path.Ext(filename))
+	switch ext {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".svg":
+		return "image/svg+xml"
+	case ".pdf":
+		return "application/pdf"
+	case ".doc":
+		return "application/msword"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xls":
+		return "application/vnd.ms-excel"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".zip":
+		return "application/zip"
+	case ".mp4":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".mp3":
+		return "audio/mpeg"
+	default:
+		return "application/octet-stream"
+	}
 }

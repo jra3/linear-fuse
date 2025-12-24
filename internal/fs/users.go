@@ -14,8 +14,7 @@ import (
 
 // UsersNode represents the /users directory
 type UsersNode struct {
-	fs.Inode
-	lfs *LinearFS
+	BaseNode
 }
 
 var _ fs.NodeReaddirer = (*UsersNode)(nil)
@@ -24,8 +23,7 @@ var _ fs.NodeGetattrer = (*UsersNode)(nil)
 
 func (u *UsersNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = u.lfs.uid
-	out.Gid = u.lfs.gid
+	u.SetOwner(out)
 	return 0
 }
 
@@ -59,7 +57,7 @@ func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 			out.Attr.Uid = u.lfs.uid
 			out.Attr.Gid = u.lfs.gid
 			out.Attr.SetTimes(&now, &now, &now)
-			node := &UserNode{lfs: u.lfs, user: user}
+			node := &UserNode{BaseNode: BaseNode{lfs: u.lfs}, user: user}
 			return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
 	}
@@ -82,8 +80,7 @@ func userDirName(user api.User) string {
 
 // UserNode represents a single user's directory (e.g., /users/alice)
 type UserNode struct {
-	fs.Inode
-	lfs  *LinearFS
+	BaseNode
 	user api.User
 }
 
@@ -94,8 +91,7 @@ var _ fs.NodeGetattrer = (*UserNode)(nil)
 func (u *UserNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
-	out.Uid = u.lfs.uid
-	out.Gid = u.lfs.gid
+	u.SetOwner(out)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -125,7 +121,7 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle user.md metadata file
 	if name == "user.md" {
-		node := &UserInfoNode{lfs: u.lfs, user: u.user}
+		node := &UserInfoNode{BaseNode: BaseNode{lfs: u.lfs}, user: u.user}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Uid = u.lfs.uid
@@ -147,7 +143,7 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 				teamKey = issue.Team.Key
 			}
 			node := &IssueDirSymlink{
-				lfs:        u.lfs,
+				BaseNode:   BaseNode{lfs: u.lfs},
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
 			}
@@ -163,8 +159,7 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 // IssueDirSymlink is a symlink pointing to an issue directory in /teams/<KEY>/issues/<identifier>/
 type IssueDirSymlink struct {
-	fs.Inode
-	lfs        *LinearFS
+	BaseNode
 	teamKey    string
 	identifier string
 }
@@ -179,10 +174,7 @@ func (s *IssueDirSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) 
 
 func (s *IssueDirSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0777 | syscall.S_IFLNK
-	if s.lfs != nil {
-		out.Uid = s.lfs.uid
-		out.Gid = s.lfs.gid
-	}
+	s.SetOwner(out)
 	target := fmt.Sprintf("../../teams/%s/issues/%s", s.teamKey, s.identifier)
 	out.Size = uint64(len(target))
 	return 0
@@ -190,8 +182,7 @@ func (s *IssueDirSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 
 // UserInfoNode is a virtual file containing user metadata
 type UserInfoNode struct {
-	fs.Inode
-	lfs  *LinearFS
+	BaseNode
 	user api.User
 }
 
@@ -235,10 +226,7 @@ status: %s
 func (u *UserInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := u.generateContent()
 	out.Mode = 0444 | syscall.S_IFREG
-	if u.lfs != nil {
-		out.Uid = u.lfs.uid
-		out.Gid = u.lfs.gid
-	}
+	u.SetOwner(out)
 	out.Size = uint64(len(content))
 	return 0
 }

@@ -930,3 +930,311 @@ func TestDBInitiativeUpdatesToAPIUpdates(t *testing.T) {
 		t.Fatalf("Expected 2 updates, got %d", len(apiUpdates))
 	}
 }
+
+// =============================================================================
+// Attachment Conversion Tests
+// =============================================================================
+
+func TestAPIAttachmentToDBAttachment(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	attachment := api.Attachment{
+		ID:         "attach-1",
+		Title:      "GitHub PR",
+		Subtitle:   "feat: Add new feature",
+		URL:        "https://github.com/org/repo/pull/123",
+		SourceType: "github-pr",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Creator: &api.User{
+			ID:    "user-1",
+			Name:  "Developer",
+			Email: "dev@example.com",
+		},
+	}
+
+	params, err := APIAttachmentToDBAttachment(attachment, "issue-1")
+	if err != nil {
+		t.Fatalf("APIAttachmentToDBAttachment failed: %v", err)
+	}
+
+	if params.ID != attachment.ID {
+		t.Errorf("ID mismatch: got %s, want %s", params.ID, attachment.ID)
+	}
+	if params.IssueID != "issue-1" {
+		t.Errorf("IssueID mismatch: got %s, want issue-1", params.IssueID)
+	}
+	if params.Title != attachment.Title {
+		t.Errorf("Title mismatch: got %s, want %s", params.Title, attachment.Title)
+	}
+	if params.Url != attachment.URL {
+		t.Errorf("URL mismatch: got %s, want %s", params.Url, attachment.URL)
+	}
+	if params.SourceType.String != attachment.SourceType {
+		t.Errorf("SourceType mismatch: got %s, want %s", params.SourceType.String, attachment.SourceType)
+	}
+}
+
+func TestDBAttachmentToAPIAttachment(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	apiData := api.Attachment{
+		ID:         "attach-1",
+		Title:      "Slack Thread",
+		Subtitle:   "Discussion",
+		URL:        "https://slack.com/archives/C123/p456",
+		SourceType: "slack",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	attachment := Attachment{
+		ID:         "attach-1",
+		IssueID:    "issue-1",
+		Title:      "Slack Thread",
+		Url:        "https://slack.com/archives/C123/p456",
+		SourceType: toNullString(strPtr("slack")),
+		SyncedAt:   now,
+		Data:       mustMarshal(apiData),
+	}
+
+	apiAttachment, err := DBAttachmentToAPIAttachment(attachment)
+	if err != nil {
+		t.Fatalf("DBAttachmentToAPIAttachment failed: %v", err)
+	}
+
+	if apiAttachment.ID != attachment.ID {
+		t.Errorf("ID mismatch: got %s, want %s", apiAttachment.ID, attachment.ID)
+	}
+	if apiAttachment.Title != "Slack Thread" {
+		t.Errorf("Title mismatch: got %s, want Slack Thread", apiAttachment.Title)
+	}
+	if apiAttachment.SourceType != "slack" {
+		t.Errorf("SourceType mismatch: got %s, want slack", apiAttachment.SourceType)
+	}
+}
+
+func TestDBAttachmentsToAPIAttachments(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	attachments := []Attachment{
+		{
+			ID:         "a1",
+			IssueID:    "issue-1",
+			Title:      "PR 1",
+			Url:        "https://github.com/pr/1",
+			SourceType: toNullString(strPtr("github-pr")),
+			SyncedAt:   now,
+			Data:       mustMarshal(api.Attachment{ID: "a1", Title: "PR 1", SourceType: "github-pr"}),
+		},
+		{
+			ID:         "a2",
+			IssueID:    "issue-1",
+			Title:      "Slack",
+			Url:        "https://slack.com/thread",
+			SourceType: toNullString(strPtr("slack")),
+			SyncedAt:   now,
+			Data:       mustMarshal(api.Attachment{ID: "a2", Title: "Slack", SourceType: "slack"}),
+		},
+	}
+
+	apiAttachments, err := DBAttachmentsToAPIAttachments(attachments)
+	if err != nil {
+		t.Fatalf("DBAttachmentsToAPIAttachments failed: %v", err)
+	}
+
+	if len(apiAttachments) != 2 {
+		t.Fatalf("Expected 2 attachments, got %d", len(apiAttachments))
+	}
+	if apiAttachments[0].ID != "a1" {
+		t.Errorf("First attachment ID mismatch")
+	}
+	if apiAttachments[1].ID != "a2" {
+		t.Errorf("Second attachment ID mismatch")
+	}
+}
+
+// =============================================================================
+// Embedded File Conversion Tests
+// =============================================================================
+
+func TestAPIEmbeddedFileToDBFile(t *testing.T) {
+	t.Parallel()
+	file := api.EmbeddedFile{
+		ID:        "file-1",
+		IssueID:   "issue-1",
+		URL:       "https://uploads.linear.app/workspace/file1/screenshot.png",
+		Filename:  "screenshot.png",
+		MimeType:  "image/png",
+		FileSize:  12345,
+		CachePath: "/tmp/cache/file-1",
+		Source:    "description",
+	}
+
+	params := APIEmbeddedFileToDBFile(file)
+
+	if params.ID != file.ID {
+		t.Errorf("ID mismatch: got %s, want %s", params.ID, file.ID)
+	}
+	if params.IssueID != file.IssueID {
+		t.Errorf("IssueID mismatch: got %s, want %s", params.IssueID, file.IssueID)
+	}
+	if params.Url != file.URL {
+		t.Errorf("URL mismatch: got %s, want %s", params.Url, file.URL)
+	}
+	if params.Filename != file.Filename {
+		t.Errorf("Filename mismatch: got %s, want %s", params.Filename, file.Filename)
+	}
+	if params.MimeType.String != file.MimeType {
+		t.Errorf("MimeType mismatch: got %s, want %s", params.MimeType.String, file.MimeType)
+	}
+	if params.Source != file.Source {
+		t.Errorf("Source mismatch: got %s, want %s", params.Source, file.Source)
+	}
+}
+
+func TestAPIEmbeddedFileToDBFileWithEmptyMimeType(t *testing.T) {
+	t.Parallel()
+	file := api.EmbeddedFile{
+		ID:       "file-1",
+		IssueID:  "issue-1",
+		URL:      "https://uploads.linear.app/workspace/file1/data.bin",
+		Filename: "data.bin",
+		MimeType: "", // Empty MIME type
+		Source:   "description",
+	}
+
+	params := APIEmbeddedFileToDBFile(file)
+
+	if params.MimeType.Valid {
+		t.Error("MimeType should be invalid for empty string")
+	}
+}
+
+func TestDBEmbeddedFileToAPIFile(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	file := EmbeddedFile{
+		ID:        "file-1",
+		IssueID:   "issue-1",
+		Url:       "https://uploads.linear.app/workspace/file1/design.pdf",
+		Filename:  "design.pdf",
+		MimeType:  sql.NullString{String: "application/pdf", Valid: true},
+		FileSize:  sql.NullInt64{Int64: 54321, Valid: true},
+		CachePath: sql.NullString{String: "/tmp/cache/file-1", Valid: true},
+		Source:    "comment:abc123",
+		CreatedAt: now,
+		SyncedAt:  now,
+	}
+
+	apiFile := DBEmbeddedFileToAPIFile(file)
+
+	if apiFile.ID != file.ID {
+		t.Errorf("ID mismatch: got %s, want %s", apiFile.ID, file.ID)
+	}
+	if apiFile.IssueID != file.IssueID {
+		t.Errorf("IssueID mismatch: got %s, want %s", apiFile.IssueID, file.IssueID)
+	}
+	if apiFile.URL != file.Url {
+		t.Errorf("URL mismatch: got %s, want %s", apiFile.URL, file.Url)
+	}
+	if apiFile.Filename != file.Filename {
+		t.Errorf("Filename mismatch: got %s, want %s", apiFile.Filename, file.Filename)
+	}
+	if apiFile.MimeType != "application/pdf" {
+		t.Errorf("MimeType mismatch: got %s, want application/pdf", apiFile.MimeType)
+	}
+	if apiFile.FileSize != 54321 {
+		t.Errorf("FileSize mismatch: got %d, want 54321", apiFile.FileSize)
+	}
+	if apiFile.CachePath != "/tmp/cache/file-1" {
+		t.Errorf("CachePath mismatch: got %s, want /tmp/cache/file-1", apiFile.CachePath)
+	}
+	if apiFile.Source != "comment:abc123" {
+		t.Errorf("Source mismatch: got %s, want comment:abc123", apiFile.Source)
+	}
+}
+
+func TestDBEmbeddedFileToAPIFileWithNulls(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	file := EmbeddedFile{
+		ID:        "file-1",
+		IssueID:   "issue-1",
+		Url:       "https://uploads.linear.app/file.bin",
+		Filename:  "file.bin",
+		MimeType:  sql.NullString{Valid: false}, // Not valid
+		FileSize:  sql.NullInt64{Valid: false},  // Not valid
+		CachePath: sql.NullString{Valid: false}, // Not valid
+		Source:    "description",
+		CreatedAt: now,
+		SyncedAt:  now,
+	}
+
+	apiFile := DBEmbeddedFileToAPIFile(file)
+
+	if apiFile.MimeType != "" {
+		t.Errorf("MimeType should be empty, got %s", apiFile.MimeType)
+	}
+	if apiFile.FileSize != 0 {
+		t.Errorf("FileSize should be 0, got %d", apiFile.FileSize)
+	}
+	if apiFile.CachePath != "" {
+		t.Errorf("CachePath should be empty, got %s", apiFile.CachePath)
+	}
+}
+
+func TestDBEmbeddedFilesToAPIFiles(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	files := []EmbeddedFile{
+		{
+			ID:        "f1",
+			IssueID:   "issue-1",
+			Url:       "https://uploads.linear.app/file1.png",
+			Filename:  "file1.png",
+			MimeType:  sql.NullString{String: "image/png", Valid: true},
+			Source:    "description",
+			CreatedAt: now,
+			SyncedAt:  now,
+		},
+		{
+			ID:        "f2",
+			IssueID:   "issue-1",
+			Url:       "https://uploads.linear.app/file2.pdf",
+			Filename:  "file2.pdf",
+			MimeType:  sql.NullString{String: "application/pdf", Valid: true},
+			Source:    "comment:xyz",
+			CreatedAt: now,
+			SyncedAt:  now,
+		},
+	}
+
+	apiFiles := DBEmbeddedFilesToAPIFiles(files)
+
+	if len(apiFiles) != 2 {
+		t.Fatalf("Expected 2 files, got %d", len(apiFiles))
+	}
+	if apiFiles[0].ID != "f1" {
+		t.Errorf("First file ID mismatch")
+	}
+	if apiFiles[0].Filename != "file1.png" {
+		t.Errorf("First file Filename mismatch")
+	}
+	if apiFiles[1].ID != "f2" {
+		t.Errorf("Second file ID mismatch")
+	}
+	if apiFiles[1].Source != "comment:xyz" {
+		t.Errorf("Second file Source mismatch")
+	}
+}
+
+func TestDBEmbeddedFilesToAPIFilesEmpty(t *testing.T) {
+	t.Parallel()
+	files := []EmbeddedFile{}
+
+	apiFiles := DBEmbeddedFilesToAPIFiles(files)
+
+	if len(apiFiles) != 0 {
+		t.Errorf("Expected empty slice, got %d files", len(apiFiles))
+	}
+}

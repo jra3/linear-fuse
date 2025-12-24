@@ -96,6 +96,8 @@ fragment DocumentFields on Document {
   createdAt
   updatedAt
   creator { id name email }
+  issue { id identifier }
+  project { id }
 }
 `
 
@@ -106,6 +108,21 @@ fragment LabelFields on IssueLabel {
   name
   color
   description
+}
+`
+
+// AttachmentFieldsFragment is a GraphQL fragment for attachment fields.
+const AttachmentFieldsFragment = `
+fragment AttachmentFields on Attachment {
+  id
+  title
+  subtitle
+  url
+  sourceType
+  metadata
+  createdAt
+  updatedAt
+  creator { id name email }
 }
 `
 
@@ -524,7 +541,7 @@ mutation ArchiveIssue($id: String!) {
 }
 `
 
-// queryIssueDetails fetches both comments and documents for an issue in one query
+// queryIssueDetails fetches comments, documents, and attachments for an issue in one query
 var queryIssueDetails = `
 query IssueDetails($issueId: String!) {
   issue(id: $issueId) {
@@ -534,9 +551,23 @@ query IssueDetails($issueId: String!) {
     documents(first: 100) {
       nodes { ...DocumentFields }
     }
+    attachments(first: 100) {
+      nodes { ...AttachmentFields }
+    }
   }
 }
-` + CommentFieldsFragment + DocumentFieldsFragment
+` + CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment
+
+// queryIssueAttachments fetches only attachments for an issue
+var queryIssueAttachments = `
+query IssueAttachments($issueId: String!) {
+  issue(id: $issueId) {
+    attachments(first: 100) {
+      nodes { ...AttachmentFields }
+    }
+  }
+}
+` + AttachmentFieldsFragment
 
 var queryIssueComments = `
 query IssueComments($issueId: String!) {

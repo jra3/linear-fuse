@@ -686,3 +686,102 @@ func DBInitiativeUpdatesToAPIUpdates(updates []InitiativeUpdate) ([]api.Initiati
 	}
 	return result, nil
 }
+
+// =============================================================================
+// Attachment Conversion (external links: GitHub PRs, Slack, etc.)
+// =============================================================================
+
+// APIAttachmentToDBAttachment converts an api.Attachment to UpsertAttachmentParams
+func APIAttachmentToDBAttachment(attachment api.Attachment, issueID string) (UpsertAttachmentParams, error) {
+	data, err := json.Marshal(attachment)
+	if err != nil {
+		return UpsertAttachmentParams{}, err
+	}
+	metadata, _ := json.Marshal(attachment.Metadata)
+
+	params := UpsertAttachmentParams{
+		ID:         attachment.ID,
+		IssueID:    issueID,
+		Title:      attachment.Title,
+		Subtitle:   sql.NullString{String: attachment.Subtitle, Valid: attachment.Subtitle != ""},
+		Url:        attachment.URL,
+		SourceType: sql.NullString{String: attachment.SourceType, Valid: attachment.SourceType != ""},
+		Metadata:   metadata,
+		CreatedAt:  sql.NullTime{Time: attachment.CreatedAt, Valid: !attachment.CreatedAt.IsZero()},
+		UpdatedAt:  sql.NullTime{Time: attachment.UpdatedAt, Valid: !attachment.UpdatedAt.IsZero()},
+		SyncedAt:   Now(),
+		Data:       data,
+	}
+	if attachment.Creator != nil {
+		params.CreatorID = sql.NullString{String: attachment.Creator.ID, Valid: true}
+		params.CreatorName = sql.NullString{String: attachment.Creator.Name, Valid: true}
+		params.CreatorEmail = sql.NullString{String: attachment.Creator.Email, Valid: true}
+	}
+	return params, nil
+}
+
+// DBAttachmentToAPIAttachment converts a db.Attachment to api.Attachment
+func DBAttachmentToAPIAttachment(attachment Attachment) (api.Attachment, error) {
+	var apiAttachment api.Attachment
+	if err := json.Unmarshal(attachment.Data, &apiAttachment); err != nil {
+		return api.Attachment{}, err
+	}
+	return apiAttachment, nil
+}
+
+// DBAttachmentsToAPIAttachments converts a slice of db.Attachment to api.Attachment
+func DBAttachmentsToAPIAttachments(attachments []Attachment) ([]api.Attachment, error) {
+	result := make([]api.Attachment, len(attachments))
+	for i, attachment := range attachments {
+		apiAttachment, err := DBAttachmentToAPIAttachment(attachment)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = apiAttachment
+	}
+	return result, nil
+}
+
+// =============================================================================
+// EmbeddedFile Conversion (images, PDFs from Linear CDN)
+// =============================================================================
+
+// APIEmbeddedFileToDBFile converts an api.EmbeddedFile to UpsertEmbeddedFileParams
+func APIEmbeddedFileToDBFile(file api.EmbeddedFile) UpsertEmbeddedFileParams {
+	return UpsertEmbeddedFileParams{
+		ID:        file.ID,
+		IssueID:   file.IssueID,
+		Url:       file.URL,
+		Filename:  file.Filename,
+		MimeType:  sql.NullString{String: file.MimeType, Valid: file.MimeType != ""},
+		FileSize:  sql.NullInt64{Int64: file.FileSize, Valid: file.FileSize > 0},
+		CachePath: sql.NullString{String: file.CachePath, Valid: file.CachePath != ""},
+		Source:    file.Source,
+		CreatedAt: Now(),
+		SyncedAt:  Now(),
+	}
+}
+
+// DBEmbeddedFileToAPIFile converts a db.EmbeddedFile to api.EmbeddedFile
+func DBEmbeddedFileToAPIFile(file EmbeddedFile) api.EmbeddedFile {
+	return api.EmbeddedFile{
+		ID:        file.ID,
+		IssueID:   file.IssueID,
+		URL:       file.Url,
+		Filename:  file.Filename,
+		MimeType:  NullStringValue(file.MimeType),
+		FileSize:  file.FileSize.Int64,
+		CachePath: NullStringValue(file.CachePath),
+		Source:    file.Source,
+		SyncedAt:  file.SyncedAt,
+	}
+}
+
+// DBEmbeddedFilesToAPIFiles converts a slice of db.EmbeddedFile to api.EmbeddedFile
+func DBEmbeddedFilesToAPIFiles(files []EmbeddedFile) []api.EmbeddedFile {
+	result := make([]api.EmbeddedFile, len(files))
+	for i, file := range files {
+		result[i] = DBEmbeddedFileToAPIFile(file)
+	}
+	return result
+}

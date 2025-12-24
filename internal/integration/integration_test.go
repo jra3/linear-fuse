@@ -285,6 +285,12 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 		return err
 	}
 
+	// Populate embedded files for issue-1
+	embeddedFiles := fixtures.FixtureAPIEmbeddedFiles()
+	if err := fixtures.PopulateEmbeddedFiles(ctx, store, "issue-1", embeddedFiles); err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+const deleteAttachment = `-- name: DeleteAttachment :exec
+DELETE FROM attachments WHERE id = ?
+`
+
+func (q *Queries) DeleteAttachment(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteAttachment, id)
+	return err
+}
+
 const deleteComment = `-- name: DeleteComment :exec
 DELETE FROM comments WHERE id = ?
 `
@@ -36,6 +45,15 @@ DELETE FROM documents WHERE id = ?
 
 func (q *Queries) DeleteDocument(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteDocument, id)
+	return err
+}
+
+const deleteEmbeddedFile = `-- name: DeleteEmbeddedFile :exec
+DELETE FROM embedded_files WHERE id = ?
+`
+
+func (q *Queries) DeleteEmbeddedFile(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteEmbeddedFile, id)
 	return err
 }
 
@@ -98,6 +116,15 @@ func (q *Queries) DeleteIssue(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteIssueAttachments = `-- name: DeleteIssueAttachments :exec
+DELETE FROM attachments WHERE issue_id = ?
+`
+
+func (q *Queries) DeleteIssueAttachments(ctx context.Context, issueID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueAttachments, issueID)
+	return err
+}
+
 const deleteIssueByIdentifier = `-- name: DeleteIssueByIdentifier :exec
 DELETE FROM issues WHERE identifier = ?
 `
@@ -122,6 +149,15 @@ DELETE FROM documents WHERE issue_id = ?
 
 func (q *Queries) DeleteIssueDocuments(ctx context.Context, issueID sql.NullString) error {
 	_, err := q.db.ExecContext(ctx, deleteIssueDocuments, issueID)
+	return err
+}
+
+const deleteIssueEmbeddedFiles = `-- name: DeleteIssueEmbeddedFiles :exec
+DELETE FROM embedded_files WHERE issue_id = ?
+`
+
+func (q *Queries) DeleteIssueEmbeddedFiles(ctx context.Context, issueID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueEmbeddedFiles, issueID)
 	return err
 }
 
@@ -286,6 +322,36 @@ DELETE FROM users WHERE id = ?
 func (q *Queries) DeleteUser(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteUser, id)
 	return err
+}
+
+const getAttachment = `-- name: GetAttachment :one
+
+SELECT id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM attachments WHERE id = ?
+`
+
+// =============================================================================
+// Attachments queries (external links: GitHub PRs, Slack, etc.)
+// =============================================================================
+func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, error) {
+	row := q.db.QueryRowContext(ctx, getAttachment, id)
+	var i Attachment
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.Title,
+		&i.Subtitle,
+		&i.Url,
+		&i.SourceType,
+		&i.Metadata,
+		&i.CreatorID,
+		&i.CreatorName,
+		&i.CreatorEmail,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.Data,
+	)
+	return i, err
 }
 
 const getComment = `-- name: GetComment :one
@@ -463,6 +529,54 @@ func (q *Queries) GetDocumentBySlug(ctx context.Context, slugID string) (Documen
 	return i, err
 }
 
+const getEmbeddedFile = `-- name: GetEmbeddedFile :one
+
+SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE id = ?
+`
+
+// =============================================================================
+// Embedded Files queries (images, PDFs from Linear CDN)
+// =============================================================================
+func (q *Queries) GetEmbeddedFile(ctx context.Context, id string) (EmbeddedFile, error) {
+	row := q.db.QueryRowContext(ctx, getEmbeddedFile, id)
+	var i EmbeddedFile
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.Url,
+		&i.Filename,
+		&i.MimeType,
+		&i.FileSize,
+		&i.CachePath,
+		&i.Source,
+		&i.CreatedAt,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const getEmbeddedFileByURL = `-- name: GetEmbeddedFileByURL :one
+SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE url = ?
+`
+
+func (q *Queries) GetEmbeddedFileByURL(ctx context.Context, url string) (EmbeddedFile, error) {
+	row := q.db.QueryRowContext(ctx, getEmbeddedFileByURL, url)
+	var i EmbeddedFile
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.Url,
+		&i.Filename,
+		&i.MimeType,
+		&i.FileSize,
+		&i.CachePath,
+		&i.Source,
+		&i.CreatedAt,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
 const getInitiative = `-- name: GetInitiative :one
 
 SELECT id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data FROM initiatives WHERE id = ?
@@ -556,6 +670,17 @@ SELECT MAX(synced_at) FROM initiative_updates WHERE initiative_id = ?
 
 func (q *Queries) GetInitiativeUpdatesSyncedAt(ctx context.Context, initiativeID string) (interface{}, error) {
 	row := q.db.QueryRowContext(ctx, getInitiativeUpdatesSyncedAt, initiativeID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
+const getIssueAttachmentsSyncedAt = `-- name: GetIssueAttachmentsSyncedAt :one
+SELECT MAX(synced_at) FROM attachments WHERE issue_id = ?
+`
+
+func (q *Queries) GetIssueAttachmentsSyncedAt(ctx context.Context, issueID string) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getIssueAttachmentsSyncedAt, issueID)
 	var max interface{}
 	err := row.Scan(&max)
 	return max, err
@@ -1159,6 +1284,44 @@ func (q *Queries) ListAllUsers(ctx context.Context) ([]User, error) {
 	return items, nil
 }
 
+const listCachedEmbeddedFiles = `-- name: ListCachedEmbeddedFiles :many
+SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE cache_path IS NOT NULL
+`
+
+func (q *Queries) ListCachedEmbeddedFiles(ctx context.Context) ([]EmbeddedFile, error) {
+	rows, err := q.db.QueryContext(ctx, listCachedEmbeddedFiles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EmbeddedFile{}
+	for rows.Next() {
+		var i EmbeddedFile
+		if err := rows.Scan(
+			&i.ID,
+			&i.IssueID,
+			&i.Url,
+			&i.Filename,
+			&i.MimeType,
+			&i.FileSize,
+			&i.CachePath,
+			&i.Source,
+			&i.CreatedAt,
+			&i.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCycleIssues = `-- name: ListCycleIssues :many
 SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC
 `
@@ -1370,6 +1533,48 @@ func (q *Queries) ListInitiatives(ctx context.Context) ([]Initiative, error) {
 	return items, nil
 }
 
+const listIssueAttachments = `-- name: ListIssueAttachments :many
+SELECT id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM attachments WHERE issue_id = ? ORDER BY created_at
+`
+
+func (q *Queries) ListIssueAttachments(ctx context.Context, issueID string) ([]Attachment, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueAttachments, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Attachment{}
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.IssueID,
+			&i.Title,
+			&i.Subtitle,
+			&i.Url,
+			&i.SourceType,
+			&i.Metadata,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.CreatorEmail,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listIssueComments = `-- name: ListIssueComments :many
 SELECT id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data FROM comments WHERE issue_id = ? ORDER BY created_at
 `
@@ -1439,6 +1644,44 @@ func (q *Queries) ListIssueDocuments(ctx context.Context, issueID sql.NullString
 			&i.UpdatedAt,
 			&i.SyncedAt,
 			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssueEmbeddedFiles = `-- name: ListIssueEmbeddedFiles :many
+SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE issue_id = ? ORDER BY filename
+`
+
+func (q *Queries) ListIssueEmbeddedFiles(ctx context.Context, issueID string) ([]EmbeddedFile, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueEmbeddedFiles, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EmbeddedFile{}
+	for rows.Next() {
+		var i EmbeddedFile
+		if err := rows.Scan(
+			&i.ID,
+			&i.IssueID,
+			&i.Url,
+			&i.Filename,
+			&i.MimeType,
+			&i.FileSize,
+			&i.CachePath,
+			&i.Source,
+			&i.CreatedAt,
+			&i.SyncedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3232,6 +3475,77 @@ func (q *Queries) SetIssueParent(ctx context.Context, arg SetIssueParentParams) 
 	return err
 }
 
+const updateEmbeddedFileCache = `-- name: UpdateEmbeddedFileCache :exec
+UPDATE embedded_files SET cache_path = ?, file_size = ? WHERE id = ?
+`
+
+type UpdateEmbeddedFileCacheParams struct {
+	CachePath sql.NullString `json:"cache_path"`
+	FileSize  sql.NullInt64  `json:"file_size"`
+	ID        string         `json:"id"`
+}
+
+func (q *Queries) UpdateEmbeddedFileCache(ctx context.Context, arg UpdateEmbeddedFileCacheParams) error {
+	_, err := q.db.ExecContext(ctx, updateEmbeddedFileCache, arg.CachePath, arg.FileSize, arg.ID)
+	return err
+}
+
+const upsertAttachment = `-- name: UpsertAttachment :exec
+INSERT INTO attachments (id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    issue_id = excluded.issue_id,
+    title = excluded.title,
+    subtitle = excluded.subtitle,
+    url = excluded.url,
+    source_type = excluded.source_type,
+    metadata = excluded.metadata,
+    creator_id = excluded.creator_id,
+    creator_name = excluded.creator_name,
+    creator_email = excluded.creator_email,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertAttachmentParams struct {
+	ID           string          `json:"id"`
+	IssueID      string          `json:"issue_id"`
+	Title        string          `json:"title"`
+	Subtitle     sql.NullString  `json:"subtitle"`
+	Url          string          `json:"url"`
+	SourceType   sql.NullString  `json:"source_type"`
+	Metadata     json.RawMessage `json:"metadata"`
+	CreatorID    sql.NullString  `json:"creator_id"`
+	CreatorName  sql.NullString  `json:"creator_name"`
+	CreatorEmail sql.NullString  `json:"creator_email"`
+	CreatedAt    sql.NullTime    `json:"created_at"`
+	UpdatedAt    sql.NullTime    `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertAttachment(ctx context.Context, arg UpsertAttachmentParams) error {
+	_, err := q.db.ExecContext(ctx, upsertAttachment,
+		arg.ID,
+		arg.IssueID,
+		arg.Title,
+		arg.Subtitle,
+		arg.Url,
+		arg.SourceType,
+		arg.Metadata,
+		arg.CreatorID,
+		arg.CreatorName,
+		arg.CreatorEmail,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
 const upsertComment = `-- name: UpsertComment :exec
 INSERT INTO comments (id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -3390,6 +3704,49 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		arg.UpdatedAt,
 		arg.SyncedAt,
 		arg.Data,
+	)
+	return err
+}
+
+const upsertEmbeddedFile = `-- name: UpsertEmbeddedFile :exec
+INSERT INTO embedded_files (id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    issue_id = excluded.issue_id,
+    url = excluded.url,
+    filename = excluded.filename,
+    mime_type = excluded.mime_type,
+    file_size = COALESCE(excluded.file_size, embedded_files.file_size),
+    cache_path = COALESCE(excluded.cache_path, embedded_files.cache_path),
+    source = excluded.source,
+    synced_at = excluded.synced_at
+`
+
+type UpsertEmbeddedFileParams struct {
+	ID        string         `json:"id"`
+	IssueID   string         `json:"issue_id"`
+	Url       string         `json:"url"`
+	Filename  string         `json:"filename"`
+	MimeType  sql.NullString `json:"mime_type"`
+	FileSize  sql.NullInt64  `json:"file_size"`
+	CachePath sql.NullString `json:"cache_path"`
+	Source    string         `json:"source"`
+	CreatedAt time.Time      `json:"created_at"`
+	SyncedAt  time.Time      `json:"synced_at"`
+}
+
+func (q *Queries) UpsertEmbeddedFile(ctx context.Context, arg UpsertEmbeddedFileParams) error {
+	_, err := q.db.ExecContext(ctx, upsertEmbeddedFile,
+		arg.ID,
+		arg.IssueID,
+		arg.Url,
+		arg.Filename,
+		arg.MimeType,
+		arg.FileSize,
+		arg.CachePath,
+		arg.Source,
+		arg.CreatedAt,
+		arg.SyncedAt,
 	)
 	return err
 }
