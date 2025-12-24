@@ -16,6 +16,14 @@ type RootNode struct {
 
 var _ fs.NodeReaddirer = (*RootNode)(nil)
 var _ fs.NodeLookuper = (*RootNode)(nil)
+var _ fs.NodeGetattrer = (*RootNode)(nil)
+
+func (r *RootNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = r.lfs.uid
+	out.Gid = r.lfs.gid
+	return 0
+}
 
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
@@ -31,26 +39,40 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "README.md":
-		node := &ReadmeNode{}
+		node := &ReadmeNode{lfs: r.lfs}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
 		out.Attr.Size = uint64(len(content))
+		out.Attr.Uid = r.lfs.uid
+		out.Attr.Gid = r.lfs.gid
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
 	case "teams":
 		node := &TeamsNode{lfs: r.lfs}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = r.lfs.uid
+		out.Attr.Gid = r.lfs.gid
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "users":
 		node := &UsersNode{lfs: r.lfs}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = r.lfs.uid
+		out.Attr.Gid = r.lfs.gid
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "my":
 		node := &MyNode{lfs: r.lfs}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = r.lfs.uid
+		out.Attr.Gid = r.lfs.gid
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "initiatives":
 		node := &InitiativesNode{lfs: r.lfs}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = r.lfs.uid
+		out.Attr.Gid = r.lfs.gid
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	default:
@@ -61,6 +83,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 // ReadmeNode is a virtual file containing filesystem documentation
 type ReadmeNode struct {
 	fs.Inode
+	lfs *LinearFS
 }
 
 var _ fs.NodeGetattrer = (*ReadmeNode)(nil)
@@ -75,6 +98,8 @@ func (r *ReadmeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	content := r.generateContent()
 	out.Mode = 0444 | syscall.S_IFREG
 	out.Size = uint64(len(content))
+	out.Uid = r.lfs.uid
+	out.Gid = r.lfs.gid
 	return 0
 }
 

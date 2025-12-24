@@ -71,8 +71,8 @@ fragment IssueFields on Issue {
 }
 `
 
-// commentFieldsFragment is a GraphQL fragment for comment fields.
-const commentFieldsFragment = `
+// CommentFieldsFragment is a GraphQL fragment for comment fields.
+const CommentFieldsFragment = `
 fragment CommentFields on Comment {
   id
   body
@@ -83,8 +83,8 @@ fragment CommentFields on Comment {
 }
 `
 
-// documentFieldsFragment is a GraphQL fragment for document fields.
-const documentFieldsFragment = `
+// DocumentFieldsFragment is a GraphQL fragment for document fields.
+const DocumentFieldsFragment = `
 fragment DocumentFields on Document {
   id
   title
@@ -424,6 +424,18 @@ query Users {
 }
 `
 
+const queryViewer = `
+query Viewer {
+  viewer {
+    id
+    name
+    email
+    displayName
+    active
+  }
+}
+`
+
 const queryTeamMembers = `
 query TeamMembers($teamId: String!) {
   team(id: $teamId) {
@@ -512,6 +524,20 @@ mutation ArchiveIssue($id: String!) {
 }
 `
 
+// queryIssueDetails fetches both comments and documents for an issue in one query
+var queryIssueDetails = `
+query IssueDetails($issueId: String!) {
+  issue(id: $issueId) {
+    comments(first: 100) {
+      nodes { ...CommentFields }
+    }
+    documents(first: 100) {
+      nodes { ...DocumentFields }
+    }
+  }
+}
+` + CommentFieldsFragment + DocumentFieldsFragment
+
 var queryIssueComments = `
 query IssueComments($issueId: String!) {
   issue(id: $issueId) {
@@ -520,7 +546,7 @@ query IssueComments($issueId: String!) {
     }
   }
 }
-` + commentFieldsFragment
+` + CommentFieldsFragment
 
 var mutationCreateComment = `
 mutation CreateComment($issueId: String!, $body: String!) {
@@ -529,7 +555,7 @@ mutation CreateComment($issueId: String!, $body: String!) {
     comment { ...CommentFields }
   }
 }
-` + commentFieldsFragment
+` + CommentFieldsFragment
 
 var mutationUpdateComment = `
 mutation UpdateComment($id: String!, $body: String!) {
@@ -538,7 +564,7 @@ mutation UpdateComment($id: String!, $body: String!) {
     comment { ...CommentFields }
   }
 }
-` + commentFieldsFragment
+` + CommentFieldsFragment
 
 const mutationDeleteComment = `
 mutation DeleteComment($id: String!) {
@@ -556,7 +582,7 @@ query IssueDocuments($issueId: String!) {
     }
   }
 }
-` + documentFieldsFragment
+` + DocumentFieldsFragment
 
 var queryProjectDocuments = `
 query ProjectDocuments($projectId: ID!) {
@@ -564,7 +590,7 @@ query ProjectDocuments($projectId: ID!) {
     nodes { ...DocumentFields }
   }
 }
-` + documentFieldsFragment
+` + DocumentFieldsFragment
 
 var mutationCreateDocument = `
 mutation CreateDocument($input: DocumentCreateInput!) {
@@ -573,7 +599,7 @@ mutation CreateDocument($input: DocumentCreateInput!) {
     document { ...DocumentFields }
   }
 }
-` + documentFieldsFragment
+` + DocumentFieldsFragment
 
 var mutationUpdateDocument = `
 mutation UpdateDocument($id: String!, $input: DocumentUpdateInput!) {
@@ -582,7 +608,7 @@ mutation UpdateDocument($id: String!, $input: DocumentUpdateInput!) {
     document { ...DocumentFields }
   }
 }
-` + documentFieldsFragment
+` + DocumentFieldsFragment
 
 const mutationDeleteDocument = `
 mutation DeleteDocument($id: String!) {

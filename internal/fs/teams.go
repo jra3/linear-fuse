@@ -19,6 +19,14 @@ type TeamsNode struct {
 
 var _ fs.NodeReaddirer = (*TeamsNode)(nil)
 var _ fs.NodeLookuper = (*TeamsNode)(nil)
+var _ fs.NodeGetattrer = (*TeamsNode)(nil)
+
+func (t *TeamsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = t.lfs.uid
+	out.Gid = t.lfs.gid
+	return 0
+}
 
 func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	teams, err := t.lfs.GetTeams(ctx)
@@ -45,6 +53,9 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	for _, team := range teams {
 		if team.Key == name {
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.Uid = t.lfs.uid
+			out.Attr.Gid = t.lfs.gid
 			node := &TeamNode{lfs: t.lfs, team: team}
 			return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
@@ -62,6 +73,14 @@ type TeamNode struct {
 
 var _ fs.NodeReaddirer = (*TeamNode)(nil)
 var _ fs.NodeLookuper = (*TeamNode)(nil)
+var _ fs.NodeGetattrer = (*TeamNode)(nil)
+
+func (t *TeamNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = t.lfs.uid
+	out.Gid = t.lfs.gid
+	return 0
+}
 
 func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
@@ -83,9 +102,11 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "team.md":
-		node := &TeamInfoNode{team: t.team}
+		node := &TeamInfoNode{lfs: t.lfs, team: t.team}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
@@ -94,6 +115,8 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		node := &StatesInfoNode{lfs: t.lfs, team: t.team}
 		content := node.getContent(ctx)
 		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
@@ -101,30 +124,50 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		node := &LabelsInfoNode{lfs: t.lfs, team: t.team}
 		content := node.getContent(ctx)
 		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
 	case "by":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &FilterRootNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "cycles":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &CyclesNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "projects":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &ProjectsNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "issues":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &IssuesNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "docs":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &DocsNode{lfs: t.lfs, teamID: t.team.ID}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "labels":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &LabelsNode{lfs: t.lfs, teamID: t.team.ID}
 		return t.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFDIR,
@@ -132,6 +175,9 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		}), 0
 
 	case "search":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
 		node := &SearchNode{lfs: t.lfs, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
@@ -142,6 +188,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 // TeamInfoNode is a virtual file containing team metadata
 type TeamInfoNode struct {
 	fs.Inode
+	lfs  *LinearFS
 	team api.Team
 }
 
@@ -180,6 +227,10 @@ updated: %q
 func (t *TeamInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := t.generateContent()
 	out.Mode = 0444 | syscall.S_IFREG
+	if t.lfs != nil {
+		out.Uid = t.lfs.uid
+		out.Gid = t.lfs.gid
+	}
 	out.Size = uint64(len(content))
 	out.Attr.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
 	return 0
@@ -264,6 +315,8 @@ states:
 func (s *StatesInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := s.getContent(ctx)
 	out.Mode = 0444 | syscall.S_IFREG
+	out.Uid = s.lfs.uid
+	out.Gid = s.lfs.gid
 	out.Size = uint64(len(content))
 	return 0
 }
@@ -348,6 +401,8 @@ labels:
 func (l *LabelsInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := l.getContent(ctx)
 	out.Mode = 0444 | syscall.S_IFREG
+	out.Uid = l.lfs.uid
+	out.Gid = l.lfs.gid
 	out.Size = uint64(len(content))
 	return 0
 }

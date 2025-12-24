@@ -126,6 +126,9 @@ type Repository interface {
 	// GetCurrentUser returns the authenticated user
 	GetCurrentUser(ctx context.Context) (*api.User, error)
 
+	// SetCurrentUser sets the authenticated user (for /my views)
+	SetCurrentUser(user *api.User)
+
 	// GetTeamMembers returns members of a team
 	GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error)
 

@@ -39,6 +39,10 @@ var _ fs.NodeGetattrer = (*SearchNode)(nil)
 func (n *SearchNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	if n.lfs != nil {
+		out.Uid = n.lfs.uid
+		out.Gid = n.lfs.gid
+	}
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -60,6 +64,8 @@ func (n *SearchNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 
 	now := time.Now()
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.Attr.Uid = n.lfs.uid
+	out.Attr.Gid = n.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	// Short cache time for search results
 	out.SetAttrTimeout(10 * time.Second)
@@ -88,6 +94,10 @@ var _ fs.NodeGetattrer = (*SearchResultsNode)(nil)
 func (n *SearchResultsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	if n.lfs != nil {
+		out.Uid = n.lfs.uid
+		out.Gid = n.lfs.gid
+	}
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -125,9 +135,12 @@ func (n *SearchResultsNode) Lookup(ctx context.Context, name string, out *fuse.E
 	for _, issue := range issues {
 		if issue.Identifier == name {
 			node := &SearchResultSymlink{
+				lfs:        n.lfs,
 				identifier: issue.Identifier,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.Uid = n.lfs.uid
+			out.Attr.Gid = n.lfs.gid
 			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -138,6 +151,7 @@ func (n *SearchResultsNode) Lookup(ctx context.Context, name string, out *fuse.E
 // Path from search/{query}/ to issues/ is ../../issues/
 type SearchResultSymlink struct {
 	fs.Inode
+	lfs        *LinearFS
 	identifier string
 }
 
@@ -153,6 +167,10 @@ func (s *SearchResultSymlink) Readlink(ctx context.Context) ([]byte, syscall.Err
 func (s *SearchResultSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	target := fmt.Sprintf("../../issues/%s", s.identifier)
 	out.Mode = 0777 | syscall.S_IFLNK
+	if s.lfs != nil {
+		out.Uid = s.lfs.uid
+		out.Gid = s.lfs.gid
+	}
 	out.Size = uint64(len(target))
 	return 0
 }
@@ -171,6 +189,7 @@ func decodeSearchQuery(encoded string) string {
 // (e.g., /my/assigned/search/, /teams/ENG/by/status/Todo/search/)
 type ScopedSearchNode struct {
 	fs.Inode
+	lfs          *LinearFS
 	source       IssueSource
 	symlinkDepth int // how many "../" to reach teams/
 }
@@ -182,6 +201,10 @@ var _ fs.NodeGetattrer = (*ScopedSearchNode)(nil)
 func (n *ScopedSearchNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	if n.lfs != nil {
+		out.Uid = n.lfs.uid
+		out.Gid = n.lfs.gid
+	}
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -198,11 +221,16 @@ func (n *ScopedSearchNode) Lookup(ctx context.Context, name string, out *fuse.En
 
 	now := time.Now()
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	if n.lfs != nil {
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+	}
 	out.SetTimes(&now, &now, &now)
 	out.SetAttrTimeout(10 * time.Second)
 	out.SetEntryTimeout(10 * time.Second)
 
 	node := &ScopedSearchResultsNode{
+		lfs:          n.lfs,
 		source:       n.source,
 		query:        query,
 		symlinkDepth: n.symlinkDepth + 1, // +1 for the query directory
@@ -213,6 +241,7 @@ func (n *ScopedSearchNode) Lookup(ctx context.Context, name string, out *fuse.En
 // ScopedSearchResultsNode shows search results within a scoped view
 type ScopedSearchResultsNode struct {
 	fs.Inode
+	lfs          *LinearFS
 	source       IssueSource
 	query        string
 	symlinkDepth int
@@ -225,6 +254,10 @@ var _ fs.NodeGetattrer = (*ScopedSearchResultsNode)(nil)
 func (n *ScopedSearchResultsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	if n.lfs != nil {
+		out.Uid = n.lfs.uid
+		out.Gid = n.lfs.gid
+	}
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -262,11 +295,16 @@ func (n *ScopedSearchResultsNode) Lookup(ctx context.Context, name string, out *
 				teamKey = issue.Team.Key
 			}
 			node := &ScopedSearchSymlink{
+				lfs:          n.lfs,
 				teamKey:      teamKey,
 				identifier:   issue.Identifier,
 				symlinkDepth: n.symlinkDepth,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			if n.lfs != nil {
+				out.Attr.Uid = n.lfs.uid
+				out.Attr.Gid = n.lfs.gid
+			}
 			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -309,6 +347,7 @@ func matchesQuery(issue api.Issue, query string) bool {
 // ScopedSearchSymlink points to the actual issue location
 type ScopedSearchSymlink struct {
 	fs.Inode
+	lfs          *LinearFS
 	teamKey      string
 	identifier   string
 	symlinkDepth int // number of directories to go up
@@ -323,6 +362,10 @@ func (s *ScopedSearchSymlink) Readlink(ctx context.Context) ([]byte, syscall.Err
 
 func (s *ScopedSearchSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0777 | syscall.S_IFLNK
+	if s.lfs != nil {
+		out.Uid = s.lfs.uid
+		out.Gid = s.lfs.gid
+	}
 	out.Size = uint64(len(s.target()))
 	return 0
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,35 @@ type APIClient interface {
 
 	// Project details
 	GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error)
+
+	// Issue details (comments and documents)
+	GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error)
+	GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error)
+	GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error)
+	GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error)
+}
+
+const detailsBatchSize = 20 // Number of issues to fetch details for in one API call (Linear has 10k complexity limit)
+
+// SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
+var sqliteTimeFormats = []string{
+	time.RFC3339,
+	time.RFC3339Nano,
+	"2006-01-02 15:04:05.999999999-07:00", // SQLite format with timezone
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006-01-02 15:04:05-07:00",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02 15:04:05", // SQLite format without timezone
+}
+
+// parseSQLiteTime parses a time string from SQLite, trying multiple formats
+func parseSQLiteTime(s string) time.Time {
+	for _, layout := range sqliteTimeFormats {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // Worker handles background synchronization of Linear issues to SQLite
@@ -47,6 +77,11 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
+
+	// Rate limit tracking for issue details sync
+	rateLimitMu     sync.RWMutex
+	rateLimitedAt   time.Time
+	rateLimitExpiry time.Time
 }
 
 // Config holds configuration for the sync worker
@@ -227,7 +262,7 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 		case time.Time:
 			lastIssueUpdatedAt = v
 		case string:
-			lastIssueUpdatedAt, _ = time.Parse(time.RFC3339, v)
+			lastIssueUpdatedAt = parseSQLiteTime(v)
 		}
 	}
 
@@ -250,6 +285,10 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 // syncTeamIssues fetches issues ordered by updatedAt DESC and stops when hitting unchanged issues
 func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUpdatedAt time.Time) (added, updated, pages int, err error) {
 	var cursor string
+	var pendingDetailIssues []struct {
+		ID         string
+		Identifier string
+	}
 
 	for {
 		// Check for cancellation
@@ -295,6 +334,18 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 				continue
 			}
 
+			// Queue for batch details sync
+			pendingDetailIssues = append(pendingDetailIssues, struct {
+				ID         string
+				Identifier string
+			}{ID: issue.ID, Identifier: issue.Identifier})
+
+			// Sync details in batches
+			if len(pendingDetailIssues) >= detailsBatchSize {
+				w.syncIssueDetailsBatch(ctx, pendingDetailIssues)
+				pendingDetailIssues = nil
+			}
+
 			if isNew {
 				added++
 			} else {
@@ -314,6 +365,11 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 		}
 
 		cursor = pageInfo.EndCursor
+	}
+
+	// Sync any remaining pending issue details
+	if len(pendingDetailIssues) > 0 {
+		w.syncIssueDetailsBatch(ctx, pendingDetailIssues)
 	}
 
 	return added, updated, pages, nil
@@ -593,6 +649,207 @@ func (w *Worker) syncTeamMembers(ctx context.Context, teamID string) error {
 			SyncedAt: db.Now(),
 		}); err != nil {
 			log.Printf("[sync] upsert team member %s failed: %v", member.Email, err)
+		}
+	}
+
+	return nil
+}
+
+// =============================================================================
+// Rate Limit Handling
+// =============================================================================
+
+// isRateLimitError checks if an error indicates a rate limit
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "RATELIMITED") ||
+		strings.Contains(errStr, "Rate limit exceeded") ||
+		strings.Contains(errStr, "rate limit")
+}
+
+// isRateLimited returns true if we're currently rate limited for issue details
+func (w *Worker) isRateLimited() bool {
+	w.rateLimitMu.RLock()
+	defer w.rateLimitMu.RUnlock()
+	return time.Now().Before(w.rateLimitExpiry)
+}
+
+// setRateLimited marks that we've hit a rate limit
+func (w *Worker) setRateLimited() {
+	w.rateLimitMu.Lock()
+	defer w.rateLimitMu.Unlock()
+	w.rateLimitedAt = time.Now()
+	// Linear rate limit is per hour, wait 15 minutes before retrying
+	w.rateLimitExpiry = w.rateLimitedAt.Add(15 * time.Minute)
+	log.Printf("[sync] rate limited, pausing issue details sync until %s",
+		w.rateLimitExpiry.Format(time.RFC3339))
+}
+
+// =============================================================================
+// Issue Details Sync (Comments and Documents)
+// =============================================================================
+
+// syncIssueDetailsBatch fetches and stores comments and documents for multiple issues in a single API call
+func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
+	ID         string
+	Identifier string
+}) {
+	// Skip if rate limited
+	if w.isRateLimited() {
+		return
+	}
+
+	// Extract IDs
+	ids := make([]string, len(issues))
+	idToIdentifier := make(map[string]string, len(issues))
+	for i, issue := range issues {
+		ids[i] = issue.ID
+		idToIdentifier[issue.ID] = issue.Identifier
+	}
+
+	// Fetch all details in one API call
+	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
+	if err != nil {
+		if isRateLimitError(err) {
+			w.setRateLimited()
+			return
+		}
+		log.Printf("[sync] batch fetch details failed: %v", err)
+		return
+	}
+
+	// Store results
+	for issueID, details := range detailsMap {
+		if details == nil {
+			continue
+		}
+
+		// Store comments
+		for _, comment := range details.Comments {
+			params, err := db.APICommentToDBComment(comment, issueID)
+			if err != nil {
+				continue
+			}
+			if err := w.store.Queries().UpsertComment(ctx, params); err != nil {
+				log.Printf("[sync] upsert comment %s failed: %v", comment.ID, err)
+			}
+		}
+
+		// Store documents
+		for _, doc := range details.Documents {
+			params, err := db.APIDocumentToDBDocument(doc)
+			if err != nil {
+				continue
+			}
+			if err := w.store.Queries().UpsertDocument(ctx, params); err != nil {
+				log.Printf("[sync] upsert document %s failed: %v", doc.ID, err)
+			}
+		}
+	}
+
+	log.Printf("[sync] batch synced details for %d issues", len(detailsMap))
+}
+
+// syncIssueDetails fetches and stores both comments and documents for an issue in a single API call
+func (w *Worker) syncIssueDetails(ctx context.Context, issueID, issueIdentifier string) error {
+	// Skip if rate limited
+	if w.isRateLimited() {
+		return nil
+	}
+
+	details, err := w.client.GetIssueDetails(ctx, issueID)
+	if err != nil {
+		if isRateLimitError(err) {
+			w.setRateLimited()
+			return nil // Don't propagate rate limit as error
+		}
+		return err
+	}
+
+	// Store comments
+	for _, comment := range details.Comments {
+		params, err := db.APICommentToDBComment(comment, issueID)
+		if err != nil {
+			log.Printf("[sync] convert comment %s failed: %v", comment.ID, err)
+			continue
+		}
+		if err := w.store.Queries().UpsertComment(ctx, params); err != nil {
+			log.Printf("[sync] upsert comment %s failed: %v", comment.ID, err)
+		}
+	}
+
+	// Store documents
+	for _, doc := range details.Documents {
+		params, err := db.APIDocumentToDBDocument(doc)
+		if err != nil {
+			log.Printf("[sync] convert document %s failed: %v", doc.ID, err)
+			continue
+		}
+		if err := w.store.Queries().UpsertDocument(ctx, params); err != nil {
+			log.Printf("[sync] upsert document %s failed: %v", doc.ID, err)
+		}
+	}
+
+	return nil
+}
+
+// syncIssueComments fetches and stores comments for an issue (legacy, use syncIssueDetails instead)
+func (w *Worker) syncIssueComments(ctx context.Context, issueID string) error {
+	// Skip if rate limited
+	if w.isRateLimited() {
+		return nil
+	}
+
+	comments, err := w.client.GetIssueComments(ctx, issueID)
+	if err != nil {
+		if isRateLimitError(err) {
+			w.setRateLimited()
+			return nil // Don't propagate rate limit as error
+		}
+		return err
+	}
+
+	for _, comment := range comments {
+		params, err := db.APICommentToDBComment(comment, issueID)
+		if err != nil {
+			log.Printf("[sync] convert comment %s failed: %v", comment.ID, err)
+			continue
+		}
+		if err := w.store.Queries().UpsertComment(ctx, params); err != nil {
+			log.Printf("[sync] upsert comment %s failed: %v", comment.ID, err)
+		}
+	}
+
+	return nil
+}
+
+// syncIssueDocuments fetches and stores documents for an issue (legacy, use syncIssueDetails instead)
+func (w *Worker) syncIssueDocuments(ctx context.Context, issueID string) error {
+	// Skip if rate limited
+	if w.isRateLimited() {
+		return nil
+	}
+
+	docs, err := w.client.GetIssueDocuments(ctx, issueID)
+	if err != nil {
+		if isRateLimitError(err) {
+			w.setRateLimited()
+			return nil // Don't propagate rate limit as error
+		}
+		return err
+	}
+
+	for _, doc := range docs {
+		params, err := db.APIDocumentToDBDocument(doc)
+		if err != nil {
+			log.Printf("[sync] convert document %s failed: %v", doc.ID, err)
+			continue
+		}
+		if err := w.store.Queries().UpsertDocument(ctx, params); err != nil {
+			log.Printf("[sync] upsert document %s failed: %v", doc.ID, err)
 		}
 	}
 

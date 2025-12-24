@@ -342,6 +342,10 @@ func (m *MockRepository) GetCurrentUser(ctx context.Context) (*api.User, error) 
 	return m.CurrentUser, nil
 }
 
+func (m *MockRepository) SetCurrentUser(user *api.User) {
+	m.CurrentUser = user
+}
+
 func (m *MockRepository) GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error) {
 	return m.TeamMembers[teamID], nil
 }

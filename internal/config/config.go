@@ -27,8 +27,9 @@ type MountConfig struct {
 }
 
 type LogConfig struct {
-	Level string `yaml:"level"`
-	File  string `yaml:"file"`
+	Level    string `yaml:"level"`
+	File     string `yaml:"file"`
+	APIStats bool   `yaml:"api_stats"`
 }
 
 func DefaultConfig() *Config {

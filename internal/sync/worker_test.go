@@ -155,6 +155,44 @@ func (m *mockAPIClient) GetProjectMilestones(ctx context.Context, projectID stri
 	return m.milestones[projectID], nil
 }
 
+func (m *mockAPIClient) GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return &api.IssueDetails{
+		Comments:  []api.Comment{},
+		Documents: []api.Document{},
+	}, nil
+}
+
+func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	result := make(map[string]*api.IssueDetails, len(issueIDs))
+	for _, id := range issueIDs {
+		result[id] = &api.IssueDetails{
+			Comments:  []api.Comment{},
+			Documents: []api.Document{},
+		}
+	}
+	return result, nil
+}
+
+func (m *mockAPIClient) GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return []api.Comment{}, nil
+}
+
+func (m *mockAPIClient) GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error) {
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return []api.Document{}, nil
+}
+
 func TestWorkerStartStop(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

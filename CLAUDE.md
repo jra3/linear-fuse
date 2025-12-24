@@ -221,6 +221,33 @@ SQLite serves as the persistent cache layer. See [docs/DATABASE.md](docs/DATABAS
 3. **Sync Metadata**: Every table has `synced_at` for staleness detection
 4. **FTS5 Search**: Full-text search on issues via triggers that sync with content table
 
+### Time Handling
+
+**Important**: SQLite and Linear's GraphQL API use different time formats.
+
+| Source | Format | Example |
+|--------|--------|---------|
+| Linear API | RFC3339 | `2025-12-23T21:35:36.017Z` |
+| SQLite | Space-separated | `2025-12-23 21:35:36.017+00:00` |
+
+The SQLite driver is configured with `_time_format=sqlite` which returns space-separated timestamps instead of RFC3339's `T` separator. This causes `time.Parse(time.RFC3339, s)` to fail silently.
+
+**Solution**: Use the `parseTime()` helper in `internal/repo/sqlite.go` or `parseSQLiteTime()` in `internal/sync/worker.go`:
+
+```go
+var sqliteTimeFormats = []string{
+    time.RFC3339,
+    time.RFC3339Nano,
+    "2006-01-02 15:04:05.999999999-07:00", // SQLite with timezone
+    "2006-01-02 15:04:05.999999999Z07:00",
+    "2006-01-02 15:04:05-07:00",
+    "2006-01-02 15:04:05Z07:00",
+    "2006-01-02 15:04:05",                 // SQLite without timezone
+}
+```
+
+When parsing times from SQLite queries (especially `MAX()`, `MIN()` aggregates which return `interface{}`), always use these helpers rather than `time.Parse(time.RFC3339, s)` directly.
+
 ### Adding New Tables
 
 ```sql

@@ -40,7 +40,9 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	uid := uint32(os.Getuid())
 	gid := uint32(os.Getgid())
 
-	client := api.NewClient(cfg.APIKey)
+	client := api.NewClientWithOptions(cfg.APIKey, api.ClientOptions{
+		APIStatsEnabled: cfg.Log.APIStats,
+	})
 
 	return &LinearFS{
 		uid:    uid,
@@ -87,6 +89,15 @@ func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error
 
 	// Create repository with API client for on-demand fetching
 	lfs.repo = repo.NewSQLiteRepository(store, lfs.client)
+
+	// Fetch and set the current user (for /my views)
+	viewer, err := lfs.client.GetViewer(ctx)
+	if err != nil {
+		log.Printf("[sqlite] Warning: failed to get viewer: %v", err)
+	} else if viewer != nil {
+		lfs.repo.SetCurrentUser(viewer)
+		log.Printf("[sqlite] Current user: %s (%s)", viewer.Email, viewer.ID)
+	}
 
 	// Create and start sync worker
 	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())

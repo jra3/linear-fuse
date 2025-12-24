@@ -33,6 +33,14 @@ type InitiativesNode struct {
 
 var _ fs.NodeReaddirer = (*InitiativesNode)(nil)
 var _ fs.NodeLookuper = (*InitiativesNode)(nil)
+var _ fs.NodeGetattrer = (*InitiativesNode)(nil)
+
+func (i *InitiativesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = i.lfs.uid
+	out.Gid = i.lfs.gid
+	return 0
+}
 
 func (i *InitiativesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	initiatives, err := i.lfs.GetInitiatives(ctx)
@@ -59,6 +67,9 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 
 	for _, init := range initiatives {
 		if initiativeDirName(init) == name {
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.Uid = i.lfs.uid
+			out.Attr.Gid = i.lfs.gid
 			node := &InitiativeNode{lfs: i.lfs, initiative: init}
 			return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
@@ -90,6 +101,15 @@ type InitiativeNode struct {
 
 var _ fs.NodeReaddirer = (*InitiativeNode)(nil)
 var _ fs.NodeLookuper = (*InitiativeNode)(nil)
+var _ fs.NodeGetattrer = (*InitiativeNode)(nil)
+
+func (i *InitiativeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = i.lfs.uid
+	out.Gid = i.lfs.gid
+	out.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
+	return 0
+}
 
 func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
@@ -103,18 +123,26 @@ func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "initiative.md":
-		node := &InitiativeInfoNode{initiative: i.initiative}
+		node := &InitiativeInfoNode{lfs: i.lfs, initiative: i.initiative}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Uid = i.lfs.uid
+		out.Attr.Gid = i.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
 	case "projects":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = i.lfs.uid
+		out.Attr.Gid = i.lfs.gid
 		node := &InitiativeProjectsNode{lfs: i.lfs, initiative: i.initiative}
 		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "updates":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = i.lfs.uid
+		out.Attr.Gid = i.lfs.gid
 		node := &InitiativeUpdatesNode{lfs: i.lfs, initiativeID: i.initiative.ID, initiativeUpdatedAt: i.initiative.UpdatedAt}
 		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
@@ -125,6 +153,7 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 // InitiativeInfoNode is a virtual file containing initiative metadata
 type InitiativeInfoNode struct {
 	fs.Inode
+	lfs        *LinearFS
 	initiative api.Initiative
 }
 
@@ -193,6 +222,10 @@ updated: %q
 func (i *InitiativeInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := i.generateContent()
 	out.Mode = 0444 | syscall.S_IFREG
+	if i.lfs != nil {
+		out.Uid = i.lfs.uid
+		out.Gid = i.lfs.gid
+	}
 	out.Size = uint64(len(content))
 	out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 	return 0
@@ -223,6 +256,14 @@ type InitiativeProjectsNode struct {
 
 var _ fs.NodeReaddirer = (*InitiativeProjectsNode)(nil)
 var _ fs.NodeLookuper = (*InitiativeProjectsNode)(nil)
+var _ fs.NodeGetattrer = (*InitiativeProjectsNode)(nil)
+
+func (p *InitiativeProjectsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = p.lfs.uid
+	out.Gid = p.lfs.gid
+	return 0
+}
 
 func (p *InitiativeProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, len(p.initiative.Projects.Nodes))
@@ -245,6 +286,8 @@ func (p *InitiativeProjectsNode) Lookup(ctx context.Context, name string, out *f
 				project: proj,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.Uid = p.lfs.uid
+			out.Attr.Gid = p.lfs.gid
 			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -306,6 +349,10 @@ func (s *InitiativeProjectSymlink) Readlink(ctx context.Context) ([]byte, syscal
 func (s *InitiativeProjectSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// Use a reasonable estimate for symlink size
 	out.Mode = 0777 | syscall.S_IFLNK
+	if s.lfs != nil {
+		out.Uid = s.lfs.uid
+		out.Gid = s.lfs.gid
+	}
 	out.Size = 64
 	return 0
 }
@@ -325,6 +372,8 @@ var _ fs.NodeGetattrer = (*InitiativeUpdatesNode)(nil)
 
 func (n *InitiativeUpdatesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
 	out.SetTimes(&n.initiativeUpdatedAt, &n.initiativeUpdatedAt, &n.initiativeUpdatedAt)
 	return 0
 }
@@ -394,10 +443,13 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 		if expectedName == name {
 			content := initiativeUpdateToMarkdown(&update)
 			node := &InitiativeUpdateNode{
+				lfs:     n.lfs,
 				update:  update,
 				content: content,
 			}
 			out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
+			out.Attr.Uid = n.lfs.uid
+			out.Attr.Gid = n.lfs.gid
 			out.Attr.Size = uint64(len(content))
 			out.SetAttrTimeout(30 * time.Second)
 			out.SetEntryTimeout(30 * time.Second)
@@ -431,6 +483,7 @@ func (n *InitiativeUpdatesNode) Create(ctx context.Context, name string, flags u
 // InitiativeUpdateNode represents a single initiative update file (read-only)
 type InitiativeUpdateNode struct {
 	fs.Inode
+	lfs     *LinearFS
 	update  api.InitiativeUpdate
 	content []byte
 }
@@ -441,6 +494,10 @@ var _ fs.NodeReader = (*InitiativeUpdateNode)(nil)
 
 func (n *InitiativeUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0444 | syscall.S_IFREG
+	if n.lfs != nil {
+		out.Uid = n.lfs.uid
+		out.Gid = n.lfs.gid
+	}
 	out.Size = uint64(len(n.content))
 	out.SetTimes(&n.update.UpdatedAt, &n.update.UpdatedAt, &n.update.CreatedAt)
 	return 0

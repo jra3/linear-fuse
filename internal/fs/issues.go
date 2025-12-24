@@ -101,6 +101,8 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		issue: *issue,
 	}
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.Attr.Uid = n.lfs.uid
+	out.Attr.Gid = n.lfs.gid
 	out.SetAttrTimeout(30 * time.Second)
 	out.SetEntryTimeout(30 * time.Second)
 	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
@@ -236,6 +238,15 @@ type IssueDirectoryNode struct {
 
 var _ fs.NodeReaddirer = (*IssueDirectoryNode)(nil)
 var _ fs.NodeLookuper = (*IssueDirectoryNode)(nil)
+var _ fs.NodeGetattrer = (*IssueDirectoryNode)(nil)
+
+func (n *IssueDirectoryNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = n.lfs.uid
+	out.Gid = n.lfs.gid
+	out.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
+	return 0
+}
 
 func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
@@ -284,6 +295,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			issueUpdatedAt: n.issue.UpdatedAt,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
@@ -298,6 +311,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			issueID: n.issue.ID,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{
@@ -311,6 +326,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			issue: n.issue,
 		}
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{

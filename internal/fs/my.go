@@ -23,6 +23,8 @@ var _ fs.NodeGetattrer = (*MyNode)(nil)
 func (m *MyNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = m.lfs.uid
+	out.Gid = m.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -39,6 +41,8 @@ func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	now := time.Now()
 	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.Attr.Uid = m.lfs.uid
+	out.Attr.Gid = m.lfs.gid
 	out.Attr.SetTimes(&now, &now, &now)
 
 	switch name {
@@ -70,6 +74,8 @@ var _ fs.NodeGetattrer = (*MyIssuesNode)(nil)
 func (m *MyIssuesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = m.lfs.uid
+	out.Gid = m.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -112,8 +118,11 @@ func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	if name == "search" {
 		now := time.Now()
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = m.lfs.uid
+		out.Attr.Gid = m.lfs.gid
 		out.SetTimes(&now, &now, &now)
 		node := &ScopedSearchNode{
+			lfs:          m.lfs,
 			source:       IssueSourceFunc(m.getIssues),
 			symlinkDepth: 3, // /my/assigned/search/{query}/ -> need 4 "../" to reach root
 		}
@@ -132,10 +141,13 @@ func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 				teamKey = issue.Team.Key
 			}
 			node := &IssueDirSymlink{
+				lfs:        m.lfs,
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.Uid = m.lfs.uid
+			out.Attr.Gid = m.lfs.gid
 			return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}

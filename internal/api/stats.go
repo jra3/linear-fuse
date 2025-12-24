@@ -22,8 +22,6 @@ const (
 	rollingWindowDuration = time.Hour
 )
 
-var statsEnabled = os.Getenv("LINEARFS_API_STATS") != ""
-
 // OperationStats tracks metrics for a single GraphQL operation.
 type OperationStats struct {
 	Count       int64 // total calls
@@ -43,8 +41,14 @@ type APIStats struct {
 }
 
 // NewAPIStats creates a new API stats tracker.
-// If LINEARFS_API_STATS=1, starts a background goroutine that logs stats periodically.
-func NewAPIStats() *APIStats {
+// If logEnabled is true, starts a background goroutine that logs stats periodically.
+// Stats are always collected; this only controls whether they're logged.
+func NewAPIStats(logEnabled bool) *APIStats {
+	// Also check env var for backwards compatibility
+	if os.Getenv("LINEARFS_API_STATS") != "" {
+		logEnabled = true
+	}
+
 	s := &APIStats{
 		operations:  make(map[string]*OperationStats),
 		recentCalls: make([]time.Time, 0, 1000),
@@ -52,7 +56,7 @@ func NewAPIStats() *APIStats {
 		stopCh:      make(chan struct{}),
 	}
 
-	if statsEnabled {
+	if logEnabled {
 		s.wg.Add(1)
 		go s.periodicLogger()
 	}

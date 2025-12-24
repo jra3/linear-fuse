@@ -8,7 +8,7 @@ import (
 
 func TestAPIStats_Record(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	// Record some calls
@@ -47,7 +47,7 @@ func TestAPIStats_Record(t *testing.T) {
 
 func TestAPIStats_HourlyCount(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	// Record some calls
@@ -63,7 +63,7 @@ func TestAPIStats_HourlyCount(t *testing.T) {
 
 func TestAPIStats_HourlyRate(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	// Record 150 calls (10% of 1500 limit)
@@ -79,7 +79,7 @@ func TestAPIStats_HourlyRate(t *testing.T) {
 
 func TestAPIStats_RecordRateLimitWait(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	stats.RecordRateLimitWait(100 * time.Millisecond)
@@ -93,7 +93,7 @@ func TestAPIStats_RecordRateLimitWait(t *testing.T) {
 
 func TestAPIStats_Summary(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	// Record some varied calls
@@ -128,7 +128,7 @@ func TestAPIStats_Summary(t *testing.T) {
 
 func TestAPIStats_Summary_NoRateLimitWait(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	stats.Record("GetTeams", 100*time.Millisecond, nil)
@@ -141,7 +141,7 @@ func TestAPIStats_Summary_NoRateLimitWait(t *testing.T) {
 
 func TestAPIStats_CleanupOldTimestamps(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	// Manually inject old timestamps
@@ -264,7 +264,7 @@ func TestFormatMillis(t *testing.T) {
 
 func TestAPIStats_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
-	stats := NewAPIStats()
+	stats := NewAPIStats(false)
 	defer stats.Close()
 
 	// Hammer it from multiple goroutines

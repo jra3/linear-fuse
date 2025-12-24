@@ -551,12 +551,8 @@ func (r *SQLiteRepository) maybeRefreshComments(issueID string, isEmpty bool) {
 	syncedAt, err := r.store.Queries().GetIssueCommentsSyncedAt(context.Background(), issueID)
 	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
 
-	// If empty, fetch synchronously on first access; otherwise refresh in background
-	if isEmpty && isStale {
-		// Synchronous fetch for empty data
-		r.refreshComments(context.Background(), issueID)
-	} else if isStale {
-		// Background refresh for stale data
+	// Always refresh in background to avoid blocking on directory listings (e.g., find)
+	if isStale {
 		r.triggerBackgroundRefresh("comments:"+issueID, func(ctx context.Context) error {
 			return r.refreshComments(ctx, issueID)
 		})
@@ -582,7 +578,19 @@ func (r *SQLiteRepository) refreshComments(ctx context.Context, issueID string) 
 	return nil
 }
 
+// SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
+var sqliteTimeFormats = []string{
+	time.RFC3339,
+	time.RFC3339Nano,
+	"2006-01-02 15:04:05.999999999-07:00", // SQLite format with timezone
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006-01-02 15:04:05-07:00",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02 15:04:05", // SQLite format without timezone
+}
+
 // parseTime converts interface{} from SQLite to time.Time
+// Handles both RFC3339 (API) and SQLite's space-separated format
 func parseTime(v interface{}) time.Time {
 	if v == nil {
 		return time.Time{}
@@ -591,8 +599,12 @@ func parseTime(v interface{}) time.Time {
 	case time.Time:
 		return t
 	case string:
-		parsed, _ := time.Parse(time.RFC3339, t)
-		return parsed
+		for _, layout := range sqliteTimeFormats {
+			if parsed, err := time.Parse(layout, t); err == nil {
+				return parsed
+			}
+		}
+		return time.Time{}
 	default:
 		return time.Time{}
 	}
@@ -638,9 +650,8 @@ func (r *SQLiteRepository) maybeRefreshIssueDocuments(issueID string, isEmpty bo
 	syncedAt, err := r.store.Queries().GetIssueDocumentsSyncedAt(context.Background(), sql.NullString{String: issueID, Valid: true})
 	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
 
-	if isEmpty && isStale {
-		r.refreshIssueDocuments(context.Background(), issueID)
-	} else if isStale {
+	// Always refresh in background to avoid blocking on directory listings (e.g., find)
+	if isStale {
 		r.triggerBackgroundRefresh("issue-docs:"+issueID, func(ctx context.Context) error {
 			return r.refreshIssueDocuments(ctx, issueID)
 		})
@@ -687,9 +698,8 @@ func (r *SQLiteRepository) maybeRefreshProjectDocuments(projectID string, isEmpt
 	syncedAt, err := r.store.Queries().GetProjectDocumentsSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
 	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
 
-	if isEmpty && isStale {
-		r.refreshProjectDocuments(context.Background(), projectID)
-	} else if isStale {
+	// Always refresh in background to avoid blocking on directory listings (e.g., find)
+	if isStale {
 		r.triggerBackgroundRefresh("project-docs:"+projectID, func(ctx context.Context) error {
 			return r.refreshProjectDocuments(ctx, projectID)
 		})
@@ -790,9 +800,8 @@ func (r *SQLiteRepository) maybeRefreshProjectUpdates(projectID string, isEmpty 
 	syncedAt, err := r.store.Queries().GetProjectUpdatesSyncedAt(context.Background(), projectID)
 	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
 
-	if isEmpty && isStale {
-		r.refreshProjectUpdates(context.Background(), projectID)
-	} else if isStale {
+	// Always refresh in background to avoid blocking on directory listings (e.g., find)
+	if isStale {
 		r.triggerBackgroundRefresh("project-updates:"+projectID, func(ctx context.Context) error {
 			return r.refreshProjectUpdates(ctx, projectID)
 		})
@@ -839,9 +848,8 @@ func (r *SQLiteRepository) maybeRefreshInitiativeUpdates(initiativeID string, is
 	syncedAt, err := r.store.Queries().GetInitiativeUpdatesSyncedAt(context.Background(), initiativeID)
 	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
 
-	if isEmpty && isStale {
-		r.refreshInitiativeUpdates(context.Background(), initiativeID)
-	} else if isStale {
+	// Always refresh in background to avoid blocking on directory listings (e.g., find)
+	if isStale {
 		r.triggerBackgroundRefresh("initiative-updates:"+initiativeID, func(ctx context.Context) error {
 			return r.refreshInitiativeUpdates(ctx, initiativeID)
 		})

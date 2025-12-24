@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -27,7 +28,16 @@ type Client struct {
 	stats      *APIStats
 }
 
+// ClientOptions configures the API client.
+type ClientOptions struct {
+	APIStatsEnabled bool // Enable periodic stats logging
+}
+
 func NewClient(apiKey string) *Client {
+	return NewClientWithOptions(apiKey, ClientOptions{})
+}
+
+func NewClientWithOptions(apiKey string, opts ClientOptions) *Client {
 	// Linear allows 1,500 requests/hour (25/min).
 	// Burst of 50 handles cold cache scenarios; rate of 2/sec for sustained use.
 	limiter := rate.NewLimiter(rate.Limit(2), 50)
@@ -37,7 +47,7 @@ func NewClient(apiKey string) *Client {
 		apiURL:     defaultAPIURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		limiter:    limiter,
-		stats:      NewAPIStats(),
+		stats:      NewAPIStats(opts.APIStatsEnabled),
 	}
 }
 
@@ -1104,6 +1114,20 @@ func (c *Client) GetUsers(ctx context.Context) ([]User, error) {
 	return result.Users.Nodes, nil
 }
 
+// GetViewer fetches the currently authenticated user
+func (c *Client) GetViewer(ctx context.Context) (*User, error) {
+	var result struct {
+		Viewer User `json:"viewer"`
+	}
+
+	err := c.query(ctx, queryViewer, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &result.Viewer, nil
+}
+
 // GetTeamMembers fetches members of a specific team
 func (c *Client) GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
 	var result struct {
@@ -1187,6 +1211,112 @@ func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue,
 	}
 
 	return &result.IssueCreate.Issue, nil
+}
+
+// IssueDetails contains both comments and documents for an issue
+type IssueDetails struct {
+	Comments  []Comment
+	Documents []Document
+}
+
+// GetIssueDetails fetches both comments and documents for an issue in a single query
+func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDetails, error) {
+	var result struct {
+		Issue struct {
+			Comments struct {
+				Nodes []Comment `json:"nodes"`
+			} `json:"comments"`
+			Documents struct {
+				Nodes []Document `json:"nodes"`
+			} `json:"documents"`
+		} `json:"issue"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+	}
+
+	err := c.query(ctx, queryIssueDetails, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &IssueDetails{
+		Comments:  result.Issue.Comments.Nodes,
+		Documents: result.Issue.Documents.Nodes,
+	}, nil
+}
+
+// GetIssueDetailsBatch fetches comments and documents for multiple issues in a single query.
+// Returns a map of issueID -> IssueDetails. Uses GraphQL aliases to batch requests.
+func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*IssueDetails, error) {
+	if len(issueIDs) == 0 {
+		return make(map[string]*IssueDetails), nil
+	}
+
+	// Build a batched query using aliases
+	// Example: query { i0: issue(id: "id1") { ... } i1: issue(id: "id2") { ... } }
+	var queryParts []string
+	vars := make(map[string]any)
+
+	for i, id := range issueIDs {
+		alias := fmt.Sprintf("i%d", i)
+		varName := fmt.Sprintf("id%d", i)
+		queryParts = append(queryParts, fmt.Sprintf(`%s: issue(id: $%s) {
+			comments(first: 100) { nodes { ...CommentFields } }
+			documents(first: 100) { nodes { ...DocumentFields } }
+		}`, alias, varName))
+		vars[varName] = id
+	}
+
+	// Build variable declarations
+	var varDecls []string
+	for i := range issueIDs {
+		varDecls = append(varDecls, fmt.Sprintf("$id%d: String!", i))
+	}
+
+	query := fmt.Sprintf(`query IssueDetailsBatch(%s) { %s } %s %s`,
+		strings.Join(varDecls, ", "),
+		strings.Join(queryParts, " "),
+		CommentFieldsFragment,
+		DocumentFieldsFragment,
+	)
+
+	// Result will be a map of alias -> issue data
+	var rawResult map[string]json.RawMessage
+	err := c.query(ctx, query, vars, &rawResult)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse each aliased result
+	result := make(map[string]*IssueDetails, len(issueIDs))
+	for i, id := range issueIDs {
+		alias := fmt.Sprintf("i%d", i)
+		raw, ok := rawResult[alias]
+		if !ok {
+			continue
+		}
+
+		var issueData struct {
+			Comments struct {
+				Nodes []Comment `json:"nodes"`
+			} `json:"comments"`
+			Documents struct {
+				Nodes []Document `json:"nodes"`
+			} `json:"documents"`
+		}
+		if err := json.Unmarshal(raw, &issueData); err != nil {
+			continue
+		}
+
+		result[id] = &IssueDetails{
+			Comments:  issueData.Comments.Nodes,
+			Documents: issueData.Documents.Nodes,
+		}
+	}
+
+	return result, nil
 }
 
 // GetIssueComments fetches comments for an issue

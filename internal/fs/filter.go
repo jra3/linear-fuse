@@ -44,6 +44,8 @@ var filterCategories = []string{"status", "label", "assignee"}
 func (f *FilterRootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = f.lfs.uid
+	out.Gid = f.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -64,6 +66,8 @@ func (f *FilterRootNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		if cat == name {
 			now := time.Now()
 			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.Uid = f.lfs.uid
+			out.Attr.Gid = f.lfs.gid
 			out.Attr.SetTimes(&now, &now, &now)
 			node := &FilterCategoryNode{
 				lfs:      f.lfs,
@@ -91,6 +95,8 @@ var _ fs.NodeGetattrer = (*FilterCategoryNode)(nil)
 func (f *FilterCategoryNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = f.lfs.uid
+	out.Gid = f.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -121,6 +127,8 @@ func (f *FilterCategoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		if val == name {
 			now := time.Now()
 			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.Uid = f.lfs.uid
+			out.Attr.Gid = f.lfs.gid
 			out.Attr.SetTimes(&now, &now, &now)
 			node := &FilterValueNode{
 				lfs:      f.lfs,
@@ -196,6 +204,8 @@ var _ fs.NodeGetattrer = (*FilterValueNode)(nil)
 func (f *FilterValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
+	out.Uid = f.lfs.uid
+	out.Gid = f.lfs.gid
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -226,8 +236,11 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	if name == "search" {
 		now := time.Now()
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = f.lfs.uid
+		out.Attr.Gid = f.lfs.gid
 		out.SetTimes(&now, &now, &now)
 		node := &ScopedSearchNode{
+			lfs:          f.lfs,
 			source:       IssueSourceFunc(f.getFilteredIssues),
 			symlinkDepth: 6, // /teams/ENG/by/status/Todo/search/{query}/ -> need 7 "../" to reach root
 		}
@@ -242,9 +255,12 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	for _, issue := range issues {
 		if issue.Identifier == name {
 			node := &FilterIssueSymlink{
+				lfs:        f.lfs,
 				identifier: issue.Identifier,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.Uid = f.lfs.uid
+			out.Attr.Gid = f.lfs.gid
 			return f.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -292,6 +308,7 @@ func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error)
 // Path from by/category/value/ to issues/ is ../../../issues/
 type FilterIssueSymlink struct {
 	fs.Inode
+	lfs        *LinearFS
 	identifier string
 }
 
@@ -307,6 +324,10 @@ func (s *FilterIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errn
 func (s *FilterIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	target := fmt.Sprintf("../../../issues/%s", s.identifier)
 	out.Mode = 0777 | syscall.S_IFLNK
+	if s.lfs != nil {
+		out.Uid = s.lfs.uid
+		out.Gid = s.lfs.gid
+	}
 	out.Size = uint64(len(target))
 	return 0
 }
