@@ -187,6 +187,22 @@ After writes, both internal and kernel caches must be invalidated:
 
 Each writable node type has stable inode generation via fnv hash (e.g., `issueIno()`, `commentIno()`).
 
+**Critical for create/delete operations**: Directory listings are cached on the directory inode. You must call `InvalidateKernelInode(dirIno)` to refresh `readdir` results - `InvalidateKernelEntry` alone only clears individual name lookups.
+
+```go
+// After creating a document - invalidate directory inode AND entries
+lfs.InvalidateKernelInode(docsDirIno(issueID))  // Clears directory listing
+lfs.InvalidateKernelEntry(docsDirIno(issueID), "new.md")
+lfs.InvalidateKernelEntry(docsDirIno(issueID), newFilename)
+
+// After deleting - also delete from SQLite
+lfs.store.Queries().DeleteDocument(ctx, docID)  // Immediate visibility
+lfs.InvalidateKernelInode(docsDirIno(issueID))
+lfs.InvalidateKernelEntry(docsDirIno(issueID), filename)
+```
+
+**Delete operations**: Must delete from both API and SQLite. The `api.Client` methods only call the Linear API; delete handlers must also call `store.Queries().DeleteX()` for immediate visibility.
+
 ## Configuration
 
 API key via `LINEAR_API_KEY` env var or `~/.config/linearfs/config.yaml`:
