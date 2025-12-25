@@ -2,7 +2,9 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,10 +51,13 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 		return nil, syscall.EIO
 	}
 
+	// Deduplicate filenames by appending (2), (3), etc. for duplicates
+	nameCount := make(map[string]int)
 	entries := make([]fuse.DirEntry, len(files))
 	for i, file := range files {
+		name := deduplicateFilename(file.Filename, nameCount)
 		entries[i] = fuse.DirEntry{
-			Name: file.Filename,
+			Name: name,
 			Mode: syscall.S_IFREG,
 		}
 	}
@@ -66,29 +71,40 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 		return nil, syscall.EIO
 	}
 
+	// Build deduplicated name mapping (same logic as Readdir)
+	nameCount := make(map[string]int)
+	fileByDeduplicatedName := make(map[string]api.EmbeddedFile)
 	for _, file := range files {
-		if file.Filename == name {
-			node := &EmbeddedFileNode{
-				BaseNode: BaseNode{lfs: n.lfs},
-				file:     file,
-			}
-
-			// Set initial attributes
-			out.Attr.Mode = 0444 | syscall.S_IFREG
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.Size = uint64(file.FileSize) // May be 0 until downloaded
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
-
-			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  embeddedFileIno(file.ID),
-			}), 0
-		}
+		deduped := deduplicateFilename(file.Filename, nameCount)
+		fileByDeduplicatedName[deduped] = file
 	}
 
-	return nil, syscall.ENOENT
+	file, ok := fileByDeduplicatedName[name]
+	if !ok {
+		return nil, syscall.ENOENT
+	}
+
+	node := &EmbeddedFileNode{
+		BaseNode: BaseNode{lfs: n.lfs},
+		file:     file,
+	}
+
+	// Set initial attributes
+	out.Attr.Mode = 0444 | syscall.S_IFREG
+	out.Attr.Uid = n.lfs.uid
+	out.Attr.Gid = n.lfs.gid
+	if file.FileSize > 0 {
+		out.Attr.Size = uint64(file.FileSize)
+	} else {
+		out.Attr.Size = 1024 * 1024 // Placeholder for lazy-fetch
+	}
+	out.SetAttrTimeout(30 * time.Second)
+	out.SetEntryTimeout(30 * time.Second)
+
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFREG,
+		Ino:  embeddedFileIno(file.ID),
+	}), 0
 }
 
 // EmbeddedFileNode represents a file in the /attachments/ directory
@@ -138,4 +154,23 @@ func (n *EmbeddedFileNode) Read(ctx context.Context, fh fs.FileHandle, dest []by
 	}
 
 	return fuse.ReadResultData(content[off:end]), 0
+}
+
+// deduplicateFilename returns a unique filename by appending (2), (3), etc. for duplicates.
+// The nameCount map tracks how many times each base name has been seen.
+func deduplicateFilename(name string, nameCount map[string]int) string {
+	nameCount[name]++
+	count := nameCount[name]
+	if count == 1 {
+		return name
+	}
+
+	// Insert counter before extension: image.png -> image (2).png
+	ext := ""
+	base := name
+	if dot := strings.LastIndex(name, "."); dot > 0 {
+		ext = name[dot:]
+		base = name[:dot]
+	}
+	return fmt.Sprintf("%s (%d)%s", base, count, ext)
 }

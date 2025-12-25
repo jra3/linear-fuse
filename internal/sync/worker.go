@@ -889,11 +889,30 @@ func (w *Worker) syncIssueDocuments(ctx context.Context, issueID string) error {
 // Embedded Files Extraction
 // =============================================================================
 
-// linearCDNPattern matches Linear CDN URLs for uploaded files
+// markdownLinkPattern matches markdown links/images with Linear CDN URLs
+// Captures: [1] = display name, [2] = full URL
+// Matches: ![image.png](https://uploads.linear.app/...) or [file.md](https://uploads.linear.app/...)
+var markdownLinkPattern = regexp.MustCompile(`!?\[([^\]]*)\]\((https://uploads\.linear\.app/[^\s\)]+)\)`)
+
+// linearCDNPattern matches bare Linear CDN URLs (fallback when not in markdown syntax)
 var linearCDNPattern = regexp.MustCompile(`https://uploads\.linear\.app/[^\s\)\]"'<>]+`)
 
 // extractAndStoreEmbeddedFiles extracts Linear CDN URLs from content and stores them
 func (w *Worker) extractAndStoreEmbeddedFiles(ctx context.Context, issueID, content, source string) {
+	// First, find all markdown-formatted links to get display names
+	urlToName := make(map[string]string)
+	mdMatches := markdownLinkPattern.FindAllStringSubmatch(content, -1)
+	for _, match := range mdMatches {
+		if len(match) >= 3 {
+			displayName := strings.TrimSpace(match[1])
+			url := match[2]
+			if displayName != "" {
+				urlToName[url] = displayName
+			}
+		}
+	}
+
+	// Find all URLs (including those not in markdown format)
 	urls := linearCDNPattern.FindAllString(content, -1)
 	if len(urls) == 0 {
 		return
@@ -907,8 +926,11 @@ func (w *Worker) extractAndStoreEmbeddedFiles(ctx context.Context, issueID, cont
 		hash := sha256.Sum256([]byte(url))
 		id := hex.EncodeToString(hash[:16]) // Use first 16 bytes for shorter ID
 
-		// Extract filename from URL path
-		filename := extractFilename(url)
+		// Use markdown display name if available, otherwise extract from URL
+		filename := urlToName[url]
+		if filename == "" {
+			filename = extractFilename(url)
+		}
 
 		// Detect MIME type from extension
 		mimeType := detectMIMEType(filename)
