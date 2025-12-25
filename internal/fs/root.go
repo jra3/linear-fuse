@@ -144,6 +144,8 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Multi-word search | ` + "`" + `ls /teams/ENG/search/login+error/` + "`" + ` (+ = space) |
 | Search my issues | ` + "`" + `ls /my/assigned/search/experiment/` + "`" + ` |
 | Search filtered view | ` + "`" + `ls /teams/ENG/by/status/Todo/search/bug/` + "`" + ` |
+| View attachments | ` + "`" + `ls /teams/ENG/issues/ENG-123/attachments/` + "`" + ` |
+| Open attachment | ` + "`" + `open .../attachments/screenshot.png` + "`" + ` (lazy-fetch) |
 
 ## File Permissions
 
@@ -167,13 +169,16 @@ write to new.md to update existing content.
 ├── by/status|label|assignee/      # symlinks to issues
 ├── search/{query}/                # full-text search results
 ├── issues/{ID}/
-│   ├── issue.md                   # EDITABLE
+│   ├── issue.md                   # EDITABLE (includes links in frontmatter)
 │   ├── comments/
 │   │   ├── new.md                 # write-only: creates comment
 │   │   └── {id}.md                # EDITABLE: existing comments
 │   ├── docs/
 │   │   ├── "Title.md"             # create: filename becomes title
 │   │   └── {slug}.md              # EDITABLE: existing documents
+│   ├── attachments/               # embedded files (lazy-fetch)
+│   │   ├── screenshot.png         # read-only, downloaded on access
+│   │   └── design-spec.pdf
 │   └── children/                  # symlinks to sub-issues
 ├── cycles/{name}/                 # symlinks to issues
 └── projects/{slug}/
@@ -210,11 +215,18 @@ parent: ENG-100           # editable (parent issue identifier)
 project: "My Project"     # editable (project name)
 milestone: "Phase 1"      # editable (milestone within project)
 cycle: "Sprint 42"        # editable (cycle/sprint name)
+links:                    # read-only external attachments
+  - type: github-pr
+    title: "feat: Fix auth flow"
+    url: https://github.com/org/repo/pull/456
+  - type: slack
+    title: "Discussion thread"
+    url: https://slack.com/archives/...
 ---
 Description here (editable)
 ` + "```" + `
 
-Read-only: id, identifier, url, created, updated
+Read-only: id, identifier, url, created, updated, links
 
 ## Sub-Issues
 
@@ -295,6 +307,47 @@ Results are symlinks pointing to the actual issue directories.
 **Query encoding:**
 - Use ` + "`" + `+` + "`" + ` for spaces: ` + "`" + `auth+token` + "`" + ` searches for "auth token"
 - Use ` + "`" + `*` + "`" + ` for prefix matching: ` + "`" + `ENG-12*` + "`" + ` matches ENG-12, ENG-120, ENG-123
+
+## Attachments
+
+Issues can have two types of attachments:
+
+### Embedded Files (attachments/)
+
+Images and files embedded in issue descriptions or comments appear in the
+` + "`" + `attachments/` + "`" + ` directory:
+
+` + "```" + `bash
+ls /teams/ENG/issues/ENG-123/attachments/
+# screenshot.png  design-spec.pdf
+
+# Files are lazy-fetched on first read
+cat .../attachments/screenshot.png > ~/Desktop/screenshot.png
+open .../attachments/design-spec.pdf
+` + "```" + `
+
+**Key points:**
+- Files are read-only (cannot upload via filesystem)
+- Downloaded on-demand from Linear's CDN
+- File sizes shown in ` + "`" + `ls -l` + "`" + ` reflect actual size
+- Duplicate filenames get suffixes: ` + "`" + `image.png` + "`" + `, ` + "`" + `image (2).png` + "`" + `
+
+### External Links (in issue.md)
+
+External attachments (GitHub PRs, Slack threads, Figma links) appear in the
+` + "`" + `links:` + "`" + ` section of issue.md frontmatter:
+
+` + "```" + `yaml
+links:
+  - type: github-pr
+    title: "feat: Fix auth flow"
+    url: https://github.com/org/repo/pull/456
+  - type: figma
+    title: "Login redesign"
+    url: https://figma.com/...
+` + "```" + `
+
+Common link types: github-pr, github-issue, slack, figma, notion, url
 
 ## Notes
 
