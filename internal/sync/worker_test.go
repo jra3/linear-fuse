@@ -890,8 +890,10 @@ func TestExtractAndStoreEmbeddedFiles(t *testing.T) {
 	issueID := "test-issue-123"
 
 	// Content with embedded files
+	// - First file: markdown with display name becomes the filename
+	// - Second file: bare URL, filename extracted from path
 	content := `Here's a screenshot of the bug:
-![bug](https://uploads.linear.app/workspace1/issue1/bug-screenshot.png)
+![bug-screenshot.png](https://uploads.linear.app/workspace1/issue1/bug-screenshot.png)
 
 And here's the design spec:
 https://uploads.linear.app/workspace1/issue1/design-spec.pdf`
