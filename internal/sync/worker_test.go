@@ -200,6 +200,10 @@ func (m *mockAPIClient) GetIssueAttachments(ctx context.Context, issueID string)
 	return []api.Attachment{}, nil
 }
 
+func (m *mockAPIClient) AuthHeader() string {
+	return "Bearer test-token"
+}
+
 func TestWorkerStartStop(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
