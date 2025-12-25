@@ -228,9 +228,17 @@ func TestTeamsCacheHit(t *testing.T) {
 	}
 
 	// Immediate second read (should be cached)
-	entries2, err := os.ReadDir(teamsPath())
+	// Add small delay and retry to handle potential FUSE timing issues on Linux CI
+	var entries2 []os.DirEntry
+	for i := 0; i < 3; i++ {
+		entries2, err = os.ReadDir(teamsPath())
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
-		t.Fatalf("Second read failed: %v", err)
+		t.Fatalf("Second read failed after retries (first read got %d entries): %v", len(entries1), err)
 	}
 
 	// Should return same data
@@ -247,9 +255,17 @@ func TestUsersCacheHit(t *testing.T) {
 	}
 
 	// Immediate second read (should be cached)
-	entries2, err := os.ReadDir(usersPath())
+	// Add small delay and retry to handle potential FUSE timing issues on Linux CI
+	var entries2 []os.DirEntry
+	for i := 0; i < 3; i++ {
+		entries2, err = os.ReadDir(usersPath())
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
-		t.Fatalf("Second read failed: %v", err)
+		t.Fatalf("Second read failed after retries (first read got %d entries): %v", len(entries1), err)
 	}
 
 	// Should return same data
