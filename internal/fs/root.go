@@ -387,6 +387,7 @@ Common link types: github-pr, github-issue, slack, figma, notion, url
 - **Invalid values fail the write** (unknown status, labels, assignee, etc.)
 - **Clear optional fields** by deleting the line (assignee, labels, due, estimate, parent, project, milestone, cycle)
 - All symlinks resolve to issue directories containing issue.md
+- All files are owned by the user who mounted the filesystem
 - Cache TTL: 60s (external changes may be delayed)
 
 ## Write-Only new.md Files

@@ -81,6 +81,32 @@ Use `ls -l` to see what operations are allowed on each file:
 
 **Important:** Existing documents and comments are editable. Edit them directly—don't write to `new.md` to update existing content.
 
+## File Timestamps
+
+Files and directories have meaningful timestamps from Linear, enabling time-based sorting:
+
+```bash
+# Sort by modification time (most recently updated first)
+ls -lt /mnt/linear/my/active/
+ls -lt /mnt/linear/teams/TEAM/by/status/Todo/
+
+# Sort by creation time (oldest first)
+ls -ltr /mnt/linear/teams/TEAM/issues/
+```
+
+| Timestamp | Source | Example |
+|-----------|--------|---------|
+| **mtime** (modified) | Issue's `updatedAt` | Last edit to issue |
+| **ctime** (changed) | Issue's `createdAt` | When issue was created |
+| **atime** (accessed) | Same as mtime | Not separately tracked |
+
+Timestamps are preserved across all views:
+- Issue directories and symlinks in `/my/`, `/users/`, `/by/`, `/cycles/`, `/projects/`
+- Project and initiative directories
+- Cycle directories (use cycle start/end dates)
+
+**Note:** All files are owned by the user who mounted the filesystem, not `root`.
+
 ## Directory Structure
 
 ```
