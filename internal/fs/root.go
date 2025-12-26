@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -18,8 +19,10 @@ var _ fs.NodeLookuper = (*RootNode)(nil)
 var _ fs.NodeGetattrer = (*RootNode)(nil)
 
 func (r *RootNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
 	r.SetOwner(out)
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -35,6 +38,7 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	now := time.Now()
 	switch name {
 	case "README.md":
 		node := &ReadmeNode{BaseNode: BaseNode{lfs: r.lfs}}
@@ -43,6 +47,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Size = uint64(len(content))
 		out.Attr.Uid = r.lfs.uid
 		out.Attr.Gid = r.lfs.gid
+		out.Attr.SetTimes(&now, &now, &now)
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 
 	case "teams":
@@ -50,6 +55,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = r.lfs.uid
 		out.Attr.Gid = r.lfs.gid
+		out.Attr.SetTimes(&now, &now, &now)
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "users":
@@ -57,6 +63,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = r.lfs.uid
 		out.Attr.Gid = r.lfs.gid
+		out.Attr.SetTimes(&now, &now, &now)
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "my":
@@ -64,6 +71,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = r.lfs.uid
 		out.Attr.Gid = r.lfs.gid
+		out.Attr.SetTimes(&now, &now, &now)
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "initiatives":
@@ -71,6 +79,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = r.lfs.uid
 		out.Attr.Gid = r.lfs.gid
+		out.Attr.SetTimes(&now, &now, &now)
 		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	default:
@@ -92,10 +101,12 @@ func (r *ReadmeNode) generateContent() []byte {
 }
 
 func (r *ReadmeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	content := r.generateContent()
 	out.Mode = 0444 | syscall.S_IFREG
 	out.Size = uint64(len(content))
 	r.SetOwner(out)
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -146,6 +157,7 @@ Issues as markdown files. Edit frontmatter to update Linear.
 | Search filtered view | ` + "`" + `ls /teams/ENG/by/status/Todo/search/bug/` + "`" + ` |
 | View attachments | ` + "`" + `ls /teams/ENG/issues/ENG-123/attachments/` + "`" + ` |
 | Open attachment | ` + "`" + `open .../attachments/screenshot.png` + "`" + ` (lazy-fetch) |
+| Sort by recent | ` + "`" + `ls -lt /my/active/` + "`" + ` (uses issue timestamps) |
 
 ## File Permissions
 
@@ -307,6 +319,25 @@ Results are symlinks pointing to the actual issue directories.
 **Query encoding:**
 - Use ` + "`" + `+` + "`" + ` for spaces: ` + "`" + `auth+token` + "`" + ` searches for "auth token"
 - Use ` + "`" + `*` + "`" + ` for prefix matching: ` + "`" + `ENG-12*` + "`" + ` matches ENG-12, ENG-120, ENG-123
+
+## Sorting by Date
+
+Issues and symlinks have proper timestamps from Linear, enabling sorting:
+
+` + "```" + `bash
+# Sort by modification time (most recent first)
+ls -lt /my/active/
+ls -lt /teams/ENG/by/status/Todo/
+
+# Sort by creation time (oldest first)
+ls -ltr /teams/ENG/issues/
+` + "```" + `
+
+Timestamps reflect:
+- **Mtime (modified):** Issue's ` + "`" + `updatedAt` + "`" + ` from Linear
+- **Ctime (created):** Issue's ` + "`" + `createdAt` + "`" + ` from Linear
+
+Works in all views: ` + "`" + `/my/` + "`" + `, ` + "`" + `/users/` + "`" + `, ` + "`" + `/by/` + "`" + `, ` + "`" + `/cycles/` + "`" + `, ` + "`" + `/projects/` + "`" + `, ` + "`" + `/search/` + "`" + `, and ` + "`" + `/children/` + "`" + `.
 
 ## Attachments
 

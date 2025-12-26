@@ -35,8 +35,10 @@ var _ fs.NodeLookuper = (*InitiativesNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativesNode)(nil)
 
 func (i *InitiativesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
 	i.SetOwner(out)
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -68,6 +70,7 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 			out.Attr.Mode = 0755 | syscall.S_IFDIR
 			out.Attr.Uid = i.lfs.uid
 			out.Attr.Gid = i.lfs.gid
+			out.Attr.SetTimes(&init.UpdatedAt, &init.UpdatedAt, &init.CreatedAt)
 			node := &InitiativeNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: init}
 			return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
@@ -132,6 +135,7 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = i.lfs.uid
 		out.Attr.Gid = i.lfs.gid
+		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 		node := &InitiativeProjectsNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative}
 		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
@@ -139,6 +143,7 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = i.lfs.uid
 		out.Attr.Gid = i.lfs.gid
+		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 		node := &InitiativeUpdatesNode{BaseNode: BaseNode{lfs: i.lfs}, initiativeID: i.initiative.ID, initiativeUpdatedAt: i.initiative.UpdatedAt}
 		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
@@ -252,6 +257,7 @@ var _ fs.NodeGetattrer = (*InitiativeProjectsNode)(nil)
 func (p *InitiativeProjectsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
 	p.SetOwner(out)
+	out.SetTimes(&p.initiative.UpdatedAt, &p.initiative.UpdatedAt, &p.initiative.CreatedAt)
 	return 0
 }
 
@@ -336,10 +342,12 @@ func (s *InitiativeProjectSymlink) Readlink(ctx context.Context) ([]byte, syscal
 }
 
 func (s *InitiativeProjectSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	// Use a reasonable estimate for symlink size
 	out.Mode = 0777 | syscall.S_IFLNK
 	s.SetOwner(out)
 	out.Size = 64
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 

@@ -312,6 +312,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = n.lfs.uid
 		out.Attr.Gid = n.lfs.gid
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{
@@ -327,6 +328,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = n.lfs.uid
 		out.Attr.Gid = n.lfs.gid
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{
@@ -342,6 +344,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
 		out.Attr.Uid = n.lfs.uid
 		out.Attr.Gid = n.lfs.gid
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 		out.SetAttrTimeout(30 * time.Second)
 		out.SetEntryTimeout(30 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{
@@ -738,6 +741,7 @@ var _ fs.NodeGetattrer = (*ChildrenNode)(nil)
 func (n *ChildrenNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
 	n.SetOwner(out)
+	out.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 	return 0
 }
 
@@ -770,9 +774,12 @@ func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 					ID:         child.ID,
 					Identifier: child.Identifier,
 					Title:      child.Title,
+					CreatedAt:  child.CreatedAt,
+					UpdatedAt:  child.UpdatedAt,
 				},
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.SetTimes(&child.UpdatedAt, &child.UpdatedAt, &child.CreatedAt)
 			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -797,5 +804,6 @@ func (s *ChildSymlinkNode) Readlink(ctx context.Context) ([]byte, syscall.Errno)
 func (s *ChildSymlinkNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0777 | syscall.S_IFLNK
 	out.Size = uint64(len("../") + len(s.child.Identifier))
+	out.SetTimes(&s.child.UpdatedAt, &s.child.UpdatedAt, &s.child.CreatedAt)
 	return 0
 }

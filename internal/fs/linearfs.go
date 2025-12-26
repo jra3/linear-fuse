@@ -395,6 +395,8 @@ func (lfs *LinearFS) GetCycleIssues(ctx context.Context, cycleID string) ([]api.
 			ID:         issue.ID,
 			Identifier: issue.Identifier,
 			Title:      issue.Title,
+			CreatedAt:  issue.CreatedAt,
+			UpdatedAt:  issue.UpdatedAt,
 		}
 	}
 	return result, nil
@@ -438,6 +440,8 @@ func (lfs *LinearFS) GetProjectIssues(ctx context.Context, projectID string) ([]
 			ID:         issue.ID,
 			Identifier: issue.Identifier,
 			Title:      issue.Title,
+			CreatedAt:  issue.CreatedAt,
+			UpdatedAt:  issue.UpdatedAt,
 			Team:       issue.Team,
 		}
 	}

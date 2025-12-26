@@ -66,7 +66,7 @@ fragment IssueFields on Issue {
   project { id name slugId }
   projectMilestone { id name }
   parent { id identifier title }
-  children { nodes { id identifier title } }
+  children { nodes { id identifier title createdAt updatedAt } }
   cycle { id name number }
 }
 `
@@ -220,6 +220,7 @@ query CycleIssues($cycleId: String!, $after: String) {
         id
         identifier
         title
+        createdAt
         updatedAt
         team {
           id
@@ -279,6 +280,8 @@ query ProjectIssues($projectId: String!, $after: String) {
         id
         identifier
         title
+        createdAt
+        updatedAt
         team {
           id
           key

@@ -129,10 +129,13 @@ func (n *SearchResultsNode) Lookup(ctx context.Context, name string, out *fuse.E
 			node := &SearchResultSymlink{
 				BaseNode:   BaseNode{lfs: n.lfs},
 				identifier: issue.Identifier,
+				createdAt:  issue.CreatedAt,
+				updatedAt:  issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
 			out.Attr.Uid = n.lfs.uid
 			out.Attr.Gid = n.lfs.gid
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -144,6 +147,8 @@ func (n *SearchResultsNode) Lookup(ctx context.Context, name string, out *fuse.E
 type SearchResultSymlink struct {
 	BaseNode
 	identifier string
+	createdAt  time.Time
+	updatedAt  time.Time
 }
 
 var _ fs.NodeReadlinker = (*SearchResultSymlink)(nil)
@@ -160,6 +165,7 @@ func (s *SearchResultSymlink) Getattr(ctx context.Context, f fs.FileHandle, out 
 	out.Mode = 0777 | syscall.S_IFLNK
 	s.SetOwner(out)
 	out.Size = uint64(len(target))
+	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
 	return 0
 }
 
@@ -279,12 +285,15 @@ func (n *ScopedSearchResultsNode) Lookup(ctx context.Context, name string, out *
 				teamKey:      teamKey,
 				identifier:   issue.Identifier,
 				symlinkDepth: n.symlinkDepth,
+				createdAt:    issue.CreatedAt,
+				updatedAt:    issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
 			if n.lfs != nil {
 				out.Attr.Uid = n.lfs.uid
 				out.Attr.Gid = n.lfs.gid
 			}
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -330,6 +339,8 @@ type ScopedSearchSymlink struct {
 	teamKey      string
 	identifier   string
 	symlinkDepth int // number of directories to go up
+	createdAt    time.Time
+	updatedAt    time.Time
 }
 
 var _ fs.NodeReadlinker = (*ScopedSearchSymlink)(nil)
@@ -343,6 +354,7 @@ func (s *ScopedSearchSymlink) Getattr(ctx context.Context, f fs.FileHandle, out 
 	out.Mode = 0777 | syscall.S_IFLNK
 	s.SetOwner(out)
 	out.Size = uint64(len(s.target()))
+	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
 	return 0
 }
 

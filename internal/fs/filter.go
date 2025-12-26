@@ -251,10 +251,13 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 			node := &FilterIssueSymlink{
 				BaseNode:   BaseNode{lfs: f.lfs},
 				identifier: issue.Identifier,
+				createdAt:  issue.CreatedAt,
+				updatedAt:  issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
 			out.Attr.Uid = f.lfs.uid
 			out.Attr.Gid = f.lfs.gid
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return f.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -303,6 +306,8 @@ func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error)
 type FilterIssueSymlink struct {
 	BaseNode
 	identifier string
+	createdAt  time.Time
+	updatedAt  time.Time
 }
 
 var _ fs.NodeReadlinker = (*FilterIssueSymlink)(nil)
@@ -319,5 +324,6 @@ func (s *FilterIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *
 	out.Mode = 0777 | syscall.S_IFLNK
 	s.SetOwner(out)
 	out.Size = uint64(len(target))
+	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
 	return 0
 }

@@ -55,9 +55,11 @@ type ChildIssues struct {
 
 // ChildIssue is a minimal issue representation for child listings
 type ChildIssue struct {
-	ID         string `json:"id"`
-	Identifier string `json:"identifier"`
-	Title      string `json:"title"`
+	ID         string    `json:"id"`
+	Identifier string    `json:"identifier"`
+	Title      string    `json:"title"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type State struct {
@@ -133,10 +135,12 @@ type PageInfo struct {
 
 // ProjectIssue is a minimal issue representation for project listings
 type ProjectIssue struct {
-	ID         string `json:"id"`
-	Identifier string `json:"identifier"`
-	Title      string `json:"title"`
-	Team       *Team  `json:"team"`
+	ID         string    `json:"id"`
+	Identifier string    `json:"identifier"`
+	Title      string    `json:"title"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+	Team       *Team     `json:"team"`
 }
 
 // CycleIssue is a minimal issue representation for cycle listings
@@ -144,6 +148,7 @@ type CycleIssue struct {
 	ID         string    `json:"id"`
 	Identifier string    `json:"identifier"`
 	Title      string    `json:"title"`
+	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 	Team       *Team     `json:"team"`
 }

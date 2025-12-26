@@ -37,9 +37,18 @@ type LabelsNode struct {
 
 var _ fs.NodeReaddirer = (*LabelsNode)(nil)
 var _ fs.NodeLookuper = (*LabelsNode)(nil)
+var _ fs.NodeGetattrer = (*LabelsNode)(nil)
 var _ fs.NodeCreater = (*LabelsNode)(nil)
 var _ fs.NodeUnlinker = (*LabelsNode)(nil)
 var _ fs.NodeRenamer = (*LabelsNode)(nil)
+
+func (n *LabelsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
+	out.Mode = 0755 | syscall.S_IFDIR
+	n.SetOwner(out)
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
 
 func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
@@ -103,10 +112,12 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 				content:      content,
 				contentReady: true,
 			}
+			now := time.Now()
 			out.Attr.Mode = 0644 | syscall.S_IFREG
 			out.Attr.Uid = n.lfs.uid
 			out.Attr.Gid = n.lfs.gid
 			out.Attr.Size = uint64(len(content))
+			out.Attr.SetTimes(&now, &now, &now)
 			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
 			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
 			return n.NewInode(ctx, node, fs.StableAttr{
@@ -291,9 +302,11 @@ func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	now := time.Now()
 	out.Mode = 0644
 	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -443,9 +456,11 @@ func (n *NewLabelNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	now := time.Now()
 	out.Mode = 0200
 	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 

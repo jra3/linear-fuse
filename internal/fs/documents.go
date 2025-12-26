@@ -45,8 +45,10 @@ var _ fs.NodeRenamer = (*DocsNode)(nil)
 var _ fs.NodeGetattrer = (*DocsNode)(nil)
 
 func (n *DocsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	out.Mode = 0755 | syscall.S_IFDIR
 	n.SetOwner(out)
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -470,9 +472,11 @@ func (n *NewDocumentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	now := time.Now()
 	out.Mode = 0200
 	n.SetOwner(out)
 	out.Size = uint64(len(n.content))
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 

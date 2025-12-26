@@ -119,6 +119,7 @@ var _ fs.NodeOpener = (*EmbeddedFileNode)(nil)
 var _ fs.NodeReader = (*EmbeddedFileNode)(nil)
 
 func (n *EmbeddedFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	out.Mode = 0444 // Read-only
 	n.SetOwner(out)
 	if n.file.FileSize > 0 {
@@ -129,6 +130,7 @@ func (n *EmbeddedFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *f
 		// Use 1MB as a reasonable placeholder for images.
 		out.Size = 1024 * 1024
 	}
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 

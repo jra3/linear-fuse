@@ -35,8 +35,10 @@ func (n *NewIssueNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	now := time.Now()
 	out.Mode = 0644
 	out.Size = uint64(len(n.content))
+	out.SetTimes(&now, &now, &now)
 
 	return 0
 }

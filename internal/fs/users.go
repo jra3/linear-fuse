@@ -146,10 +146,13 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 				BaseNode:   BaseNode{lfs: u.lfs},
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
+				createdAt:  issue.CreatedAt,
+				updatedAt:  issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
 			out.Attr.Uid = u.lfs.uid
 			out.Attr.Gid = u.lfs.gid
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -162,6 +165,8 @@ type IssueDirSymlink struct {
 	BaseNode
 	teamKey    string
 	identifier string
+	createdAt  time.Time
+	updatedAt  time.Time
 }
 
 var _ fs.NodeReadlinker = (*IssueDirSymlink)(nil)
@@ -177,6 +182,7 @@ func (s *IssueDirSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fus
 	s.SetOwner(out)
 	target := fmt.Sprintf("../../teams/%s/issues/%s", s.teamKey, s.identifier)
 	out.Size = uint64(len(target))
+	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
 	return 0
 }
 

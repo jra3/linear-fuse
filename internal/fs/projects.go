@@ -85,6 +85,10 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 	for _, project := range projects {
 		if projectDirName(project) == name {
+			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.Uid = p.lfs.uid
+			out.Attr.Gid = p.lfs.gid
+			out.Attr.SetTimes(&project.UpdatedAt, &project.UpdatedAt, &project.CreatedAt)
 			node := &ProjectNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: project}
 			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
@@ -183,6 +187,14 @@ type ProjectNode struct {
 
 var _ fs.NodeReaddirer = (*ProjectNode)(nil)
 var _ fs.NodeLookuper = (*ProjectNode)(nil)
+var _ fs.NodeGetattrer = (*ProjectNode)(nil)
+
+func (p *ProjectNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	p.SetOwner(out)
+	out.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
+	return 0
+}
 
 func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)
@@ -233,12 +245,20 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	// Handle docs/ directory
 	if name == "docs" {
 		node := &DocsNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = p.lfs.uid
+		out.Attr.Gid = p.lfs.gid
+		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
 	// Handle updates/ directory
 	if name == "updates" {
 		node := &UpdatesNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID, projectUpdatedAt: p.project.UpdatedAt}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = p.lfs.uid
+		out.Attr.Gid = p.lfs.gid
+		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 	}
 
@@ -250,9 +270,15 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	for _, issue := range issues {
 		if issue.Identifier == name {
 			node := &ProjectIssueSymlink{
+				BaseNode:   BaseNode{lfs: p.lfs},
 				identifier: issue.Identifier,
+				createdAt:  issue.CreatedAt,
+				updatedAt:  issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.Uid = p.lfs.uid
+			out.Attr.Gid = p.lfs.gid
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -262,8 +288,10 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 
 // ProjectIssueSymlink is a symlink pointing to an issue directory
 type ProjectIssueSymlink struct {
-	fs.Inode
+	BaseNode
 	identifier string
+	createdAt  time.Time
+	updatedAt  time.Time
 }
 
 var _ fs.NodeReadlinker = (*ProjectIssueSymlink)(nil)
@@ -277,7 +305,9 @@ func (s *ProjectIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Err
 func (s *ProjectIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	target := fmt.Sprintf("../../issues/%s", s.identifier)
 	out.Mode = 0777 | syscall.S_IFLNK
+	s.SetOwner(out)
 	out.Size = uint64(len(target))
+	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
 	return 0
 }
 

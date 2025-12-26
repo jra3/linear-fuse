@@ -140,10 +140,13 @@ func (m *MyIssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 				BaseNode:   BaseNode{lfs: m.lfs},
 				teamKey:    teamKey,
 				identifier: issue.Identifier,
+				createdAt:  issue.CreatedAt,
+				updatedAt:  issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
 			out.Attr.Uid = m.lfs.uid
 			out.Attr.Gid = m.lfs.gid
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}

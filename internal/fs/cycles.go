@@ -80,9 +80,12 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		for _, cycle := range cycles {
 			if isCurrent(cycle) {
 				target := cycleDirName(cycle)
-				node := &CurrentCycleSymlink{target: target}
+				node := &CurrentCycleSymlink{BaseNode: BaseNode{lfs: c.lfs}, target: target}
 				out.Attr.Mode = 0777 | syscall.S_IFLNK
+				out.Attr.Uid = c.lfs.uid
+				out.Attr.Gid = c.lfs.gid
 				out.Attr.Size = uint64(len(target))
+				out.Attr.SetTimes(&cycle.EndsAt, &cycle.StartsAt, &cycle.StartsAt)
 				return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 			}
 		}
@@ -94,6 +97,8 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		if cycleDirName(cycle) == name {
 			node := &CycleDirNode{BaseNode: BaseNode{lfs: c.lfs}, team: c.team, cycle: cycle}
 			out.Attr.Mode = 0755 | syscall.S_IFDIR
+			out.Attr.Uid = c.lfs.uid
+			out.Attr.Gid = c.lfs.gid
 			out.Attr.SetTimes(&cycle.EndsAt, &cycle.StartsAt, &cycle.StartsAt)
 			return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 		}
@@ -104,7 +109,7 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 
 // CurrentCycleSymlink represents the /teams/{KEY}/cycles/current symlink
 type CurrentCycleSymlink struct {
-	fs.Inode
+	BaseNode
 	target string
 }
 
@@ -116,8 +121,11 @@ func (s *CurrentCycleSymlink) Readlink(ctx context.Context) ([]byte, syscall.Err
 }
 
 func (s *CurrentCycleSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	now := time.Now()
 	out.Mode = 0777 | syscall.S_IFLNK
+	s.SetOwner(out)
 	out.Size = uint64(len(s.target))
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -165,9 +173,11 @@ func (c *CycleDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle cycle.md
 	if name == "cycle.md" {
-		node := &CycleFileNode{team: c.team, cycle: c.cycle}
+		node := &CycleFileNode{BaseNode: BaseNode{lfs: c.lfs}, team: c.team, cycle: c.cycle}
 		content := node.generateContent()
 		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Uid = c.lfs.uid
+		out.Attr.Gid = c.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&c.cycle.EndsAt, &c.cycle.StartsAt, &c.cycle.StartsAt)
 		return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
@@ -182,9 +192,15 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	for _, issue := range issues {
 		if issue.Identifier == name {
 			node := &CycleIssueSymlink{
+				BaseNode:   BaseNode{lfs: c.lfs},
 				identifier: issue.Identifier,
+				createdAt:  issue.CreatedAt,
+				updatedAt:  issue.UpdatedAt,
 			}
 			out.Attr.Mode = 0777 | syscall.S_IFLNK
+			out.Attr.Uid = c.lfs.uid
+			out.Attr.Gid = c.lfs.gid
+			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
 			return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
 		}
 	}
@@ -194,8 +210,10 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 // CycleIssueSymlink represents a symlink from cycle to issue directory
 type CycleIssueSymlink struct {
-	fs.Inode
+	BaseNode
 	identifier string
+	createdAt  time.Time
+	updatedAt  time.Time
 }
 
 var _ fs.NodeReadlinker = (*CycleIssueSymlink)(nil)
@@ -210,13 +228,15 @@ func (s *CycleIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno
 func (s *CycleIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	target := fmt.Sprintf("../../issues/%s", s.identifier)
 	out.Mode = 0777 | syscall.S_IFLNK
+	s.SetOwner(out)
 	out.Size = uint64(len(target))
+	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
 	return 0
 }
 
 // CycleFileNode represents the cycle.md file inside a cycle directory
 type CycleFileNode struct {
-	fs.Inode
+	BaseNode
 	team  api.Team
 	cycle api.Cycle
 }
@@ -299,6 +319,7 @@ progress:
 func (c *CycleFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := c.generateContent()
 	out.Mode = 0444 | syscall.S_IFREG
+	c.SetOwner(out)
 	out.Size = uint64(len(content))
 	out.Attr.SetTimes(&c.cycle.EndsAt, &c.cycle.StartsAt, &c.cycle.StartsAt)
 	return 0
