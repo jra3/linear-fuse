@@ -198,11 +198,20 @@ Description body (editable)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
 </permissions>
 
+<new_md_behavior>
+new.md is a write-only trigger file (like /proc/sysrq-trigger):
+- Reading always returns empty (size 0)
+- Writing creates a new item and consumes the content
+- Editors fail because they read-before-write (vim, vscode)
+- Use piped output: echo "text" > new.md, cat file > new.md
+- Created items appear as separate files (e.g., 001-2025-01-15.md)
+- For docs/, prefer named files: echo "x" > docs/"Title.md"
+</new_md_behavior>
+
 <important_notes>
 - Validate status/labels against states.md and labels.md before editing
 - Invalid values fail the write silently
 - Clear optional fields by deleting the line entirely
-- new.md files are write-only triggers (echo/cat only, editors won't work)
 - Cache TTL: 60s for issues, 10min for states/labels/users
 - Files owned by mounting user, timestamps reflect Linear's updatedAt/createdAt
 </important_notes>
