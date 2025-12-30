@@ -77,7 +77,7 @@ func TestWriteToReadmeReturnsError(t *testing.T) {
 
 func TestDeleteNewMdReturnsError(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("Delete new.md Test")
+	issue, cleanup, err := createTestIssue("Delete _create Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -85,11 +85,11 @@ func TestDeleteNewMdReturnsError(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// Try to delete new.md
+	// Try to delete _create
 	path := newCommentPath(testTeamKey, issue.Identifier)
 	err = os.Remove(path)
 	if err == nil {
-		t.Error("Expected error when deleting new.md")
+		t.Error("Expected error when deleting _create")
 	}
 }
 

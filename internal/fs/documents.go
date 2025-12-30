@@ -79,15 +79,15 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Fetch documents (uses cache if available)
 	docs, err := n.getDocuments(ctx)
 	if err != nil {
-		// On error, return just new.md
+		// On error, return just _create
 		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "new.md", Mode: syscall.S_IFREG},
+			{Name: "_create", Mode: syscall.S_IFREG},
 		}), 0
 	}
 
-	// Always include new.md for creating documents
+	// Always include _create for creating documents
 	entries := []fuse.DirEntry{
-		{Name: "new.md", Mode: syscall.S_IFREG},
+		{Name: "_create", Mode: syscall.S_IFREG},
 	}
 
 	for _, doc := range docs {
@@ -101,8 +101,8 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle new.md for creating documents
-	if name == "new.md" {
+	// Handle _create for creating documents
+	if name == "_create" {
 		now := time.Now()
 		node := &NewDocumentNode{
 			BaseNode:  BaseNode{lfs: n.lfs},
@@ -166,8 +166,8 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		log.Printf("Unlink document: %s", name)
 	}
 
-	// Don't allow deleting new.md
-	if name == "new.md" {
+	// Don't allow deleting _create
+	if name == "_create" {
 		return syscall.EPERM
 	}
 
@@ -202,8 +202,8 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		log.Printf("Rename document: %s -> %s", name, newName)
 	}
 
-	// Don't allow renaming new.md
-	if name == "new.md" {
+	// Don't allow renaming _create
+	if name == "_create" {
 		return syscall.EPERM
 	}
 
@@ -485,7 +485,7 @@ func (n *NewDocumentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle
 }
 
 func (n *NewDocumentNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// new.md is write-only - return permission denied
+	// _create is write-only - return permission denied
 	return nil, syscall.EACCES
 }
 
@@ -547,9 +547,9 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return syscall.EIO
 	}
 
-	// If no title in content, use filename (unless it's new.md)
+	// If no title in content, use filename (unless it's _create)
 	if title == "" || title == "Untitled" {
-		if n.filename != "" && n.filename != "new.md" {
+		if n.filename != "" && n.filename != "_create" {
 			// Convert filename to title: remove .md, replace dashes with spaces
 			title = strings.TrimSuffix(n.filename, ".md")
 			title = strings.ReplaceAll(title, "-", " ")
@@ -606,7 +606,7 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// Invalidate the directory inode so the kernel re-reads the listing
 	n.lfs.InvalidateKernelInode(docsDirIno(parentID))
 	// Also invalidate specific entries
-	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), "new.md")
+	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), "_create")
 	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), documentFilename(*doc))
 
 	if n.lfs.debug {

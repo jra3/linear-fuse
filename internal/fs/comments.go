@@ -57,15 +57,15 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	// Fetch comments (uses cache if available)
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
 	if err != nil {
-		// On error, return just new.md
+		// On error, return just _create
 		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "new.md", Mode: syscall.S_IFREG},
+			{Name: "_create", Mode: syscall.S_IFREG},
 		}), 0
 	}
 
-	// Always include new.md for creating comments
+	// Always include _create for creating comments
 	entries := []fuse.DirEntry{
-		{Name: "new.md", Mode: syscall.S_IFREG},
+		{Name: "_create", Mode: syscall.S_IFREG},
 	}
 
 	// Sort comments by creation time
@@ -86,8 +86,8 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 }
 
 func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle new.md for creating comments
-	if name == "new.md" {
+	// Handle _create for creating comments
+	if name == "_create" {
 		now := time.Now()
 		node := &NewCommentNode{
 			BaseNode: BaseNode{lfs: n.lfs},
@@ -152,8 +152,8 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		log.Printf("Unlink comment: %s", name)
 	}
 
-	// Don't allow deleting new.md
-	if name == "new.md" {
+	// Don't allow deleting _create
+	if name == "_create" {
 		return syscall.EPERM
 	}
 
@@ -421,7 +421,7 @@ func (n *NewCommentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 }
 
 func (n *NewCommentNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// new.md is write-only - return permission denied
+	// _create is write-only - return permission denied
 	return nil, syscall.EACCES
 }
 
@@ -500,7 +500,7 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 
 	// Invalidate kernel cache - directory inode so listing is refreshed
 	n.lfs.InvalidateKernelInode(commentsDirIno(n.issueID))
-	n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), "new.md")
+	n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), "_create")
 
 	if n.lfs.debug {
 		log.Printf("Comment created successfully")

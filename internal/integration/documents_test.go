@@ -29,20 +29,20 @@ func TestDocsDirectoryListing(t *testing.T) {
 		t.Fatalf("Failed to read docs directory: %v", err)
 	}
 
-	// Should have at least new.md and the document
+	// Should have at least _create and the document
 	hasNewMd := false
 	hasDoc := false
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			hasNewMd = true
 		}
-		if strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "new.md" {
+		if strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "_create" {
 			hasDoc = true
 		}
 	}
 
 	if !hasNewMd {
-		t.Error("Docs directory should contain new.md")
+		t.Error("Docs directory should contain _create")
 	}
 	if !hasDoc {
 		t.Error("Docs directory should contain at least one document file")
@@ -70,10 +70,10 @@ func TestDocumentFilenameFormat(t *testing.T) {
 		t.Fatalf("Failed to read docs directory: %v", err)
 	}
 
-	// Find document files (not new.md)
+	// Find document files (not _create)
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "new.md" {
+		if name == "_create" {
 			continue
 		}
 		// Should be {slugId}.md format
@@ -107,7 +107,7 @@ func TestDocumentFileContents(t *testing.T) {
 
 	// Find and read a document file
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 
@@ -146,7 +146,7 @@ func TestDocumentFileContents(t *testing.T) {
 
 func TestCreateDocumentViaNewMd(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("Create Doc via new.md Test")
+	issue, cleanup, err := createTestIssue("Create Doc via _create Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -154,12 +154,12 @@ func TestCreateDocumentViaNewMd(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// Write to new.md with title as first heading
-	docContent := "# [TEST] Doc Created via new.md\n\nThis document was created via the filesystem."
+	// Write to _create with title as first heading
+	docContent := "# [TEST] Doc Created via _create\n\nThis document was created via the filesystem."
 	newMdPath := newDocPath(testTeamKey, issue.Identifier)
 
 	if err := os.WriteFile(newMdPath, []byte(docContent), 0644); err != nil {
-		t.Fatalf("Failed to write to new.md: %v", err)
+		t.Fatalf("Failed to write to _create: %v", err)
 	}
 
 	// No wait needed - kernel cache invalidated on filesystem write
@@ -172,14 +172,14 @@ func TestCreateDocumentViaNewMd(t *testing.T) {
 	found := false
 	var createdDocFile string
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(content), "Doc Created via new.md") {
+		if strings.Contains(string(content), "Doc Created via _create") {
 			found = true
 			createdDocFile = entry.Name()
 			break
@@ -187,7 +187,7 @@ func TestCreateDocumentViaNewMd(t *testing.T) {
 	}
 
 	if !found {
-		t.Error("Document created via new.md not found")
+		t.Error("Document created via _create not found")
 	}
 
 	// Cleanup: delete the created document
@@ -221,7 +221,7 @@ func TestUpdateDocument(t *testing.T) {
 
 	var docFile string
 	for _, entry := range entries {
-		if entry.Name() != "new.md" {
+		if entry.Name() != "_create" {
 			docFile = entry.Name()
 			break
 		}
@@ -279,7 +279,7 @@ func TestDeleteDocument(t *testing.T) {
 
 	var docFile string
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
@@ -315,7 +315,7 @@ func TestDeleteDocument(t *testing.T) {
 
 func TestDocsNewMdAlwaysExists(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("new.md Exists Test")
+	issue, cleanup, err := createTestIssue("_create Exists Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -323,16 +323,16 @@ func TestDocsNewMdAlwaysExists(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// new.md should always be present
+	// _create should always be present
 	_, err = os.Stat(newDocPath(testTeamKey, issue.Identifier))
 	if err != nil {
-		t.Errorf("new.md should always exist in docs: %v", err)
+		t.Errorf("_create should always exist in docs: %v", err)
 	}
 }
 
 func TestDocsNewMdWriteOnly(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("new.md Write-Only Test")
+	issue, cleanup, err := createTestIssue("_create Write-Only Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -340,10 +340,10 @@ func TestDocsNewMdWriteOnly(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// new.md should be write-only (0200), so reading should fail
+	// _create should be write-only (0200), so reading should fail
 	_, err = os.ReadFile(newDocPath(testTeamKey, issue.Identifier))
 	if err == nil {
-		t.Error("new.md should be write-only and not readable")
+		t.Error("_create should be write-only and not readable")
 	}
 
 	// Verify we can still write to it
@@ -353,7 +353,7 @@ title: Test Document
 Test content`
 	err = os.WriteFile(newDocPath(testTeamKey, issue.Identifier), []byte(content), 0644)
 	if err != nil {
-		t.Errorf("new.md should be writable: %v", err)
+		t.Errorf("_create should be writable: %v", err)
 	}
 }
 
@@ -388,7 +388,7 @@ func TestDocsDirectoryExistsInIssue(t *testing.T) {
 
 func TestCannotDeleteNewMd(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("Cannot Delete new.md Test")
+	issue, cleanup, err := createTestIssue("Cannot Delete _create Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -396,10 +396,10 @@ func TestCannotDeleteNewMd(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// Try to delete new.md - should fail
+	// Try to delete _create - should fail
 	err = os.Remove(newDocPath(testTeamKey, issue.Identifier))
 	if err == nil {
-		t.Error("Should not be able to delete new.md")
+		t.Error("Should not be able to delete _create")
 	}
 }
 
@@ -413,7 +413,7 @@ func TestCreateDocumentViaFilename(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// Create document by writing to a new filename (not new.md)
+	// Create document by writing to a new filename (not _create)
 	// The filename (minus .md) becomes the document title
 	docTitle := "[TEST] Doc Created via Filename"
 	docFilename := docTitle + ".md"
@@ -433,7 +433,7 @@ func TestCreateDocumentViaFilename(t *testing.T) {
 	found := false
 	var createdDocFile string
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
@@ -487,7 +487,7 @@ func TestCreateDocumentViaFilenameWithDashes(t *testing.T) {
 	found := false
 	var createdDocFile string
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))

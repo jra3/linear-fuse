@@ -376,9 +376,9 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 		return nil, syscall.EIO
 	}
 
-	// Always include new.md for creating updates
+	// Always include _create for creating updates
 	entries := []fuse.DirEntry{
-		{Name: "new.md", Mode: syscall.S_IFREG},
+		{Name: "_create", Mode: syscall.S_IFREG},
 	}
 
 	// Sort updates by creation time
@@ -400,8 +400,8 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 }
 
 func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle new.md for creating updates
-	if name == "new.md" {
+	// Handle _create for creating updates
+	if name == "_create" {
 		now := time.Now()
 		node := &NewInitiativeUpdateNode{
 			BaseNode:     BaseNode{lfs: n.lfs},
@@ -543,7 +543,7 @@ func (n *NewInitiativeUpdateNode) Open(ctx context.Context, flags uint32) (fs.Fi
 }
 
 func (n *NewInitiativeUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// new.md is write-only - return permission denied
+	// _create is write-only - return permission denied
 	return nil, syscall.EACCES
 }
 
@@ -622,7 +622,7 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 	n.created = true
 
 	// Invalidate kernel cache entry for updates directory
-	n.lfs.InvalidateKernelEntry(initiativeUpdatesDirIno(n.initiativeID), "new.md")
+	n.lfs.InvalidateKernelEntry(initiativeUpdatesDirIno(n.initiativeID), "_create")
 
 	if n.lfs.debug {
 		log.Printf("Initiative update created successfully")

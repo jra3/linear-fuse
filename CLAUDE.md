@@ -87,12 +87,12 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 │   │   ├── status/<state>/               # Issues by workflow state
 │   │   ├── label/<name>/                 # Issues by label
 │   │   └── assignee/<name>/              # Issues by assignee (includes "unassigned")
-│   ├── labels/*.md                       # Label CRUD via new.md
+│   ├── labels/*.md                       # Label CRUD via _create
 │   ├── search/<query>/                   # Full-text search results (symlinks)
 │   ├── projects/<slug>/
 │   │   ├── project.md                    # Project metadata (read/write)
 │   │   ├── docs/*.md                     # Project documents
-│   │   ├── updates/*.md                  # Status updates via new.md
+│   │   ├── updates/*.md                  # Status updates via _create
 │   │   └── TEAM-*/                       # Issue symlinks
 │   └── cycles/
 │       ├── current                       # Symlink to active cycle
@@ -100,7 +100,7 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 ├── initiatives/<slug>/
 │   ├── initiative.md                     # Initiative metadata
 │   ├── projects/                         # Linked project symlinks
-│   └── updates/*.md                      # Status updates via new.md
+│   └── updates/*.md                      # Status updates via _create
 ├── users/<name>/                         # Per-user issue symlinks
 └── my/
     ├── assigned/, created/, active/      # Personal issue views
@@ -194,7 +194,7 @@ Each writable node type has stable inode generation via fnv hash (e.g., `issueIn
 ```go
 // After creating a document - invalidate directory inode AND entries
 lfs.InvalidateKernelInode(docsDirIno(issueID))  // Clears directory listing
-lfs.InvalidateKernelEntry(docsDirIno(issueID), "new.md")
+lfs.InvalidateKernelEntry(docsDirIno(issueID), "_create")
 lfs.InvalidateKernelEntry(docsDirIno(issueID), newFilename)
 
 // After deleting - also delete from SQLite

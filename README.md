@@ -53,7 +53,7 @@ ls /mnt/linear/teams/TEAM/issues/TEAM-123/comments/
 cat /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 
 # Add a comment
-echo "My comment" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/new.md
+echo "My comment" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/_create
 
 # View your assigned issues
 ls /mnt/linear/my/assigned/
@@ -76,10 +76,10 @@ Use `ls -l` to see what operations are allowed on each file:
 |------------|---------|---------|
 | `-r--r--r--` | Read-only | `team.md`, `states.md`, `initiative.md` |
 | `-rw-r--r--` | **Editable** | `issue.md`, `project.md`, existing docs/comments |
-| `--w-------` | Write-only trigger | `new.md` (creates new items) |
+| `--w-------` | Write-only trigger | `_create` (creates new items) |
 | `lrwxrwxrwx` | Symlink | Issues in cycles/projects/filtered views |
 
-**Important:** Existing documents and comments are editable. Edit them directly—don't write to `new.md` to update existing content.
+**Important:** Existing documents and comments are editable. Edit them directly—don't write to `_create` to update existing content.
 
 ## File Timestamps
 
@@ -126,17 +126,17 @@ Timestamps are preserved across all views:
 │       │       ├── issue.md     # Issue content (read/write)
 │       │       ├── comments/
 │       │       │   ├── 001-*.md # Comments (read/write/delete)
-│       │       │   └── new.md   # Write here to create comment
+│       │       │   └── _create   # Write here to create comment
 │       │       ├── docs/
 │       │       │   ├── *.md     # Issue documents (read/write/rename/delete)
-│       │       │   └── new.md   # Write here to create document
+│       │       │   └── _create   # Write here to create document
 │       │       └── children/    # Sub-issues (symlinks to sibling issues)
 │       ├── labels/              # Label management
 │       │   ├── *.md             # Labels (read/write/rename/delete)
-│       │   └── new.md           # Write here to create label
+│       │   └── _create           # Write here to create label
 │       ├── docs/                # Team documents
 │       │   ├── *.md             # Documents (read/write/rename/delete)
-│       │   └── new.md           # Write here to create document
+│       │   └── _create           # Write here to create document
 │       ├── search/<query>/      # Full-text search results (symlinks)
 │       ├── cycles/              # Sprint cycles
 │       │   ├── current          # Symlink to active cycle (if any)
@@ -145,13 +145,13 @@ Timestamps are preserved across all views:
 │           └── <project-slug>/
 │               ├── project.md   # Project metadata (read/write)
 │               ├── docs/        # Project documents
-│               ├── updates/     # Status updates (write to new.md)
+│               ├── updates/     # Status updates (write to _create)
 │               └── TEAM-*       # Symlinks to issue directories
 ├── initiatives/
 │   └── <initiative-slug>/
 │       ├── initiative.md        # Initiative metadata (read-only)
 │       ├── projects/            # Symlinks to team projects
-│       └── updates/             # Status updates (write to new.md)
+│       └── updates/             # Status updates (write to _create)
 ├── users/
 │   └── <username>/
 │       ├── user.md              # User metadata (read-only)
@@ -228,7 +228,7 @@ rmdir /mnt/linear/teams/TEAM/issues/TEAM-123
 # View sub-issues of TEAM-123
 ls /mnt/linear/teams/TEAM/issues/TEAM-123/children/
 
-# Set parent by editing frontmatter (editors work here, unlike new.md)
+# Set parent by editing frontmatter (editors work here, unlike _create)
 # Add: parent: TEAM-100
 vim /mnt/linear/teams/TEAM/issues/TEAM-456/issue.md
 ```
@@ -238,16 +238,16 @@ vim /mnt/linear/teams/TEAM/issues/TEAM-456/issue.md
 | Operation | Command | Effect |
 |-----------|---------|--------|
 | Read comments | `cat comments/001-*.md` | View comment content |
-| Create comment | `echo "text" > comments/new.md` | Posts new comment |
+| Create comment | `echo "text" > comments/_create` | Posts new comment |
 | Edit comment | Edit comment file and save | Updates comment |
 | Delete comment | `rm comments/001-*.md` | Deletes comment |
 
-> **Note:** `new.md` is a write-only trigger file. It's always empty (0 bytes) and cannot be read.
+> **Note:** `_create` is a write-only trigger file. It's always empty (0 bytes) and cannot be read.
 > Write content to it using `echo` or `cat` with redirect. Editors that read before writing won't work.
 
 ```bash
 # Add a comment
-echo "This needs review" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/new.md
+echo "This needs review" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/_create
 
 # Delete a comment
 rm /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
@@ -257,16 +257,16 @@ rm /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 
 | Operation | Command | Effect |
 |-----------|---------|--------|
-| Create document | `echo "..." > docs/new.md` | Creates document with title from frontmatter |
+| Create document | `echo "..." > docs/_create` | Creates document with title from frontmatter |
 | Edit document | Edit doc file and save | Updates title/content |
-| Rename document | `mv docs/old.md docs/new.md` | Renames document title |
+| Rename document | `mv docs/old.md docs/_create` | Renames document title |
 | Delete document | `rm docs/spec.md` | Deletes document |
 
-> **Note:** `new.md` is a write-only trigger file (see Comments section above).
+> **Note:** `_create` is a write-only trigger file (see Comments section above).
 
 ```bash
 # Create a document (with YAML frontmatter for title)
-cat > /mnt/linear/teams/TEAM/issues/TEAM-123/docs/new.md << 'EOF'
+cat > /mnt/linear/teams/TEAM/issues/TEAM-123/docs/_create << 'EOF'
 ---
 title: "Technical Spec"
 ---
@@ -281,16 +281,16 @@ mv docs/old-name.md docs/new-name.md
 
 | Operation | Command | Effect |
 |-----------|---------|--------|
-| Create label | `echo "..." > labels/new.md` | Creates label with name/color |
+| Create label | `echo "..." > labels/_create` | Creates label with name/color |
 | Edit label | Edit label file and save | Updates name/color/description |
 | Rename label | `mv labels/Bug.md labels/Defect.md` | Renames label |
 | Delete label | `rm labels/OldLabel.md` | Deletes label |
 
-> **Note:** `new.md` is a write-only trigger file (see Comments section above).
+> **Note:** `_create` is a write-only trigger file (see Comments section above).
 
 ```bash
 # Create a new label
-cat > /mnt/linear/teams/TEAM/labels/new.md << 'EOF'
+cat > /mnt/linear/teams/TEAM/labels/_create << 'EOF'
 ---
 name: "Critical"
 color: "#FF0000"

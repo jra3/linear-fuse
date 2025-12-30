@@ -137,8 +137,8 @@ FUSE filesystem exposing Linear.app as editable markdown files. Edit YAML frontm
   team.md, states.md, labels.md     [read-only metadata]
   issues/{ID}/
     issue.md                        [read/write]
-    comments/{id}.md                [read/write, new.md=create]
-    docs/{slug}.md                  [read/write, new.md=create]
+    comments/{id}.md                [read/write, _create=trigger]
+    docs/{slug}.md                  [read/write, _create=trigger]
     attachments/                    [read-only, lazy-fetch from CDN]
     children/                       [symlinks to sub-issues]
   by/status|label|assignee/{value}/ [issue symlinks]
@@ -163,7 +163,7 @@ FUSE filesystem exposing Linear.app as editable markdown files. Edit YAML frontm
 READ:    cat .../issue.md
 EDIT:    vim .../issue.md            (edit frontmatter, save)
 CREATE:  mkdir issues/"Title"        (new issue)
-         echo "text" > comments/new.md
+         echo "text" > comments/_create
          echo "text" > docs/"Title.md"
 ARCHIVE: rmdir issues/{ID}           (soft delete)
          rmdir projects/{slug}
@@ -194,19 +194,19 @@ Description body (editable)
 <permissions>
 -r--r--r--  Read-only     team.md, states.md, initiative.md
 -rw-r--r--  Editable      issue.md, project.md, comments/*.md, docs/*.md
---w-------  Write-only    new.md (write triggers creation, always empty)
+--w-------  Write-only    _create (write triggers creation, always empty)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
 </permissions>
 
-<new_md_behavior>
-new.md is a write-only trigger file (like /proc/sysrq-trigger):
+<_create_behavior>
+_create is a write-only trigger file (like /proc/sysrq-trigger):
 - Reading always returns empty (size 0)
 - Writing creates a new item and consumes the content
 - Editors fail because they read-before-write (vim, vscode)
-- Use piped output: echo "text" > new.md, cat file > new.md
+- Use piped output: echo "text" > _create, cat file > _create
 - Created items appear as separate files (e.g., 001-2025-01-15.md)
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
-</new_md_behavior>
+</_create_behavior>
 
 <important_notes>
 - Validate status/labels against states.md and labels.md before editing

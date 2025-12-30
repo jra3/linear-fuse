@@ -57,7 +57,7 @@ func commentFilePath(teamKey, issueID, filename string) string {
 }
 
 func newCommentPath(teamKey, issueID string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "comments", "new.md")
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "comments", "_create")
 }
 
 func docsPath(teamKey, issueID string) string {
@@ -69,7 +69,7 @@ func docFilePath(teamKey, issueID, filename string) string {
 }
 
 func newDocPath(teamKey, issueID string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "docs", "new.md")
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "docs", "_create")
 }
 
 func cyclesPath(teamKey string) string {

@@ -179,7 +179,7 @@ func TestFixtureLabelsDirectoryListing(t *testing.T) {
 		t.Fatalf("Failed to read labels directory: %v", err)
 	}
 
-	// Should have labels (Bug, Feature, Documentation) + new.md
+	// Should have labels (Bug, Feature, Documentation) + _create
 	if len(entries) < 3 {
 		t.Errorf("Expected at least 3 labels, got %d", len(entries))
 	}
@@ -193,7 +193,7 @@ func TestFixtureLabelFileContents(t *testing.T) {
 
 	testedCount := 0
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		if !strings.HasSuffix(entry.Name(), ".md") {
@@ -752,10 +752,10 @@ func TestFixtureProjectUpdatesDirectoryExists(t *testing.T) {
 
 func TestFixtureProjectUpdatesHasNewMd(t *testing.T) {
 	projectPath := filepath.Join(projectsPath(testTeamKey), "test-project")
-	newMdPath := filepath.Join(projectPath, "updates", "new.md")
+	newMdPath := filepath.Join(projectPath, "updates", "_create")
 	_, err := os.Stat(newMdPath)
 	if err != nil {
-		t.Errorf("updates/new.md should exist: %v", err)
+		t.Errorf("updates/_create should exist: %v", err)
 	}
 }
 
@@ -793,10 +793,10 @@ func TestFixtureInitiativeUpdatesHasNewMd(t *testing.T) {
 		t.Skip("No initiatives to test")
 	}
 
-	newMdPath := filepath.Join(initiativePath(entries[0].Name()), "updates", "new.md")
+	newMdPath := filepath.Join(initiativePath(entries[0].Name()), "updates", "_create")
 	_, err = os.Stat(newMdPath)
 	if err != nil {
-		t.Errorf("updates/new.md should exist: %v", err)
+		t.Errorf("updates/_create should exist: %v", err)
 	}
 }
 

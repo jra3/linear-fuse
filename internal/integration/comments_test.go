@@ -17,11 +17,11 @@ func TestCommentsDirectoryListing(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// Create comment via filesystem (new.md)
+	// Create comment via filesystem (_create)
 	commentBody := "[TEST] Comment for listing test"
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
-		t.Fatalf("Failed to write to new.md: %v", err)
+		t.Fatalf("Failed to write to _create: %v", err)
 	}
 
 	// Read comments directory
@@ -30,20 +30,20 @@ func TestCommentsDirectoryListing(t *testing.T) {
 		t.Fatalf("Failed to read comments directory: %v", err)
 	}
 
-	// Should have at least new.md and the comment
+	// Should have at least _create and the comment
 	hasNewMd := false
 	hasComment := false
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			hasNewMd = true
 		}
-		if strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "new.md" {
+		if strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "_create" {
 			hasComment = true
 		}
 	}
 
 	if !hasNewMd {
-		t.Error("Comments directory should contain new.md")
+		t.Error("Comments directory should contain _create")
 	}
 	if !hasComment {
 		t.Error("Comments directory should contain at least one comment file")
@@ -63,7 +63,7 @@ func TestCommentFilenameFormat(t *testing.T) {
 	// Create comment via filesystem
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 	if err := os.WriteFile(newMdPath, []byte("[TEST] Comment for filename test"), 0644); err != nil {
-		t.Fatalf("Failed to write to new.md: %v", err)
+		t.Fatalf("Failed to write to _create: %v", err)
 	}
 
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
@@ -71,10 +71,10 @@ func TestCommentFilenameFormat(t *testing.T) {
 		t.Fatalf("Failed to read comments directory: %v", err)
 	}
 
-	// Find comment files (not new.md)
+	// Find comment files (not _create)
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "new.md" {
+		if name == "_create" {
 			continue
 		}
 		// Should be in format: NNN-YYYY-MM-DDTHH-MM.md
@@ -101,7 +101,7 @@ func TestCommentFileContents(t *testing.T) {
 	commentBody := "This is the comment body text"
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
-		t.Fatalf("Failed to write to new.md: %v", err)
+		t.Fatalf("Failed to write to _create: %v", err)
 	}
 
 	entries, err := os.ReadDir(commentsPath(testTeamKey, issue.Identifier))
@@ -111,7 +111,7 @@ func TestCommentFileContents(t *testing.T) {
 
 	// Find and read a comment file
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 
@@ -147,7 +147,7 @@ func TestCommentFileContents(t *testing.T) {
 
 func TestCreateCommentViaNewMd(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("Create Comment via new.md Test")
+	issue, cleanup, err := createTestIssue("Create Comment via _create Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -155,12 +155,12 @@ func TestCreateCommentViaNewMd(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// Write to new.md
-	commentBody := "[TEST] Comment created via new.md"
+	// Write to _create
+	commentBody := "[TEST] Comment created via _create"
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 
 	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
-		t.Fatalf("Failed to write to new.md: %v", err)
+		t.Fatalf("Failed to write to _create: %v", err)
 	}
 
 	// No wait needed - kernel cache invalidated on filesystem write
@@ -172,21 +172,21 @@ func TestCreateCommentViaNewMd(t *testing.T) {
 
 	found := false
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		content, err := os.ReadFile(commentFilePath(testTeamKey, issue.Identifier, entry.Name()))
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(content), "Comment created via new.md") {
+		if strings.Contains(string(content), "Comment created via _create") {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Error("Comment created via new.md not found")
+		t.Error("Comment created via _create not found")
 	}
 }
 
@@ -203,7 +203,7 @@ func TestDeleteComment(t *testing.T) {
 	// Create comment via filesystem
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 	if err := os.WriteFile(newMdPath, []byte("[TEST] Comment to delete"), 0644); err != nil {
-		t.Fatalf("Failed to write to new.md: %v", err)
+		t.Fatalf("Failed to write to _create: %v", err)
 	}
 
 	// Find the comment file
@@ -214,7 +214,7 @@ func TestDeleteComment(t *testing.T) {
 
 	var commentFile string
 	for _, entry := range entries {
-		if entry.Name() != "new.md" && strings.HasSuffix(entry.Name(), ".md") {
+		if entry.Name() != "_create" && strings.HasSuffix(entry.Name(), ".md") {
 			commentFile = entry.Name()
 			break
 		}
@@ -244,7 +244,7 @@ func TestDeleteComment(t *testing.T) {
 
 func TestNewMdAlwaysExists(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("new.md Exists Test")
+	issue, cleanup, err := createTestIssue("_create Exists Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -252,16 +252,16 @@ func TestNewMdAlwaysExists(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// new.md should always be present
+	// _create should always be present
 	_, err = os.Stat(newCommentPath(testTeamKey, issue.Identifier))
 	if err != nil {
-		t.Errorf("new.md should always exist: %v", err)
+		t.Errorf("_create should always exist: %v", err)
 	}
 }
 
 func TestNewMdWriteOnly(t *testing.T) {
 	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("new.md Write-Only Test")
+	issue, cleanup, err := createTestIssue("_create Write-Only Test")
 	if err != nil {
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
@@ -269,15 +269,15 @@ func TestNewMdWriteOnly(t *testing.T) {
 
 	waitForCacheExpiry()
 
-	// new.md should be write-only (0200), so reading should fail
+	// _create should be write-only (0200), so reading should fail
 	_, err = os.ReadFile(newCommentPath(testTeamKey, issue.Identifier))
 	if err == nil {
-		t.Error("new.md should be write-only and not readable")
+		t.Error("_create should be write-only and not readable")
 	}
 
 	// Verify we can still write to it
 	err = os.WriteFile(newCommentPath(testTeamKey, issue.Identifier), []byte("[TEST] Write-only test"), 0644)
 	if err != nil {
-		t.Errorf("new.md should be writable: %v", err)
+		t.Errorf("_create should be writable: %v", err)
 	}
 }

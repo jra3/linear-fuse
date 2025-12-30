@@ -127,11 +127,11 @@ func TestFixtureCommentsDirectoryListing(t *testing.T) {
 		t.Fatalf("Failed to read comments directory: %v", err)
 	}
 
-	// Should have new.md + 3 comments
+	// Should have _create + 3 comments
 	hasNewMd := false
 	commentCount := 0
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			hasNewMd = true
 		} else if strings.HasSuffix(entry.Name(), ".md") {
 			commentCount++
@@ -139,7 +139,7 @@ func TestFixtureCommentsDirectoryListing(t *testing.T) {
 	}
 
 	if !hasNewMd {
-		t.Error("Comments directory should contain new.md")
+		t.Error("Comments directory should contain _create")
 	}
 	if commentCount != 3 {
 		t.Errorf("Expected 3 comments, got %d", commentCount)
@@ -154,7 +154,7 @@ func TestFixtureCommentFilenameFormat(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "new.md" {
+		if name == "_create" {
 			continue
 		}
 		// Should be in format: NNN-YYYY-MM-DDTHH-MM.md
@@ -175,7 +175,7 @@ func TestFixtureCommentFileContents(t *testing.T) {
 
 	testedCount := 0
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		if !strings.HasSuffix(entry.Name(), ".md") {
@@ -217,18 +217,18 @@ func TestFixtureCommentFileContents(t *testing.T) {
 }
 
 func TestFixtureNewMdAlwaysExists(t *testing.T) {
-	// new.md should always be present in comments directory
+	// _create should always be present in comments directory
 	_, err := os.Stat(newCommentPath(testTeamKey, "TST-1"))
 	if err != nil {
-		t.Errorf("new.md should always exist: %v", err)
+		t.Errorf("_create should always exist: %v", err)
 	}
 }
 
 func TestFixtureNewMdWriteOnly(t *testing.T) {
-	// new.md should be write-only (0200), so reading should fail
+	// _create should be write-only (0200), so reading should fail
 	_, err := os.ReadFile(newCommentPath(testTeamKey, "TST-1"))
 	if err == nil {
-		t.Error("new.md should be write-only and not readable")
+		t.Error("_create should be write-only and not readable")
 	}
 }
 
@@ -242,11 +242,11 @@ func TestFixtureDocsDirectoryListing(t *testing.T) {
 		t.Fatalf("Failed to read docs directory: %v", err)
 	}
 
-	// Should have new.md + 2 documents
+	// Should have _create + 2 documents
 	hasNewMd := false
 	docCount := 0
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			hasNewMd = true
 		} else if strings.HasSuffix(entry.Name(), ".md") {
 			docCount++
@@ -254,7 +254,7 @@ func TestFixtureDocsDirectoryListing(t *testing.T) {
 	}
 
 	if !hasNewMd {
-		t.Error("Docs directory should contain new.md")
+		t.Error("Docs directory should contain _create")
 	}
 	if docCount != 2 {
 		t.Errorf("Expected 2 documents, got %d", docCount)
@@ -269,7 +269,7 @@ func TestFixtureDocumentFilenameFormat(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "new.md" {
+		if name == "_create" {
 			continue
 		}
 		if !strings.HasSuffix(name, ".md") {
@@ -286,7 +286,7 @@ func TestFixtureDocumentFileContents(t *testing.T) {
 
 	testedCount := 0
 	for _, entry := range entries {
-		if entry.Name() == "new.md" {
+		if entry.Name() == "_create" {
 			continue
 		}
 		if !strings.HasSuffix(entry.Name(), ".md") {
@@ -327,14 +327,14 @@ func TestFixtureDocumentFileContents(t *testing.T) {
 func TestFixtureDocsNewMdAlwaysExists(t *testing.T) {
 	_, err := os.Stat(newDocPath(testTeamKey, "TST-1"))
 	if err != nil {
-		t.Errorf("docs/new.md should always exist: %v", err)
+		t.Errorf("docs/_create should always exist: %v", err)
 	}
 }
 
 func TestFixtureDocsNewMdWriteOnly(t *testing.T) {
 	_, err := os.ReadFile(newDocPath(testTeamKey, "TST-1"))
 	if err == nil {
-		t.Error("docs/new.md should be write-only and not readable")
+		t.Error("docs/_create should be write-only and not readable")
 	}
 }
 

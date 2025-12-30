@@ -615,9 +615,9 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// Always include new.md for creating updates
+	// Always include _create for creating updates
 	entries := []fuse.DirEntry{
-		{Name: "new.md", Mode: syscall.S_IFREG},
+		{Name: "_create", Mode: syscall.S_IFREG},
 	}
 
 	// Sort updates by creation time
@@ -639,8 +639,8 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 }
 
 func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle new.md for creating updates
-	if name == "new.md" {
+	// Handle _create for creating updates
+	if name == "_create" {
 		now := time.Now()
 		node := &NewUpdateNode{
 			BaseNode:  BaseNode{lfs: n.lfs},
@@ -778,7 +778,7 @@ func (n *NewUpdateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, 
 }
 
 func (n *NewUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// new.md is write-only - return permission denied
+	// _create is write-only - return permission denied
 	return nil, syscall.EACCES
 }
 
@@ -857,7 +857,7 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	n.created = true
 
 	// Invalidate kernel cache entry for updates directory
-	n.lfs.InvalidateKernelEntry(updatesDirIno(n.projectID), "new.md")
+	n.lfs.InvalidateKernelEntry(updatesDirIno(n.projectID), "_create")
 
 	if n.lfs.debug {
 		log.Printf("Project update created successfully")

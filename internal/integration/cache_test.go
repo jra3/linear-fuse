@@ -109,7 +109,7 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 	}
 	initialCount := len(entries1)
 
-	// Create comment via new.md
+	// Create comment via _create
 	commentBody := "[TEST] Cache invalidation comment"
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {
@@ -131,7 +131,7 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 
 func TestCommentVisibleImmediatelyAfterCreate(t *testing.T) {
 	skipIfNoWriteTests(t)
-	// This test verifies that after creating a comment via new.md,
+	// This test verifies that after creating a comment via _create,
 	// the new comment is visible immediately (cache insertion, not invalidation)
 
 	issue, cleanup, err := createTestIssue("Immediate Visibility Test")
@@ -150,7 +150,7 @@ func TestCommentVisibleImmediatelyAfterCreate(t *testing.T) {
 	}
 	initialCount := len(entries1)
 
-	// Create comment via new.md
+	// Create comment via _create
 	commentBody := "[TEST] Immediate visibility comment"
 	newMdPath := newCommentPath(testTeamKey, issue.Identifier)
 	if err := os.WriteFile(newMdPath, []byte(commentBody), 0644); err != nil {

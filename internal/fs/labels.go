@@ -57,12 +57,12 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// +1 for new.md
+	// +1 for _create
 	entries := make([]fuse.DirEntry, len(labels)+1)
 
-	// Always include new.md for creating labels
+	// Always include _create for creating labels
 	entries[0] = fuse.DirEntry{
-		Name: "new.md",
+		Name: "_create",
 		Mode: syscall.S_IFREG,
 	}
 
@@ -77,8 +77,8 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle new.md for creating labels
-	if name == "new.md" {
+	// Handle _create for creating labels
+	if name == "_create" {
 		now := time.Now()
 		node := &NewLabelNode{
 			BaseNode: BaseNode{lfs: n.lfs},
@@ -135,8 +135,8 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		log.Printf("Unlink label: %s", name)
 	}
 
-	// Don't allow deleting new.md
-	if name == "new.md" {
+	// Don't allow deleting _create
+	if name == "_create" {
 		return syscall.EPERM
 	}
 
@@ -170,8 +170,8 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		log.Printf("Rename label: %s -> %s (newParent type: %T)", name, newName, newParent)
 	}
 
-	// Don't allow renaming new.md
-	if name == "new.md" {
+	// Don't allow renaming _create
+	if name == "_create" {
 		return syscall.EPERM
 	}
 
@@ -469,7 +469,7 @@ func (n *NewLabelNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, u
 }
 
 func (n *NewLabelNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// new.md is write-only - return permission denied
+	// _create is write-only - return permission denied
 	return nil, syscall.EACCES
 }
 
@@ -566,7 +566,7 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	n.created = true
 
 	// Invalidate kernel cache entry for labels directory
-	n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), "new.md")
+	n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), "_create")
 
 	if n.lfs.debug {
 		log.Printf("Label created successfully")
