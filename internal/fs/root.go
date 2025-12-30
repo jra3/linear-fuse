@@ -192,7 +192,9 @@ write to new.md to update existing content.
 │   │   ├── screenshot.png         # read-only, downloaded on access
 │   │   └── design-spec.pdf
 │   └── children/                  # symlinks to sub-issues
-├── cycles/{name}/                 # symlinks to issues
+├── cycles/
+│   ├── current                    # symlink to active cycle
+│   └── {name}/                    # cycle directories with issue symlinks
 └── projects/{slug}/
     ├── project.md                 # EDITABLE
     ├── docs/                      # same as issue docs

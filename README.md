@@ -119,9 +119,8 @@ Timestamps are preserved across all views:
 │       ├── labels.md            # Labels reference (read-only)
 │       ├── by/                  # Filter issues by attribute
 │       │   ├── status/<name>/   # Issues filtered by status (symlinks)
-│       │   ├── priority/<level>/# Issues filtered by priority (symlinks)
 │       │   ├── label/<name>/    # Issues filtered by label (symlinks)
-│       │   └── assignee/<name>/ # Issues filtered by assignee (symlinks)
+│       │   └── assignee/<name>/ # Issues by assignee (includes "unassigned")
 │       ├── issues/
 │       │   └── <TEAM-nnn>/       # Issue identifier (e.g., TEAM-123)
 │       │       ├── issue.md     # Issue content (read/write)
@@ -138,7 +137,10 @@ Timestamps are preserved across all views:
 │       ├── docs/                # Team documents
 │       │   ├── *.md             # Documents (read/write/rename/delete)
 │       │   └── new.md           # Write here to create document
-│       ├── cycles/              # Sprint cycles (read-only)
+│       ├── search/<query>/      # Full-text search results (symlinks)
+│       ├── cycles/              # Sprint cycles
+│       │   ├── current          # Symlink to active cycle (if any)
+│       │   └── <cycle-name>/    # Cycle directories with issue symlinks
 │       └── projects/
 │           └── <project-slug>/
 │               ├── project.md   # Project metadata (read/write)

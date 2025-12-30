@@ -85,16 +85,18 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 │   │       └── children/                 # Sub-issue symlinks
 │   ├── by/                               # Filtered views
 │   │   ├── status/<state>/               # Issues by workflow state
-│   │   ├── priority/<level>/             # Issues by priority
-│   │   ├── assignee/<email>/             # Issues by assignee
 │   │   ├── label/<name>/                 # Issues by label
-│   │   └── unassigned/                   # Unassigned issues
+│   │   └── assignee/<name>/              # Issues by assignee (includes "unassigned")
 │   ├── labels/*.md                       # Label CRUD via new.md
+│   ├── search/<query>/                   # Full-text search results (symlinks)
 │   ├── projects/<slug>/
 │   │   ├── project.md                    # Project metadata (read/write)
 │   │   ├── docs/*.md                     # Project documents
-│   │   └── updates/*.md                  # Status updates via new.md
-│   └── cycles/<name>/                    # Sprint/cycle issues
+│   │   ├── updates/*.md                  # Status updates via new.md
+│   │   └── TEAM-*/                       # Issue symlinks
+│   └── cycles/
+│       ├── current                       # Symlink to active cycle
+│       └── <name>/                       # Cycle directories with issue symlinks
 ├── initiatives/<slug>/
 │   ├── initiative.md                     # Initiative metadata
 │   ├── projects/                         # Linked project symlinks
@@ -117,7 +119,7 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
   - `ByNode`/`FilteredIssuesNode` - Server-side filtered queries
 - **internal/marshal**: Markdown ↔ Linear issue conversion with YAML frontmatter
 - **internal/db**: SQLite database layer with sqlc-generated queries
-  - `schema.sql` - Table definitions (see [docs/DATABASE.md](docs/DATABASE.md))
+  - `schema.sql` - Table definitions (well-commented, see inline docs)
   - `queries.sql` - sqlc query definitions
   - `convert.go` - API ↔ DB type conversion functions
 - **internal/repo**: Repository pattern for data access
@@ -228,7 +230,7 @@ Key input types for mutations:
 
 ## Database Design
 
-SQLite serves as the persistent cache layer. See [docs/DATABASE.md](docs/DATABASE.md) for full details.
+SQLite serves as the persistent cache layer. See `internal/db/schema.sql` for table definitions.
 
 ### Key Principles
 
