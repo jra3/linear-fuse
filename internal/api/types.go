@@ -16,6 +16,7 @@ type Issue struct {
 	Identifier       string            `json:"identifier"`
 	Title            string            `json:"title"`
 	Description      string            `json:"description"`
+	BranchName       string            `json:"branchName"`
 	State            State             `json:"state"`
 	Assignee         *User             `json:"assignee"`
 	Creator          *User             `json:"creator"`
@@ -25,6 +26,10 @@ type Issue struct {
 	Estimate         *float64          `json:"estimate"`
 	CreatedAt        time.Time         `json:"createdAt"`
 	UpdatedAt        time.Time         `json:"updatedAt"`
+	StartedAt        *time.Time        `json:"startedAt"`
+	CompletedAt      *time.Time        `json:"completedAt"`
+	CanceledAt       *time.Time        `json:"canceledAt"`
+	ArchivedAt       *time.Time        `json:"archivedAt"`
 	URL              string            `json:"url"`
 	Team             *Team             `json:"team"`
 	Project          *Project          `json:"project"`
@@ -32,6 +37,21 @@ type Issue struct {
 	Parent           *ParentIssue      `json:"parent"`
 	Children         ChildIssues       `json:"children"`
 	Cycle            *IssueCycle       `json:"cycle"`
+	Relations        IssueRelations    `json:"relations"`
+	InverseRelations IssueRelations    `json:"inverseRelations"`
+}
+
+// IssueRelations is a collection of issue relations
+type IssueRelations struct {
+	Nodes []IssueRelation `json:"nodes"`
+}
+
+// IssueRelation represents a relationship between two issues
+type IssueRelation struct {
+	ID           string       `json:"id"`
+	Type         string       `json:"type"` // blocks, duplicate, related, similar
+	RelatedIssue *ParentIssue `json:"relatedIssue,omitempty"`
+	Issue        *ParentIssue `json:"issue,omitempty"` // For inverse relations
 }
 
 // IssueCycle is a minimal cycle representation for issue references
@@ -290,4 +310,49 @@ type EmbeddedFile struct {
 	CachePath string    // Local cache path (empty if not cached)
 	Source    string    // Where found: "description" or "comment:{id}"
 	SyncedAt  time.Time // When metadata was synced
+}
+
+// IssueHistoryEntry represents a single change in an issue's history
+type IssueHistoryEntry struct {
+	ID                 string     `json:"id"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	Actor              *User      `json:"actor"`
+	FromAssignee       *User      `json:"fromAssignee"`
+	ToAssignee         *User      `json:"toAssignee"`
+	FromState          *State     `json:"fromState"`
+	ToState            *State     `json:"toState"`
+	FromPriority       *int       `json:"fromPriority"`
+	ToPriority         *int       `json:"toPriority"`
+	FromTitle          *string    `json:"fromTitle"`
+	ToTitle            *string    `json:"toTitle"`
+	FromDueDate        *string    `json:"fromDueDate"`
+	ToDueDate          *string    `json:"toDueDate"`
+	FromEstimate       *float64   `json:"fromEstimate"`
+	ToEstimate         *float64   `json:"toEstimate"`
+	FromParent         *ParentRef `json:"fromParent"`
+	ToParent           *ParentRef `json:"toParent"`
+	FromProject        *NamedRef  `json:"fromProject"`
+	ToProject          *NamedRef  `json:"toProject"`
+	FromCycle          *NamedRef  `json:"fromCycle"`
+	ToCycle            *NamedRef  `json:"toCycle"`
+	AddedLabels        []Label    `json:"addedLabels"`
+	RemovedLabels      []Label    `json:"removedLabels"`
+	UpdatedDescription bool       `json:"updatedDescription"`
+}
+
+// ParentRef is a minimal issue reference for history entries
+type ParentRef struct {
+	ID         string `json:"id"`
+	Identifier string `json:"identifier"`
+}
+
+// NamedRef is a minimal reference with just ID and name
+type NamedRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// IssueHistory is a collection of history entries
+type IssueHistory struct {
+	Nodes []IssueHistoryEntry `json:"nodes"`
 }

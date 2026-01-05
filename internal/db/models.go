@@ -151,8 +151,13 @@ type Issue struct {
 	DueDate       sql.NullString  `json:"due_date"`
 	Estimate      sql.NullFloat64 `json:"estimate"`
 	Url           sql.NullString  `json:"url"`
+	BranchName    sql.NullString  `json:"branch_name"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	StartedAt     sql.NullTime    `json:"started_at"`
+	CompletedAt   sql.NullTime    `json:"completed_at"`
+	CanceledAt    sql.NullTime    `json:"canceled_at"`
+	ArchivedAt    sql.NullTime    `json:"archived_at"`
 	SyncedAt      time.Time       `json:"synced_at"`
 	Data          json.RawMessage `json:"data"`
 }

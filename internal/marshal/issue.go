@@ -14,6 +14,25 @@ type AttachmentLink struct {
 	URL   string `yaml:"url"`
 }
 
+// IssueRelationLink represents an issue relation for frontmatter
+type IssueRelationLink struct {
+	Type  string `yaml:"type"`
+	Issue string `yaml:"issue"`
+}
+
+// invertRelationType returns the inverse relation type
+// blocks -> blocked-by, duplicate -> duplicate-of, etc.
+func invertRelationType(relType string) string {
+	switch relType {
+	case "blocks":
+		return "blocked-by"
+	case "duplicate":
+		return "duplicate-of"
+	default:
+		return relType // related, similar stay the same
+	}
+}
+
 // IssueToMarkdown converts a Linear issue to markdown with YAML frontmatter
 func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, error) {
 	fm := make(map[string]any)
@@ -24,6 +43,26 @@ func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, e
 	fm["url"] = issue.URL
 	fm["created"] = issue.CreatedAt.Format(time.RFC3339)
 	fm["updated"] = issue.UpdatedAt.Format(time.RFC3339)
+	if issue.Creator != nil {
+		fm["creator"] = issue.Creator.Email
+	}
+	if issue.BranchName != "" {
+		fm["branch"] = issue.BranchName
+	}
+
+	// Workflow timestamps (read-only)
+	if issue.StartedAt != nil {
+		fm["started"] = issue.StartedAt.Format(time.RFC3339)
+	}
+	if issue.CompletedAt != nil {
+		fm["completed"] = issue.CompletedAt.Format(time.RFC3339)
+	}
+	if issue.CanceledAt != nil {
+		fm["canceled"] = issue.CanceledAt.Format(time.RFC3339)
+	}
+	if issue.ArchivedAt != nil {
+		fm["archived"] = issue.ArchivedAt.Format(time.RFC3339)
+	}
 
 	// Editable fields
 	fm["title"] = issue.Title
@@ -83,6 +122,32 @@ func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, e
 			})
 		}
 		fm["links"] = links
+	}
+
+	// Add issue relations (read-only)
+	var relations []IssueRelationLink
+	// Forward relations (this issue -> related issue)
+	for _, rel := range issue.Relations.Nodes {
+		if rel.RelatedIssue != nil {
+			relations = append(relations, IssueRelationLink{
+				Type:  rel.Type,
+				Issue: rel.RelatedIssue.Identifier,
+			})
+		}
+	}
+	// Inverse relations (related issue -> this issue)
+	for _, rel := range issue.InverseRelations.Nodes {
+		if rel.Issue != nil {
+			// Invert the relation type for the inverse direction
+			invertedType := invertRelationType(rel.Type)
+			relations = append(relations, IssueRelationLink{
+				Type:  invertedType,
+				Issue: rel.Issue.Identifier,
+			})
+		}
+	}
+	if len(relations) > 0 {
+		fm["relations"] = relations
 	}
 
 	// Body is just the description

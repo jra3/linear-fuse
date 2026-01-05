@@ -22,8 +22,13 @@ CREATE TABLE IF NOT EXISTS issues (
     due_date TEXT,
     estimate REAL,
     url TEXT,
+    branch_name TEXT,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
+    started_at DATETIME,
+    completed_at DATETIME,
+    canceled_at DATETIME,
+    archived_at DATETIME,
     synced_at DATETIME NOT NULL,
     data JSON NOT NULL  -- Full issue JSON for complex fields (labels, children, etc.)
 );

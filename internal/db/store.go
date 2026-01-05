@@ -157,8 +157,9 @@ func scanIssues(rows *sql.Rows) ([]Issue, error) {
 			&i.StateID, &i.StateName, &i.StateType,
 			&i.AssigneeID, &i.AssigneeEmail, &i.CreatorID, &i.CreatorEmail, &i.Priority,
 			&i.ProjectID, &i.ProjectName, &i.CycleID, &i.CycleName,
-			&i.ParentID, &i.DueDate, &i.Estimate, &i.Url,
-			&i.CreatedAt, &i.UpdatedAt, &i.SyncedAt, &i.Data,
+			&i.ParentID, &i.DueDate, &i.Estimate, &i.Url, &i.BranchName,
+			&i.CreatedAt, &i.UpdatedAt, &i.StartedAt, &i.CompletedAt, &i.CanceledAt, &i.ArchivedAt,
+			&i.SyncedAt, &i.Data,
 		); err != nil {
 			return nil, err
 		}
@@ -191,8 +192,13 @@ type IssueData struct {
 	DueDate       *string
 	Estimate      *float64
 	URL           *string
+	BranchName    *string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	StartedAt     *time.Time
+	CompletedAt   *time.Time
+	CanceledAt    *time.Time
+	ArchivedAt    *time.Time
 	Data          json.RawMessage
 }
 
@@ -220,8 +226,13 @@ func (d *IssueData) ToUpsertParams() UpsertIssueParams {
 		DueDate:       toNullString(d.DueDate),
 		Estimate:      toNullFloat64(d.Estimate),
 		Url:           toNullString(d.URL),
+		BranchName:    toNullString(d.BranchName),
 		CreatedAt:     d.CreatedAt,
 		UpdatedAt:     d.UpdatedAt,
+		StartedAt:     toNullTimePtr(d.StartedAt),
+		CompletedAt:   toNullTimePtr(d.CompletedAt),
+		CanceledAt:    toNullTimePtr(d.CanceledAt),
+		ArchivedAt:    toNullTimePtr(d.ArchivedAt),
 		SyncedAt:      Now(),
 		Data:          d.Data,
 	}
@@ -239,6 +250,13 @@ func toNullFloat64(f *float64) sql.NullFloat64 {
 		return sql.NullFloat64{}
 	}
 	return sql.NullFloat64{Float64: *f, Valid: true}
+}
+
+func toNullTimePtr(t *time.Time) sql.NullTime {
+	if t == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *t, Valid: true}
 }
 
 // ToNullTime converts a time.Time to sql.NullTime

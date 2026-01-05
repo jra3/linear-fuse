@@ -687,7 +687,7 @@ func (q *Queries) GetIssueAttachmentsSyncedAt(ctx context.Context, issueID strin
 }
 
 const getIssueByID = `-- name: GetIssueByID :one
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE id = ?
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE id = ?
 `
 
 func (q *Queries) GetIssueByID(ctx context.Context, id string) (Issue, error) {
@@ -715,8 +715,13 @@ func (q *Queries) GetIssueByID(ctx context.Context, id string) (Issue, error) {
 		&i.DueDate,
 		&i.Estimate,
 		&i.Url,
+		&i.BranchName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CanceledAt,
+		&i.ArchivedAt,
 		&i.SyncedAt,
 		&i.Data,
 	)
@@ -724,7 +729,7 @@ func (q *Queries) GetIssueByID(ctx context.Context, id string) (Issue, error) {
 }
 
 const getIssueByIdentifier = `-- name: GetIssueByIdentifier :one
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE identifier = ?
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE identifier = ?
 `
 
 func (q *Queries) GetIssueByIdentifier(ctx context.Context, identifier string) (Issue, error) {
@@ -752,8 +757,13 @@ func (q *Queries) GetIssueByIdentifier(ctx context.Context, identifier string) (
 		&i.DueDate,
 		&i.Estimate,
 		&i.Url,
+		&i.BranchName,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CanceledAt,
+		&i.ArchivedAt,
 		&i.SyncedAt,
 		&i.Data,
 	)
@@ -1323,7 +1333,7 @@ func (q *Queries) ListCachedEmbeddedFiles(ctx context.Context) ([]EmbeddedFile, 
 }
 
 const listCycleIssues = `-- name: ListCycleIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListCycleIssues(ctx context.Context, cycleID sql.NullString) ([]Issue, error) {
@@ -1357,8 +1367,13 @@ func (q *Queries) ListCycleIssues(ctx context.Context, cycleID sql.NullString) (
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -1767,7 +1782,7 @@ func (q *Queries) ListProjectInitiativeIDs(ctx context.Context, projectID string
 }
 
 const listProjectIssues = `-- name: ListProjectIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE project_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE project_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListProjectIssues(ctx context.Context, projectID sql.NullString) ([]Issue, error) {
@@ -1801,8 +1816,13 @@ func (q *Queries) ListProjectIssues(ctx context.Context, projectID sql.NullStrin
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2187,7 +2207,7 @@ func (q *Queries) ListTeamIssueIDs(ctx context.Context, teamID string) ([]ListTe
 }
 
 const listTeamIssues = `-- name: ListTeamIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamIssues(ctx context.Context, teamID string) ([]Issue, error) {
@@ -2221,8 +2241,13 @@ func (q *Queries) ListTeamIssues(ctx context.Context, teamID string) ([]Issue, e
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2240,7 +2265,7 @@ func (q *Queries) ListTeamIssues(ctx context.Context, teamID string) ([]Issue, e
 }
 
 const listTeamIssuesByAssignee = `-- name: ListTeamIssuesByAssignee :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByAssigneeParams struct {
@@ -2279,8 +2304,13 @@ func (q *Queries) ListTeamIssuesByAssignee(ctx context.Context, arg ListTeamIssu
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2298,7 +2328,7 @@ func (q *Queries) ListTeamIssuesByAssignee(ctx context.Context, arg ListTeamIssu
 }
 
 const listTeamIssuesByAssigneeEmail = `-- name: ListTeamIssuesByAssigneeEmail :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_email = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_email = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByAssigneeEmailParams struct {
@@ -2337,8 +2367,13 @@ func (q *Queries) ListTeamIssuesByAssigneeEmail(ctx context.Context, arg ListTea
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2356,7 +2391,7 @@ func (q *Queries) ListTeamIssuesByAssigneeEmail(ctx context.Context, arg ListTea
 }
 
 const listTeamIssuesByCycle = `-- name: ListTeamIssuesByCycle :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByCycleParams struct {
@@ -2395,8 +2430,13 @@ func (q *Queries) ListTeamIssuesByCycle(ctx context.Context, arg ListTeamIssuesB
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2414,7 +2454,7 @@ func (q *Queries) ListTeamIssuesByCycle(ctx context.Context, arg ListTeamIssuesB
 }
 
 const listTeamIssuesByCycleName = `-- name: ListTeamIssuesByCycleName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByCycleNameParams struct {
@@ -2453,8 +2493,13 @@ func (q *Queries) ListTeamIssuesByCycleName(ctx context.Context, arg ListTeamIss
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2472,7 +2517,7 @@ func (q *Queries) ListTeamIssuesByCycleName(ctx context.Context, arg ListTeamIss
 }
 
 const listTeamIssuesByParent = `-- name: ListTeamIssuesByParent :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE parent_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE parent_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullString) ([]Issue, error) {
@@ -2506,8 +2551,13 @@ func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullS
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2525,7 +2575,7 @@ func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullS
 }
 
 const listTeamIssuesByPriority = `-- name: ListTeamIssuesByPriority :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND priority = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND priority = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByPriorityParams struct {
@@ -2564,8 +2614,13 @@ func (q *Queries) ListTeamIssuesByPriority(ctx context.Context, arg ListTeamIssu
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2583,7 +2638,7 @@ func (q *Queries) ListTeamIssuesByPriority(ctx context.Context, arg ListTeamIssu
 }
 
 const listTeamIssuesByProject = `-- name: ListTeamIssuesByProject :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByProjectParams struct {
@@ -2622,8 +2677,13 @@ func (q *Queries) ListTeamIssuesByProject(ctx context.Context, arg ListTeamIssue
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2641,7 +2701,7 @@ func (q *Queries) ListTeamIssuesByProject(ctx context.Context, arg ListTeamIssue
 }
 
 const listTeamIssuesByProjectName = `-- name: ListTeamIssuesByProjectName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND project_name = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND project_name = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByProjectNameParams struct {
@@ -2680,8 +2740,13 @@ func (q *Queries) ListTeamIssuesByProjectName(ctx context.Context, arg ListTeamI
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2699,7 +2764,7 @@ func (q *Queries) ListTeamIssuesByProjectName(ctx context.Context, arg ListTeamI
 }
 
 const listTeamIssuesByState = `-- name: ListTeamIssuesByState :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND state_id = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByStateParams struct {
@@ -2738,8 +2803,13 @@ func (q *Queries) ListTeamIssuesByState(ctx context.Context, arg ListTeamIssuesB
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2757,7 +2827,7 @@ func (q *Queries) ListTeamIssuesByState(ctx context.Context, arg ListTeamIssuesB
 }
 
 const listTeamIssuesByStateName = `-- name: ListTeamIssuesByStateName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_name = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND state_name = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByStateNameParams struct {
@@ -2796,8 +2866,13 @@ func (q *Queries) ListTeamIssuesByStateName(ctx context.Context, arg ListTeamIss
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -2815,7 +2890,7 @@ func (q *Queries) ListTeamIssuesByStateName(ctx context.Context, arg ListTeamIss
 }
 
 const listTeamIssuesByStateType = `-- name: ListTeamIssuesByStateType :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND state_type = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND state_type = ? ORDER BY updated_at DESC
 `
 
 type ListTeamIssuesByStateTypeParams struct {
@@ -2854,8 +2929,13 @@ func (q *Queries) ListTeamIssuesByStateType(ctx context.Context, arg ListTeamIss
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -3085,7 +3165,7 @@ func (q *Queries) ListTeamStatesByType(ctx context.Context, arg ListTeamStatesBy
 }
 
 const listTeamUnassignedIssues = `-- name: ListTeamUnassignedIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) ([]Issue, error) {
@@ -3119,8 +3199,13 @@ func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) (
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -3173,7 +3258,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 }
 
 const listUserActiveIssues = `-- name: ListUserActiveIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullString) ([]Issue, error) {
@@ -3207,8 +3292,13 @@ func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullS
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -3226,7 +3316,7 @@ func (q *Queries) ListUserActiveIssues(ctx context.Context, assigneeID sql.NullS
 }
 
 const listUserAssignedIssues = `-- name: ListUserAssignedIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE assignee_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.NullString) ([]Issue, error) {
@@ -3260,8 +3350,13 @@ func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.Nul
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -3279,7 +3374,7 @@ func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.Nul
 }
 
 const listUserAssignedIssuesByEmail = `-- name: ListUserAssignedIssuesByEmail :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEmail sql.NullString) ([]Issue, error) {
@@ -3313,8 +3408,13 @@ func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEma
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -3332,7 +3432,7 @@ func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEma
 }
 
 const listUserCreatedIssues = `-- name: ListUserCreatedIssues :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, created_at, updated_at, synced_at, data FROM issues WHERE creator_id = ? ORDER BY updated_at DESC
+SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, data FROM issues WHERE creator_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListUserCreatedIssues(ctx context.Context, creatorID sql.NullString) ([]Issue, error) {
@@ -3366,8 +3466,13 @@ func (q *Queries) ListUserCreatedIssues(ctx context.Context, creatorID sql.NullS
 			&i.DueDate,
 			&i.Estimate,
 			&i.Url,
+			&i.BranchName,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CanceledAt,
+			&i.ArchivedAt,
 			&i.SyncedAt,
 			&i.Data,
 		); err != nil {
@@ -3891,15 +3996,17 @@ INSERT INTO issues (
     state_id, state_name, state_type,
     assignee_id, assignee_email, creator_id, creator_email, priority,
     project_id, project_name, cycle_id, cycle_name,
-    parent_id, due_date, estimate, url,
-    created_at, updated_at, synced_at, data
+    parent_id, due_date, estimate, url, branch_name,
+    created_at, updated_at, started_at, completed_at, canceled_at, archived_at,
+    synced_at, data
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?,
     ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
-    ?, ?, ?, ?,
-    ?, ?, ?, ?
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
+    ?, ?
 ) ON CONFLICT(id) DO UPDATE SET
     identifier = excluded.identifier,
     team_id = excluded.team_id,
@@ -3921,8 +4028,13 @@ INSERT INTO issues (
     due_date = excluded.due_date,
     estimate = excluded.estimate,
     url = excluded.url,
+    branch_name = excluded.branch_name,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
+    started_at = excluded.started_at,
+    completed_at = excluded.completed_at,
+    canceled_at = excluded.canceled_at,
+    archived_at = excluded.archived_at,
     synced_at = excluded.synced_at,
     data = excluded.data
 `
@@ -3949,8 +4061,13 @@ type UpsertIssueParams struct {
 	DueDate       sql.NullString  `json:"due_date"`
 	Estimate      sql.NullFloat64 `json:"estimate"`
 	Url           sql.NullString  `json:"url"`
+	BranchName    sql.NullString  `json:"branch_name"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	StartedAt     sql.NullTime    `json:"started_at"`
+	CompletedAt   sql.NullTime    `json:"completed_at"`
+	CanceledAt    sql.NullTime    `json:"canceled_at"`
+	ArchivedAt    sql.NullTime    `json:"archived_at"`
 	SyncedAt      time.Time       `json:"synced_at"`
 	Data          json.RawMessage `json:"data"`
 }
@@ -3978,8 +4095,13 @@ func (q *Queries) UpsertIssue(ctx context.Context, arg UpsertIssueParams) error 
 		arg.DueDate,
 		arg.Estimate,
 		arg.Url,
+		arg.BranchName,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.StartedAt,
+		arg.CompletedAt,
+		arg.CanceledAt,
+		arg.ArchivedAt,
 		arg.SyncedAt,
 		arg.Data,
 	)

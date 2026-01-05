@@ -70,15 +70,17 @@ INSERT INTO issues (
     state_id, state_name, state_type,
     assignee_id, assignee_email, creator_id, creator_email, priority,
     project_id, project_name, cycle_id, cycle_name,
-    parent_id, due_date, estimate, url,
-    created_at, updated_at, synced_at, data
+    parent_id, due_date, estimate, url, branch_name,
+    created_at, updated_at, started_at, completed_at, canceled_at, archived_at,
+    synced_at, data
 ) VALUES (
     ?, ?, ?, ?, ?,
     ?, ?, ?,
     ?, ?, ?, ?, ?,
     ?, ?, ?, ?,
-    ?, ?, ?, ?,
-    ?, ?, ?, ?
+    ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
+    ?, ?
 ) ON CONFLICT(id) DO UPDATE SET
     identifier = excluded.identifier,
     team_id = excluded.team_id,
@@ -100,8 +102,13 @@ INSERT INTO issues (
     due_date = excluded.due_date,
     estimate = excluded.estimate,
     url = excluded.url,
+    branch_name = excluded.branch_name,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
+    started_at = excluded.started_at,
+    completed_at = excluded.completed_at,
+    canceled_at = excluded.canceled_at,
+    archived_at = excluded.archived_at,
     synced_at = excluded.synced_at,
     data = excluded.data;
 

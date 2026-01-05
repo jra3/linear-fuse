@@ -1477,6 +1477,28 @@ func (c *Client) GetIssueAttachments(ctx context.Context, issueID string) ([]Att
 	return result.Issue.Attachments.Nodes, nil
 }
 
+// GetIssueHistory fetches the history/audit trail for an issue
+func (c *Client) GetIssueHistory(ctx context.Context, issueID string) ([]IssueHistoryEntry, error) {
+	var result struct {
+		Issue struct {
+			History struct {
+				Nodes []IssueHistoryEntry `json:"nodes"`
+			} `json:"history"`
+		} `json:"issue"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+	}
+
+	err := c.query(ctx, queryIssueHistory, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Issue.History.Nodes, nil
+}
+
 // GetTeamDocuments returns an empty list since Linear API doesn't support team-level documents
 // Documents can be attached to issues or projects, but not directly to teams
 func (c *Client) GetTeamDocuments(ctx context.Context, teamID string) ([]Document, error) {

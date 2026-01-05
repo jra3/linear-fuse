@@ -77,6 +77,15 @@ func APIIssueToDBIssue(issue api.Issue) (*IssueData, error) {
 	if issue.URL != "" {
 		d.URL = &issue.URL
 	}
+	if issue.BranchName != "" {
+		d.BranchName = &issue.BranchName
+	}
+
+	// Workflow timestamps
+	d.StartedAt = issue.StartedAt
+	d.CompletedAt = issue.CompletedAt
+	d.CanceledAt = issue.CanceledAt
+	d.ArchivedAt = issue.ArchivedAt
 
 	return d, nil
 }

@@ -42,6 +42,13 @@ func childrenDirIno(issueID string) uint64 {
 	return h.Sum64()
 }
 
+// historyIno generates a stable inode number for an issue's history.md file
+func historyIno(issueID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("history:" + issueID))
+	return h.Sum64()
+}
+
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
 	BaseNode
@@ -247,6 +254,7 @@ func (n *IssueDirectoryNode) Getattr(ctx context.Context, f fs.FileHandle, out *
 func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "issue.md", Mode: syscall.S_IFREG},
+		{Name: "history.md", Mode: syscall.S_IFREG},
 		{Name: "comments", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "children", Mode: syscall.S_IFDIR},
@@ -280,6 +288,35 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFREG,
 			Ino:  issueIno(n.issue.ID),
+		}), 0
+
+	case "history.md":
+		// Fetch history content during Lookup so we can set the actual size
+		// (kernel won't issue READ if size is 0)
+		entries, err := n.lfs.client.GetIssueHistory(ctx, n.issue.ID)
+		if err != nil {
+			log.Printf("Failed to fetch history for %s: %v", n.issue.Identifier, err)
+			return nil, syscall.EIO
+		}
+		content := marshal.HistoryToMarkdown(n.issue.Identifier, entries)
+
+		node := &HistoryFileNode{
+			BaseNode:     BaseNode{lfs: n.lfs},
+			issueID:      n.issue.ID,
+			identifier:   n.issue.Identifier,
+			content:      content,
+			contentReady: true,
+		}
+		out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+		out.Attr.Size = uint64(len(content))
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFREG,
+			Ino:  historyIno(n.issue.ID),
 		}), 0
 
 	case "comments":
@@ -806,4 +843,86 @@ func (s *ChildSymlinkNode) Getattr(ctx context.Context, f fs.FileHandle, out *fu
 	out.Size = uint64(len("../") + len(s.child.Identifier))
 	out.SetTimes(&s.child.UpdatedAt, &s.child.UpdatedAt, &s.child.CreatedAt)
 	return 0
+}
+
+// HistoryFileNode represents a history.md file inside /teams/{KEY}/issues/{ID}/
+// It lazily fetches history from the Linear API on first read.
+type HistoryFileNode struct {
+	BaseNode
+	issueID    string
+	identifier string
+
+	// Lazy-loaded content
+	mu           sync.Mutex
+	content      []byte
+	contentReady bool
+}
+
+var _ fs.NodeGetattrer = (*HistoryFileNode)(nil)
+var _ fs.NodeOpener = (*HistoryFileNode)(nil)
+var _ fs.NodeReader = (*HistoryFileNode)(nil)
+
+// ensureContent fetches and renders history content if not already cached
+func (h *HistoryFileNode) ensureContent(ctx context.Context) error {
+	if h.contentReady {
+		return nil
+	}
+
+	if h.lfs.debug {
+		log.Printf("HistoryFileNode: fetching history for %s (issueID=%s)", h.identifier, h.issueID)
+	}
+
+	// Fetch history from API (lazy fetch)
+	entries, err := h.lfs.client.GetIssueHistory(ctx, h.issueID)
+	if err != nil {
+		log.Printf("Failed to fetch history for %s: %v", h.identifier, err)
+		return err
+	}
+
+	if h.lfs.debug {
+		log.Printf("HistoryFileNode: got %d history entries for %s", len(entries), h.identifier)
+	}
+
+	h.content = marshal.HistoryToMarkdown(h.identifier, entries)
+	h.contentReady = true
+	return nil
+}
+
+func (h *HistoryFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if err := h.ensureContent(ctx); err != nil {
+		return syscall.EIO
+	}
+
+	out.Mode = 0444 // Read-only
+	h.SetOwner(out)
+	out.Size = uint64(len(h.content))
+
+	return 0
+}
+
+func (h *HistoryFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	return nil, fuse.FOPEN_KEEP_CACHE, 0
+}
+
+func (h *HistoryFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if err := h.ensureContent(ctx); err != nil {
+		return nil, syscall.EIO
+	}
+
+	if off >= int64(len(h.content)) {
+		return fuse.ReadResultData(nil), 0
+	}
+
+	end := off + int64(len(dest))
+	if end > int64(len(h.content)) {
+		end = int64(len(h.content))
+	}
+
+	return fuse.ReadResultData(h.content[off:end]), 0
 }

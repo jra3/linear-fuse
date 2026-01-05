@@ -16,6 +16,19 @@ make fmt            # Format code
 make lint           # Run golangci-lint
 ```
 
+To reinstall while running:
+```bash
+# Linux (systemd)
+systemctl --user stop linearfs.service
+make install
+systemctl --user start linearfs.service
+
+# macOS (launchd)
+launchctl stop com.linearfs.mount
+make install
+launchctl start com.linearfs.mount
+```
+
 To test manually:
 ```bash
 ./bin/linearfs mount -f -d /tmp/linear  # Foreground with debug
