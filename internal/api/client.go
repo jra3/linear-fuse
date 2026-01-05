@@ -1133,6 +1133,24 @@ func (c *Client) GetViewer(ctx context.Context) (*User, error) {
 	return &result.Viewer, nil
 }
 
+// GetViewerTeams fetches only teams where the current user is a member
+func (c *Client) GetViewerTeams(ctx context.Context) ([]Team, error) {
+	var result struct {
+		Viewer struct {
+			Teams struct {
+				Nodes []Team `json:"nodes"`
+			} `json:"teams"`
+		} `json:"viewer"`
+	}
+
+	err := c.query(ctx, queryViewerTeams, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Viewer.Teams.Nodes, nil
+}
+
 // GetTeamMembers fetches members of a specific team
 func (c *Client) GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
 	var result struct {

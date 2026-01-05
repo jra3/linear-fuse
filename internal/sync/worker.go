@@ -27,6 +27,7 @@ import (
 type APIClient interface {
 	// Teams
 	GetTeams(ctx context.Context) ([]api.Team, error)
+	GetViewerTeams(ctx context.Context) ([]api.Team, error)
 	GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Issue, api.PageInfo, error)
 
 	// Team metadata
@@ -206,10 +207,10 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 		// Continue with teams even if workspace sync fails
 	}
 
-	// Sync teams list
-	teams, err := w.client.GetTeams(ctx)
+	// Sync only teams where the viewer is a member (not all visible teams)
+	teams, err := w.client.GetViewerTeams(ctx)
 	if err != nil {
-		return fmt.Errorf("get teams: %w", err)
+		return fmt.Errorf("get viewer teams: %w", err)
 	}
 
 	for _, team := range teams {

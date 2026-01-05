@@ -495,6 +495,24 @@ query Viewer {
 }
 `
 
+// queryViewerTeams fetches only teams where the current user is a member
+const queryViewerTeams = `
+query ViewerTeams {
+  viewer {
+    teams {
+      nodes {
+        id
+        key
+        name
+        icon
+        createdAt
+        updatedAt
+      }
+    }
+  }
+}
+`
+
 const queryTeamMembers = `
 query TeamMembers($teamId: String!) {
   team(id: $teamId) {

@@ -52,6 +52,14 @@ func (m *mockAPIClient) GetTeams(ctx context.Context) ([]api.Team, error) {
 	return m.teams, nil
 }
 
+func (m *mockAPIClient) GetViewerTeams(ctx context.Context) ([]api.Team, error) {
+	atomic.AddInt32(&m.getTeamsCalls, 1)
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.teams, nil
+}
+
 func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Issue, api.PageInfo, error) {
 	atomic.AddInt32(&m.getIssuesCalls, 1)
 	if m.simulateError != nil {
