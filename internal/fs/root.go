@@ -179,6 +179,7 @@ SORT:    ls -lt /my/active/           (mtime = updatedAt)
 <issue_frontmatter>
 ---
 identifier: ENG-123                 [read-only]
+branch: "john/eng-123-fix-bug"      [read-only, suggested git branch]
 title: "Fix bug"                    [editable]
 status: "In Progress"               [must match states.md]
 assignee: "user@example.com"        [email or display name]
