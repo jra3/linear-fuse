@@ -130,14 +130,14 @@ Timestamps are preserved across all views:
 │       │       ├── docs/
 │       │       │   ├── *.md     # Issue documents (read/write/rename/delete)
 │       │       │   └── _create   # Write here to create document
-│       │       └── children/    # Sub-issues (symlinks to sibling issues)
+│       │       ├── children/    # Sub-issues (symlinks to sibling issues)
+│       │       └── .error       # Last validation error (read-only)
 │       ├── labels/              # Label management
 │       │   ├── *.md             # Labels (read/write/rename/delete)
 │       │   └── _create           # Write here to create label
 │       ├── docs/                # Team documents
 │       │   ├── *.md             # Documents (read/write/rename/delete)
 │       │   └── _create           # Write here to create document
-│       ├── search/<query>/      # Full-text search results (symlinks)
 │       ├── cycles/              # Sprint cycles
 │       │   ├── current          # Symlink to active cycle (if any)
 │       │   └── <cycle-name>/    # Cycle directories with issue symlinks
@@ -195,6 +195,27 @@ The login flow fails when users attempt to authenticate with SSO.
 - `estimate` - Point estimate
 - `parent` - Parent issue identifier (e.g., TEAM-100)
 - Description (content after frontmatter)
+
+### Validation Errors
+
+Writes fail with `EINVAL` (Invalid argument) for invalid frontmatter values. After a failed write, check the `.error` file to see what went wrong:
+
+```bash
+# Example: invalid priority value
+$ echo "priority: critical" >> /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md
+# Write fails with EINVAL
+
+$ cat /mnt/linear/teams/TEAM/issues/TEAM-123/.error
+Field: priority
+Value: "critical"
+Error: invalid priority "critical": must be none, low, medium, high, or urgent
+```
+
+**Validated fields:** status, assignee, labels, priority, project, milestone, cycle, parent
+
+**Reference files:** Check `states.md` for valid workflow states, `labels.md` for valid labels.
+
+The `.error` file is cleared on successful writes.
 
 ## File Operations
 

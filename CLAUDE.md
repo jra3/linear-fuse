@@ -93,6 +93,7 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 │   ├── issues/
 │   │   └── <ID>/
 │   │       ├── issue.md                  # Issue content (read/write)
+│   │       ├── .error                    # Last validation error (read-only)
 │   │       ├── comments/*.md             # Comments (read/write/delete)
 │   │       ├── docs/*.md                 # Documents (read/write/delete)
 │   │       └── children/                 # Sub-issue symlinks
@@ -101,7 +102,6 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 │   │   ├── label/<name>/                 # Issues by label
 │   │   └── assignee/<name>/              # Issues by assignee (includes "unassigned")
 │   ├── labels/*.md                       # Label CRUD via _create
-│   ├── search/<query>/                   # Full-text search results (symlinks)
 │   ├── projects/<slug>/
 │   │   ├── project.md                    # Project metadata (read/write)
 │   │   ├── docs/*.md                     # Project documents
@@ -125,6 +125,7 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 - **internal/fs**: FUSE implementation using go-fuse/v2. Key node types:
   - `LinearFS` - Main struct with caches and server reference
   - `IssueFileNode` - Read/write issue.md files
+  - `ErrorFileNode` - Read-only .error file for validation errors
   - `CommentsNode`/`CommentNode` - Comment listing and CRUD
   - `DocsNode`/`DocumentFileNode` - Document CRUD
   - `LabelsNode`/`LabelFileNode` - Label CRUD
@@ -194,6 +195,21 @@ When adding new fields to an entity, update the corresponding fragment.
 
 **Architecture principle**: API and DB layers are intentionally decoupled. The `api.Client` methods only call the Linear API; they do not touch SQLite. Write handlers (`Flush`, `Mkdir`, etc.) are responsible for upserting to SQLite after successful API calls. This keeps concerns separated and makes the data flow explicit.
 
+### Validation Errors
+
+Invalid frontmatter values return `EINVAL` and store a descriptive error message readable via `.error`:
+
+```go
+// In Flush() - set error and return EINVAL
+lfs.SetIssueError(issueID, fmt.Sprintf("Field: %s\nValue: %q\nError: %s", field, value, errMsg))
+return 0, syscall.EINVAL
+
+// On successful write - clear the error
+lfs.ClearIssueError(issueID)
+```
+
+The `.error` file is implemented by `ErrorFileNode` - a read-only virtual file that reads from `LinearFS.issueErrors` map. This makes validation failures visible to LLMs and scripts that can't easily parse FUSE error codes.
+
 ### Cache Invalidation
 
 After writes, both internal and kernel caches must be invalidated:
@@ -250,7 +266,6 @@ SQLite serves as the persistent cache layer. See `internal/db/schema.sql` for ta
 1. **Hybrid Column + JSON Storage**: Extract queryable fields as columns, store full API response in `data JSON`
 2. **Denormalization**: Store both IDs and names to avoid joins (e.g., `state_id` + `state_name`)
 3. **Sync Metadata**: Every table has `synced_at` for staleness detection
-4. **FTS5 Search**: Full-text search on issues via triggers that sync with content table
 
 ### Time Handling
 
