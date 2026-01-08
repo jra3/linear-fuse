@@ -1,6 +1,9 @@
 package api
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Team struct {
 	ID        string    `json:"id"`
@@ -270,7 +273,7 @@ func PriorityName(p int) string {
 	}
 }
 
-// PriorityValue converts string priority to numeric
+// PriorityValue converts string priority to numeric (silently defaults to 0)
 func PriorityValue(name string) int {
 	switch name {
 	case "urgent":
@@ -283,6 +286,24 @@ func PriorityValue(name string) int {
 		return 4
 	default:
 		return 0
+	}
+}
+
+// ValidatePriority validates and converts string priority to numeric, returning error for invalid values
+func ValidatePriority(name string) (int, error) {
+	switch name {
+	case "urgent":
+		return 1, nil
+	case "high":
+		return 2, nil
+	case "medium":
+		return 3, nil
+	case "low":
+		return 4, nil
+	case "none", "":
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("invalid priority %q: must be none, low, medium, high, or urgent", name)
 	}
 }
 

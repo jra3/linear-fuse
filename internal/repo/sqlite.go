@@ -301,26 +301,6 @@ func (r *SQLiteRepository) GetMyActiveIssues(ctx context.Context) ([]api.Issue, 
 }
 
 // =============================================================================
-// Search
-// =============================================================================
-
-func (r *SQLiteRepository) SearchIssues(ctx context.Context, query string) ([]api.Issue, error) {
-	issues, err := r.store.SearchIssues(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("search issues: %w", err)
-	}
-	return db.DBIssuesToAPIIssues(issues)
-}
-
-func (r *SQLiteRepository) SearchTeamIssues(ctx context.Context, teamID, query string) ([]api.Issue, error) {
-	issues, err := r.store.SearchTeamIssues(ctx, query, teamID)
-	if err != nil {
-		return nil, fmt.Errorf("search team issues: %w", err)
-	}
-	return db.DBIssuesToAPIIssues(issues)
-}
-
-// =============================================================================
 // States
 // =============================================================================
 

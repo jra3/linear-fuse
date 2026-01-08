@@ -21,24 +21,35 @@ import (
 	"github.com/jra3/linear-fuse/internal/sync"
 )
 
+// IssueError represents a validation error from a failed write operation
+type IssueError struct {
+	Message   string
+	Timestamp time.Time
+}
+
 // LinearFS implements a FUSE filesystem backed by Linear.
 // Read operations go through the Repository (SQLite + on-demand API fetch).
 // Write operations (mutations) use the API Client directly.
 type LinearFS struct {
-	client     *api.Client      // For mutations only
+	client     *api.Client            // For mutations only
 	repo       *repo.SQLiteRepository // For all read operations
-	server     *fuse.Server     // FUSE server for kernel cache invalidation
-	store      *db.Store        // SQLite store (owned by repo, kept for sync worker)
-	syncWorker *sync.Worker     // Background sync worker
+	server     *fuse.Server           // FUSE server for kernel cache invalidation
+	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
+	syncWorker *sync.Worker           // Background sync worker
 	debug      bool
 	uid        uint32 // Owner UID for files/dirs
 	gid        uint32 // Owner GID for files/dirs
+	mountPoint string // Filesystem mount path (for README generation)
 
 	// File cache for embedded files
 	fileCacheDir  string
 	fileCacheMu   gosync.RWMutex
 	fileCache     map[string][]byte // in-memory cache (file ID -> content)
 	fileCacheInit gosync.Once
+
+	// Issue write errors (for .error virtual files)
+	issueErrors   map[string]*IssueError
+	issueErrorsMu gosync.RWMutex
 }
 
 // BaseNode provides common functionality for all LinearFS nodes.
@@ -89,6 +100,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		debug:        debug,
 		fileCacheDir: cacheDir,
 		fileCache:    make(map[string][]byte),
+		issueErrors:  make(map[string]*IssueError),
 	}, nil
 }
 
@@ -175,6 +187,38 @@ func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
 // SetServer sets the FUSE server reference for kernel cache invalidation
 func (lfs *LinearFS) SetServer(server *fuse.Server) {
 	lfs.server = server
+}
+
+// MountPoint returns the filesystem mount path
+func (lfs *LinearFS) MountPoint() string {
+	if lfs.mountPoint == "" {
+		return "/mnt/linear" // fallback for tests
+	}
+	return lfs.mountPoint
+}
+
+// SetIssueError stores a validation error for an issue (visible via .error file)
+func (lfs *LinearFS) SetIssueError(issueID, message string) {
+	lfs.issueErrorsMu.Lock()
+	defer lfs.issueErrorsMu.Unlock()
+	lfs.issueErrors[issueID] = &IssueError{
+		Message:   message,
+		Timestamp: time.Now(),
+	}
+}
+
+// ClearIssueError removes the error for an issue (called on successful write)
+func (lfs *LinearFS) ClearIssueError(issueID string) {
+	lfs.issueErrorsMu.Lock()
+	defer lfs.issueErrorsMu.Unlock()
+	delete(lfs.issueErrors, issueID)
+}
+
+// GetIssueError returns the last validation error for an issue, or nil if none
+func (lfs *LinearFS) GetIssueError(issueID string) *IssueError {
+	lfs.issueErrorsMu.RLock()
+	defer lfs.issueErrorsMu.RUnlock()
+	return lfs.issueErrors[issueID]
 }
 
 // InvalidateKernelInode tells the kernel to drop cached data for an inode
@@ -335,16 +379,6 @@ func (lfs *LinearFS) GetFilteredIssuesByAssignee(ctx context.Context, teamID, as
 // GetFilteredIssuesUnassigned fetches issues with no assignee
 func (lfs *LinearFS) GetFilteredIssuesUnassigned(ctx context.Context, teamID string) ([]api.Issue, error) {
 	return lfs.repo.GetUnassignedIssues(ctx, teamID)
-}
-
-// SearchTeamIssues performs full-text search on issues within a team
-func (lfs *LinearFS) SearchTeamIssues(ctx context.Context, teamID, query string) ([]api.Issue, error) {
-	return lfs.repo.SearchTeamIssues(ctx, teamID, query)
-}
-
-// SearchAllIssues performs full-text search across all issues
-func (lfs *LinearFS) SearchAllIssues(ctx context.Context, query string) ([]api.Issue, error) {
-	return lfs.repo.SearchIssues(ctx, query)
 }
 
 // InvalidateMyIssues is a no-op; SQLite is the source of truth
@@ -857,6 +891,7 @@ func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *Li
 
 	// Store server reference for kernel cache invalidation
 	lfs.SetServer(server)
+	lfs.mountPoint = mountpoint
 
 	return server, lfs, nil
 }
@@ -886,6 +921,7 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error)
 	}
 
 	lfs.SetServer(server)
+	lfs.mountPoint = mountpoint
 	return server, nil
 }
 

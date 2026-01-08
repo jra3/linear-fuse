@@ -189,7 +189,10 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	}
 
 	if priority, ok := doc.Frontmatter["priority"].(string); ok {
-		newPriority := api.PriorityValue(priority)
+		newPriority, err := api.ValidatePriority(priority)
+		if err != nil {
+			return nil, fmt.Errorf("priority: %w", err)
+		}
 		if newPriority != original.Priority {
 			update["priority"] = newPriority
 		}

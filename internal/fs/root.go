@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"syscall"
 	"time"
 
@@ -97,7 +98,8 @@ var _ fs.NodeOpener = (*ReadmeNode)(nil)
 var _ fs.NodeReader = (*ReadmeNode)(nil)
 
 func (r *ReadmeNode) generateContent() []byte {
-	return []byte(readmeContent)
+	mp := r.lfs.MountPoint()
+	return []byte(generateReadme(mp))
 }
 
 func (r *ReadmeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -126,23 +128,25 @@ func (r *ReadmeNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 	return fuse.ReadResultData(content[off:end]), 0
 }
 
-const readmeContent = `# Linear Filesystem
+func generateReadme(mountPoint string) string {
+	return fmt.Sprintf(`# Linear Filesystem
 
 <purpose>
 FUSE filesystem exposing Linear.app as editable markdown files. Edit YAML frontmatter to update issues.
+Mount point: %s (all paths below are relative to this mount point)
 </purpose>
 
 <directory_structure>
-/teams/{KEY}/
+teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
   issues/{ID}/
     issue.md                        [read/write]
+    .error                          [read-only: last validation error]
     comments/{id}.md                [read/write, _create=trigger]
     docs/{slug}.md                  [read/write, _create=trigger]
     attachments/                    [read-only: ls to list, cat to download]
     children/                       [symlinks to sub-issues]
   by/status|label|assignee/{value}/ [issue symlinks]
-  search/{query}/                   [FTS5 results, use + for spaces]
   projects/{slug}/
     project.md                      [read/write]
     docs/                           [same as issues]
@@ -152,28 +156,23 @@ FUSE filesystem exposing Linear.app as editable markdown files. Edit YAML frontm
     current                         [symlink to active cycle]
     {name}/                         [issue symlinks]
 
-/initiatives/{slug}/
+initiatives/{slug}/
   initiative.md                     [read-only]
   projects/, updates/
 
-/users/{name}/                      [issue symlinks + user.md]
-/my/assigned|created|active/        [your issue symlinks]
+users/{name}/                       [issue symlinks + user.md]
+my/assigned|created|active/         [your issue symlinks]
 </directory_structure>
 
 <operations>
-READ:    cat /teams/ENG/issues/ENG-123/issue.md
+READ:    cat %s/teams/ENG/issues/ENG-123/issue.md
 EDIT:    vim issue.md                 (edit frontmatter, save)
-CREATE:  mkdir /teams/ENG/issues/"New Issue Title"
+CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"
          echo "text" > comments/_create
          echo "text" > docs/"Title.md"
          echo "---\nhealth: atRisk\n---\nBlocked" > updates/_create
-ARCHIVE: rmdir /teams/ENG/issues/ENG-123
-SEARCH:  ls /teams/ENG/search/bug/
-         ls /teams/ENG/search/auth+token/    (+ = space)
-         ls /teams/ENG/search/ENG-12*/       (* = prefix match)
-         ls /my/assigned/search/experiment/  (scoped to view)
-         ls /teams/ENG/by/status/Todo/search/urgent/
-SORT:    ls -lt /my/active/           (mtime = updatedAt)
+ARCHIVE: rmdir %s/teams/ENG/issues/ENG-123
+SORT:    ls -lt %s/my/active/           (mtime = updatedAt)
 </operations>
 
 <issue_frontmatter>
@@ -214,13 +213,27 @@ _create is a write-only trigger file (like /proc/sysrq-trigger):
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
 </_create_behavior>
 
+<validation_errors>
+Writes fail with EINVAL (Invalid argument) for invalid frontmatter values.
+After a failed write, cat .error to see what went wrong:
+
+  $ echo "priority: critical" >> issue.md  # invalid priority
+  $ cat .error
+  Field: priority
+  Value: "critical"
+  Error: invalid priority "critical": must be none, low, medium, high, or urgent
+
+Validated fields: status, assignee, labels, priority, project, milestone, cycle, parent
+Reference files: states.md (valid statuses), labels.md (valid labels)
+The .error file is cleared on successful writes.
+</validation_errors>
+
 <important_notes>
-- Validate status/labels against states.md and labels.md before editing
-- Invalid values fail the write silently (no error returned)
 - Clear optional fields by deleting the line entirely
 - Set parent: add "parent: ENG-100" | Remove: delete line
 - Link project to initiative: add "initiatives: [Name]" to project.md
 - Cache TTL: 60s for issues, 10min for states/labels/users
 - Timestamps: mtime=updatedAt, ctime=createdAt from Linear
 </important_notes>
-`
+`, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint)
+}

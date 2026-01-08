@@ -446,47 +446,6 @@ func TestSQLiteRepository_Projects(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_Search(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Insert test team and issues
-	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
-
-	issues := []api.Issue{
-		{ID: "i1", Identifier: "TST-1", Title: "Fix login bug", Description: "Users cannot login", Team: &team, State: api.State{ID: "s1"}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
-		{ID: "i2", Identifier: "TST-2", Title: "Add dashboard", Description: "Create new dashboard", Team: &team, State: api.State{ID: "s1"}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
-		{ID: "i3", Identifier: "TST-3", Title: "Update login page", Description: "Redesign", Team: &team, State: api.State{ID: "s1"}, CreatedAt: time.Now(), UpdatedAt: time.Now()},
-	}
-	for _, issue := range issues {
-		data, _ := db.APIIssueToDBIssue(issue)
-		store.Queries().UpsertIssue(ctx, data.ToUpsertParams())
-	}
-
-	// Test SearchIssues
-	results, err := repo.SearchIssues(ctx, "login")
-	if err != nil {
-		t.Fatalf("SearchIssues failed: %v", err)
-	}
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results for 'login', got %d", len(results))
-	}
-
-	// Test SearchTeamIssues
-	results, err = repo.SearchTeamIssues(ctx, "team-1", "dashboard")
-	if err != nil {
-		t.Fatalf("SearchTeamIssues failed: %v", err)
-	}
-	if len(results) != 1 {
-		t.Errorf("Expected 1 result for 'dashboard', got %d", len(results))
-	}
-}
-
 func TestSQLiteRepository_CurrentUser(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)

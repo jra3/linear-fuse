@@ -2,7 +2,6 @@ package repo
 
 import (
 	"context"
-	"strings"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
@@ -245,38 +244,6 @@ func (m *MockRepository) GetUserIssues(ctx context.Context, userID string) ([]ap
 			if issue.Assignee != nil && issue.Assignee.ID == userID {
 				result = append(result, issue)
 			}
-		}
-	}
-	return result, nil
-}
-
-// =============================================================================
-// Search
-// =============================================================================
-
-func (m *MockRepository) SearchIssues(ctx context.Context, query string) ([]api.Issue, error) {
-	query = strings.ToLower(query)
-	var result []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if strings.Contains(strings.ToLower(issue.Title), query) ||
-				strings.Contains(strings.ToLower(issue.Description), query) ||
-				strings.Contains(strings.ToLower(issue.Identifier), query) {
-				result = append(result, issue)
-			}
-		}
-	}
-	return result, nil
-}
-
-func (m *MockRepository) SearchTeamIssues(ctx context.Context, teamID, query string) ([]api.Issue, error) {
-	query = strings.ToLower(query)
-	var result []api.Issue
-	for _, issue := range m.Issues[teamID] {
-		if strings.Contains(strings.ToLower(issue.Title), query) ||
-			strings.Contains(strings.ToLower(issue.Description), query) ||
-			strings.Contains(strings.ToLower(issue.Identifier), query) {
-			result = append(result, issue)
 		}
 	}
 	return result, nil

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"log"
 	"sync"
@@ -46,6 +47,13 @@ func childrenDirIno(issueID string) uint64 {
 func historyIno(issueID string) uint64 {
 	h := fnv.New64a()
 	h.Write([]byte("history:" + issueID))
+	return h.Sum64()
+}
+
+// errorIno generates a stable inode number for an issue's .error file
+func errorIno(issueID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("error:" + issueID))
 	return h.Sum64()
 }
 
@@ -255,6 +263,7 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 	entries := []fuse.DirEntry{
 		{Name: "issue.md", Mode: syscall.S_IFREG},
 		{Name: "history.md", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 		{Name: "comments", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "children", Mode: syscall.S_IFDIR},
@@ -317,6 +326,30 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFREG,
 			Ino:  historyIno(n.issue.ID),
+		}), 0
+
+	case ".error":
+		node := &ErrorFileNode{
+			BaseNode: BaseNode{lfs: n.lfs},
+			issueID:  n.issue.ID,
+		}
+		// Get error to determine size
+		issueErr := n.lfs.GetIssueError(n.issue.ID)
+		size := uint64(0)
+		if issueErr != nil {
+			size = uint64(len(issueErr.Message) + 1) // +1 for newline
+		}
+		now := time.Now()
+		out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+		out.Attr.Size = size
+		out.SetAttrTimeout(1 * time.Second)  // Short timeout - errors change on writes
+		out.SetEntryTimeout(1 * time.Second)
+		out.Attr.SetTimes(&now, &now, &now)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFREG,
+			Ino:  errorIno(n.issue.ID),
 		}), 0
 
 	case "comments":
@@ -550,7 +583,8 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	updates, err := marshal.MarkdownToIssueUpdate(i.content, &i.issue)
 	if err != nil {
 		log.Printf("Failed to parse changes for %s: %v", i.issue.Identifier, err)
-		return syscall.EIO
+		i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	if len(updates) == 0 {
@@ -568,12 +602,14 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if stateName, ok := updates["stateId"].(string); ok {
 		if i.issue.Team == nil {
 			log.Printf("Cannot resolve state '%s': issue has no team", stateName)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: status\nValue: \""+stateName+"\"\nError: Cannot resolve state - issue has no team")
+			return syscall.EINVAL
 		}
 		stateID, err := i.lfs.ResolveStateID(ctx, i.issue.Team.ID, stateName)
 		if err != nil {
 			log.Printf("Failed to resolve state '%s': %v", stateName, err)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: status\nValue: \""+stateName+"\"\nError: "+err.Error()+". See states.md for valid workflow states.")
+			return syscall.EINVAL
 		}
 		newStateName = stateName // Capture name before replacing with ID
 		updates["stateId"] = stateID
@@ -584,7 +620,8 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		userID, err := i.lfs.ResolveUserID(ctx, assigneeID)
 		if err != nil {
 			log.Printf("Failed to resolve assignee '%s': %v", assigneeID, err)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: assignee\nValue: \""+assigneeID+"\"\nError: "+err.Error()+". Use email address or display name.")
+			return syscall.EINVAL
 		}
 		updates["assigneeId"] = userID
 	}
@@ -605,15 +642,18 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		} else {
 			if i.issue.Team == nil {
 				log.Printf("Cannot resolve labels: issue has no team")
-				return syscall.EIO
+				i.lfs.SetIssueError(i.issue.ID, "Field: labels\nError: Cannot resolve labels - issue has no team")
+				return syscall.EINVAL
 			}
 			labelIDs, notFound, err := i.lfs.ResolveLabelIDs(ctx, i.issue.Team.ID, labelNames)
 			if err != nil {
 				log.Printf("Failed to resolve labels: %v", err)
-				return syscall.EIO
+				i.lfs.SetIssueError(i.issue.ID, "Field: labels\nError: "+err.Error())
+				return syscall.EINVAL
 			}
 			if len(notFound) > 0 {
 				log.Printf("Unknown labels: %v (see labels.md for valid labels)", notFound)
+				i.lfs.SetIssueError(i.issue.ID, "Field: labels\nValue: "+fmt.Sprintf("%v", notFound)+"\nError: Unknown labels. See labels.md for valid labels.")
 				return syscall.EINVAL
 			}
 			updates["labelIds"] = labelIDs
@@ -625,7 +665,8 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		issueID, err := i.lfs.ResolveIssueID(ctx, parentID)
 		if err != nil {
 			log.Printf("Failed to resolve parent '%s': %v", parentID, err)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: parent\nValue: \""+parentID+"\"\nError: "+err.Error())
+			return syscall.EINVAL
 		}
 		updates["parentId"] = issueID
 	}
@@ -634,12 +675,14 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if projectName, ok := updates["projectId"].(string); ok {
 		if i.issue.Team == nil {
 			log.Printf("Cannot resolve project '%s': issue has no team", projectName)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: project\nValue: \""+projectName+"\"\nError: Cannot resolve project - issue has no team")
+			return syscall.EINVAL
 		}
 		projectID, err := i.lfs.ResolveProjectID(ctx, i.issue.Team.ID, projectName)
 		if err != nil {
 			log.Printf("Failed to resolve project '%s': %v", projectName, err)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: project\nValue: \""+projectName+"\"\nError: "+err.Error())
+			return syscall.EINVAL
 		}
 		updates["projectId"] = projectID
 	}
@@ -654,12 +697,14 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			projectID = i.issue.Project.ID
 		} else {
 			log.Printf("Cannot resolve milestone '%s': issue has no project", milestoneName)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: milestone\nValue: \""+milestoneName+"\"\nError: Cannot resolve milestone - issue has no project. Set project first.")
+			return syscall.EINVAL
 		}
 		milestoneID, err := i.lfs.ResolveMilestoneID(ctx, projectID, milestoneName)
 		if err != nil {
 			log.Printf("Failed to resolve milestone '%s': %v", milestoneName, err)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: milestone\nValue: \""+milestoneName+"\"\nError: "+err.Error())
+			return syscall.EINVAL
 		}
 		updates["projectMilestoneId"] = milestoneID
 	}
@@ -668,12 +713,14 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if cycleName, ok := updates["cycleId"].(string); ok {
 		if i.issue.Team == nil {
 			log.Printf("Cannot resolve cycle '%s': issue has no team", cycleName)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: cycle\nValue: \""+cycleName+"\"\nError: Cannot resolve cycle - issue has no team")
+			return syscall.EINVAL
 		}
 		cycleID, err := i.lfs.ResolveCycleID(ctx, i.issue.Team.ID, cycleName)
 		if err != nil {
 			log.Printf("Failed to resolve cycle '%s': %v", cycleName, err)
-			return syscall.EIO
+			i.lfs.SetIssueError(i.issue.ID, "Field: cycle\nValue: \""+cycleName+"\"\nError: "+err.Error())
+			return syscall.EINVAL
 		}
 		updates["cycleId"] = cycleID
 	}
@@ -681,8 +728,12 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Call Linear API to update
 	if err := i.lfs.client.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
+		i.lfs.SetIssueError(i.issue.ID, "API error: "+err.Error())
 		return syscall.EIO
 	}
+
+	// Clear any previous error on successful write
+	i.lfs.ClearIssueError(i.issue.ID)
 
 	if i.lfs.debug {
 		log.Printf("Flush: %s updated successfully", i.issue.Identifier)
@@ -925,4 +976,54 @@ func (h *HistoryFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte
 	}
 
 	return fuse.ReadResultData(h.content[off:end]), 0
+}
+
+// ErrorFileNode represents a .error file inside /teams/{KEY}/issues/{ID}/
+// It shows the last validation error from a failed write operation.
+type ErrorFileNode struct {
+	BaseNode
+	issueID string
+}
+
+var _ fs.NodeGetattrer = (*ErrorFileNode)(nil)
+var _ fs.NodeOpener = (*ErrorFileNode)(nil)
+var _ fs.NodeReader = (*ErrorFileNode)(nil)
+
+func (e *ErrorFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0444 // Read-only
+	e.SetOwner(out)
+
+	// Get current error to determine size
+	issueErr := e.lfs.GetIssueError(e.issueID)
+	if issueErr != nil {
+		out.Size = uint64(len(issueErr.Message) + 1) // +1 for newline
+	} else {
+		out.Size = 0
+	}
+
+	return 0
+}
+
+func (e *ErrorFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	return nil, fuse.FOPEN_KEEP_CACHE, 0
+}
+
+func (e *ErrorFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	issueErr := e.lfs.GetIssueError(e.issueID)
+	if issueErr == nil {
+		return fuse.ReadResultData(nil), 0
+	}
+
+	content := []byte(issueErr.Message + "\n")
+
+	if off >= int64(len(content)) {
+		return fuse.ReadResultData(nil), 0
+	}
+
+	end := off + int64(len(dest))
+	if end > int64(len(content)) {
+		end = int64(len(content))
+	}
+
+	return fuse.ReadResultData(content[off:end]), 0
 }

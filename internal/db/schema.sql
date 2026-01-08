@@ -62,33 +62,6 @@ CREATE TABLE IF NOT EXISTS teams (
     synced_at DATETIME NOT NULL
 );
 
--- Full-text search virtual table
-CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
-    identifier,
-    title,
-    description,
-    content='issues',
-    content_rowid='rowid'
-);
-
--- Triggers to keep FTS in sync
-CREATE TRIGGER IF NOT EXISTS issues_ai AFTER INSERT ON issues BEGIN
-    INSERT INTO issues_fts(rowid, identifier, title, description)
-    VALUES (NEW.rowid, NEW.identifier, NEW.title, NEW.description);
-END;
-
-CREATE TRIGGER IF NOT EXISTS issues_ad AFTER DELETE ON issues BEGIN
-    INSERT INTO issues_fts(issues_fts, rowid, identifier, title, description)
-    VALUES('delete', OLD.rowid, OLD.identifier, OLD.title, OLD.description);
-END;
-
-CREATE TRIGGER IF NOT EXISTS issues_au AFTER UPDATE ON issues BEGIN
-    INSERT INTO issues_fts(issues_fts, rowid, identifier, title, description)
-    VALUES('delete', OLD.rowid, OLD.identifier, OLD.title, OLD.description);
-    INSERT INTO issues_fts(rowid, identifier, title, description)
-    VALUES (NEW.rowid, NEW.identifier, NEW.title, NEW.description);
-END;
-
 -- =============================================================================
 -- Workflow States (per team)
 -- =============================================================================

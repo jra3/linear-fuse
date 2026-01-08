@@ -176,36 +176,6 @@ func TestMockRepository_MyIssues(t *testing.T) {
 	}
 }
 
-func TestMockRepository_Search(t *testing.T) {
-	t.Parallel()
-	repo := NewMockRepository()
-	ctx := context.Background()
-
-	team := api.Team{ID: "team-1"}
-
-	repo.AddIssue(api.Issue{ID: "i1", Identifier: "TST-1", Title: "Fix login bug", Description: "Users cannot login", Team: &team})
-	repo.AddIssue(api.Issue{ID: "i2", Identifier: "TST-2", Title: "Add dashboard", Description: "New feature", Team: &team})
-	repo.AddIssue(api.Issue{ID: "i3", Identifier: "TST-3", Title: "Update login page", Description: "Redesign", Team: &team})
-
-	// Test SearchIssues
-	results, _ := repo.SearchIssues(ctx, "login")
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results for 'login', got %d", len(results))
-	}
-
-	// Test SearchTeamIssues
-	results, _ = repo.SearchTeamIssues(ctx, "team-1", "dashboard")
-	if len(results) != 1 {
-		t.Errorf("Expected 1 result for 'dashboard', got %d", len(results))
-	}
-
-	// Test case-insensitive search
-	results, _ = repo.SearchIssues(ctx, "LOGIN")
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results for 'LOGIN' (case-insensitive), got %d", len(results))
-	}
-}
-
 func TestMockRepository_States(t *testing.T) {
 	t.Parallel()
 	repo := NewMockRepository()

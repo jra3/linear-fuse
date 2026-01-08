@@ -94,39 +94,6 @@ func (s *Store) WithTx(ctx context.Context, fn func(*Queries) error) error {
 	return tx.Commit()
 }
 
-// SearchIssues performs full-text search on issues
-// This uses raw SQL since sqlc doesn't support FTS5
-func (s *Store) SearchIssues(ctx context.Context, query string) ([]Issue, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT issues.* FROM issues
-		JOIN issues_fts ON issues.rowid = issues_fts.rowid
-		WHERE issues_fts MATCH ?
-		ORDER BY rank
-	`, query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanIssues(rows)
-}
-
-// SearchTeamIssues performs full-text search on issues within a team
-func (s *Store) SearchTeamIssues(ctx context.Context, query string, teamID string) ([]Issue, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT issues.* FROM issues
-		JOIN issues_fts ON issues.rowid = issues_fts.rowid
-		WHERE issues_fts MATCH ? AND issues.team_id = ?
-		ORDER BY rank
-	`, query, teamID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanIssues(rows)
-}
-
 // ListIssuesByLabel returns issues that have a specific label
 // Labels are stored in the JSON data column as {"labels": {"nodes": [...]}}
 func (s *Store) ListIssuesByLabel(ctx context.Context, teamID, labelName string) ([]Issue, error) {

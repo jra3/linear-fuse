@@ -18,11 +18,8 @@ func TestMyAssignedContainsSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read my/assigned directory: %v", err)
 	}
 
-	// Check that entries are symlinks (if any exist), except for "search" directory
+	// Check that entries are symlinks (if any exist)
 	for _, entry := range entries {
-		if entry.Name() == "search" {
-			continue // search is a directory, not a symlink
-		}
 		info, err := entry.Info()
 		if err != nil {
 			t.Fatalf("Failed to get info for %s: %v", entry.Name(), err)
@@ -39,20 +36,12 @@ func TestMyAssignedSymlinkTarget(t *testing.T) {
 		t.Fatalf("Failed to read my/assigned directory: %v", err)
 	}
 
-	// Find first non-search entry
-	var entry os.DirEntry
-	for _, e := range entries {
-		if e.Name() != "search" {
-			entry = e
-			break
-		}
-	}
-	if entry == nil {
+	if len(entries) == 0 {
 		t.Skip("No assigned issues to test symlink target")
 	}
 
 	// Check symlink target format
-	linkPath := filepath.Join(myAssignedPath(), entry.Name())
+	linkPath := filepath.Join(myAssignedPath(), entries[0].Name())
 	target, err := os.Readlink(linkPath)
 	if err != nil {
 		t.Fatalf("Failed to read symlink: %v", err)
@@ -74,20 +63,12 @@ func TestMyAssignedSymlinkResolvable(t *testing.T) {
 		t.Fatalf("Failed to read my/assigned directory: %v", err)
 	}
 
-	// Find first non-search entry
-	var entry os.DirEntry
-	for _, e := range entries {
-		if e.Name() != "search" {
-			entry = e
-			break
-		}
-	}
-	if entry == nil {
+	if len(entries) == 0 {
 		t.Skip("No assigned issues to test symlink resolution")
 	}
 
 	// Symlinks point to issue directories, so read issue.md inside
-	linkPath := filepath.Join(myAssignedPath(), entry.Name(), "issue.md")
+	linkPath := filepath.Join(myAssignedPath(), entries[0].Name(), "issue.md")
 	content, err := os.ReadFile(linkPath)
 	if err != nil {
 		t.Fatalf("Failed to read issue.md through symlink: %v", err)
@@ -105,11 +86,8 @@ func TestMyCreatedContainsSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read my/created directory: %v", err)
 	}
 
-	// Check that entries are symlinks (if any exist), except for "search" directory
+	// Check that entries are symlinks (if any exist)
 	for _, entry := range entries {
-		if entry.Name() == "search" {
-			continue // search is a directory, not a symlink
-		}
 		info, err := entry.Info()
 		if err != nil {
 			t.Fatalf("Failed to get info for %s: %v", entry.Name(), err)
@@ -126,11 +104,8 @@ func TestMyActiveContainsSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read my/active directory: %v", err)
 	}
 
-	// Check that entries are symlinks (if any exist), except for "search" directory
+	// Check that entries are symlinks (if any exist)
 	for _, entry := range entries {
-		if entry.Name() == "search" {
-			continue // search is a directory, not a symlink
-		}
 		info, err := entry.Info()
 		if err != nil {
 			t.Fatalf("Failed to get info for %s: %v", entry.Name(), err)
@@ -149,9 +124,6 @@ func TestMyActiveOnlyNonCompletedIssues(t *testing.T) {
 
 	// Read each issue through symlink and check status
 	for _, entry := range entries {
-		if entry.Name() == "search" {
-			continue // search is a directory, not an issue symlink
-		}
 		// Symlinks point to issue directories, so read issue.md inside
 		linkPath := filepath.Join(myActivePath(), entry.Name(), "issue.md")
 		content, err := os.ReadFile(linkPath)

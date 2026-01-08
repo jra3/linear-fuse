@@ -144,10 +144,6 @@ func byLabelPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "by", "label")
 }
 
-func searchPath(teamKey string) string {
-	return filepath.Join(mountPoint, "teams", teamKey, "search")
-}
-
 // Retry helpers
 
 func readFileWithRetry(path string, maxWait time.Duration) ([]byte, error) {

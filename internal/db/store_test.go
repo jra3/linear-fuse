@@ -268,52 +268,6 @@ func TestTeams(t *testing.T) {
 	}
 }
 
-func TestSearchIssues(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	// Insert issues with searchable content
-	issues := []struct {
-		id    string
-		title string
-		desc  string
-	}{
-		{"1", "Fix authentication bug", "Users cannot login"},
-		{"2", "Add dark mode", "Support for dark theme"},
-		{"3", "Login page redesign", "New login page design"},
-	}
-
-	teamID := "team-1"
-	for i, iss := range issues {
-		data := &IssueData{
-			ID:          iss.id,
-			Identifier:  "TST-" + string(rune('1'+i)),
-			Title:       iss.title,
-			Description: &iss.desc,
-			TeamID:      teamID,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-			Data:        json.RawMessage("{}"),
-		}
-		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
-			t.Fatalf("Insert failed: %v", err)
-		}
-	}
-
-	// Search for "login"
-	results, err := store.SearchIssues(ctx, "login")
-	if err != nil {
-		t.Fatalf("SearchIssues failed: %v", err)
-	}
-
-	// Should find issues mentioning login
-	if len(results) < 2 {
-		t.Errorf("Expected at least 2 results for 'login', got %d", len(results))
-	}
-}
-
 func TestWithTransaction(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -527,60 +481,6 @@ func TestListIssuesByParent(t *testing.T) {
 	}
 	if len(children) != 3 {
 		t.Errorf("Expected 3 children, got %d", len(children))
-	}
-}
-
-func TestSearchTeamIssues(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	// Insert issues in two different teams
-	team1 := "team-1"
-	team2 := "team-2"
-
-	issues := []struct {
-		id     string
-		teamID string
-		title  string
-	}{
-		{"1", team1, "Fix login bug"},
-		{"2", team1, "Add feature"},
-		{"3", team2, "Login redesign"},
-	}
-
-	for i, iss := range issues {
-		data := &IssueData{
-			ID:         iss.id,
-			Identifier: "TST-" + string(rune('1'+i)),
-			Title:      iss.title,
-			TeamID:     iss.teamID,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-			Data:       json.RawMessage("{}"),
-		}
-		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
-			t.Fatalf("Insert failed: %v", err)
-		}
-	}
-
-	// Search team1 for "login" - should find 1
-	results, err := store.SearchTeamIssues(ctx, "login", team1)
-	if err != nil {
-		t.Fatalf("SearchTeamIssues failed: %v", err)
-	}
-	if len(results) != 1 {
-		t.Errorf("Expected 1 result for team1, got %d", len(results))
-	}
-
-	// Search all for "login" - should find 2
-	allResults, err := store.SearchIssues(ctx, "login")
-	if err != nil {
-		t.Fatalf("SearchIssues failed: %v", err)
-	}
-	if len(allResults) != 2 {
-		t.Errorf("Expected 2 results total, got %d", len(allResults))
 	}
 }
 

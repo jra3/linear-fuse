@@ -81,16 +81,6 @@ type Repository interface {
 	GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error)
 
 	// ==========================================================================
-	// Search
-	// ==========================================================================
-
-	// SearchIssues performs full-text search across issues
-	SearchIssues(ctx context.Context, query string) ([]api.Issue, error)
-
-	// SearchTeamIssues performs full-text search within a team
-	SearchTeamIssues(ctx context.Context, teamID, query string) ([]api.Issue, error)
-
-	// ==========================================================================
 	// States (workflow states)
 	// ==========================================================================
 
