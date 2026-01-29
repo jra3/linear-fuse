@@ -29,12 +29,13 @@ func documentIno(docID string) uint64 {
 	return h.Sum64()
 }
 
-// DocsNode represents a docs/ directory within issues, teams, or projects
+// DocsNode represents a docs/ directory within issues, teams, projects, or initiatives
 type DocsNode struct {
 	BaseNode
-	issueID   string // Set if issue docs
-	teamID    string // Set if team docs
-	projectID string // Set if project docs
+	issueID      string // Set if issue docs
+	teamID       string // Set if team docs
+	projectID    string // Set if project docs
+	initiativeID string // Set if initiative docs
 }
 
 var _ fs.NodeReaddirer = (*DocsNode)(nil)
@@ -62,6 +63,9 @@ func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 	if n.projectID != "" {
 		return n.lfs.GetProjectDocuments(ctx, n.projectID)
 	}
+	if n.initiativeID != "" {
+		return n.lfs.GetInitiativeDocuments(ctx, n.initiativeID)
+	}
 	return nil, nil
 }
 
@@ -72,7 +76,10 @@ func (n *DocsNode) parentID() string {
 	if n.teamID != "" {
 		return n.teamID
 	}
-	return n.projectID
+	if n.projectID != "" {
+		return n.projectID
+	}
+	return n.initiativeID
 }
 
 func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -105,10 +112,11 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	if name == "_create" {
 		now := time.Now()
 		node := &NewDocumentNode{
-			BaseNode:  BaseNode{lfs: n.lfs},
-			issueID:   n.issueID,
-			teamID:    n.teamID,
-			projectID: n.projectID,
+			BaseNode:     BaseNode{lfs: n.lfs},
+			issueID:      n.issueID,
+			teamID:       n.teamID,
+			projectID:    n.projectID,
+			initiativeID: n.initiativeID,
 		}
 		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Uid = n.lfs.uid
@@ -141,6 +149,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 				issueID:      n.issueID,
 				teamID:       n.teamID,
 				projectID:    n.projectID,
+				initiativeID: n.initiativeID,
 				content:      content,
 				contentReady: true,
 			}
@@ -264,11 +273,12 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 	}
 
 	node := &NewDocumentNode{
-		BaseNode:  BaseNode{lfs: n.lfs},
-		issueID:   n.issueID,
-		teamID:    n.teamID,
-		projectID: n.projectID,
-		filename:  name, // Store filename for use as title
+		BaseNode:     BaseNode{lfs: n.lfs},
+		issueID:      n.issueID,
+		teamID:       n.teamID,
+		projectID:    n.projectID,
+		initiativeID: n.initiativeID,
+		filename:     name, // Store filename for use as title
 	}
 
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
@@ -292,10 +302,11 @@ func documentFilename(doc api.Document) string {
 // DocumentFileNode represents a single document file (read-write)
 type DocumentFileNode struct {
 	BaseNode
-	document  api.Document
-	issueID   string
-	teamID    string
-	projectID string
+	document     api.Document
+	issueID      string
+	teamID       string
+	projectID    string
+	initiativeID string
 
 	mu           sync.Mutex
 	content      []byte
@@ -450,10 +461,11 @@ func (n *DocumentFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uin
 // NewDocumentNode handles creating new documents
 type NewDocumentNode struct {
 	BaseNode
-	issueID   string
-	teamID    string
-	projectID string
-	filename  string // Original filename (used as title if none in content)
+	issueID      string
+	teamID       string
+	projectID    string
+	initiativeID string
+	filename     string // Original filename (used as title if none in content)
 
 	mu      sync.Mutex
 	content []byte
@@ -581,6 +593,9 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	if n.projectID != "" {
 		input["projectId"] = n.projectID
 	}
+	if n.initiativeID != "" {
+		input["initiativeId"] = n.initiativeID
+	}
 
 	doc, err := n.lfs.CreateDocument(ctx, input)
 	if err != nil {
@@ -602,6 +617,9 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	}
 	if parentID == "" {
 		parentID = n.projectID
+	}
+	if parentID == "" {
+		parentID = n.initiativeID
 	}
 	// Invalidate the directory inode so the kernel re-reads the listing
 	n.lfs.InvalidateKernelInode(docsDirIno(parentID))

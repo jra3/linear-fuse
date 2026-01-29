@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
@@ -385,6 +386,63 @@ func (m *MockRepository) GetMilestoneByName(ctx context.Context, projectID, name
 	return nil, nil
 }
 
+func (m *MockRepository) GetMilestoneByID(ctx context.Context, id string) (*api.ProjectMilestone, error) {
+	for _, milestones := range m.Milestones {
+		for i := range milestones {
+			if milestones[i].ID == id {
+				return &milestones[i], nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockRepository) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
+	milestone := api.ProjectMilestone{
+		ID:          "milestone-" + name,
+		Name:        name,
+		Description: description,
+		SortOrder:   float64(len(m.Milestones[projectID])),
+	}
+	m.Milestones[projectID] = append(m.Milestones[projectID], milestone)
+	return &milestone, nil
+}
+
+func (m *MockRepository) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
+	for projectID, milestones := range m.Milestones {
+		for i := range milestones {
+			if milestones[i].ID == milestoneID {
+				if input.Name != nil {
+					m.Milestones[projectID][i].Name = *input.Name
+				}
+				if input.Description != nil {
+					m.Milestones[projectID][i].Description = *input.Description
+				}
+				if input.TargetDate != nil {
+					m.Milestones[projectID][i].TargetDate = input.TargetDate
+				}
+				if input.SortOrder != nil {
+					m.Milestones[projectID][i].SortOrder = *input.SortOrder
+				}
+				return &m.Milestones[projectID][i], nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("milestone not found")
+}
+
+func (m *MockRepository) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
+	for projectID, milestones := range m.Milestones {
+		for i := range milestones {
+			if milestones[i].ID == milestoneID {
+				m.Milestones[projectID] = append(m.Milestones[projectID][:i], m.Milestones[projectID][i+1:]...)
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("milestone not found")
+}
+
 // =============================================================================
 // Comments
 // =============================================================================
@@ -414,6 +472,10 @@ func (m *MockRepository) GetIssueDocuments(ctx context.Context, issueID string) 
 
 func (m *MockRepository) GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error) {
 	return m.Documents[projectID], nil
+}
+
+func (m *MockRepository) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]api.Document, error) {
+	return m.Documents[initiativeID], nil
 }
 
 func (m *MockRepository) GetDocumentBySlug(ctx context.Context, slug string) (*api.Document, error) {
@@ -484,6 +546,29 @@ func (m *MockRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cacheP
 		}
 	}
 	return nil
+}
+
+func (m *MockRepository) GetAttachmentByID(ctx context.Context, id string) (*api.Attachment, error) {
+	for _, attachments := range m.Attachments {
+		for _, att := range attachments {
+			if att.ID == id {
+				return &att, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockRepository) GetIssueRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error) {
+	return nil, nil // Mock returns empty
+}
+
+func (m *MockRepository) GetIssueInverseRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error) {
+	return nil, nil // Mock returns empty
+}
+
+func (m *MockRepository) GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error) {
+	return nil, nil // Mock returns nil
 }
 
 // Ensure MockRepository implements Repository

@@ -59,21 +59,22 @@ type Cycle struct {
 }
 
 type Document struct {
-	ID          string          `json:"id"`
-	SlugID      string          `json:"slug_id"`
-	Title       string          `json:"title"`
-	Icon        sql.NullString  `json:"icon"`
-	Color       sql.NullString  `json:"color"`
-	Content     sql.NullString  `json:"content"`
-	ContentData sql.NullString  `json:"content_data"`
-	IssueID     sql.NullString  `json:"issue_id"`
-	ProjectID   sql.NullString  `json:"project_id"`
-	CreatorID   sql.NullString  `json:"creator_id"`
-	Url         sql.NullString  `json:"url"`
-	CreatedAt   sql.NullTime    `json:"created_at"`
-	UpdatedAt   sql.NullTime    `json:"updated_at"`
-	SyncedAt    time.Time       `json:"synced_at"`
-	Data        json.RawMessage `json:"data"`
+	ID           string          `json:"id"`
+	SlugID       string          `json:"slug_id"`
+	Title        string          `json:"title"`
+	Icon         sql.NullString  `json:"icon"`
+	Color        sql.NullString  `json:"color"`
+	Content      sql.NullString  `json:"content"`
+	ContentData  sql.NullString  `json:"content_data"`
+	IssueID      sql.NullString  `json:"issue_id"`
+	ProjectID    sql.NullString  `json:"project_id"`
+	InitiativeID sql.NullString  `json:"initiative_id"`
+	CreatorID    sql.NullString  `json:"creator_id"`
+	Url          sql.NullString  `json:"url"`
+	CreatedAt    sql.NullTime    `json:"created_at"`
+	UpdatedAt    sql.NullTime    `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
 }
 
 type EmbeddedFile struct {
@@ -162,10 +163,14 @@ type Issue struct {
 	Data          json.RawMessage `json:"data"`
 }
 
-type IssuesFt struct {
-	Identifier  string `json:"identifier"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
+type IssueRelation struct {
+	ID             string       `json:"id"`
+	IssueID        string       `json:"issue_id"`
+	RelatedIssueID string       `json:"related_issue_id"`
+	Type           string       `json:"type"`
+	CreatedAt      sql.NullTime `json:"created_at"`
+	UpdatedAt      sql.NullTime `json:"updated_at"`
+	SyncedAt       time.Time    `json:"synced_at"`
 }
 
 type Label struct {

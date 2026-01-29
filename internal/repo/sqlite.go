@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sync"
@@ -505,6 +506,102 @@ func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, na
 	return &result, nil
 }
 
+func (r *SQLiteRepository) GetMilestoneByID(ctx context.Context, id string) (*api.ProjectMilestone, error) {
+	milestone, err := r.store.Queries().GetProjectMilestone(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get milestone by id: %w", err)
+	}
+	result := db.DBMilestoneToAPIProjectMilestone(milestone)
+	return &result, nil
+}
+
+func (r *SQLiteRepository) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
+	if r.client == nil {
+		return nil, fmt.Errorf("API client not available")
+	}
+
+	// Create via API
+	milestone, err := r.client.CreateProjectMilestone(ctx, projectID, name, description)
+	if err != nil {
+		return nil, fmt.Errorf("create milestone: %w", err)
+	}
+
+	// Upsert to SQLite for immediate visibility
+	now := time.Now()
+	r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
+		ID:          milestone.ID,
+		ProjectID:   projectID,
+		Name:        milestone.Name,
+		Description: sql.NullString{String: milestone.Description, Valid: milestone.Description != ""},
+		TargetDate:  sql.NullString{String: ptrString(milestone.TargetDate), Valid: milestone.TargetDate != nil},
+		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
+		SyncedAt:    now,
+		Data:        json.RawMessage("{}"),
+	})
+
+	return milestone, nil
+}
+
+func (r *SQLiteRepository) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
+	if r.client == nil {
+		return nil, fmt.Errorf("API client not available")
+	}
+
+	// Get the current milestone to find the project ID
+	existing, err := r.store.Queries().GetProjectMilestone(ctx, milestoneID)
+	if err != nil {
+		return nil, fmt.Errorf("get milestone: %w", err)
+	}
+
+	// Update via API
+	milestone, err := r.client.UpdateProjectMilestone(ctx, milestoneID, input)
+	if err != nil {
+		return nil, fmt.Errorf("update milestone: %w", err)
+	}
+
+	// Upsert to SQLite for immediate visibility
+	now := time.Now()
+	r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
+		ID:          milestone.ID,
+		ProjectID:   existing.ProjectID,
+		Name:        milestone.Name,
+		Description: sql.NullString{String: milestone.Description, Valid: milestone.Description != ""},
+		TargetDate:  sql.NullString{String: ptrString(milestone.TargetDate), Valid: milestone.TargetDate != nil},
+		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
+		SyncedAt:    now,
+		Data:        json.RawMessage("{}"),
+	})
+
+	return milestone, nil
+}
+
+func (r *SQLiteRepository) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
+	if r.client == nil {
+		return fmt.Errorf("API client not available")
+	}
+
+	// Delete via API
+	if err := r.client.DeleteProjectMilestone(ctx, milestoneID); err != nil {
+		return fmt.Errorf("delete milestone: %w", err)
+	}
+
+	// Delete from SQLite
+	r.store.Queries().DeleteProjectMilestone(ctx, milestoneID)
+
+	return nil
+}
+
+// ptrString returns the string value or empty if nil
+func ptrString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // =============================================================================
 // Comments
 // =============================================================================
@@ -689,6 +786,54 @@ func (r *SQLiteRepository) maybeRefreshProjectDocuments(projectID string, isEmpt
 // refreshProjectDocuments fetches documents from API and stores in SQLite
 func (r *SQLiteRepository) refreshProjectDocuments(ctx context.Context, projectID string) error {
 	docs, err := r.client.GetProjectDocuments(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	for _, doc := range docs {
+		params, err := db.APIDocumentToDBDocument(doc)
+		if err != nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertDocument(ctx, params); err != nil {
+			log.Printf("[repo] upsert document %s failed: %v", doc.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]api.Document, error) {
+	docs, err := r.store.Queries().ListInitiativeDocuments(ctx, sql.NullString{String: initiativeID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list initiative documents: %w", err)
+	}
+
+	// Check staleness and trigger background refresh if needed
+	r.maybeRefreshInitiativeDocuments(initiativeID, len(docs) == 0)
+
+	return db.DBDocumentsToAPIDocuments(docs)
+}
+
+// maybeRefreshInitiativeDocuments checks if initiative documents need refreshing
+func (r *SQLiteRepository) maybeRefreshInitiativeDocuments(initiativeID string, isEmpty bool) {
+	if r.client == nil {
+		return
+	}
+
+	syncedAt, err := r.store.Queries().GetInitiativeDocumentsSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
+	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+
+	// Always refresh in background to avoid blocking on directory listings (e.g., find)
+	if isStale {
+		r.triggerBackgroundRefresh("initiative-docs:"+initiativeID, func(ctx context.Context) error {
+			return r.refreshInitiativeDocuments(ctx, initiativeID)
+		})
+	}
+}
+
+// refreshInitiativeDocuments fetches documents from API and stores in SQLite
+func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initiativeID string) error {
+	docs, err := r.client.GetInitiativeDocuments(ctx, initiativeID)
 	if err != nil {
 		return err
 	}
@@ -934,4 +1079,101 @@ func (r *SQLiteRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cach
 		FileSize:  sql.NullInt64{Int64: size, Valid: true},
 		ID:        id,
 	})
+}
+
+// GetAttachmentByID returns an attachment by ID
+func (r *SQLiteRepository) GetAttachmentByID(ctx context.Context, id string) (*api.Attachment, error) {
+	att, err := r.store.Queries().GetAttachment(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get attachment: %w", err)
+	}
+	result, err := db.DBAttachmentToAPIAttachment(att)
+	if err != nil {
+		return nil, fmt.Errorf("convert attachment: %w", err)
+	}
+	return &result, nil
+}
+
+// =============================================================================
+// Issue Relations
+// =============================================================================
+
+// GetIssueRelations returns all relations for an issue (outgoing)
+func (r *SQLiteRepository) GetIssueRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error) {
+	relations, err := r.store.Queries().ListIssueRelations(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("list issue relations: %w", err)
+	}
+
+	// Convert DB relations to API relations
+	result := make([]api.IssueRelation, len(relations))
+	for i, rel := range relations {
+		result[i] = api.IssueRelation{
+			ID:   rel.ID,
+			Type: rel.Type,
+			RelatedIssue: &api.ParentIssue{
+				ID: rel.RelatedIssueID,
+			},
+		}
+		// Try to get the related issue details
+		if issue, err := r.GetIssueByID(ctx, rel.RelatedIssueID); err == nil && issue != nil {
+			result[i].RelatedIssue.Identifier = issue.Identifier
+			result[i].RelatedIssue.Title = issue.Title
+		}
+	}
+	return result, nil
+}
+
+// GetIssueInverseRelations returns all inverse relations (incoming)
+func (r *SQLiteRepository) GetIssueInverseRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error) {
+	relations, err := r.store.Queries().ListIssueInverseRelations(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("list issue inverse relations: %w", err)
+	}
+
+	// Convert DB relations to API relations (for inverse, the "issue" field points to the source)
+	result := make([]api.IssueRelation, len(relations))
+	for i, rel := range relations {
+		result[i] = api.IssueRelation{
+			ID:   rel.ID,
+			Type: rel.Type,
+			Issue: &api.ParentIssue{
+				ID: rel.IssueID,
+			},
+		}
+		// Try to get the source issue details
+		if issue, err := r.GetIssueByID(ctx, rel.IssueID); err == nil && issue != nil {
+			result[i].Issue.Identifier = issue.Identifier
+			result[i].Issue.Title = issue.Title
+		}
+	}
+	return result, nil
+}
+
+// GetIssueRelationByID returns a relation by ID
+func (r *SQLiteRepository) GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error) {
+	rel, err := r.store.Queries().GetIssueRelation(ctx, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get issue relation: %w", err)
+	}
+
+	result := api.IssueRelation{
+		ID:   rel.ID,
+		Type: rel.Type,
+		RelatedIssue: &api.ParentIssue{
+			ID: rel.RelatedIssueID,
+		},
+	}
+	// Try to get the related issue details
+	if issue, err := r.GetIssueByID(ctx, rel.RelatedIssueID); err == nil && issue != nil {
+		result.RelatedIssue.Identifier = issue.Identifier
+		result.RelatedIssue.Title = issue.Title
+	}
+	return &result, nil
 }

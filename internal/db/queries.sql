@@ -508,8 +508,8 @@ SELECT * FROM documents WHERE issue_id = ? ORDER BY title;
 SELECT * FROM documents WHERE project_id = ? ORDER BY title;
 
 -- name: UpsertDocument :exec
-INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, creator_id, url, created_at, updated_at, synced_at, data)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     slug_id = excluded.slug_id,
     title = excluded.title,
@@ -519,6 +519,7 @@ ON CONFLICT(id) DO UPDATE SET
     content_data = excluded.content_data,
     issue_id = excluded.issue_id,
     project_id = excluded.project_id,
+    initiative_id = excluded.initiative_id,
     creator_id = excluded.creator_id,
     url = excluded.url,
     created_at = excluded.created_at,
@@ -540,6 +541,15 @@ SELECT MAX(synced_at) FROM documents WHERE issue_id = ?;
 
 -- name: GetProjectDocumentsSyncedAt :one
 SELECT MAX(synced_at) FROM documents WHERE project_id = ?;
+
+-- name: ListInitiativeDocuments :many
+SELECT * FROM documents WHERE initiative_id = ? ORDER BY title;
+
+-- name: DeleteInitiativeDocuments :exec
+DELETE FROM documents WHERE initiative_id = ?;
+
+-- name: GetInitiativeDocumentsSyncedAt :one
+SELECT MAX(synced_at) FROM documents WHERE initiative_id = ?;
 
 -- =============================================================================
 -- Initiatives queries
@@ -750,3 +760,39 @@ DELETE FROM embedded_files WHERE issue_id = ?;
 
 -- name: ListCachedEmbeddedFiles :many
 SELECT * FROM embedded_files WHERE cache_path IS NOT NULL;
+
+-- =============================================================================
+-- Issue Relations queries
+-- =============================================================================
+
+-- name: GetIssueRelation :one
+SELECT * FROM issue_relations WHERE id = ?;
+
+-- name: ListIssueRelations :many
+SELECT * FROM issue_relations WHERE issue_id = ? ORDER BY type, related_issue_id;
+
+-- name: ListIssueRelationsByType :many
+SELECT * FROM issue_relations WHERE issue_id = ? AND type = ? ORDER BY related_issue_id;
+
+-- name: ListIssueInverseRelations :many
+SELECT * FROM issue_relations WHERE related_issue_id = ? ORDER BY type, issue_id;
+
+-- name: UpsertIssueRelation :exec
+INSERT INTO issue_relations (id, issue_id, related_issue_id, type, created_at, updated_at, synced_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    issue_id = excluded.issue_id,
+    related_issue_id = excluded.related_issue_id,
+    type = excluded.type,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at;
+
+-- name: DeleteIssueRelation :exec
+DELETE FROM issue_relations WHERE id = ?;
+
+-- name: DeleteIssueRelations :exec
+DELETE FROM issue_relations WHERE issue_id = ?;
+
+-- name: GetIssueRelationsSyncedAt :one
+SELECT MAX(synced_at) FROM issue_relations WHERE issue_id = ?;

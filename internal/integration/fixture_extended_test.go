@@ -727,25 +727,29 @@ func TestFixtureAttachmentsDirectoryExists(t *testing.T) {
 
 func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 	// TST-1 has 2 embedded files: screenshot.png and design.pdf
+	// Plus _create trigger file = 3 entries
 	attachPath := attachmentsPath(testTeamKey, "TST-1")
 	entries, err := os.ReadDir(attachPath)
 	if err != nil {
 		t.Fatalf("Failed to read attachments directory: %v", err)
 	}
 
-	if len(entries) != 2 {
-		t.Errorf("Expected 2 attachments, got %d", len(entries))
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries (2 files + _create), got %d", len(entries))
 	}
 
 	// Check for expected files
 	hasScreenshot := false
 	hasDesign := false
+	hasCreate := false
 	for _, entry := range entries {
-		if entry.Name() == "screenshot.png" {
+		switch entry.Name() {
+		case "screenshot.png":
 			hasScreenshot = true
-		}
-		if entry.Name() == "design.pdf" {
+		case "design.pdf":
 			hasDesign = true
+		case "_create":
+			hasCreate = true
 		}
 	}
 
@@ -754,6 +758,9 @@ func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 	}
 	if !hasDesign {
 		t.Error("Expected design.pdf in attachments")
+	}
+	if !hasCreate {
+		t.Error("Expected _create trigger file in attachments")
 	}
 }
 
@@ -814,14 +821,18 @@ func TestFixtureIssueDirectoryContainsAttachments(t *testing.T) {
 }
 
 func TestFixtureEmptyAttachmentsDirectory(t *testing.T) {
-	// TST-2 has no embedded files
+	// TST-2 has no embedded files, but has _create trigger file
 	attachPath := attachmentsPath(testTeamKey, "TST-2")
 	entries, err := os.ReadDir(attachPath)
 	if err != nil {
 		t.Fatalf("Failed to read attachments directory: %v", err)
 	}
 
-	if len(entries) != 0 {
-		t.Errorf("Expected 0 attachments for TST-2, got %d", len(entries))
+	if len(entries) != 1 {
+		t.Errorf("Expected 1 entry (_create only) for TST-2, got %d", len(entries))
+	}
+
+	if len(entries) > 0 && entries[0].Name() != "_create" {
+		t.Errorf("Expected _create as only entry, got %s", entries[0].Name())
 	}
 }

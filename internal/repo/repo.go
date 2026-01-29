@@ -155,6 +155,18 @@ type Repository interface {
 	// GetMilestoneByName returns a milestone by name within a project
 	GetMilestoneByName(ctx context.Context, projectID, name string) (*api.ProjectMilestone, error)
 
+	// GetMilestoneByID returns a milestone by its ID
+	GetMilestoneByID(ctx context.Context, id string) (*api.ProjectMilestone, error)
+
+	// CreateProjectMilestone creates a new milestone for a project
+	CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error)
+
+	// UpdateProjectMilestone updates an existing milestone
+	UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error)
+
+	// DeleteProjectMilestone deletes a milestone
+	DeleteProjectMilestone(ctx context.Context, milestoneID string) error
+
 	// ==========================================================================
 	// Comments (on-demand fetch)
 	// ==========================================================================
@@ -175,6 +187,9 @@ type Repository interface {
 
 	// GetProjectDocuments returns documents attached to a project
 	GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error)
+
+	// GetInitiativeDocuments returns documents attached to an initiative
+	GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]api.Document, error)
 
 	// GetDocumentBySlug returns a document by its slug
 	GetDocumentBySlug(ctx context.Context, slug string) (*api.Document, error)
@@ -210,10 +225,26 @@ type Repository interface {
 	// (GitHub PRs, Slack messages, etc. - shown in issue.md frontmatter)
 	GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error)
 
+	// GetAttachmentByID returns an attachment by ID
+	GetAttachmentByID(ctx context.Context, id string) (*api.Attachment, error)
+
 	// GetIssueEmbeddedFiles returns embedded files for an issue
 	// (images, PDFs uploaded to Linear CDN - shown in /attachments/ directory)
 	GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error)
 
 	// UpdateEmbeddedFileCache updates the cache path and size for an embedded file
 	UpdateEmbeddedFileCache(ctx context.Context, id, cachePath string, size int64) error
+
+	// ==========================================================================
+	// Issue Relations
+	// ==========================================================================
+
+	// GetIssueRelations returns all relations for an issue (outgoing)
+	GetIssueRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error)
+
+	// GetIssueInverseRelations returns all inverse relations (incoming)
+	GetIssueInverseRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error)
+
+	// GetIssueRelationByID returns a relation by ID
+	GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error)
 }

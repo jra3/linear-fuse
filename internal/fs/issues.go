@@ -268,6 +268,7 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "children", Mode: syscall.S_IFDIR},
 		{Name: "attachments", Mode: syscall.S_IFDIR},
+		{Name: "relations", Mode: syscall.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
 }
@@ -420,6 +421,27 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFDIR,
 			Ino:  attachmentsDirIno(n.issue.ID),
+		}), 0
+
+	case "relations":
+		teamID := ""
+		if n.issue.Team != nil {
+			teamID = n.issue.Team.ID
+		}
+		node := &RelationsNode{
+			BaseNode: BaseNode{lfs: n.lfs},
+			issueID:  n.issue.ID,
+			teamID:   teamID,
+		}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		return n.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  relationsDirIno(n.issue.ID),
 		}), 0
 	}
 
@@ -595,9 +617,6 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return 0
 	}
 
-	// Track state name for updating i.issue after API call
-	var newStateName string
-
 	// Resolve status name to state ID if needed
 	if stateName, ok := updates["stateId"].(string); ok {
 		if i.issue.Team == nil {
@@ -611,7 +630,6 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			i.lfs.SetIssueError(i.issue.ID, "Field: status\nValue: \""+stateName+"\"\nError: "+err.Error()+". See states.md for valid workflow states.")
 			return syscall.EINVAL
 		}
-		newStateName = stateName // Capture name before replacing with ID
 		updates["stateId"] = stateID
 	}
 
@@ -773,36 +791,21 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Invalidate kernel cache for this file
 	i.lfs.InvalidateKernelInode(issueIno(i.issue.ID))
 
-	// Update i.issue with the new values so next read sees them
-	// (otherwise generateContent would serialize the old i.issue data)
-	if newStateName != "" {
-		i.issue.State.Name = newStateName
-	}
-	if title, ok := updates["title"].(string); ok {
-		i.issue.Title = title
-	}
-	if desc, ok := updates["description"].(string); ok {
-		i.issue.Description = desc
-	}
-	if priority, ok := updates["priority"].(int); ok {
-		i.issue.Priority = priority
-	}
-	if dueDate, ok := updates["dueDate"].(string); ok {
-		i.issue.DueDate = &dueDate
-	} else if updates["dueDate"] == nil {
-		i.issue.DueDate = nil
-	}
-	if estimate, ok := updates["estimate"].(int); ok {
-		est := float64(estimate)
-		i.issue.Estimate = &est
-	} else if updates["estimate"] == nil {
-		i.issue.Estimate = nil
-	}
-
-	// Upsert the updated issue to SQLite so it's immediately visible
-	if err := i.lfs.UpsertIssue(ctx, i.issue); err != nil {
-		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+	// Fetch fresh issue from API and upsert to SQLite for immediate visibility.
+	// This ensures all fields (assignee, labels, project, etc.) are correctly persisted,
+	// rather than manually updating a subset of fields which was causing bugs #128 and #129.
+	freshIssue, err := i.lfs.client.GetIssue(ctx, i.issue.ID)
+	if err != nil {
+		log.Printf("Warning: failed to fetch fresh issue after update: %v", err)
 		// Don't fail - the issue was updated in Linear, sync will eventually pick it up
+	} else {
+		// Update local copy with fresh data
+		i.issue = *freshIssue
+
+		// Upsert fresh issue to SQLite so it's immediately visible
+		if err := i.lfs.UpsertIssue(ctx, *freshIssue); err != nil {
+			log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+		}
 	}
 
 	i.dirty = false
@@ -825,6 +828,7 @@ type ChildrenNode struct {
 var _ fs.NodeReaddirer = (*ChildrenNode)(nil)
 var _ fs.NodeLookuper = (*ChildrenNode)(nil)
 var _ fs.NodeGetattrer = (*ChildrenNode)(nil)
+var _ fs.NodeMkdirer = (*ChildrenNode)(nil)
 
 func (n *ChildrenNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
@@ -872,6 +876,64 @@ func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		}
 	}
 	return nil, syscall.ENOENT
+}
+
+// Mkdir creates a new sub-issue (child issue) with the given title
+func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if n.lfs.debug {
+		log.Printf("Mkdir: creating sub-issue %q under %s", name, n.issue.Identifier)
+	}
+
+	// Get team ID from parent issue
+	teamID := ""
+	if n.issue.Team != nil {
+		teamID = n.issue.Team.ID
+	}
+	if teamID == "" {
+		log.Printf("Cannot create sub-issue: parent issue %s has no team", n.issue.Identifier)
+		return nil, syscall.EIO
+	}
+
+	// Create a new issue with the parent set
+	input := map[string]any{
+		"teamId":   teamID,
+		"title":    name,
+		"parentId": n.issue.ID,
+	}
+
+	issue, err := n.lfs.client.CreateIssue(ctx, input)
+	if err != nil {
+		log.Printf("Failed to create sub-issue: %v", err)
+		return nil, syscall.EIO
+	}
+
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
+		log.Printf("Warning: failed to upsert sub-issue to SQLite: %v", err)
+	}
+
+	// Invalidate caches
+	n.lfs.InvalidateTeamIssues(teamID)
+	n.lfs.InvalidateMyIssues()
+	n.lfs.InvalidateFilteredIssues(teamID)
+	n.lfs.InvalidateKernelInode(childrenDirIno(n.issue.ID))
+	n.lfs.InvalidateKernelEntry(issuesDirIno(teamID), issue.Identifier)
+
+	// Return the new issue as a directory node (Mkdir must return a directory)
+	node := &IssueDirectoryNode{
+		BaseNode: BaseNode{lfs: n.lfs},
+		issue:    *issue,
+	}
+
+	out.Attr.Mode = 0755 | syscall.S_IFDIR
+	out.SetAttrTimeout(30 * time.Second)
+	out.SetEntryTimeout(30 * time.Second)
+	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
+
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+		Ino:  issueDirIno(issue.ID),
+	}), 0
 }
 
 // ChildSymlinkNode is a symlink pointing to a child issue directory

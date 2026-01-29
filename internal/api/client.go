@@ -726,6 +726,85 @@ func (c *Client) GetProjectMilestones(ctx context.Context, projectID string) ([]
 	return result.Project.ProjectMilestones.Nodes, nil
 }
 
+// CreateProjectMilestone creates a new milestone for a project
+func (c *Client) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*ProjectMilestone, error) {
+	var result struct {
+		ProjectMilestoneCreate struct {
+			Success          bool             `json:"success"`
+			ProjectMilestone ProjectMilestone `json:"projectMilestone"`
+		} `json:"projectMilestoneCreate"`
+	}
+
+	vars := map[string]any{
+		"projectId": projectID,
+		"name":      name,
+	}
+	if description != "" {
+		vars["description"] = description
+	}
+
+	err := c.query(ctx, mutationCreateProjectMilestone, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.ProjectMilestoneCreate.Success {
+		return nil, fmt.Errorf("milestone creation failed")
+	}
+
+	return &result.ProjectMilestoneCreate.ProjectMilestone, nil
+}
+
+// UpdateProjectMilestone updates an existing milestone
+func (c *Client) UpdateProjectMilestone(ctx context.Context, milestoneID string, input ProjectMilestoneUpdateInput) (*ProjectMilestone, error) {
+	var result struct {
+		ProjectMilestoneUpdate struct {
+			Success          bool             `json:"success"`
+			ProjectMilestone ProjectMilestone `json:"projectMilestone"`
+		} `json:"projectMilestoneUpdate"`
+	}
+
+	vars := map[string]any{
+		"id":    milestoneID,
+		"input": input,
+	}
+
+	err := c.query(ctx, mutationUpdateProjectMilestone, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.ProjectMilestoneUpdate.Success {
+		return nil, fmt.Errorf("milestone update failed")
+	}
+
+	return &result.ProjectMilestoneUpdate.ProjectMilestone, nil
+}
+
+// DeleteProjectMilestone deletes a milestone
+func (c *Client) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
+	var result struct {
+		ProjectMilestoneDelete struct {
+			Success bool `json:"success"`
+		} `json:"projectMilestoneDelete"`
+	}
+
+	vars := map[string]any{
+		"id": milestoneID,
+	}
+
+	err := c.query(ctx, mutationDeleteProjectMilestone, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.ProjectMilestoneDelete.Success {
+		return fmt.Errorf("milestone deletion failed")
+	}
+
+	return nil
+}
+
 // GetProjectUpdates fetches status updates for a project
 func (c *Client) GetProjectUpdates(ctx context.Context, projectID string) ([]ProjectUpdate, error) {
 	var result struct {
@@ -1525,6 +1604,26 @@ func (c *Client) GetProjectDocuments(ctx context.Context, projectID string) ([]D
 	return result.Documents.Nodes, nil
 }
 
+// GetInitiativeDocuments fetches documents for an initiative
+func (c *Client) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]Document, error) {
+	var result struct {
+		Documents struct {
+			Nodes []Document `json:"nodes"`
+		} `json:"documents"`
+	}
+
+	vars := map[string]any{
+		"initiativeId": initiativeID,
+	}
+
+	err := c.query(ctx, queryInitiativeDocuments, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result.Documents.Nodes, nil
+}
+
 // CreateDocument creates a new document
 func (c *Client) CreateDocument(ctx context.Context, input map[string]any) (*Document, error) {
 	var result struct {
@@ -1614,4 +1713,147 @@ func (c *Client) GetInitiatives(ctx context.Context) ([]Initiative, error) {
 	}
 
 	return result.Initiatives.Nodes, nil
+}
+
+// =============================================================================
+// Issue Relations
+// =============================================================================
+
+// CreateIssueRelation creates a relation between two issues
+// relationType must be one of: blocks, duplicate, related, similar
+func (c *Client) CreateIssueRelation(ctx context.Context, issueID, relatedIssueID, relationType string) (*IssueRelation, error) {
+	var result struct {
+		IssueRelationCreate struct {
+			Success       bool          `json:"success"`
+			IssueRelation IssueRelation `json:"issueRelation"`
+		} `json:"issueRelationCreate"`
+	}
+
+	vars := map[string]any{
+		"issueId":        issueID,
+		"relatedIssueId": relatedIssueID,
+		"type":           relationType,
+	}
+
+	err := c.query(ctx, mutationCreateIssueRelation, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.IssueRelationCreate.Success {
+		return nil, fmt.Errorf("issue relation creation failed")
+	}
+
+	return &result.IssueRelationCreate.IssueRelation, nil
+}
+
+// DeleteIssueRelation deletes an issue relation
+func (c *Client) DeleteIssueRelation(ctx context.Context, relationID string) error {
+	var result struct {
+		IssueRelationDelete struct {
+			Success bool `json:"success"`
+		} `json:"issueRelationDelete"`
+	}
+
+	vars := map[string]any{
+		"id": relationID,
+	}
+
+	err := c.query(ctx, mutationDeleteIssueRelation, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.IssueRelationDelete.Success {
+		return fmt.Errorf("issue relation deletion failed")
+	}
+
+	return nil
+}
+
+// =============================================================================
+// Attachments Create/Link
+// =============================================================================
+
+// CreateAttachment creates a generic attachment (external link) on an issue
+func (c *Client) CreateAttachment(ctx context.Context, issueID, title, url, subtitle string) (*Attachment, error) {
+	var result struct {
+		AttachmentCreate struct {
+			Success    bool       `json:"success"`
+			Attachment Attachment `json:"attachment"`
+		} `json:"attachmentCreate"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+		"title":   title,
+		"url":     url,
+	}
+	if subtitle != "" {
+		vars["subtitle"] = subtitle
+	}
+
+	err := c.query(ctx, mutationCreateAttachment, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.AttachmentCreate.Success {
+		return nil, fmt.Errorf("attachment creation failed")
+	}
+
+	return &result.AttachmentCreate.Attachment, nil
+}
+
+// LinkURL creates an attachment by linking a URL (Linear auto-detects type)
+func (c *Client) LinkURL(ctx context.Context, issueID, url, title string) (*Attachment, error) {
+	var result struct {
+		AttachmentLinkURL struct {
+			Success    bool       `json:"success"`
+			Attachment Attachment `json:"attachment"`
+		} `json:"attachmentLinkURL"`
+	}
+
+	vars := map[string]any{
+		"issueId": issueID,
+		"url":     url,
+	}
+	if title != "" {
+		vars["title"] = title
+	}
+
+	err := c.query(ctx, mutationLinkURL, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if !result.AttachmentLinkURL.Success {
+		return nil, fmt.Errorf("URL linking failed")
+	}
+
+	return &result.AttachmentLinkURL.Attachment, nil
+}
+
+// DeleteAttachment deletes an attachment
+func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) error {
+	var result struct {
+		AttachmentDelete struct {
+			Success bool `json:"success"`
+		} `json:"attachmentDelete"`
+	}
+
+	vars := map[string]any{
+		"id": attachmentID,
+	}
+
+	err := c.query(ctx, mutationDeleteAttachment, vars, &result)
+	if err != nil {
+		return err
+	}
+
+	if !result.AttachmentDelete.Success {
+		return fmt.Errorf("attachment deletion failed")
+	}
+
+	return nil
 }

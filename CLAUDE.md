@@ -141,7 +141,7 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
   - `sqlite.go` - SQLite-backed implementation
   - `mock.go` - In-memory mock for testing
 - **internal/sync**: Background sync worker for Linear → SQLite
-- **internal/cache**: Generic TTL cache (being phased out in favor of SQLite)
+- **internal/cache**: Generic TTL cache (legacy, no longer imported - kept for reference)
 
 ### GraphQL Query Design
 

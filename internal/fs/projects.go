@@ -114,6 +114,12 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		return nil, syscall.EIO
 	}
 
+	// Upsert to SQLite so it's immediately visible
+	if err := p.lfs.UpsertProject(ctx, p.team.ID, *project); err != nil {
+		log.Printf("Warning: failed to upsert project to SQLite: %v", err)
+		// Don't fail - the project was created in Linear, sync will eventually pick it up
+	}
+
 	// Invalidate cache
 	p.lfs.InvalidateTeamProjects(p.team.ID)
 
@@ -202,8 +208,8 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// +3 for project.md, docs/, and updates/
-	entries := make([]fuse.DirEntry, len(issues)+3)
+	// +4 for project.md, docs/, updates/, and milestones/
+	entries := make([]fuse.DirEntry, len(issues)+4)
 	entries[0] = fuse.DirEntry{
 		Name: "project.md",
 		Mode: syscall.S_IFREG,
@@ -216,8 +222,12 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		Name: "updates",
 		Mode: syscall.S_IFDIR,
 	}
+	entries[3] = fuse.DirEntry{
+		Name: "milestones",
+		Mode: syscall.S_IFDIR,
+	}
 	for i, issue := range issues {
-		entries[i+3] = fuse.DirEntry{
+		entries[i+4] = fuse.DirEntry{
 			Name: issue.Identifier,
 			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
@@ -260,6 +270,19 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		out.Attr.Gid = p.lfs.gid
 		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	}
+
+	// Handle milestones/ directory
+	if name == "milestones" {
+		node := &MilestonesNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID}
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = p.lfs.uid
+		out.Attr.Gid = p.lfs.gid
+		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
+		return p.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  milestonesDirIno(p.project.ID),
+		}), 0
 	}
 
 	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)

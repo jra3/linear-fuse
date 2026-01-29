@@ -233,7 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_comments_user ON comments(user_id);
 CREATE INDEX IF NOT EXISTS idx_comments_created ON comments(issue_id, created_at);
 
 -- =============================================================================
--- Documents (attached to issues, projects, or standalone)
+-- Documents (attached to issues, projects, initiatives, or standalone)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
@@ -245,6 +245,7 @@ CREATE TABLE IF NOT EXISTS documents (
     content_data TEXT,  -- ProseMirror JSON
     issue_id TEXT,
     project_id TEXT,
+    initiative_id TEXT,
     creator_id TEXT,
     url TEXT,
     created_at DATETIME,
@@ -256,6 +257,7 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS idx_documents_slug ON documents(slug_id);
 CREATE INDEX IF NOT EXISTS idx_documents_issue ON documents(issue_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
+CREATE INDEX IF NOT EXISTS idx_documents_initiative ON documents(initiative_id);
 CREATE INDEX IF NOT EXISTS idx_documents_creator ON documents(creator_id);
 
 -- =============================================================================
@@ -379,3 +381,20 @@ CREATE TABLE IF NOT EXISTS embedded_files (
 
 CREATE INDEX IF NOT EXISTS idx_embedded_files_issue ON embedded_files(issue_id);
 CREATE INDEX IF NOT EXISTS idx_embedded_files_cached ON embedded_files(cache_path) WHERE cache_path IS NOT NULL;
+
+-- =============================================================================
+-- Issue Relations (blocks, duplicate, related, similar)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS issue_relations (
+    id TEXT PRIMARY KEY,
+    issue_id TEXT NOT NULL,           -- The issue this relation belongs to
+    related_issue_id TEXT NOT NULL,   -- The related issue
+    type TEXT NOT NULL,               -- blocks, duplicate, related, similar
+    created_at DATETIME,
+    updated_at DATETIME,
+    synced_at DATETIME NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_relations_issue ON issue_relations(issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_relations_related ON issue_relations(related_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_relations_type ON issue_relations(issue_id, type);

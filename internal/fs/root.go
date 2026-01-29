@@ -144,13 +144,22 @@ teams/{KEY}/
     .error                          [read-only: last validation error]
     comments/{id}.md                [read/write, _create=trigger]
     docs/{slug}.md                  [read/write, _create=trigger]
-    attachments/                    [read-only: ls to list, cat to download]
-    children/                       [symlinks to sub-issues]
+    attachments/                    [embedded files + external links]
+      _create                       [write "URL [title]" to link]
+      *.png, *.pdf                  [read-only: embedded images/files]
+      *.link                        [read-only: external link info]
+    relations/                      [issue dependencies/links]
+      _create                       [write "type ID" to create]
+      {type}-{ID}.rel               [read-only info, rm to delete]
+    children/                       [symlinks to sub-issues, mkdir to create]
   by/status|label|assignee/{value}/ [issue symlinks]
   projects/{slug}/
     project.md                      [read/write]
     docs/                           [same as issues]
     updates/                        [_create with health: onTrack|atRisk|offTrack]
+    milestones/                     [project milestones]
+      _create                       [write "name\ndescription" to create]
+      {name}.md                     [read/write, rm to delete]
     {ISSUE-ID} symlinks
   cycles/
     current                         [symlink to active cycle]
@@ -168,9 +177,16 @@ my/assigned|created|active/         [your issue symlinks]
 READ:    cat %s/teams/ENG/issues/ENG-123/issue.md
 EDIT:    vim issue.md                 (edit frontmatter, save)
 CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"
+         mkdir children/"Sub-task Title"   (creates child issue)
+         mkdir %s/teams/ENG/projects/"New Project"
          echo "text" > comments/_create
          echo "text" > docs/"Title.md"
          echo "---\nhealth: atRisk\n---\nBlocked" > updates/_create
+LINK:    echo "https://github.com/org/repo/pull/123" > attachments/_create
+         echo "blocks ENG-456" > relations/_create
+         echo -e "Phase 1\nInitial milestone" > milestones/_create
+DELETE:  rm relations/blocks-ENG-456.rel
+         rm milestones/"Phase 1.md"
 ARCHIVE: rmdir %s/teams/ENG/issues/ENG-123
 SORT:    ls -lt %s/my/active/           (mtime = updatedAt)
 </operations>
@@ -198,7 +214,7 @@ Description body (editable)
 
 <permissions>
 -r--r--r--  Read-only     team.md, states.md, initiative.md
--rw-r--r--  Editable      issue.md, project.md, comments/*.md, docs/*.md
+-rw-r--r--  Editable      issue.md, project.md, comments/*.md, docs/*.md, milestones/*.md
 --w-------  Write-only    _create (write triggers creation, always empty)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
 </permissions>
@@ -232,8 +248,10 @@ The .error file is cleared on successful writes.
 - Clear optional fields by deleting the line entirely
 - Set parent: add "parent: ENG-100" | Remove: delete line
 - Link project to initiative: add "initiatives: [Name]" to project.md
+- Relation types: blocks, duplicate, related, similar
+- Inverse relations shown as: blocked-by, duplicated-by, related-to, similar-to
 - Cache TTL: 60s for issues, 10min for states/labels/users
 - Timestamps: mtime=updatedAt, ctime=createdAt from Linear
 </important_notes>
-`, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint)
+`, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint)
 }

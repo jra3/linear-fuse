@@ -297,6 +297,26 @@ func (lfs *LinearFS) UpsertLabel(ctx context.Context, teamID string, label api.L
 	return lfs.store.Queries().UpsertLabel(ctx, params)
 }
 
+// UpsertProject inserts or updates a project in SQLite.
+func (lfs *LinearFS) UpsertProject(ctx context.Context, teamID string, project api.Project) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIProjectToDBProject(project)
+	if err != nil {
+		return err
+	}
+	if err := lfs.store.Queries().UpsertProject(ctx, params); err != nil {
+		return err
+	}
+	// Also create project-team association
+	return lfs.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
+		ProjectID: project.ID,
+		TeamID:    teamID,
+		SyncedAt:  db.Now(),
+	})
+}
+
 // UpsertProjectUpdate inserts or updates a project update in SQLite.
 func (lfs *LinearFS) UpsertProjectUpdate(ctx context.Context, projectID string, update api.ProjectUpdate) error {
 	if lfs.store == nil {
@@ -555,6 +575,10 @@ func (lfs *LinearFS) GetProjectDocuments(ctx context.Context, projectID string) 
 	return lfs.repo.GetProjectDocuments(ctx, projectID)
 }
 
+func (lfs *LinearFS) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]api.Document, error) {
+	return lfs.repo.GetInitiativeDocuments(ctx, initiativeID)
+}
+
 // InvalidateIssueDocuments is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateIssueDocuments(issueID string) {
 	// No-op: SQLite is source of truth
@@ -744,6 +768,21 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	}
 
 	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
+}
+
+// CreateProjectMilestone creates a new milestone for a project
+func (lfs *LinearFS) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
+	return lfs.repo.CreateProjectMilestone(ctx, projectID, name, description)
+}
+
+// UpdateProjectMilestone updates an existing milestone
+func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
+	return lfs.repo.UpdateProjectMilestone(ctx, milestoneID, input)
+}
+
+// DeleteProjectMilestone deletes a milestone
+func (lfs *LinearFS) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
+	return lfs.repo.DeleteProjectMilestone(ctx, milestoneID)
 }
 
 // ResolveCycleID resolves a cycle name to its ID

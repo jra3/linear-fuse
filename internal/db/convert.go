@@ -470,6 +470,9 @@ func APIDocumentToDBDocument(document api.Document) (UpsertDocumentParams, error
 	if document.Project != nil {
 		params.ProjectID = sql.NullString{String: document.Project.ID, Valid: true}
 	}
+	if document.Initiative != nil {
+		params.InitiativeID = sql.NullString{String: document.Initiative.ID, Valid: true}
+	}
 	if document.Creator != nil {
 		params.CreatorID = sql.NullString{String: document.Creator.ID, Valid: true}
 	}

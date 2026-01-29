@@ -151,6 +151,14 @@ type ProjectMilestone struct {
 	SortOrder   float64 `json:"sortOrder"`
 }
 
+// ProjectMilestoneUpdateInput is the input for updating a project milestone
+type ProjectMilestoneUpdateInput struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	TargetDate  *string `json:"targetDate,omitempty"`
+	SortOrder   *float64 `json:"sortOrder,omitempty"`
+}
+
 type PageInfo struct {
 	HasNextPage bool   `json:"hasNextPage"`
 	EndCursor   string `json:"endCursor"`
@@ -206,19 +214,20 @@ type ProjectUpdate struct {
 }
 
 type Document struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Content   string    `json:"content"`
-	SlugID    string    `json:"slugId"`
-	URL       string    `json:"url"`
-	Icon      string    `json:"icon"`
-	Color     string    `json:"color"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-	Creator   *User     `json:"creator"`
-	Issue     *Issue    `json:"issue"`
-	Project   *Project  `json:"project"`
-	Team      *Team     `json:"team"`
+	ID         string      `json:"id"`
+	Title      string      `json:"title"`
+	Content    string      `json:"content"`
+	SlugID     string      `json:"slugId"`
+	URL        string      `json:"url"`
+	Icon       string      `json:"icon"`
+	Color      string      `json:"color"`
+	CreatedAt  time.Time   `json:"createdAt"`
+	UpdatedAt  time.Time   `json:"updatedAt"`
+	Creator    *User       `json:"creator"`
+	Issue      *Issue      `json:"issue"`
+	Project    *Project    `json:"project"`
+	Initiative *Initiative `json:"initiative"`
+	Team       *Team       `json:"team"`
 }
 
 type Initiative struct {

@@ -137,6 +137,7 @@ fragment DocumentFields on Document {
   creator { id name email }
   issue { id identifier }
   project { id }
+  initiative { id name }
 }
 `
 
@@ -343,6 +344,48 @@ query ProjectMilestones($projectId: String!) {
         sortOrder
       }
     }
+  }
+}
+`
+
+// =============================================================================
+// Project Milestones Mutations
+// =============================================================================
+
+const mutationCreateProjectMilestone = `
+mutation CreateProjectMilestone($projectId: String!, $name: String!, $description: String) {
+  projectMilestoneCreate(input: { projectId: $projectId, name: $name, description: $description }) {
+    success
+    projectMilestone {
+      id
+      name
+      description
+      targetDate
+      sortOrder
+    }
+  }
+}
+`
+
+const mutationUpdateProjectMilestone = `
+mutation UpdateProjectMilestone($id: String!, $input: ProjectMilestoneUpdateInput!) {
+  projectMilestoneUpdate(id: $id, input: $input) {
+    success
+    projectMilestone {
+      id
+      name
+      description
+      targetDate
+      sortOrder
+    }
+  }
+}
+`
+
+const mutationDeleteProjectMilestone = `
+mutation DeleteProjectMilestone($id: String!) {
+  projectMilestoneDelete(id: $id) {
+    success
   }
 }
 `
@@ -665,6 +708,14 @@ query ProjectDocuments($projectId: ID!) {
 }
 ` + DocumentFieldsFragment
 
+var queryInitiativeDocuments = `
+query InitiativeDocuments($initiativeId: ID!) {
+  documents(first: 100, filter: { initiative: { id: { eq: $initiativeId } } }) {
+    nodes { ...DocumentFields }
+  }
+}
+` + DocumentFieldsFragment
+
 var mutationCreateDocument = `
 mutation CreateDocument($input: DocumentCreateInput!) {
   documentCreate(input: $input) {
@@ -800,6 +851,78 @@ query Initiatives {
         }
       }
     }
+  }
+}
+`
+
+// =============================================================================
+// Issue Relations
+// =============================================================================
+
+const mutationCreateIssueRelation = `
+mutation CreateIssueRelation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!) {
+  issueRelationCreate(input: { issueId: $issueId, relatedIssueId: $relatedIssueId, type: $type }) {
+    success
+    issueRelation {
+      id
+      type
+      issue { id identifier title }
+      relatedIssue { id identifier title }
+    }
+  }
+}
+`
+
+const mutationDeleteIssueRelation = `
+mutation DeleteIssueRelation($id: String!) {
+  issueRelationDelete(id: $id) {
+    success
+  }
+}
+`
+
+// =============================================================================
+// Attachments Create/Link
+// =============================================================================
+
+const mutationCreateAttachment = `
+mutation CreateAttachment($issueId: String!, $title: String!, $url: String!, $subtitle: String) {
+  attachmentCreate(input: { issueId: $issueId, title: $title, url: $url, subtitle: $subtitle }) {
+    success
+    attachment {
+      id
+      title
+      subtitle
+      url
+      sourceType
+      createdAt
+      updatedAt
+    }
+  }
+}
+`
+
+const mutationLinkURL = `
+mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) {
+  attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
+    success
+    attachment {
+      id
+      title
+      subtitle
+      url
+      sourceType
+      createdAt
+      updatedAt
+    }
+  }
+}
+`
+
+const mutationDeleteAttachment = `
+mutation DeleteAttachment($id: String!) {
+  attachmentDelete(id: $id) {
+    success
   }
 }
 `

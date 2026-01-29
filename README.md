@@ -94,6 +94,8 @@ ls -lt /mnt/linear/teams/TEAM/by/status/Todo/
 ls -ltr /mnt/linear/teams/TEAM/issues/
 ```
 
+> **Note:** If using `eza` (aliased as `ls`), use `ls --sort=modified` instead of `ls -lt`.
+
 | Timestamp | Source | Example |
 |-----------|--------|---------|
 | **mtime** (modified) | Issue's `updatedAt` | Last edit to issue |
@@ -191,7 +193,7 @@ The login flow fails when users attempt to authenticate with SSO.
 - `assignee` - User email or name
 - `priority` - none/low/medium/high/urgent
 - `labels` - List of label names (check labels.md for valid values)
-- `dueDate` - Due date (ISO format)
+- `due` - Due date (YYYY-MM-DD format)
 - `estimate` - Point estimate
 - `parent` - Parent issue identifier (e.g., TEAM-100)
 - Description (content after frontmatter)
@@ -340,6 +342,48 @@ mkdir /mnt/linear/teams/TEAM/projects/"Q1 Launch"
 # Archive a project
 rmdir /mnt/linear/teams/TEAM/projects/q1-launch
 ```
+
+### Team Documents
+
+Teams can have their own documents separate from issues:
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| List documents | `ls teams/TEAM/docs/` | Shows team documents |
+| Create document | `echo "..." > teams/TEAM/docs/"Title.md"` | Creates document with title |
+| Edit document | Edit doc file and save | Updates title/content |
+| Delete document | `rm teams/TEAM/docs/spec.md` | Deletes document |
+
+```bash
+# Create a team document
+cat > /mnt/linear/teams/TEAM/docs/"Engineering Standards.md" << 'EOF'
+---
+title: "Engineering Standards"
+---
+Our coding standards and best practices...
+EOF
+```
+
+### Project Updates
+
+Post status updates to projects with health indicators:
+
+| Operation | Command | Effect |
+|-----------|---------|--------|
+| Create update | `echo "..." > projects/slug/updates/_create` | Posts status update |
+| View updates | `ls projects/slug/updates/` | Lists all updates |
+
+```bash
+# Post a project status update
+cat > /mnt/linear/teams/TEAM/projects/q1-launch/updates/_create << 'EOF'
+---
+health: atRisk
+---
+We're blocked on external API dependencies. ETA for resolution is next week.
+EOF
+```
+
+Health values: `onTrack`, `atRisk`, `offTrack`
 
 ### Editing Labels on Issues
 

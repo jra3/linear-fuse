@@ -113,6 +113,7 @@ func (i *InitiativeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "initiative.md", Mode: syscall.S_IFREG},
+		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
 		{Name: "updates", Mode: syscall.S_IFDIR},
 	}
@@ -130,6 +131,14 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+
+	case "docs":
+		out.Attr.Mode = 0755 | syscall.S_IFDIR
+		out.Attr.Uid = i.lfs.uid
+		out.Attr.Gid = i.lfs.gid
+		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
+		node := &DocsNode{BaseNode: BaseNode{lfs: i.lfs}, initiativeID: i.initiative.ID}
+		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR, Ino: docsDirIno(i.initiative.ID)}), 0
 
 	case "projects":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR

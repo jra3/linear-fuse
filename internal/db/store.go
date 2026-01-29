@@ -23,8 +23,32 @@ type Store struct {
 	queries *Queries
 }
 
-// Open opens or creates a SQLite database at the given path
+// Open opens or creates a SQLite database at the given path.
+// If the existing database has an incompatible schema, it is deleted and recreated.
 func Open(dbPath string) (*Store, error) {
+	store, err := openDB(dbPath)
+	if err != nil {
+		// Check if this is a schema error (e.g., missing column)
+		if strings.Contains(err.Error(), "no such column") ||
+			strings.Contains(err.Error(), "no such table") ||
+			strings.Contains(err.Error(), "SQL logic error") {
+			// Schema mismatch - delete and recreate
+			if removeErr := os.Remove(dbPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				return nil, fmt.Errorf("remove incompatible cache: %w", removeErr)
+			}
+			// Also remove WAL and SHM files
+			os.Remove(dbPath + "-wal")
+			os.Remove(dbPath + "-shm")
+			// Retry with fresh database
+			return openDB(dbPath)
+		}
+		return nil, err
+	}
+	return store, nil
+}
+
+// openDB is the internal function that opens the database
+func openDB(dbPath string) (*Store, error) {
 	// Ensure parent directory exists
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
