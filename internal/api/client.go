@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,15 +88,21 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		log.Printf("[API] Calling %s vars=%v", opName, variables)
 	}
 
-	// Wait for rate limit token before making request
+	// Log token bucket exhaustion before blocking
+	if tokens := c.limiter.Tokens(); tokens <= 0 {
+		log.Printf("[ratelimit] token bucket empty, %s will block until tokens replenish", opName)
+	}
+
+	// Verbose debug: log every wait >1ms
 	if debugRateLimit {
 		reservation := c.limiter.Reserve()
 		delay := reservation.Delay()
-		if delay > 0 {
-			log.Printf("[RATE] Waiting %v for rate limit token", delay)
+		if delay > time.Millisecond {
+			log.Printf("[ratelimit] debug: %s reservation delay %v", opName, delay)
 		}
-		reservation.Cancel() // Cancel and use Wait() instead for proper blocking
+		reservation.Cancel()
 	}
+
 	rateLimitStart := time.Now()
 	if err := c.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit wait cancelled: %w", err)
@@ -104,8 +111,12 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	if rateLimitWait > time.Millisecond {
 		c.stats.RecordRateLimitWait(rateLimitWait)
 	}
-	if debugRateLimit && rateLimitWait > 100*time.Millisecond {
-		log.Printf("[RATE] Waited %v for rate limit", rateLimitWait)
+	// Always log noisy rate limit waits (no env var required)
+	if rateLimitWait > 100*time.Millisecond {
+		hourly := c.stats.HourlyCount()
+		pct := float64(hourly) / float64(linearHourlyLimit) * 100
+		log.Printf("[ratelimit] %s waited %s (budget: %d/%d this hour, %.0f%% used)",
+			opName, rateLimitWait.Round(time.Millisecond), hourly, linearHourlyLimit, pct)
 	}
 
 	// Track request duration for stats
@@ -142,9 +153,18 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	}
 	defer resp.Body.Close()
 
+	// Check server-side rate limit headers
+	c.checkRateLimitHeaders(resp, opName)
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		queryErr = fmt.Errorf("failed to read response: %w", err)
+		return queryErr
+	}
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP 429): %s", opName, string(respBody))
 		return queryErr
 	}
 
@@ -160,7 +180,11 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	}
 
 	if len(gqlResp.Errors) > 0 {
-		queryErr = fmt.Errorf("GraphQL error: %s", gqlResp.Errors[0].Message)
+		errMsg := gqlResp.Errors[0].Message
+		queryErr = fmt.Errorf("GraphQL error: %s", errMsg)
+		if strings.Contains(errMsg, "RATELIMITED") || strings.Contains(strings.ToLower(errMsg), "rate limit") {
+			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, errMsg)
+		}
 		return queryErr
 	}
 
@@ -170,6 +194,38 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	}
 
 	return nil
+}
+
+// checkRateLimitHeaders logs warnings when Linear's rate limit headers indicate low remaining budget.
+func (c *Client) checkRateLimitHeaders(resp *http.Response, opName string) {
+	remaining := resp.Header.Get("X-RateLimit-Requests-Remaining")
+	limit := resp.Header.Get("X-RateLimit-Requests-Limit")
+
+	if remaining == "" {
+		return
+	}
+
+	rem, err := strconv.Atoi(remaining)
+	if err != nil {
+		return
+	}
+
+	lim := linearHourlyLimit
+	if limit != "" {
+		if parsed, err := strconv.Atoi(limit); err == nil {
+			lim = parsed
+		}
+	}
+
+	// Warn when below 20% of limit
+	if lim > 0 && float64(rem)/float64(lim) < 0.20 {
+		log.Printf("[ratelimit] Linear API: %d/%d requests remaining this hour (after %s)", rem, lim, opName)
+	}
+}
+
+// Stats returns the client's API stats tracker for external inspection.
+func (c *Client) Stats() *APIStats {
+	return c.stats
 }
 
 // GetTeams fetches all teams the user has access to

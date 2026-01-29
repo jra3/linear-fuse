@@ -77,6 +77,11 @@ func parseSQLiteTime(s string) time.Time {
 	return time.Time{}
 }
 
+// BudgetReporter provides rate limit budget information.
+type BudgetReporter interface {
+	BudgetSnapshot() (count int, pct float64)
+}
+
 // Worker handles background synchronization of Linear issues to SQLite
 type Worker struct {
 	client   APIClient
@@ -87,6 +92,7 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
+	budget   BudgetReporter // optional: for rate limit budget logging
 
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
@@ -122,6 +128,11 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 		stopCh:   make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
+}
+
+// SetBudgetReporter sets the rate limit budget reporter for enhanced logging.
+func (w *Worker) SetBudgetReporter(b BudgetReporter) {
+	w.budget = b
 }
 
 // Start begins the background sync process
@@ -699,8 +710,14 @@ func (w *Worker) setRateLimited() {
 	w.rateLimitedAt = time.Now()
 	// Linear rate limit is per hour, wait 15 minutes before retrying
 	w.rateLimitExpiry = w.rateLimitedAt.Add(15 * time.Minute)
-	log.Printf("[sync] rate limited, pausing issue details sync until %s",
-		w.rateLimitExpiry.Format(time.RFC3339))
+	if w.budget != nil {
+		count, pct := w.budget.BudgetSnapshot()
+		log.Printf("[sync] rate limited, pausing issue details sync until %s (budget: %d/1500 used this hour, %.0f%%)",
+			w.rateLimitExpiry.Format(time.RFC3339), count, pct)
+	} else {
+		log.Printf("[sync] rate limited, pausing issue details sync until %s",
+			w.rateLimitExpiry.Format(time.RFC3339))
+	}
 }
 
 // =============================================================================

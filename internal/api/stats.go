@@ -3,7 +3,6 @@ package api
 import (
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -41,14 +40,9 @@ type APIStats struct {
 }
 
 // NewAPIStats creates a new API stats tracker.
-// If logEnabled is true, starts a background goroutine that logs stats periodically.
-// Stats are always collected; this only controls whether they're logged.
+// The periodic stats logger always runs at 5-minute intervals for observability.
+// The logEnabled parameter and LINEARFS_API_STATS env var are kept for compatibility but no longer needed.
 func NewAPIStats(logEnabled bool) *APIStats {
-	// Also check env var for backwards compatibility
-	if os.Getenv("LINEARFS_API_STATS") != "" {
-		logEnabled = true
-	}
-
 	s := &APIStats{
 		operations:  make(map[string]*OperationStats),
 		recentCalls: make([]time.Time, 0, 1000),
@@ -56,10 +50,10 @@ func NewAPIStats(logEnabled bool) *APIStats {
 		stopCh:      make(chan struct{}),
 	}
 
-	if logEnabled {
-		s.wg.Add(1)
-		go s.periodicLogger()
-	}
+	// Always run periodic logger — the 5-minute interval is not noisy
+	// and provides essential observability for rate limit issues.
+	s.wg.Add(1)
+	go s.periodicLogger()
 
 	return s
 }
@@ -132,6 +126,13 @@ func (s *APIStats) HourlyRate() float64 {
 // RateLimitWaitTotal returns the total time spent waiting for the rate limiter.
 func (s *APIStats) RateLimitWaitTotal() time.Duration {
 	return time.Duration(atomic.LoadInt64(&s.rateLimitWaitNs))
+}
+
+// BudgetSnapshot returns the current hourly call count and percentage used.
+func (s *APIStats) BudgetSnapshot() (count int, pct float64) {
+	count = s.HourlyCount()
+	pct = float64(count) / float64(linearHourlyLimit) * 100
+	return
 }
 
 // Summary returns a formatted summary of API stats.
