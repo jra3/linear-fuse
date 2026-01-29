@@ -615,7 +615,9 @@ func TestDBIssuesToAPIIssues(t *testing.T) {
 			UpdatedAt:  time.Now(),
 		}
 		data, _ := APIIssueToDBIssue(issue)
-		store.Queries().UpsertIssue(ctx, data.ToUpsertParams())
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("UpsertIssue failed: %v", err)
+		}
 	}
 
 	// List and convert back
@@ -744,7 +746,9 @@ func TestGetTeamIssueCount(t *testing.T) {
 			UpdatedAt:  time.Now(),
 			Data:       json.RawMessage("{}"),
 		}
-		store.Queries().UpsertIssue(ctx, data.ToUpsertParams())
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("UpsertIssue failed: %v", err)
+		}
 	}
 
 	// Check count

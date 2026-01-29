@@ -135,7 +135,7 @@ func (m *MockLinearServer) handleRequest(w http.ResponseWriter, r *http.Request)
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -152,7 +152,7 @@ func (m *MockLinearServer) handleRequest(w http.ResponseWriter, r *http.Request)
 		"data": data,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // extractOperation extracts the operation name from a GraphQL query.

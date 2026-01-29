@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"strings"
 	"syscall"
 	"time"
@@ -337,7 +338,9 @@ func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscal
 	}
 
 	// Delete from local DB
-	n.lfs.store.Queries().DeleteAttachment(ctx, n.attachment.ID)
+	if err := n.lfs.store.Queries().DeleteAttachment(ctx, n.attachment.ID); err != nil {
+		log.Printf("[attachments] delete from DB failed: %v", err)
+	}
 
 	// Invalidate caches
 	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
@@ -418,7 +421,7 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 	// Upsert to SQLite for immediate visibility
 	now := time.Now()
 	data, _ := json.Marshal(att)
-	n.lfs.store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
+	if err := n.lfs.store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
 		ID:         att.ID,
 		IssueID:    n.issueID,
 		Title:      att.Title,
@@ -428,7 +431,9 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 		Metadata:   json.RawMessage("{}"),
 		SyncedAt:   now,
 		Data:       data,
-	})
+	}); err != nil {
+		log.Printf("[attachments] upsert to DB failed: %v", err)
+	}
 
 	// Invalidate cache
 	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))

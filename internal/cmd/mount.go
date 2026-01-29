@@ -79,7 +79,7 @@ func runMount(cmd *cobra.Command, args []string) error {
 	go func() {
 		<-sigChan
 		fmt.Println("\nUnmounting...")
-		server.Unmount()
+		_ = server.Unmount()
 	}()
 
 	fmt.Println("Filesystem mounted. Press Ctrl+C to unmount.")

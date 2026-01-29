@@ -111,8 +111,12 @@ func TestSQLiteRepository_Issues(t *testing.T) {
 
 	issueData1, _ := db.APIIssueToDBIssue(issue1)
 	issueData2, _ := db.APIIssueToDBIssue(issue2)
-	store.Queries().UpsertIssue(ctx, issueData1.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, issueData2.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData1.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, issueData2.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetTeamIssues
 	issues, err := repo.GetTeamIssues(ctx, "team-1")
@@ -158,13 +162,19 @@ func TestSQLiteRepository_FilteredIssues(t *testing.T) {
 
 	// Insert test data
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert states
 	state1Params, _ := db.APIStateToDBState(api.State{ID: "state-1", Name: "Todo", Type: "unstarted"}, "team-1")
 	state2Params, _ := db.APIStateToDBState(api.State{ID: "state-2", Name: "Done", Type: "completed"}, "team-1")
-	store.Queries().UpsertState(ctx, state1Params)
-	store.Queries().UpsertState(ctx, state2Params)
+	if err := store.Queries().UpsertState(ctx, state1Params); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertState(ctx, state2Params); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert issues with different states, priorities, and assignees
 	issues := []api.Issue{
@@ -174,7 +184,9 @@ func TestSQLiteRepository_FilteredIssues(t *testing.T) {
 	}
 	for _, issue := range issues {
 		data, _ := db.APIIssueToDBIssue(issue)
-		store.Queries().UpsertIssue(ctx, data.ToUpsertParams())
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Test GetIssuesByState
@@ -231,7 +243,9 @@ func TestSQLiteRepository_States(t *testing.T) {
 	}
 	for _, state := range states {
 		params, _ := db.APIStateToDBState(state, "team-1")
-		store.Queries().UpsertState(ctx, params)
+		if err := store.Queries().UpsertState(ctx, params); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Test GetTeamStates
@@ -271,7 +285,9 @@ func TestSQLiteRepository_Labels(t *testing.T) {
 	}
 	for _, label := range labels {
 		params, _ := db.APILabelToDBLabel(label, "team-1")
-		store.Queries().UpsertLabel(ctx, params)
+		if err := store.Queries().UpsertLabel(ctx, params); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Test GetTeamLabels
@@ -311,7 +327,9 @@ func TestSQLiteRepository_Users(t *testing.T) {
 	}
 	for _, user := range users {
 		params, _ := db.APIUserToDBUser(user)
-		store.Queries().UpsertUser(ctx, params)
+		if err := store.Queries().UpsertUser(ctx, params); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Test GetUsers
@@ -363,7 +381,9 @@ func TestSQLiteRepository_Cycles(t *testing.T) {
 	}
 	for _, cycle := range cycles {
 		params, _ := db.APICycleToDBCycle(cycle, "team-1")
-		store.Queries().UpsertCycle(ctx, params)
+		if err := store.Queries().UpsertCycle(ctx, params); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Test GetTeamCycles
@@ -403,13 +423,17 @@ func TestSQLiteRepository_Projects(t *testing.T) {
 	}
 	for _, project := range projects {
 		params, _ := db.APIProjectToDBProject(project)
-		store.Queries().UpsertProject(ctx, params)
+		if err := store.Queries().UpsertProject(ctx, params); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 		// Link to team
-		store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
+		if err := store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
 			ProjectID: project.ID,
 			TeamID:    "team-1",
 			SyncedAt:  time.Now(),
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Test GetTeamProjects
@@ -490,7 +514,9 @@ func TestSQLiteRepository_IssueChildren(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert parent issue
 	parentIssue := api.Issue{
@@ -503,7 +529,9 @@ func TestSQLiteRepository_IssueChildren(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 	parentData, _ := db.APIIssueToDBIssue(parentIssue)
-	store.Queries().UpsertIssue(ctx, parentData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, parentData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert child issues
 	child1 := api.Issue{
@@ -528,8 +556,12 @@ func TestSQLiteRepository_IssueChildren(t *testing.T) {
 	}
 	childData1, _ := db.APIIssueToDBIssue(child1)
 	childData2, _ := db.APIIssueToDBIssue(child2)
-	store.Queries().UpsertIssue(ctx, childData1.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, childData2.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, childData1.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, childData2.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetIssueChildren
 	children, err := repo.GetIssueChildren(ctx, "parent-1")
@@ -551,12 +583,16 @@ func TestSQLiteRepository_IssuesByLabel(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert label
 	label := api.Label{ID: "label-1", Name: "Bug", Color: "#ff0000"}
 	labelParams, _ := db.APILabelToDBLabel(label, "team-1")
-	store.Queries().UpsertLabel(ctx, labelParams)
+	if err := store.Queries().UpsertLabel(ctx, labelParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert issues with labels (labels are stored in JSON data field)
 	issue1 := api.Issue{
@@ -582,8 +618,12 @@ func TestSQLiteRepository_IssuesByLabel(t *testing.T) {
 
 	issueData1, _ := db.APIIssueToDBIssue(issue1)
 	issueData2, _ := db.APIIssueToDBIssue(issue2)
-	store.Queries().UpsertIssue(ctx, issueData1.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, issueData2.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData1.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, issueData2.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetIssuesByLabel (labels are stored in issue JSON data)
 	issues, err := repo.GetIssuesByLabel(ctx, "team-1", "label-1")
@@ -605,12 +645,16 @@ func TestSQLiteRepository_IssuesByProject(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert project
 	project := api.Project{ID: "project-1", Name: "Project Alpha", Slug: "alpha", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	projectParams, _ := db.APIProjectToDBProject(project)
-	store.Queries().UpsertProject(ctx, projectParams)
+	if err := store.Queries().UpsertProject(ctx, projectParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert issues with project
 	issue := api.Issue{
@@ -624,7 +668,9 @@ func TestSQLiteRepository_IssuesByProject(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 	issueData, _ := db.APIIssueToDBIssue(issue)
-	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetIssuesByProject
 	issues, err := repo.GetIssuesByProject(ctx, "project-1")
@@ -646,12 +692,16 @@ func TestSQLiteRepository_IssuesByCycle(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert cycle
 	cycle := api.Cycle{ID: "cycle-1", Number: 1, Name: "Sprint 1", StartsAt: time.Now(), EndsAt: time.Now().Add(14 * 24 * time.Hour)}
 	cycleParams, _ := db.APICycleToDBCycle(cycle, "team-1")
-	store.Queries().UpsertCycle(ctx, cycleParams)
+	if err := store.Queries().UpsertCycle(ctx, cycleParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert issue with cycle
 	issueCycle := api.IssueCycle{ID: "cycle-1", Number: 1, Name: "Sprint 1"}
@@ -666,7 +716,9 @@ func TestSQLiteRepository_IssuesByCycle(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 	issueData, _ := db.APIIssueToDBIssue(issue)
-	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetIssuesByCycle
 	issues, err := repo.GetIssuesByCycle(ctx, "cycle-1")
@@ -688,15 +740,21 @@ func TestSQLiteRepository_MyIssues(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert users
 	user1 := api.User{ID: "user-1", Name: "Me", Email: "me@example.com", Active: true}
 	user2 := api.User{ID: "user-2", Name: "Other", Email: "other@example.com", Active: true}
 	userParams1, _ := db.APIUserToDBUser(user1)
 	userParams2, _ := db.APIUserToDBUser(user2)
-	store.Queries().UpsertUser(ctx, userParams1)
-	store.Queries().UpsertUser(ctx, userParams2)
+	if err := store.Queries().UpsertUser(ctx, userParams1); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertUser(ctx, userParams2); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Set current user
 	repo.SetCurrentUser(&user1)
@@ -724,8 +782,12 @@ func TestSQLiteRepository_MyIssues(t *testing.T) {
 	}
 	myIssueData, _ := db.APIIssueToDBIssue(myIssue)
 	otherIssueData, _ := db.APIIssueToDBIssue(otherIssue)
-	store.Queries().UpsertIssue(ctx, myIssueData.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, otherIssueData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, myIssueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, otherIssueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetMyIssues
 	issues, err := repo.GetMyIssues(ctx)
@@ -750,12 +812,16 @@ func TestSQLiteRepository_MyActiveIssues(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert user and set as current
 	user := api.User{ID: "user-1", Name: "Me", Email: "me@example.com", Active: true}
 	userParams, _ := db.APIUserToDBUser(user)
-	store.Queries().UpsertUser(ctx, userParams)
+	if err := store.Queries().UpsertUser(ctx, userParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 	repo.SetCurrentUser(&user)
 
 	// Insert issues with different states
@@ -793,9 +859,15 @@ func TestSQLiteRepository_MyActiveIssues(t *testing.T) {
 	activeData, _ := db.APIIssueToDBIssue(activeIssue)
 	completedData, _ := db.APIIssueToDBIssue(completedIssue)
 	canceledData, _ := db.APIIssueToDBIssue(canceledIssue)
-	store.Queries().UpsertIssue(ctx, activeData.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, completedData.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, canceledData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, activeData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, completedData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, canceledData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetMyActiveIssues - should only return non-completed, non-canceled
 	issues, err := repo.GetMyActiveIssues(ctx)
@@ -817,12 +889,16 @@ func TestSQLiteRepository_UserIssues(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert user
 	user := api.User{ID: "user-1", Name: "User", Email: "user@example.com", Active: true}
 	userParams, _ := db.APIUserToDBUser(user)
-	store.Queries().UpsertUser(ctx, userParams)
+	if err := store.Queries().UpsertUser(ctx, userParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert issues
 	issue := api.Issue{
@@ -836,7 +912,9 @@ func TestSQLiteRepository_UserIssues(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 	issueData, _ := db.APIIssueToDBIssue(issue)
-	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetUserIssues
 	issues, err := repo.GetUserIssues(ctx, "user-1")
@@ -858,27 +936,37 @@ func TestSQLiteRepository_TeamMembers(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert users
 	user1 := api.User{ID: "user-1", Name: "Alice", Email: "alice@example.com", Active: true}
 	user2 := api.User{ID: "user-2", Name: "Bob", Email: "bob@example.com", Active: true}
 	userParams1, _ := db.APIUserToDBUser(user1)
 	userParams2, _ := db.APIUserToDBUser(user2)
-	store.Queries().UpsertUser(ctx, userParams1)
-	store.Queries().UpsertUser(ctx, userParams2)
+	if err := store.Queries().UpsertUser(ctx, userParams1); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertUser(ctx, userParams2); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Add team memberships
-	store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
+	if err := store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
 		TeamID:   "team-1",
 		UserID:   "user-1",
 		SyncedAt: time.Now(),
-	})
-	store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
 		TeamID:   "team-1",
 		UserID:   "user-2",
 		SyncedAt: time.Now(),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetTeamMembers
 	members, err := repo.GetTeamMembers(ctx, "team-1")
@@ -901,7 +989,9 @@ func TestSQLiteRepository_Milestones(t *testing.T) {
 	// Insert project
 	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	projectParams, _ := db.APIProjectToDBProject(project)
-	store.Queries().UpsertProject(ctx, projectParams)
+	if err := store.Queries().UpsertProject(ctx, projectParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert milestones
 	targetDate := "2024-03-31"
@@ -910,8 +1000,12 @@ func TestSQLiteRepository_Milestones(t *testing.T) {
 
 	ms1Params, _ := db.APIProjectMilestoneToDBMilestone(milestone1, "project-1")
 	ms2Params, _ := db.APIProjectMilestoneToDBMilestone(milestone2, "project-1")
-	store.Queries().UpsertProjectMilestone(ctx, ms1Params)
-	store.Queries().UpsertProjectMilestone(ctx, ms2Params)
+	if err := store.Queries().UpsertProjectMilestone(ctx, ms1Params); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertProjectMilestone(ctx, ms2Params); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetProjectMilestones
 	milestones, err := repo.GetProjectMilestones(ctx, "project-1")
@@ -954,7 +1048,9 @@ func TestSQLiteRepository_Comments(t *testing.T) {
 
 	// Insert test team and issue
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	issue := api.Issue{
 		ID:         "issue-1",
@@ -966,7 +1062,9 @@ func TestSQLiteRepository_Comments(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 	issueData, _ := db.APIIssueToDBIssue(issue)
-	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert comments
 	user := api.User{ID: "user-1", Name: "Commenter", Email: "commenter@example.com"}
@@ -975,8 +1073,12 @@ func TestSQLiteRepository_Comments(t *testing.T) {
 
 	c1Params, _ := db.APICommentToDBComment(comment1, "issue-1")
 	c2Params, _ := db.APICommentToDBComment(comment2, "issue-1")
-	store.Queries().UpsertComment(ctx, c1Params)
-	store.Queries().UpsertComment(ctx, c2Params)
+	if err := store.Queries().UpsertComment(ctx, c1Params); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertComment(ctx, c2Params); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetIssueComments
 	comments, err := repo.GetIssueComments(ctx, "issue-1")
@@ -1019,7 +1121,9 @@ func TestSQLiteRepository_IssueDocuments(t *testing.T) {
 
 	// Insert test team and issue
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	issue := api.Issue{
 		ID:         "issue-1",
@@ -1031,7 +1135,9 @@ func TestSQLiteRepository_IssueDocuments(t *testing.T) {
 		UpdatedAt:  time.Now(),
 	}
 	issueData, _ := db.APIIssueToDBIssue(issue)
-	store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, issueData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert documents
 	user := api.User{ID: "user-1", Name: "Author", Email: "author@example.com"}
@@ -1046,7 +1152,9 @@ func TestSQLiteRepository_IssueDocuments(t *testing.T) {
 		Issue:     &api.Issue{ID: "issue-1"},
 	}
 	docParams, _ := db.APIDocumentToDBDocument(doc)
-	store.Queries().UpsertDocument(ctx, docParams)
+	if err := store.Queries().UpsertDocument(ctx, docParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetIssueDocuments
 	docs, err := repo.GetIssueDocuments(ctx, "issue-1")
@@ -1081,7 +1189,9 @@ func TestSQLiteRepository_ProjectDocuments(t *testing.T) {
 	// Insert project
 	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	projectParams, _ := db.APIProjectToDBProject(project)
-	store.Queries().UpsertProject(ctx, projectParams)
+	if err := store.Queries().UpsertProject(ctx, projectParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert document
 	user := api.User{ID: "user-1", Name: "Author", Email: "author@example.com"}
@@ -1096,7 +1206,9 @@ func TestSQLiteRepository_ProjectDocuments(t *testing.T) {
 		Project:   &api.Project{ID: "project-1"},
 	}
 	docParams, _ := db.APIDocumentToDBDocument(doc)
-	store.Queries().UpsertDocument(ctx, docParams)
+	if err := store.Queries().UpsertDocument(ctx, docParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetProjectDocuments
 	docs, err := repo.GetProjectDocuments(ctx, "project-1")
@@ -1128,7 +1240,9 @@ func TestSQLiteRepository_Initiatives(t *testing.T) {
 		UpdatedAt:   time.Now(),
 	}
 	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
-	store.Queries().UpsertInitiative(ctx, initParams)
+	if err := store.Queries().UpsertInitiative(ctx, initParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetInitiatives
 	initiatives, err := repo.GetInitiatives(ctx)
@@ -1179,19 +1293,25 @@ func TestSQLiteRepository_InitiativeProjects(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
-	store.Queries().UpsertInitiative(ctx, initParams)
+	if err := store.Queries().UpsertInitiative(ctx, initParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert project
 	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	projectParams, _ := db.APIProjectToDBProject(project)
-	store.Queries().UpsertProject(ctx, projectParams)
+	if err := store.Queries().UpsertProject(ctx, projectParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Link project to initiative
-	store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+	if err := store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 		InitiativeID: "init-1",
 		ProjectID:    "project-1",
 		SyncedAt:     time.Now(),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetInitiativeProjects
 	projects, err := repo.GetInitiativeProjects(ctx, "init-1")
@@ -1214,7 +1334,9 @@ func TestSQLiteRepository_ProjectUpdates(t *testing.T) {
 	// Insert project
 	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	projectParams, _ := db.APIProjectToDBProject(project)
-	store.Queries().UpsertProject(ctx, projectParams)
+	if err := store.Queries().UpsertProject(ctx, projectParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert project update
 	user := api.User{ID: "user-1", Name: "User", Email: "user@example.com"}
@@ -1227,7 +1349,9 @@ func TestSQLiteRepository_ProjectUpdates(t *testing.T) {
 		User:      &user,
 	}
 	updateParams, _ := db.APIProjectUpdateToDBUpdate(update, "project-1")
-	store.Queries().UpsertProjectUpdate(ctx, updateParams)
+	if err := store.Queries().UpsertProjectUpdate(ctx, updateParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetProjectUpdates
 	updates, err := repo.GetProjectUpdates(ctx, "project-1")
@@ -1260,7 +1384,9 @@ func TestSQLiteRepository_InitiativeUpdates(t *testing.T) {
 		UpdatedAt: time.Now(),
 	}
 	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
-	store.Queries().UpsertInitiative(ctx, initParams)
+	if err := store.Queries().UpsertInitiative(ctx, initParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert initiative update
 	user := api.User{ID: "user-1", Name: "User", Email: "user@example.com"}
@@ -1273,7 +1399,9 @@ func TestSQLiteRepository_InitiativeUpdates(t *testing.T) {
 		User:      &user,
 	}
 	updateParams, _ := db.APIInitiativeUpdateToDBUpdate(update, "init-1")
-	store.Queries().UpsertInitiativeUpdate(ctx, updateParams)
+	if err := store.Queries().UpsertInitiativeUpdate(ctx, updateParams); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetInitiativeUpdates
 	updates, err := repo.GetInitiativeUpdates(ctx, "init-1")
@@ -1565,15 +1693,21 @@ func TestSQLiteRepository_MyCreatedIssues(t *testing.T) {
 
 	// Insert test team
 	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team))
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Insert users
 	user1 := api.User{ID: "user-1", Name: "Me", Email: "me@example.com", Active: true}
 	user2 := api.User{ID: "user-2", Name: "Other", Email: "other@example.com", Active: true}
 	userParams1, _ := db.APIUserToDBUser(user1)
 	userParams2, _ := db.APIUserToDBUser(user2)
-	store.Queries().UpsertUser(ctx, userParams1)
-	store.Queries().UpsertUser(ctx, userParams2)
+	if err := store.Queries().UpsertUser(ctx, userParams1); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertUser(ctx, userParams2); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Set current user
 	repo.SetCurrentUser(&user1)
@@ -1601,8 +1735,12 @@ func TestSQLiteRepository_MyCreatedIssues(t *testing.T) {
 	}
 	myData, _ := db.APIIssueToDBIssue(myCreatedIssue)
 	otherData, _ := db.APIIssueToDBIssue(otherCreatedIssue)
-	store.Queries().UpsertIssue(ctx, myData.ToUpsertParams())
-	store.Queries().UpsertIssue(ctx, otherData.ToUpsertParams())
+	if err := store.Queries().UpsertIssue(ctx, myData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertIssue(ctx, otherData.ToUpsertParams()); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Test GetMyCreatedIssues
 	issues, err := repo.GetMyCreatedIssues(ctx)

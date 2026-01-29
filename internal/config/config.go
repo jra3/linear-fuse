@@ -74,10 +74,6 @@ func LoadWithEnv(getenv func(string) string) (*Config, error) {
 	return cfg, nil
 }
 
-func getConfigPath() string {
-	return getConfigPathWithEnv(os.Getenv)
-}
-
 func getConfigPathWithEnv(getenv func(string) string) string {
 	// Check XDG_CONFIG_HOME first
 	if xdgConfig := getenv("XDG_CONFIG_HOME"); xdgConfig != "" {

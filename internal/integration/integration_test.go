@@ -80,7 +80,7 @@ func setupLiveAPI(apiKey string) error {
 	// Enable SQLite cache for repository access
 	ctx := context.Background()
 	if err := lfs.EnableSQLiteCache(ctx, ""); err != nil {
-		server.Unmount()
+		_ = server.Unmount()
 		os.RemoveAll(mountPoint)
 		return fmt.Errorf("enable sqlite cache: %w", err)
 	}

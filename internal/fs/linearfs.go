@@ -45,8 +45,6 @@ type LinearFS struct {
 	fileCacheDir  string
 	fileCacheMu   gosync.RWMutex
 	fileCache     map[string][]byte // in-memory cache (file ID -> content)
-	fileCacheInit gosync.Once
-
 	// Issue write errors (for .error virtual files)
 	issueErrors   map[string]*IssueError
 	issueErrorsMu gosync.RWMutex

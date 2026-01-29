@@ -531,7 +531,7 @@ func (r *SQLiteRepository) CreateProjectMilestone(ctx context.Context, projectID
 
 	// Upsert to SQLite for immediate visibility
 	now := time.Now()
-	r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
+	if err := r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
 		ID:          milestone.ID,
 		ProjectID:   projectID,
 		Name:        milestone.Name,
@@ -540,7 +540,9 @@ func (r *SQLiteRepository) CreateProjectMilestone(ctx context.Context, projectID
 		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
 		SyncedAt:    now,
 		Data:        json.RawMessage("{}"),
-	})
+	}); err != nil {
+		log.Printf("[repo] upsert milestone %s failed: %v", milestone.ID, err)
+	}
 
 	return milestone, nil
 }
@@ -564,7 +566,7 @@ func (r *SQLiteRepository) UpdateProjectMilestone(ctx context.Context, milestone
 
 	// Upsert to SQLite for immediate visibility
 	now := time.Now()
-	r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
+	if err := r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
 		ID:          milestone.ID,
 		ProjectID:   existing.ProjectID,
 		Name:        milestone.Name,
@@ -573,7 +575,9 @@ func (r *SQLiteRepository) UpdateProjectMilestone(ctx context.Context, milestone
 		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
 		SyncedAt:    now,
 		Data:        json.RawMessage("{}"),
-	})
+	}); err != nil {
+		log.Printf("[repo] upsert milestone %s failed: %v", milestone.ID, err)
+	}
 
 	return milestone, nil
 }
@@ -589,7 +593,9 @@ func (r *SQLiteRepository) DeleteProjectMilestone(ctx context.Context, milestone
 	}
 
 	// Delete from SQLite
-	r.store.Queries().DeleteProjectMilestone(ctx, milestoneID)
+	if err := r.store.Queries().DeleteProjectMilestone(ctx, milestoneID); err != nil {
+		log.Printf("[repo] delete milestone %s from DB failed: %v", milestoneID, err)
+	}
 
 	return nil
 }

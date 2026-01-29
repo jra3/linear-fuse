@@ -598,20 +598,24 @@ func TestDeleteInitiativeProject(t *testing.T) {
 	now := time.Now()
 
 	// Create initiative and project first
-	store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
+	if err := store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
 		ID:       "init-jp",
 		SlugID:   "init-jp",
 		Name:     "Initiative",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       "proj-jp",
 		SlugID:   "proj-jp",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create association
 	err := store.Queries().UpsertInitiativeProject(ctx, UpsertInitiativeProjectParams{
@@ -643,29 +647,35 @@ func TestDeleteInitiativeProjects(t *testing.T) {
 	initiativeID := "init-all-projs"
 
 	// Create initiative
-	store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
+	if err := store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
 		ID:       initiativeID,
 		SlugID:   "init-all",
 		Name:     "Initiative",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create projects and associations
 	for i := 0; i < 3; i++ {
 		projID := "proj-" + string(rune('a'+i))
-		store.Queries().UpsertProject(ctx, UpsertProjectParams{
+		if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 			ID:       projID,
 			SlugID:   projID,
 			Name:     "Project " + string(rune('1'+i)),
 			SyncedAt: now,
 			Data:     json.RawMessage("{}"),
-		})
-		store.Queries().UpsertInitiativeProject(ctx, UpsertInitiativeProjectParams{
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := store.Queries().UpsertInitiativeProject(ctx, UpsertInitiativeProjectParams{
 			InitiativeID: initiativeID,
 			ProjectID:    projID,
 			SyncedAt:     now,
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all projects for initiative
@@ -683,28 +693,34 @@ func TestDeleteProjectTeam(t *testing.T) {
 	now := time.Now()
 
 	// Create project and team
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       "proj-pt",
 		SlugID:   "proj-pt",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
-	store.Queries().UpsertTeam(ctx, UpsertTeamParams{
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
 		ID:        "team-pt",
 		Key:       "TPT",
 		Name:      "Team",
 		CreatedAt: sql.NullTime{Time: now, Valid: true},
 		UpdatedAt: sql.NullTime{Time: now, Valid: true},
 		SyncedAt:  now,
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create association
-	store.Queries().UpsertProjectTeam(ctx, UpsertProjectTeamParams{
+	if err := store.Queries().UpsertProjectTeam(ctx, UpsertProjectTeamParams{
 		ProjectID: "proj-pt",
 		TeamID:    "team-pt",
 		SyncedAt:  now,
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Delete specific association
 	err := store.Queries().DeleteProjectTeam(ctx, DeleteProjectTeamParams{
@@ -726,30 +742,36 @@ func TestDeleteProjectTeams(t *testing.T) {
 	projectID := "proj-all-teams"
 
 	// Create project
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       projectID,
 		SlugID:   projectID,
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create teams and associations
 	for i := 0; i < 2; i++ {
 		teamID := "team-" + string(rune('a'+i))
-		store.Queries().UpsertTeam(ctx, UpsertTeamParams{
+		if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
 			ID:        teamID,
 			Key:       "T" + string(rune('A'+i)),
 			Name:      "Team " + string(rune('1'+i)),
 			CreatedAt: sql.NullTime{Time: now, Valid: true},
 			UpdatedAt: sql.NullTime{Time: now, Valid: true},
 			SyncedAt:  now,
-		})
-		store.Queries().UpsertProjectTeam(ctx, UpsertProjectTeamParams{
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := store.Queries().UpsertProjectTeam(ctx, UpsertProjectTeamParams{
 			ProjectID: projectID,
 			TeamID:    teamID,
 			SyncedAt:  now,
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all teams for project
@@ -767,29 +789,35 @@ func TestDeleteTeamMember(t *testing.T) {
 	now := time.Now()
 
 	// Create team and user
-	store.Queries().UpsertTeam(ctx, UpsertTeamParams{
+	if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
 		ID:        "team-tm",
 		Key:       "TTM",
 		Name:      "Team",
 		CreatedAt: sql.NullTime{Time: now, Valid: true},
 		UpdatedAt: sql.NullTime{Time: now, Valid: true},
 		SyncedAt:  now,
-	})
-	store.Queries().UpsertUser(ctx, UpsertUserParams{
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := store.Queries().UpsertUser(ctx, UpsertUserParams{
 		ID:       "user-tm",
 		Email:    "user@example.com",
 		Name:     "User",
 		Active:   1,
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create membership
-	store.Queries().UpsertTeamMember(ctx, UpsertTeamMemberParams{
+	if err := store.Queries().UpsertTeamMember(ctx, UpsertTeamMemberParams{
 		TeamID:   "team-tm",
 		UserID:   "user-tm",
 		SyncedAt: now,
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Delete specific membership
 	err := store.Queries().DeleteTeamMember(ctx, DeleteTeamMemberParams{
@@ -811,31 +839,37 @@ func TestDeleteTeamMembers(t *testing.T) {
 	teamID := "team-all-members"
 
 	// Create team
-	store.Queries().UpsertTeam(ctx, UpsertTeamParams{
+	if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
 		ID:        teamID,
 		Key:       "TAM",
 		Name:      "Team",
 		CreatedAt: sql.NullTime{Time: now, Valid: true},
 		UpdatedAt: sql.NullTime{Time: now, Valid: true},
 		SyncedAt:  now,
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create users and memberships
 	for i := 0; i < 3; i++ {
 		userID := "user-" + string(rune('a'+i))
-		store.Queries().UpsertUser(ctx, UpsertUserParams{
+		if err := store.Queries().UpsertUser(ctx, UpsertUserParams{
 			ID:       userID,
 			Email:    "user" + string(rune('1'+i)) + "@example.com",
 			Name:     "User " + string(rune('1'+i)),
 			Active:   1,
 			SyncedAt: now,
 			Data:     json.RawMessage("{}"),
-		})
-		store.Queries().UpsertTeamMember(ctx, UpsertTeamMemberParams{
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		if err := store.Queries().UpsertTeamMember(ctx, UpsertTeamMemberParams{
 			TeamID:   teamID,
 			UserID:   userID,
 			SyncedAt: now,
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all members for team
@@ -857,13 +891,15 @@ func TestDeleteInitiativeUpdate(t *testing.T) {
 	now := time.Now()
 
 	// Create initiative first
-	store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
+	if err := store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
 		ID:       "init-update",
 		SlugID:   "init-update",
 		Name:     "Initiative",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create update
 	err := store.Queries().UpsertInitiativeUpdate(ctx, UpsertInitiativeUpdateParams{
@@ -901,17 +937,19 @@ func TestDeleteInitiativeUpdates(t *testing.T) {
 	initiativeID := "init-all-updates"
 
 	// Create initiative
-	store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
+	if err := store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
 		ID:       initiativeID,
 		SlugID:   "init-all-updates",
 		Name:     "Initiative",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create multiple updates
 	for i := 0; i < 3; i++ {
-		store.Queries().UpsertInitiativeUpdate(ctx, UpsertInitiativeUpdateParams{
+		if err := store.Queries().UpsertInitiativeUpdate(ctx, UpsertInitiativeUpdateParams{
 			ID:           "init-upd-" + string(rune('a'+i)),
 			InitiativeID: initiativeID,
 			Body:         "Update " + string(rune('1'+i)),
@@ -919,7 +957,9 @@ func TestDeleteInitiativeUpdates(t *testing.T) {
 			UpdatedAt:    now,
 			SyncedAt:     now,
 			Data:         json.RawMessage("{}"),
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all updates for initiative
@@ -943,13 +983,15 @@ func TestDeleteProjectUpdate(t *testing.T) {
 	now := time.Now()
 
 	// Create project first
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       "proj-update",
 		SlugID:   "proj-update",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create update
 	err := store.Queries().UpsertProjectUpdate(ctx, UpsertProjectUpdateParams{
@@ -987,17 +1029,19 @@ func TestDeleteProjectUpdates(t *testing.T) {
 	projectID := "proj-all-updates"
 
 	// Create project
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       projectID,
 		SlugID:   "proj-all-updates",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create multiple updates
 	for i := 0; i < 3; i++ {
-		store.Queries().UpsertProjectUpdate(ctx, UpsertProjectUpdateParams{
+		if err := store.Queries().UpsertProjectUpdate(ctx, UpsertProjectUpdateParams{
 			ID:        "proj-upd-" + string(rune('a'+i)),
 			ProjectID: projectID,
 			Body:      "Update " + string(rune('1'+i)),
@@ -1005,7 +1049,9 @@ func TestDeleteProjectUpdates(t *testing.T) {
 			UpdatedAt: now,
 			SyncedAt:  now,
 			Data:      json.RawMessage("{}"),
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all updates for project
@@ -1029,13 +1075,15 @@ func TestDeleteProjectMilestone(t *testing.T) {
 	now := time.Now()
 
 	// Create project first
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       "proj-milestone",
 		SlugID:   "proj-milestone",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create milestone
 	err := store.Queries().UpsertProjectMilestone(ctx, UpsertProjectMilestoneParams{
@@ -1071,23 +1119,27 @@ func TestDeleteProjectMilestones(t *testing.T) {
 	projectID := "proj-all-milestones"
 
 	// Create project
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       projectID,
 		SlugID:   "proj-all-milestones",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create multiple milestones
 	for i := 0; i < 3; i++ {
-		store.Queries().UpsertProjectMilestone(ctx, UpsertProjectMilestoneParams{
+		if err := store.Queries().UpsertProjectMilestone(ctx, UpsertProjectMilestoneParams{
 			ID:        "milestone-" + string(rune('a'+i)),
 			ProjectID: projectID,
 			Name:      "Milestone " + string(rune('1'+i)),
 			SyncedAt:  now,
 			Data:      json.RawMessage("{}"),
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all milestones for project
@@ -1112,24 +1164,28 @@ func TestDeleteProjectDocuments(t *testing.T) {
 	projectID := "proj-all-docs"
 
 	// Create project
-	store.Queries().UpsertProject(ctx, UpsertProjectParams{
+	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
 		ID:       projectID,
 		SlugID:   "proj-all-docs",
 		Name:     "Project",
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
-	})
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	// Create documents for project
 	for i := 0; i < 2; i++ {
-		store.Queries().UpsertDocument(ctx, UpsertDocumentParams{
+		if err := store.Queries().UpsertDocument(ctx, UpsertDocumentParams{
 			ID:        "pdoc-" + string(rune('a'+i)),
 			SlugID:    "pdoc-" + string(rune('a'+i)),
 			Title:     "Doc " + string(rune('1'+i)),
 			ProjectID: sql.NullString{String: projectID, Valid: true},
 			SyncedAt:  now,
 			Data:      json.RawMessage("{}"),
-		})
+		}); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
 	}
 
 	// Delete all documents for project

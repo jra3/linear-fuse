@@ -109,7 +109,7 @@ func (s *Store) WithTx(ctx context.Context, fn func(*Queries) error) error {
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := fn(s.queries.WithTx(tx)); err != nil {
 		return err

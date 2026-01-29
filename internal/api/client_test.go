@@ -353,8 +353,8 @@ func TestCallRecording(t *testing.T) {
 	client.SetAPIURL(mock.URL())
 
 	// Make multiple calls
-	client.GetTeams(context.Background())
-	client.GetUsers(context.Background())
+	_, _ = client.GetTeams(context.Background())
+	_, _ = client.GetUsers(context.Background())
 
 	calls := mock.Calls()
 	if len(calls) != 2 {
@@ -380,7 +380,7 @@ func TestMockReset(t *testing.T) {
 	client := NewClient("test-api-key")
 	client.SetAPIURL(mock.URL())
 
-	client.GetTeams(context.Background())
+	_, _ = client.GetTeams(context.Background())
 
 	if len(mock.Calls()) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(mock.Calls()))

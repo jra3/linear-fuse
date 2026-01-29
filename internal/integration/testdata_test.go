@@ -140,15 +140,6 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 	return nil, nil, fmt.Errorf("created issue not found in filesystem")
 }
 
-// getTestIssue fetches an issue by ID via API (for verification)
-// DEPRECATED: Prefer getIssueFromFilesystem or getIssueFromSQLite for write test verification
-func getTestIssue(issueID string) (*api.Issue, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	return apiClient.GetIssue(ctx, issueID)
-}
-
 // FilesystemIssue represents an issue as read from the filesystem
 type FilesystemIssue struct {
 	ID          string

@@ -199,7 +199,7 @@ func TestCreateIssueInvalidatesTeamListing(t *testing.T) {
 			doc, _ := parseFrontmatter(content)
 			if title, ok := doc.Frontmatter["title"].(string); ok && title == issueName {
 				if id, ok := doc.Frontmatter["id"].(string); ok {
-					deleteTestIssue(id)
+					_ = deleteTestIssue(id)
 				}
 				break
 			}

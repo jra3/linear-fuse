@@ -178,7 +178,7 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 func milestoneFilename(m api.ProjectMilestone) string {
 	// Sanitize name for filename
 	name := strings.ReplaceAll(m.Name, "/", "-")
-	name = strings.ReplaceAll(m.Name, "\\", "-")
+	name = strings.ReplaceAll(name, "\\", "-")
 	return name + ".md"
 }
 

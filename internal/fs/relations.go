@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"strings"
 	"syscall"
 	"time"
@@ -249,7 +250,9 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 	}
 
 	// Delete from local DB
-	n.lfs.store.Queries().DeleteIssueRelation(ctx, n.relation.ID)
+	if err := n.lfs.store.Queries().DeleteIssueRelation(ctx, n.relation.ID); err != nil {
+		log.Printf("[relations] delete from DB failed: %v", err)
+	}
 
 	return 0
 }
@@ -342,7 +345,7 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 
 	// Store in local DB
 	now := time.Now()
-	n.lfs.store.Queries().UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
+	if err := n.lfs.store.Queries().UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
 		ID:             rel.ID,
 		IssueID:        n.issueID,
 		RelatedIssueID: relatedIssue.ID,
@@ -350,7 +353,9 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 		CreatedAt:      sql.NullTime{Time: now, Valid: true},
 		UpdatedAt:      sql.NullTime{Time: now, Valid: true},
 		SyncedAt:       now,
-	})
+	}); err != nil {
+		log.Printf("[relations] upsert to DB failed: %v", err)
+	}
 
 	// Invalidate cache
 	n.lfs.InvalidateKernelInode(relationsDirIno(n.issueID))
