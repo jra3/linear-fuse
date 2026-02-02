@@ -203,6 +203,86 @@ query MyActiveIssues($after: String) {
 }
 ` + issueFieldsFragmentLite
 
+// queryTeamMetadata fetches all team metadata in a single query:
+// states, labels, cycles, projects (with milestones), members, and workspace labels.
+var queryTeamMetadata = `
+query TeamMetadata($teamId: String!) {
+  team(id: $teamId) {
+    states {
+      nodes {
+        id
+        name
+        type
+      }
+    }
+    labels {
+      nodes { ...LabelFields }
+    }
+    cycles {
+      nodes {
+        id
+        number
+        name
+        startsAt
+        endsAt
+        completedIssueCountHistory
+        issueCountHistory
+      }
+    }
+    projects {
+      nodes {
+        id
+        name
+        slugId
+        description
+        url
+        state
+        startDate
+        targetDate
+        createdAt
+        updatedAt
+        lead {
+          id
+          name
+          email
+        }
+        status {
+          id
+          name
+        }
+        initiatives {
+          nodes {
+            id
+            name
+          }
+        }
+        projectMilestones {
+          nodes {
+            id
+            name
+            description
+            targetDate
+            sortOrder
+          }
+        }
+      }
+    }
+    members {
+      nodes {
+        id
+        name
+        email
+        displayName
+        active
+      }
+    }
+  }
+  issueLabels {
+    nodes { ...LabelFields }
+  }
+}
+` + labelFieldsFragment
+
 const queryTeamStates = `
 query TeamStates($teamId: String!) {
   team(id: $teamId) {
@@ -300,6 +380,15 @@ query TeamProjects($teamId: String!) {
           nodes {
             id
             name
+          }
+        }
+        projectMilestones {
+          nodes {
+            id
+            name
+            description
+            targetDate
+            sortOrder
           }
         }
       }
@@ -508,6 +597,48 @@ const mutationInitiativeToProjectDelete = `
 mutation InitiativeToProjectDelete($initiativeId: String!, $projectId: String!) {
   initiativeToProjectDelete(initiativeId: $initiativeId, projectId: $projectId) {
     success
+  }
+}
+`
+
+// queryWorkspace fetches workspace-level entities (users and initiatives) in a single query.
+const queryWorkspace = `
+query Workspace {
+  users {
+    nodes {
+      id
+      name
+      email
+      displayName
+      active
+    }
+  }
+  initiatives {
+    nodes {
+      id
+      name
+      slugId
+      description
+      status
+      color
+      icon
+      targetDate
+      url
+      createdAt
+      updatedAt
+      owner {
+        id
+        name
+        email
+      }
+      projects {
+        nodes {
+          id
+          name
+          slugId
+        }
+      }
+    }
   }
 }
 `

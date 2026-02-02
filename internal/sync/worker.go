@@ -29,19 +29,11 @@ type APIClient interface {
 	GetTeams(ctx context.Context) ([]api.Team, error)
 	GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Issue, api.PageInfo, error)
 
-	// Team metadata
-	GetTeamStates(ctx context.Context, teamID string) ([]api.State, error)
-	GetTeamLabels(ctx context.Context, teamID string) ([]api.Label, error)
-	GetTeamCycles(ctx context.Context, teamID string) ([]api.Cycle, error)
-	GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error)
-	GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error)
+	// Consolidated team metadata (states, labels, cycles, projects, members in one call)
+	GetTeamMetadata(ctx context.Context, teamID string) (*api.TeamMetadata, error)
 
-	// Workspace-level entities
-	GetUsers(ctx context.Context) ([]api.User, error)
-	GetInitiatives(ctx context.Context) ([]api.Initiative, error)
-
-	// Project details
-	GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error)
+	// Consolidated workspace data (users + initiatives in one call)
+	GetWorkspace(ctx context.Context) (*api.WorkspaceData, error)
 
 	// Issue details (comments, documents, attachments)
 	GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error)
@@ -414,33 +406,17 @@ func (w *Worker) CleanupArchivedIssues(ctx context.Context, teamID string) (int6
 // Workspace-Level Sync
 // =============================================================================
 
-// syncWorkspace syncs workspace-level entities: users and initiatives
+// syncWorkspace syncs workspace-level entities (users + initiatives) in a single API call.
 func (w *Worker) syncWorkspace(ctx context.Context) error {
+	data, err := w.client.GetWorkspace(ctx)
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+
 	var errs []error
 
-	// Sync users
-	if err := w.syncUsers(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("users: %w", err))
-	}
-
-	// Sync initiatives
-	if err := w.syncInitiatives(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("initiatives: %w", err))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("workspace sync errors: %v", errs)
-	}
-	return nil
-}
-
-func (w *Worker) syncUsers(ctx context.Context) error {
-	users, err := w.client.GetUsers(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, user := range users {
+	// Process users
+	for _, user := range data.Users {
 		params, err := db.APIUserToDBUser(user)
 		if err != nil {
 			log.Printf("[sync] convert user %s failed: %v", user.Email, err)
@@ -450,18 +426,10 @@ func (w *Worker) syncUsers(ctx context.Context) error {
 			log.Printf("[sync] upsert user %s failed: %v", user.Email, err)
 		}
 	}
+	log.Printf("[sync] synced %d users", len(data.Users))
 
-	log.Printf("[sync] synced %d users", len(users))
-	return nil
-}
-
-func (w *Worker) syncInitiatives(ctx context.Context) error {
-	initiatives, err := w.client.GetInitiatives(ctx)
-	if err != nil {
-		return err
-	}
-
-	for _, initiative := range initiatives {
+	// Process initiatives
+	for _, initiative := range data.Initiatives {
 		params, err := db.APIInitiativeToDBInitiative(initiative)
 		if err != nil {
 			log.Printf("[sync] convert initiative %s failed: %v", initiative.Slug, err)
@@ -477,8 +445,11 @@ func (w *Worker) syncInitiatives(ctx context.Context) error {
 			log.Printf("[sync] sync initiative %s projects failed: %v", initiative.Slug, err)
 		}
 	}
+	log.Printf("[sync] synced %d initiatives", len(data.Initiatives))
 
-	log.Printf("[sync] synced %d initiatives", len(initiatives))
+	if len(errs) > 0 {
+		return fmt.Errorf("workspace sync errors: %v", errs)
+	}
 	return nil
 }
 
@@ -500,49 +471,17 @@ func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Init
 // Team Metadata Sync
 // =============================================================================
 
-// syncTeamMetadata syncs all metadata for a team: states, labels, cycles, projects, members
+// syncTeamMetadata syncs all metadata for a team in a single API call:
+// states, labels, cycles, projects (with milestones), and members.
 func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
-	var errs []error
-
-	// Sync states
-	if err := w.syncTeamStates(ctx, team.ID); err != nil {
-		errs = append(errs, fmt.Errorf("states: %w", err))
-	}
-
-	// Sync labels
-	if err := w.syncTeamLabels(ctx, team.ID); err != nil {
-		errs = append(errs, fmt.Errorf("labels: %w", err))
-	}
-
-	// Sync cycles
-	if err := w.syncTeamCycles(ctx, team.ID); err != nil {
-		errs = append(errs, fmt.Errorf("cycles: %w", err))
-	}
-
-	// Sync projects (includes milestones)
-	if err := w.syncTeamProjects(ctx, team.ID); err != nil {
-		errs = append(errs, fmt.Errorf("projects: %w", err))
-	}
-
-	// Sync team members
-	if err := w.syncTeamMembers(ctx, team.ID); err != nil {
-		errs = append(errs, fmt.Errorf("members: %w", err))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("team %s metadata errors: %v", team.ID, errs)
-	}
-	return nil
-}
-
-func (w *Worker) syncTeamStates(ctx context.Context, teamID string) error {
-	states, err := w.client.GetTeamStates(ctx, teamID)
+	meta, err := w.client.GetTeamMetadata(ctx, team.ID)
 	if err != nil {
-		return err
+		return fmt.Errorf("get team metadata: %w", err)
 	}
 
-	for _, state := range states {
-		params, err := db.APIStateToDBState(state, teamID)
+	// Process states
+	for _, state := range meta.States {
+		params, err := db.APIStateToDBState(state, team.ID)
 		if err != nil {
 			log.Printf("[sync] convert state %s failed: %v", state.Name, err)
 			continue
@@ -552,17 +491,9 @@ func (w *Worker) syncTeamStates(ctx context.Context, teamID string) error {
 		}
 	}
 
-	return nil
-}
-
-func (w *Worker) syncTeamLabels(ctx context.Context, teamID string) error {
-	labels, err := w.client.GetTeamLabels(ctx, teamID)
-	if err != nil {
-		return err
-	}
-
-	for _, label := range labels {
-		params, err := db.APILabelToDBLabel(label, teamID)
+	// Process labels (already deduplicated by GetTeamMetadata)
+	for _, label := range meta.Labels {
+		params, err := db.APILabelToDBLabel(label, team.ID)
 		if err != nil {
 			log.Printf("[sync] convert label %s failed: %v", label.Name, err)
 			continue
@@ -572,17 +503,9 @@ func (w *Worker) syncTeamLabels(ctx context.Context, teamID string) error {
 		}
 	}
 
-	return nil
-}
-
-func (w *Worker) syncTeamCycles(ctx context.Context, teamID string) error {
-	cycles, err := w.client.GetTeamCycles(ctx, teamID)
-	if err != nil {
-		return err
-	}
-
-	for _, cycle := range cycles {
-		params, err := db.APICycleToDBCycle(cycle, teamID)
+	// Process cycles
+	for _, cycle := range meta.Cycles {
+		params, err := db.APICycleToDBCycle(cycle, team.ID)
 		if err != nil {
 			log.Printf("[sync] convert cycle %s failed: %v", cycle.Name, err)
 			continue
@@ -592,16 +515,8 @@ func (w *Worker) syncTeamCycles(ctx context.Context, teamID string) error {
 		}
 	}
 
-	return nil
-}
-
-func (w *Worker) syncTeamProjects(ctx context.Context, teamID string) error {
-	projects, err := w.client.GetTeamProjects(ctx, teamID)
-	if err != nil {
-		return err
-	}
-
-	for _, project := range projects {
+	// Process projects (includes milestones)
+	for _, project := range meta.Projects {
 		params, err := db.APIProjectToDBProject(project)
 		if err != nil {
 			log.Printf("[sync] convert project %s failed: %v", project.Slug, err)
@@ -615,48 +530,29 @@ func (w *Worker) syncTeamProjects(ctx context.Context, teamID string) error {
 		// Upsert project-team association
 		if err := w.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
 			ProjectID: project.ID,
-			TeamID:    teamID,
+			TeamID:    team.ID,
 			SyncedAt:  db.Now(),
 		}); err != nil {
-			log.Printf("[sync] upsert project-team %s-%s failed: %v", project.ID, teamID, err)
+			log.Printf("[sync] upsert project-team %s-%s failed: %v", project.ID, team.ID, err)
 		}
 
-		// Sync project milestones
-		if err := w.syncProjectMilestones(ctx, project.ID); err != nil {
-			log.Printf("[sync] sync project %s milestones failed: %v", project.Slug, err)
-		}
-	}
-
-	return nil
-}
-
-func (w *Worker) syncProjectMilestones(ctx context.Context, projectID string) error {
-	milestones, err := w.client.GetProjectMilestones(ctx, projectID)
-	if err != nil {
-		return err
-	}
-
-	for _, milestone := range milestones {
-		params, err := db.APIProjectMilestoneToDBMilestone(milestone, projectID)
-		if err != nil {
-			log.Printf("[sync] convert milestone %s failed: %v", milestone.Name, err)
-			continue
-		}
-		if err := w.store.Queries().UpsertProjectMilestone(ctx, params); err != nil {
-			log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
+		// Upsert milestones inline from the metadata query (no extra API calls)
+		if project.Milestones != nil {
+			for _, milestone := range project.Milestones.Nodes {
+				mParams, mErr := db.APIProjectMilestoneToDBMilestone(milestone, project.ID)
+				if mErr != nil {
+					log.Printf("[sync] convert milestone %s failed: %v", milestone.Name, mErr)
+					continue
+				}
+				if err := w.store.Queries().UpsertProjectMilestone(ctx, mParams); err != nil {
+					log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
+				}
+			}
 		}
 	}
 
-	return nil
-}
-
-func (w *Worker) syncTeamMembers(ctx context.Context, teamID string) error {
-	members, err := w.client.GetTeamMembers(ctx, teamID)
-	if err != nil {
-		return err
-	}
-
-	for _, member := range members {
+	// Process members
+	for _, member := range meta.Members {
 		// Ensure user exists in users table
 		params, err := db.APIUserToDBUser(member)
 		if err != nil {
@@ -670,7 +566,7 @@ func (w *Worker) syncTeamMembers(ctx context.Context, teamID string) error {
 
 		// Upsert team membership
 		if err := w.store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
-			TeamID:   teamID,
+			TeamID:   team.ID,
 			UserID:   member.ID,
 			SyncedAt: db.Now(),
 		}); err != nil {

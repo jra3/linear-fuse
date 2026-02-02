@@ -678,6 +678,88 @@ func (c *Client) ArchiveIssue(ctx context.Context, issueID string) error {
 	return nil
 }
 
+// GetTeamMetadata fetches all metadata for a team in a single query:
+// states, labels (team + workspace, deduplicated), cycles, projects (with milestones), and members.
+func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetadata, error) {
+	var result struct {
+		Team struct {
+			States struct {
+				Nodes []State `json:"nodes"`
+			} `json:"states"`
+			Labels struct {
+				Nodes []Label `json:"nodes"`
+			} `json:"labels"`
+			Cycles struct {
+				Nodes []Cycle `json:"nodes"`
+			} `json:"cycles"`
+			Projects struct {
+				Nodes []Project `json:"nodes"`
+			} `json:"projects"`
+			Members struct {
+				Nodes []User `json:"nodes"`
+			} `json:"members"`
+		} `json:"team"`
+		IssueLabels struct {
+			Nodes []Label `json:"nodes"`
+		} `json:"issueLabels"`
+	}
+
+	vars := map[string]any{
+		"teamId": teamID,
+	}
+
+	err := c.query(ctx, queryTeamMetadata, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	// Combine team labels and workspace labels, deduplicating by ID
+	seen := make(map[string]bool)
+	var labels []Label
+	for _, l := range result.Team.Labels.Nodes {
+		if !seen[l.ID] {
+			seen[l.ID] = true
+			labels = append(labels, l)
+		}
+	}
+	for _, l := range result.IssueLabels.Nodes {
+		if !seen[l.ID] {
+			seen[l.ID] = true
+			labels = append(labels, l)
+		}
+	}
+
+	return &TeamMetadata{
+		States:   result.Team.States.Nodes,
+		Labels:   labels,
+		Cycles:   result.Team.Cycles.Nodes,
+		Projects: result.Team.Projects.Nodes,
+		Members:  result.Team.Members.Nodes,
+	}, nil
+}
+
+// GetWorkspace fetches workspace-level entities (users and initiatives) in a single query.
+func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
+	var result struct {
+		Users struct {
+			Nodes []User `json:"nodes"`
+		} `json:"users"`
+		Initiatives struct {
+			Nodes []Initiative `json:"nodes"`
+		} `json:"initiatives"`
+	}
+
+	err := c.query(ctx, queryWorkspace, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &WorkspaceData{
+		Users:       result.Users.Nodes,
+		Initiatives: result.Initiatives.Nodes,
+	}, nil
+}
+
 // GetTeamStates fetches workflow states for a team
 func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, error) {
 	var result struct {

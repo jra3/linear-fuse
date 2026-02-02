@@ -124,6 +124,12 @@ type Project struct {
 	Lead        *User               `json:"lead"`
 	Status      *Status             `json:"status"`
 	Initiatives *ProjectInitiatives `json:"initiatives"`
+	Milestones  *ProjectMilestones  `json:"projectMilestones"`
+}
+
+// ProjectMilestones is a collection of milestones within a project
+type ProjectMilestones struct {
+	Nodes []ProjectMilestone `json:"nodes"`
 }
 
 // ProjectInitiatives is a collection of initiatives a project belongs to
@@ -340,6 +346,21 @@ type EmbeddedFile struct {
 	CachePath string    // Local cache path (empty if not cached)
 	Source    string    // Where found: "description" or "comment:{id}"
 	SyncedAt  time.Time // When metadata was synced
+}
+
+// TeamMetadata contains all metadata for a team fetched in a single query.
+type TeamMetadata struct {
+	States   []State
+	Labels   []Label // Deduplicated team + workspace labels
+	Cycles   []Cycle
+	Projects []Project
+	Members  []User
+}
+
+// WorkspaceData contains workspace-level entities fetched in a single query.
+type WorkspaceData struct {
+	Users       []User
+	Initiatives []Initiative
 }
 
 // IssueHistoryEntry represents a single change in an issue's history

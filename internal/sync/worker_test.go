@@ -23,7 +23,6 @@ type mockAPIClient struct {
 	membersByTeam   map[string][]api.User    // teamID -> members
 	users           []api.User
 	initiatives     []api.Initiative
-	milestones      map[string][]api.ProjectMilestone // projectID -> milestones
 	pageSize        int
 	getTeamsCalls   int32
 	getIssuesCalls  int32
@@ -39,7 +38,6 @@ func newMockAPIClient() *mockAPIClient {
 		cyclesByTeam:   make(map[string][]api.Cycle),
 		projectsByTeam: make(map[string][]api.Project),
 		membersByTeam:  make(map[string][]api.User),
-		milestones:     make(map[string][]api.ProjectMilestone),
 		pageSize:       100,
 	}
 }
@@ -99,61 +97,30 @@ func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cu
 	return page, api.PageInfo{HasNextPage: hasNext, EndCursor: nextCursor}, nil
 }
 
-func (m *mockAPIClient) GetTeamStates(ctx context.Context, teamID string) ([]api.State, error) {
+func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*api.TeamMetadata, error) {
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
-	return m.statesByTeam[teamID], nil
+	return &api.TeamMetadata{
+		States:   m.statesByTeam[teamID],
+		Labels:   m.labelsByTeam[teamID],
+		Cycles:   m.cyclesByTeam[teamID],
+		Projects: m.projectsByTeam[teamID],
+		Members:  m.membersByTeam[teamID],
+	}, nil
 }
 
-func (m *mockAPIClient) GetTeamLabels(ctx context.Context, teamID string) ([]api.Label, error) {
+func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, error) {
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
-	return m.labelsByTeam[teamID], nil
+	return &api.WorkspaceData{
+		Users:       m.users,
+		Initiatives: m.initiatives,
+	}, nil
 }
 
-func (m *mockAPIClient) GetTeamCycles(ctx context.Context, teamID string) ([]api.Cycle, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return m.cyclesByTeam[teamID], nil
-}
-
-func (m *mockAPIClient) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return m.projectsByTeam[teamID], nil
-}
-
-func (m *mockAPIClient) GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return m.membersByTeam[teamID], nil
-}
-
-func (m *mockAPIClient) GetUsers(ctx context.Context) ([]api.User, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return m.users, nil
-}
-
-func (m *mockAPIClient) GetInitiatives(ctx context.Context) ([]api.Initiative, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return m.initiatives, nil
-}
-
-func (m *mockAPIClient) GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return m.milestones[projectID], nil
-}
+// GetProjectMilestones removed — milestones now come inline from GetTeamProjects
 
 func (m *mockAPIClient) GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error) {
 	if m.simulateError != nil {
@@ -595,13 +562,17 @@ func TestWorkerSyncTeamMetadata(t *testing.T) {
 		{ID: "cycle-1", Number: 1, Name: "Sprint 1"},
 	}
 	mock.projectsByTeam[teamID] = []api.Project{
-		{ID: "project-1", Slug: "test-project", Name: "Test Project"},
+		{
+			ID: "project-1", Slug: "test-project", Name: "Test Project",
+			Milestones: &api.ProjectMilestones{
+				Nodes: []api.ProjectMilestone{
+					{ID: "milestone-1", Name: "Phase 1"},
+				},
+			},
+		},
 	}
 	mock.membersByTeam[teamID] = []api.User{
 		{ID: "user-1", Email: "user1@test.com", Name: "User One"},
-	}
-	mock.milestones["project-1"] = []api.ProjectMilestone{
-		{ID: "milestone-1", Name: "Phase 1"},
 	}
 
 	cfg := Config{Interval: time.Hour}
