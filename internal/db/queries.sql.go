@@ -832,6 +832,28 @@ func (q *Queries) GetIssueDocumentsSyncedAt(ctx context.Context, issueID sql.Nul
 	return max, err
 }
 
+const getIssueHistoryCache = `-- name: GetIssueHistoryCache :one
+SELECT issue_id, synced_at, data FROM issue_history_cache WHERE issue_id = ?
+`
+
+func (q *Queries) GetIssueHistoryCache(ctx context.Context, issueID string) (IssueHistoryCache, error) {
+	row := q.db.QueryRowContext(ctx, getIssueHistoryCache, issueID)
+	var i IssueHistoryCache
+	err := row.Scan(&i.IssueID, &i.SyncedAt, &i.Data)
+	return i, err
+}
+
+const getIssueHistorySyncedAt = `-- name: GetIssueHistorySyncedAt :one
+SELECT synced_at FROM issue_history_cache WHERE issue_id = ?
+`
+
+func (q *Queries) GetIssueHistorySyncedAt(ctx context.Context, issueID string) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getIssueHistorySyncedAt, issueID)
+	var synced_at time.Time
+	err := row.Scan(&synced_at)
+	return synced_at, err
+}
+
 const getIssueRelation = `-- name: GetIssueRelation :one
 
 SELECT id, issue_id, related_issue_id, type, created_at, updated_at, synced_at FROM issue_relations WHERE id = ?
@@ -4338,6 +4360,29 @@ func (q *Queries) UpsertIssue(ctx context.Context, arg UpsertIssueParams) error 
 		arg.SyncedAt,
 		arg.Data,
 	)
+	return err
+}
+
+const upsertIssueHistoryCache = `-- name: UpsertIssueHistoryCache :exec
+
+INSERT INTO issue_history_cache (issue_id, synced_at, data)
+VALUES (?, ?, ?)
+ON CONFLICT(issue_id) DO UPDATE SET
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertIssueHistoryCacheParams struct {
+	IssueID  string          `json:"issue_id"`
+	SyncedAt time.Time       `json:"synced_at"`
+	Data     json.RawMessage `json:"data"`
+}
+
+// =============================================================================
+// Issue History Cache
+// =============================================================================
+func (q *Queries) UpsertIssueHistoryCache(ctx context.Context, arg UpsertIssueHistoryCacheParams) error {
+	_, err := q.db.ExecContext(ctx, upsertIssueHistoryCache, arg.IssueID, arg.SyncedAt, arg.Data)
 	return err
 }
 

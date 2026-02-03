@@ -179,6 +179,10 @@ func (lfs *LinearFS) GetIssueEmbeddedFiles(ctx context.Context, issueID string) 
 	return lfs.repo.GetIssueEmbeddedFiles(ctx, issueID)
 }
 
+func (lfs *LinearFS) GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error) {
+	return lfs.repo.GetIssueHistory(ctx, issueID)
+}
+
 func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
 	// No-op: SQLite is source of truth, sync worker will refresh
 }

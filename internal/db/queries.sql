@@ -796,3 +796,20 @@ DELETE FROM issue_relations WHERE issue_id = ?;
 
 -- name: GetIssueRelationsSyncedAt :one
 SELECT MAX(synced_at) FROM issue_relations WHERE issue_id = ?;
+
+-- =============================================================================
+-- Issue History Cache
+-- =============================================================================
+
+-- name: UpsertIssueHistoryCache :exec
+INSERT INTO issue_history_cache (issue_id, synced_at, data)
+VALUES (?, ?, ?)
+ON CONFLICT(issue_id) DO UPDATE SET
+    synced_at = excluded.synced_at,
+    data = excluded.data;
+
+-- name: GetIssueHistoryCache :one
+SELECT issue_id, synced_at, data FROM issue_history_cache WHERE issue_id = ?;
+
+-- name: GetIssueHistorySyncedAt :one
+SELECT synced_at FROM issue_history_cache WHERE issue_id = ?;

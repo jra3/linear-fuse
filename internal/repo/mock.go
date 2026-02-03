@@ -28,6 +28,7 @@ type MockRepository struct {
 	InitiativeUpdates map[string][]api.InitiativeUpdate // keyed by initiativeID
 	Attachments    map[string][]api.Attachment   // keyed by issueID
 	EmbeddedFiles  map[string][]api.EmbeddedFile // keyed by issueID
+	IssueHistory   map[string][]api.IssueHistoryEntry // keyed by issueID
 
 	// Current user
 	CurrentUser *api.User
@@ -555,6 +556,13 @@ func (m *MockRepository) GetAttachmentByID(ctx context.Context, id string) (*api
 				return &att, nil
 			}
 		}
+	}
+	return nil, nil
+}
+
+func (m *MockRepository) GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error) {
+	if m.IssueHistory != nil {
+		return m.IssueHistory[issueID], nil
 	}
 	return nil, nil
 }

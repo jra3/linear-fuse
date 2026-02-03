@@ -13,8 +13,10 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
-// Default staleness threshold for on-demand data (comments, documents, updates)
-const defaultStalenessThreshold = 5 * time.Minute
+// Default staleness threshold for on-demand data (comments, documents, updates).
+// The sync worker refreshes changed issues every 2 minutes, so 30 minutes is
+// generous — only issues unchanged for >30 min trigger on-demand API calls.
+const defaultStalenessThreshold = 30 * time.Minute
 
 // SQLiteRepository implements Repository using SQLite as the data store.
 // It reads from SQLite and optionally falls back to the API client
@@ -618,38 +620,46 @@ func (r *SQLiteRepository) GetIssueComments(ctx context.Context, issueID string)
 		return nil, fmt.Errorf("list issue comments: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshComments(issueID, len(comments) == 0)
+	// Check staleness and trigger combined background refresh if needed
+	r.maybeRefreshIssueDetails(issueID)
 
 	return db.DBCommentsToAPIComments(comments)
 }
 
-// maybeRefreshComments checks if comments need refreshing and triggers background fetch
-func (r *SQLiteRepository) maybeRefreshComments(issueID string, isEmpty bool) {
+// maybeRefreshIssueDetails triggers a combined refresh of comments, documents,
+// and attachments for an issue if any of them are stale. Uses a single API call
+// via GetIssueDetails instead of three separate calls.
+func (r *SQLiteRepository) maybeRefreshIssueDetails(issueID string) {
 	if r.client == nil {
 		return
 	}
 
-	// Check staleness
-	syncedAt, err := r.store.Queries().GetIssueCommentsSyncedAt(context.Background(), issueID)
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+	// Check staleness of any sub-resource — if any is stale, refresh all
+	bgCtx := context.Background()
+	commentsSyncedAt, err1 := r.store.Queries().GetIssueCommentsSyncedAt(bgCtx, issueID)
+	docsSyncedAt, err2 := r.store.Queries().GetIssueDocumentsSyncedAt(bgCtx, sql.NullString{String: issueID, Valid: true})
+	attachSyncedAt, err3 := r.store.Queries().GetIssueAttachmentsSyncedAt(bgCtx, issueID)
 
-	// Always refresh in background to avoid blocking on directory listings (e.g., find)
-	if isStale {
-		r.triggerBackgroundRefresh("comments:"+issueID, func(ctx context.Context) error {
-			return r.refreshComments(ctx, issueID)
+	commentsStale := err1 != nil || commentsSyncedAt == nil || time.Since(parseTime(commentsSyncedAt)) > r.stalenessThreshold
+	docsStale := err2 != nil || docsSyncedAt == nil || time.Since(parseTime(docsSyncedAt)) > r.stalenessThreshold
+	attachStale := err3 != nil || attachSyncedAt == nil || time.Since(parseTime(attachSyncedAt)) > r.stalenessThreshold
+
+	if commentsStale || docsStale || attachStale {
+		r.triggerBackgroundRefresh("issue-details:"+issueID, func(ctx context.Context) error {
+			return r.refreshIssueDetails(ctx, issueID)
 		})
 	}
 }
 
-// refreshComments fetches comments from API and stores in SQLite
-func (r *SQLiteRepository) refreshComments(ctx context.Context, issueID string) error {
-	comments, err := r.client.GetIssueComments(ctx, issueID)
+// refreshIssueDetails fetches comments, documents, and attachments in a single
+// API call and stores them all in SQLite.
+func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID string) error {
+	details, err := r.client.GetIssueDetails(ctx, issueID)
 	if err != nil {
 		return err
 	}
 
-	for _, comment := range comments {
+	for _, comment := range details.Comments {
 		params, err := db.APICommentToDBComment(comment, issueID)
 		if err != nil {
 			continue
@@ -658,6 +668,27 @@ func (r *SQLiteRepository) refreshComments(ctx context.Context, issueID string) 
 			log.Printf("[repo] upsert comment %s failed: %v", comment.ID, err)
 		}
 	}
+
+	for _, doc := range details.Documents {
+		params, err := db.APIDocumentToDBDocument(doc)
+		if err != nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertDocument(ctx, params); err != nil {
+			log.Printf("[repo] upsert document %s failed: %v", doc.ID, err)
+		}
+	}
+
+	for _, attachment := range details.Attachments {
+		params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
+		if err != nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertAttachment(ctx, params); err != nil {
+			log.Printf("[repo] upsert attachment %s failed: %v", attachment.ID, err)
+		}
+	}
+
 	return nil
 }
 
@@ -718,46 +749,10 @@ func (r *SQLiteRepository) GetIssueDocuments(ctx context.Context, issueID string
 		return nil, fmt.Errorf("list issue documents: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshIssueDocuments(issueID, len(docs) == 0)
+	// Check staleness and trigger combined background refresh if needed
+	r.maybeRefreshIssueDetails(issueID)
 
 	return db.DBDocumentsToAPIDocuments(docs)
-}
-
-// maybeRefreshIssueDocuments checks if issue documents need refreshing
-func (r *SQLiteRepository) maybeRefreshIssueDocuments(issueID string, isEmpty bool) {
-	if r.client == nil {
-		return
-	}
-
-	syncedAt, err := r.store.Queries().GetIssueDocumentsSyncedAt(context.Background(), sql.NullString{String: issueID, Valid: true})
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
-
-	// Always refresh in background to avoid blocking on directory listings (e.g., find)
-	if isStale {
-		r.triggerBackgroundRefresh("issue-docs:"+issueID, func(ctx context.Context) error {
-			return r.refreshIssueDocuments(ctx, issueID)
-		})
-	}
-}
-
-// refreshIssueDocuments fetches documents from API and stores in SQLite
-func (r *SQLiteRepository) refreshIssueDocuments(ctx context.Context, issueID string) error {
-	docs, err := r.client.GetIssueDocuments(ctx, issueID)
-	if err != nil {
-		return err
-	}
-
-	for _, doc := range docs {
-		params, err := db.APIDocumentToDBDocument(doc)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertDocument(ctx, params); err != nil {
-			log.Printf("[repo] upsert document %s failed: %v", doc.ID, err)
-		}
-	}
-	return nil
 }
 
 func (r *SQLiteRepository) GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error) {
@@ -1030,45 +1025,10 @@ func (r *SQLiteRepository) GetIssueAttachments(ctx context.Context, issueID stri
 		return nil, fmt.Errorf("list issue attachments: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshAttachments(issueID, len(attachments) == 0)
+	// Check staleness and trigger combined background refresh if needed
+	r.maybeRefreshIssueDetails(issueID)
 
 	return db.DBAttachmentsToAPIAttachments(attachments)
-}
-
-// maybeRefreshAttachments checks if attachments need refreshing
-func (r *SQLiteRepository) maybeRefreshAttachments(issueID string, isEmpty bool) {
-	if r.client == nil {
-		return
-	}
-
-	syncedAt, err := r.store.Queries().GetIssueAttachmentsSyncedAt(context.Background(), issueID)
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
-
-	if isStale {
-		r.triggerBackgroundRefresh("attachments:"+issueID, func(ctx context.Context) error {
-			return r.refreshAttachments(ctx, issueID)
-		})
-	}
-}
-
-// refreshAttachments fetches attachments from API and stores in SQLite
-func (r *SQLiteRepository) refreshAttachments(ctx context.Context, issueID string) error {
-	attachments, err := r.client.GetIssueAttachments(ctx, issueID)
-	if err != nil {
-		return err
-	}
-
-	for _, attachment := range attachments {
-		params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertAttachment(ctx, params); err != nil {
-			log.Printf("[repo] upsert attachment %s failed: %v", attachment.ID, err)
-		}
-	}
-	return nil
 }
 
 func (r *SQLiteRepository) GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error) {
@@ -1101,6 +1061,69 @@ func (r *SQLiteRepository) GetAttachmentByID(ctx context.Context, id string) (*a
 		return nil, fmt.Errorf("convert attachment: %w", err)
 	}
 	return &result, nil
+}
+
+// =============================================================================
+// Issue History
+// =============================================================================
+
+func (r *SQLiteRepository) GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error) {
+	cache, err := r.store.Queries().GetIssueHistoryCache(ctx, issueID)
+	if err == nil {
+		// Have cached data — check staleness and maybe refresh in background
+		r.maybeRefreshHistory(issueID, cache.SyncedAt)
+
+		var entries []api.IssueHistoryEntry
+		if err := json.Unmarshal(cache.Data, &entries); err != nil {
+			return nil, fmt.Errorf("unmarshal history cache: %w", err)
+		}
+		return entries, nil
+	}
+
+	// No cached data — fetch synchronously on first access
+	if r.client == nil {
+		return nil, nil
+	}
+	entries, fetchErr := r.client.GetIssueHistory(ctx, issueID)
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+
+	// Cache the result
+	r.upsertHistoryCache(ctx, issueID, entries)
+	return entries, nil
+}
+
+func (r *SQLiteRepository) maybeRefreshHistory(issueID string, syncedAt time.Time) {
+	if r.client == nil {
+		return
+	}
+
+	if time.Since(syncedAt) > r.stalenessThreshold {
+		r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
+			entries, err := r.client.GetIssueHistory(ctx, issueID)
+			if err != nil {
+				return err
+			}
+			r.upsertHistoryCache(ctx, issueID, entries)
+			return nil
+		})
+	}
+}
+
+func (r *SQLiteRepository) upsertHistoryCache(ctx context.Context, issueID string, entries []api.IssueHistoryEntry) {
+	data, err := json.Marshal(entries)
+	if err != nil {
+		log.Printf("[repo] marshal history for %s failed: %v", issueID, err)
+		return
+	}
+	if err := r.store.Queries().UpsertIssueHistoryCache(ctx, db.UpsertIssueHistoryCacheParams{
+		IssueID:  issueID,
+		SyncedAt: time.Now(),
+		Data:     data,
+	}); err != nil {
+		log.Printf("[repo] upsert history cache %s failed: %v", issueID, err)
+	}
 }
 
 // =============================================================================

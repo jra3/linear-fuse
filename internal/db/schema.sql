@@ -398,3 +398,12 @@ CREATE TABLE IF NOT EXISTS issue_relations (
 CREATE INDEX IF NOT EXISTS idx_issue_relations_issue ON issue_relations(issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_relations_related ON issue_relations(related_issue_id);
 CREATE INDEX IF NOT EXISTS idx_issue_relations_type ON issue_relations(issue_id, type);
+
+-- =============================================================================
+-- Issue History Cache (JSON blob per issue, read-only history)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS issue_history_cache (
+    issue_id TEXT PRIMARY KEY,
+    synced_at DATETIME NOT NULL,
+    data JSON NOT NULL  -- JSON array of IssueHistoryEntry
+);

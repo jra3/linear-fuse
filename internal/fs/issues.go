@@ -292,8 +292,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		out.Attr.Uid = n.lfs.uid
 		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = uint64(len(content))
-		out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
-		out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
 		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFREG,
@@ -303,7 +303,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 	case "history.md":
 		// Fetch history content during Lookup so we can set the actual size
 		// (kernel won't issue READ if size is 0)
-		entries, err := n.lfs.client.GetIssueHistory(ctx, n.issue.ID)
+		entries, err := n.lfs.GetIssueHistory(ctx, n.issue.ID)
 		if err != nil {
 			log.Printf("Failed to fetch history for %s: %v", n.issue.Identifier, err)
 			return nil, syscall.EIO
@@ -985,8 +985,8 @@ func (h *HistoryFileNode) ensureContent(ctx context.Context) error {
 		log.Printf("HistoryFileNode: fetching history for %s (issueID=%s)", h.identifier, h.issueID)
 	}
 
-	// Fetch history from API (lazy fetch)
-	entries, err := h.lfs.client.GetIssueHistory(ctx, h.issueID)
+	// Fetch history via repo (cached in SQLite)
+	entries, err := h.lfs.GetIssueHistory(ctx, h.issueID)
 	if err != nil {
 		log.Printf("Failed to fetch history for %s: %v", h.identifier, err)
 		return err

@@ -236,6 +236,13 @@ type Repository interface {
 	UpdateEmbeddedFileCache(ctx context.Context, id, cachePath string, size int64) error
 
 	// ==========================================================================
+	// Issue History
+	// ==========================================================================
+
+	// GetIssueHistory returns history entries for an issue (cached in SQLite)
+	GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error)
+
+	// ==========================================================================
 	// Issue Relations
 	// ==========================================================================
 

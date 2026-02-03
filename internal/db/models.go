@@ -163,6 +163,12 @@ type Issue struct {
 	Data          json.RawMessage `json:"data"`
 }
 
+type IssueHistoryCache struct {
+	IssueID  string          `json:"issue_id"`
+	SyncedAt time.Time       `json:"synced_at"`
+	Data     json.RawMessage `json:"data"`
+}
+
 type IssueRelation struct {
 	ID             string       `json:"id"`
 	IssueID        string       `json:"issue_id"`

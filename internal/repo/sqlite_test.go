@@ -1438,9 +1438,9 @@ func TestSQLiteRepository_SetStalenessThreshold(t *testing.T) {
 	repo := NewSQLiteRepository(store, nil)
 	defer repo.Close()
 
-	// Default threshold should be 5 minutes
-	if repo.stalenessThreshold != 5*time.Minute {
-		t.Errorf("Expected default threshold of 5m, got %v", repo.stalenessThreshold)
+	// Default threshold should be 30 minutes
+	if repo.stalenessThreshold != 30*time.Minute {
+		t.Errorf("Expected default threshold of 30m, got %v", repo.stalenessThreshold)
 	}
 
 	// Set custom threshold
@@ -1830,7 +1830,7 @@ func TestSQLiteRepository_TriggerBackgroundRefresh_NoClient(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_MaybeRefreshComments_NoClient(t *testing.T) {
+func TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -1840,22 +1840,8 @@ func TestSQLiteRepository_MaybeRefreshComments_NoClient(t *testing.T) {
 	defer repo.Close()
 
 	// Should be a no-op - no panic
-	repo.maybeRefreshComments("issue-1", true)
-	repo.maybeRefreshComments("issue-2", false)
-}
-
-func TestSQLiteRepository_MaybeRefreshIssueDocuments_NoClient(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Create repo without API client
-	repo := NewSQLiteRepository(store, nil)
-	defer repo.Close()
-
-	// Should be a no-op - no panic
-	repo.maybeRefreshIssueDocuments("issue-1", true)
-	repo.maybeRefreshIssueDocuments("issue-2", false)
+	repo.maybeRefreshIssueDetails("issue-1")
+	repo.maybeRefreshIssueDetails("issue-2")
 }
 
 func TestSQLiteRepository_MaybeRefreshProjectDocuments_NoClient(t *testing.T) {
@@ -2083,16 +2069,5 @@ func TestSQLiteRepository_UpdateEmbeddedFileCache(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_MaybeRefreshAttachments_NoClient(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Create repo without API client
-	repo := NewSQLiteRepository(store, nil)
-	defer repo.Close()
-
-	// Should be a no-op - no panic
-	repo.maybeRefreshAttachments("issue-1", true)
-	repo.maybeRefreshAttachments("issue-2", false)
-}
+// TestSQLiteRepository_MaybeRefreshAttachments_NoClient removed — covered by
+// TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient (consolidated refresh)
