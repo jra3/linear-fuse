@@ -1,4 +1,5 @@
-.PHONY: build install clean test test-cover integration-test integration-test-full run bench-dirs coverage coverage-html
+.PHONY: build install clean test test-cover integration-test integration-test-full run bench-dirs coverage coverage-html \
+        install-service uninstall-service enable-service disable-service start stop restart status
 
 BINARY=linearfs
 VERSION?=dev
@@ -9,7 +10,8 @@ build:
 	go build $(LDFLAGS) -o bin/$(BINARY) ./cmd/linearfs
 
 install: build
-	cp bin/$(BINARY) ~/bin/$(BINARY)
+	mkdir -p ~/.local/bin
+	cp bin/$(BINARY) ~/.local/bin/$(BINARY)
 
 clean:
 	rm -rf bin/
@@ -57,3 +59,48 @@ coverage-html: coverage
 bench-dirs: build
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
 	./scripts/bench-dirs.sh
+
+# Default mount point (~ expands in shell context)
+MOUNT_POINT ?= $(HOME)/linear
+
+# Systemd service installation (Linux only)
+install-service: install
+	@echo "Installing systemd user service..."
+	@mkdir -p ~/.config/systemd/user
+	@cp contrib/systemd/linearfs.service ~/.config/systemd/user/
+	@mkdir -p ~/.config/linearfs
+	@if [ ! -f ~/.config/linearfs/env ]; then \
+		echo "LINEARFS_MOUNT=$(MOUNT_POINT)" > ~/.config/linearfs/env; \
+		echo "Created ~/.config/linearfs/env with LINEARFS_MOUNT=$(MOUNT_POINT)"; \
+	else \
+		echo "~/.config/linearfs/env already exists, not overwriting"; \
+	fi
+	@systemctl --user daemon-reload
+	@echo "Service installed. Run 'make enable-service' to enable on login, 'make start' to start now."
+
+uninstall-service:
+	@echo "Removing systemd user service..."
+	-@systemctl --user stop linearfs.service 2>/dev/null || true
+	-@systemctl --user disable linearfs.service 2>/dev/null || true
+	@rm -f ~/.config/systemd/user/linearfs.service
+	@systemctl --user daemon-reload
+	@echo "Service removed. Config files in ~/.config/linearfs/ left intact."
+
+enable-service:
+	systemctl --user enable linearfs.service
+	@echo "Service will start on login."
+
+disable-service:
+	systemctl --user disable linearfs.service
+
+start:
+	systemctl --user start linearfs.service
+
+stop:
+	systemctl --user stop linearfs.service
+
+restart:
+	systemctl --user restart linearfs.service
+
+status:
+	systemctl --user status linearfs.service

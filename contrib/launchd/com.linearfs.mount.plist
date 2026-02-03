@@ -16,7 +16,7 @@
             fi
 
             # Set default mount point if not configured
-            LINEARFS_MOUNT="${LINEARFS_MOUNT:-$HOME/mnt/linear}"
+            LINEARFS_MOUNT="${LINEARFS_MOUNT:-$HOME/linear}"
 
             # Create mount point if it doesn't exist
             mkdir -p "$LINEARFS_MOUNT"

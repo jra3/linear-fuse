@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 make build          # Build binary to bin/linearfs
-make install        # Build and copy to ~/bin
+make install        # Build and copy to ~/.local/bin
 make test           # Run all tests
 make test-cover     # Run tests with coverage summary
 make coverage       # Generate full coverage report (unit + integration)
@@ -14,14 +14,22 @@ make coverage-html  # Open coverage report in browser
 make run            # Build and mount to /tmp/linear
 make fmt            # Format code
 make lint           # Run golangci-lint
+
+# Systemd service management (Linux)
+make install-service   # Install binary + systemd service + env file
+make uninstall-service # Remove systemd service (keeps config)
+make enable-service    # Enable service to start on login
+make disable-service   # Disable autostart
+make start             # Start the service
+make stop              # Stop the service
+make restart           # Restart the service
+make status            # Check service status
 ```
 
 To reinstall while running:
 ```bash
 # Linux (systemd)
-systemctl --user stop linearfs.service
-make install
-systemctl --user start linearfs.service
+make stop && make install && make start
 
 # macOS (launchd)
 launchctl stop com.linearfs.mount
@@ -54,9 +62,9 @@ To allow Claude Code to read from the mounted filesystem, add these permissions 
 ```json
 {
   "allow": [
-    "Read(//mnt/linear/**)",
-    "Bash(ls /mnt/linear/:*)",
-    "Bash(cat /mnt/linear/:*)"
+    "Read(~/linear/**)",
+    "Bash(ls ~/linear/:*)",
+    "Bash(cat ~/linear/:*)"
   ]
 }
 ```
@@ -64,8 +72,8 @@ To allow Claude Code to read from the mounted filesystem, add these permissions 
 Also add to your global `~/.claude/CLAUDE.md`:
 ```markdown
 # Linear.app issues via FUSE mount
-- Linear data is available at /mnt/linear
-- Read /mnt/linear/README.md for usage instructions
+- Linear data is available at ~/linear
+- Read ~/linear/README.md for usage instructions
 ```
 
 ## Architecture
@@ -87,7 +95,7 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 ### Directory Structure
 
 ```
-/mnt/linear/
+~/linear/
 ├── teams/<KEY>/
 │   ├── team.md, states.md, labels.md    # Team metadata (read-only)
 │   ├── issues/

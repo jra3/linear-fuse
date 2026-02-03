@@ -195,7 +195,7 @@ func (lfs *LinearFS) SetServer(server *fuse.Server) {
 // MountPoint returns the filesystem mount path
 func (lfs *LinearFS) MountPoint() string {
 	if lfs.mountPoint == "" {
-		return "/mnt/linear" // fallback for tests
+		return os.Getenv("HOME") + "/linear" // fallback for tests
 	}
 	return lfs.mountPoint
 }

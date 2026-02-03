@@ -41,29 +41,29 @@ make install
 export LINEAR_API_KEY="lin_api_xxxxx"
 
 # Mount the filesystem
-linearfs mount /mnt/linear
+linearfs mount ~/linear
 
 # Browse your issues (replace TEAM with your team key)
-ls /mnt/linear/teams/
-ls /mnt/linear/teams/TEAM/issues/
-cat /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md
+ls ~/linear/teams/
+ls ~/linear/teams/TEAM/issues/
+cat ~/linear/teams/TEAM/issues/TEAM-123/issue.md
 
 # View comments on an issue
-ls /mnt/linear/teams/TEAM/issues/TEAM-123/comments/
-cat /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
+ls ~/linear/teams/TEAM/issues/TEAM-123/comments/
+cat ~/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 
 # Add a comment
-echo "My comment" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/_create
+echo "My comment" > ~/linear/teams/TEAM/issues/TEAM-123/comments/_create
 
 # View your assigned issues
-ls /mnt/linear/my/assigned/
+ls ~/linear/my/assigned/
 
 # Unmount
 # macOS
-umount /mnt/linear
+umount ~/linear
 
 # Linux
-fusermount3 -u /mnt/linear
+fusermount3 -u ~/linear
 
 # or Ctrl+C if running in foreground
 ```
@@ -87,11 +87,11 @@ Files and directories have meaningful timestamps from Linear, enabling time-base
 
 ```bash
 # Sort by modification time (most recently updated first)
-ls -lt /mnt/linear/my/active/
-ls -lt /mnt/linear/teams/TEAM/by/status/Todo/
+ls -lt ~/linear/my/active/
+ls -lt ~/linear/teams/TEAM/by/status/Todo/
 
 # Sort by creation time (oldest first)
-ls -ltr /mnt/linear/teams/TEAM/issues/
+ls -ltr ~/linear/teams/TEAM/issues/
 ```
 
 > **Note:** If using `eza` (aliased as `ls`), use `ls --sort=modified` instead of `ls -lt`.
@@ -112,7 +112,7 @@ Timestamps are preserved across all views:
 ## Directory Structure
 
 ```
-/mnt/linear/
+~/linear/
 ├── README.md                    # In-filesystem documentation
 ├── teams/
 │   └── <TEAM>/                  # Your team key (e.g., ENG, PROD)
@@ -204,10 +204,10 @@ Writes fail with `EINVAL` (Invalid argument) for invalid frontmatter values. Aft
 
 ```bash
 # Example: invalid priority value
-$ echo "priority: critical" >> /mnt/linear/teams/TEAM/issues/TEAM-123/issue.md
+$ echo "priority: critical" >> ~/linear/teams/TEAM/issues/TEAM-123/issue.md
 # Write fails with EINVAL
 
-$ cat /mnt/linear/teams/TEAM/issues/TEAM-123/.error
+$ cat ~/linear/teams/TEAM/issues/TEAM-123/.error
 Field: priority
 Value: "critical"
 Error: invalid priority "critical": must be none, low, medium, high, or urgent
@@ -233,10 +233,10 @@ LinearFS maps standard filesystem operations to Linear API actions:
 
 ```bash
 # Create a new issue
-mkdir /mnt/linear/teams/TEAM/issues/"Fix login bug"
+mkdir ~/linear/teams/TEAM/issues/"Fix login bug"
 
 # Archive an issue
-rmdir /mnt/linear/teams/TEAM/issues/TEAM-123
+rmdir ~/linear/teams/TEAM/issues/TEAM-123
 ```
 
 ### Sub-Issues
@@ -249,11 +249,11 @@ rmdir /mnt/linear/teams/TEAM/issues/TEAM-123
 
 ```bash
 # View sub-issues of TEAM-123
-ls /mnt/linear/teams/TEAM/issues/TEAM-123/children/
+ls ~/linear/teams/TEAM/issues/TEAM-123/children/
 
 # Set parent by editing frontmatter (editors work here, unlike _create)
 # Add: parent: TEAM-100
-vim /mnt/linear/teams/TEAM/issues/TEAM-456/issue.md
+vim ~/linear/teams/TEAM/issues/TEAM-456/issue.md
 ```
 
 ### Comments
@@ -270,10 +270,10 @@ vim /mnt/linear/teams/TEAM/issues/TEAM-456/issue.md
 
 ```bash
 # Add a comment
-echo "This needs review" > /mnt/linear/teams/TEAM/issues/TEAM-123/comments/_create
+echo "This needs review" > ~/linear/teams/TEAM/issues/TEAM-123/comments/_create
 
 # Delete a comment
-rm /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
+rm ~/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 ```
 
 ### Documents
@@ -289,7 +289,7 @@ rm /mnt/linear/teams/TEAM/issues/TEAM-123/comments/001-2025-01-10T14-30.md
 
 ```bash
 # Create a document (with YAML frontmatter for title)
-cat > /mnt/linear/teams/TEAM/issues/TEAM-123/docs/_create << 'EOF'
+cat > ~/linear/teams/TEAM/issues/TEAM-123/docs/_create << 'EOF'
 ---
 title: "Technical Spec"
 ---
@@ -313,7 +313,7 @@ mv docs/old-name.md docs/new-name.md
 
 ```bash
 # Create a new label
-cat > /mnt/linear/teams/TEAM/labels/_create << 'EOF'
+cat > ~/linear/teams/TEAM/labels/_create << 'EOF'
 ---
 name: "Critical"
 color: "#FF0000"
@@ -322,10 +322,10 @@ description: "Critical priority items"
 EOF
 
 # Rename a label
-mv /mnt/linear/teams/TEAM/labels/Bug.md /mnt/linear/teams/TEAM/labels/Defect.md
+mv ~/linear/teams/TEAM/labels/Bug.md ~/linear/teams/TEAM/labels/Defect.md
 
 # Delete a label
-rm /mnt/linear/teams/TEAM/labels/OldLabel.md
+rm ~/linear/teams/TEAM/labels/OldLabel.md
 ```
 
 ### Projects
@@ -337,10 +337,10 @@ rm /mnt/linear/teams/TEAM/labels/OldLabel.md
 
 ```bash
 # Create a new project
-mkdir /mnt/linear/teams/TEAM/projects/"Q1 Launch"
+mkdir ~/linear/teams/TEAM/projects/"Q1 Launch"
 
 # Archive a project
-rmdir /mnt/linear/teams/TEAM/projects/q1-launch
+rmdir ~/linear/teams/TEAM/projects/q1-launch
 ```
 
 ### Team Documents
@@ -476,7 +476,7 @@ cache:
   ttl: 60s
 
 mount:
-  default_path: /mnt/linear
+  default_path: ~/linear
 
 log:
   level: info
@@ -494,7 +494,7 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.linearfs.mount.plist
 launchctl start com.linearfs.mount
 
-# Your Linear workspace will now be mounted at ~/mnt/linear on every login
+# Your Linear workspace will now be mounted at ~~/linear on every login
 ```
 
 See [INSTALL.md](INSTALL.md#running-as-a-launchd-service-automatic-startup) for details.

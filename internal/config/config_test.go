@@ -67,7 +67,7 @@ cache:
   ttl: 120s
   max_entries: 5000
 mount:
-  default_path: /mnt/linear
+  default_path: ~/linear
   allow_other: true
 log:
   level: debug
@@ -97,8 +97,8 @@ log:
 	if cfg.Cache.MaxEntries != 5000 {
 		t.Errorf("LoadWithEnv() Cache.MaxEntries = %d, want 5000", cfg.Cache.MaxEntries)
 	}
-	if cfg.Mount.DefaultPath != "/mnt/linear" {
-		t.Errorf("LoadWithEnv() Mount.DefaultPath = %q, want %q", cfg.Mount.DefaultPath, "/mnt/linear")
+	if cfg.Mount.DefaultPath != "~/linear" {
+		t.Errorf("LoadWithEnv() Mount.DefaultPath = %q, want %q", cfg.Mount.DefaultPath, "~/linear")
 	}
 	if cfg.Mount.AllowOther != true {
 		t.Error("LoadWithEnv() Mount.AllowOther should be true")
