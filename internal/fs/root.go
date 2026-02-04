@@ -166,8 +166,13 @@ teams/{KEY}/
     {name}/                         [issue symlinks]
 
 initiatives/{slug}/
-  initiative.md                     [read-only]
-  projects/, updates/
+  initiative.md                     [read/write]
+  docs/{slug}.md                    [read/write, _create=trigger]
+  projects/                         [symlinks to team projects]
+    {project-slug}                  [symlink to ../../teams/{KEY}/projects/{slug}]
+  updates/                          [status updates]
+    _create                         [write with health: onTrack|atRisk|offTrack]
+    {seq}-{date}-{health}.md        [read-only]
 
 users/{name}/                       [issue symlinks + user.md]
 my/assigned|created|active/         [your issue symlinks]
@@ -185,6 +190,10 @@ CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"
 LINK:    echo "https://github.com/org/repo/pull/123" > attachments/_create
          echo "blocks ENG-456" > relations/_create
          echo -e "Phase 1\nInitial milestone" > milestones/_create
+INITIATIVES:
+         vim initiatives/platform-modernization/initiative.md  (edit projects: list)
+         echo "text" > initiatives/my-initiative/docs/"Title.md"
+         echo "---\nhealth: atRisk\n---\nUpdate text" > initiatives/my-initiative/updates/_create
 DELETE:  rm relations/blocks-ENG-456.rel
          rm milestones/"Phase 1.md"
 ARCHIVE: rmdir %s/teams/ENG/issues/ENG-123
@@ -212,9 +221,36 @@ links:                              [read-only, external attachments]
 Description body (editable)
 </issue_frontmatter>
 
+<initiative_frontmatter>
+---
+id: 719a9756-326e-40cf-935d-38cf899a1f50   [read-only]
+name: "Platform Modernization"              [read-only]
+slug: 77d439e363bb                          [read-only]
+status: Active                              [read-only]
+projects:                                   [editable - project slugs]
+  - "api-gateway"
+  - "auth-service"
+  - "data-pipeline"
+owner:                                      [read-only]
+  id: df7cbe14-f8c2-4096-b812-73fa9d39f19f
+  name: "John Doe"
+  email: john@example.com
+targetDate: "2026-03-31"                    [read-only]
+created: "2026-01-24T22:15:26Z"             [read-only]
+updated: "2026-01-27T16:03:38Z"             [read-only]
+---
+Initiative description (read-only)
+
+Usage:
+- Edit projects: list to link/unlink projects (use project slugs)
+- Projects are resolved workspace-wide across all teams
+- Changes sync immediately to Linear API and SQLite cache
+- Other fields are read-only (Linear API doesn't support editing)
+</initiative_frontmatter>
+
 <permissions>
--r--r--r--  Read-only     team.md, states.md, initiative.md
--rw-r--r--  Editable      issue.md, project.md, comments/*.md, docs/*.md, milestones/*.md
+-r--r--r--  Read-only     team.md, states.md, user.md
+-rw-r--r--  Editable      issue.md, project.md, initiative.md, comments/*.md, docs/*.md, milestones/*.md
 --w-------  Write-only    _create (write triggers creation, always empty)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
 </permissions>
@@ -248,10 +284,12 @@ The .error file is cleared on successful writes.
 - Clear optional fields by deleting the line entirely
 - Set parent: add "parent: ENG-100" | Remove: delete line
 - Link project to initiative: add "initiatives: [Name]" to project.md
+- Link initiative to projects: edit "projects: [slugs]" in initiative.md
 - Relation types: blocks, duplicate, related, similar
 - Inverse relations shown as: blocked-by, duplicated-by, related-to, similar-to
 - Cache TTL: 60s for issues, 10min for states/labels/users
 - Timestamps: mtime=updatedAt, ctime=createdAt from Linear
+- Project slugs: Use slug (e.g., "api-gateway"), not name, in initiative.md
 </important_notes>
 `, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint)
 }
