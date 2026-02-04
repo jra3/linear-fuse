@@ -521,6 +521,24 @@ func (c *Client) GetIssue(ctx context.Context, issueID string) (*Issue, error) {
 	return &result.Issue, nil
 }
 
+// GetProject fetches a single project by ID
+func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, error) {
+	var result struct {
+		Project Project `json:"project"`
+	}
+
+	vars := map[string]any{
+		"id": projectID,
+	}
+
+	err := c.query(ctx, queryProject, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &result.Project, nil
+}
+
 // GetMyIssues fetches issues assigned to the current user
 func (c *Client) GetMyIssues(ctx context.Context) ([]Issue, error) {
 	var allIssues []Issue
@@ -1851,6 +1869,24 @@ func (c *Client) GetInitiatives(ctx context.Context) ([]Initiative, error) {
 	}
 
 	return result.Initiatives.Nodes, nil
+}
+
+// GetInitiative fetches a single initiative by ID
+func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*Initiative, error) {
+	var result struct {
+		Initiative Initiative `json:"initiative"`
+	}
+
+	vars := map[string]any{
+		"id": initiativeID,
+	}
+
+	err := c.query(ctx, queryInitiative, vars, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &result.Initiative, nil
 }
 
 // =============================================================================

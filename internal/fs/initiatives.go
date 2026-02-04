@@ -16,7 +16,23 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
+
+// initiativeInfoIno generates a stable inode number for an initiative.md file
+func initiativeInfoIno(initiativeID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("initiative-info:" + initiativeID))
+	return h.Sum64()
+}
+
+// initiativeProjectsIno generates a stable inode number for an initiative projects directory
+func initiativeProjectsIno(initiativeID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte("initiative-projects:" + initiativeID))
+	return h.Sum64()
+}
 
 // initiativeUpdatesDirIno generates a stable inode number for an initiative updates directory
 func initiativeUpdatesDirIno(initiativeID string) uint64 {
@@ -123,14 +139,17 @@ func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "initiative.md":
-		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative}
+		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
 		content := node.generateContent()
-		out.Attr.Mode = 0444 | syscall.S_IFREG
+		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Uid = i.lfs.uid
 		out.Attr.Gid = i.lfs.gid
 		out.Attr.Size = uint64(len(content))
 		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		return i.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFREG,
+			Ino:  initiativeInfoIno(i.initiative.ID),
+		}), 0
 
 	case "docs":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -146,7 +165,10 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Attr.Gid = i.lfs.gid
 		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 		node := &InitiativeProjectsNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative}
-		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return i.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  initiativeProjectsIno(i.initiative.ID),
+		}), 0
 
 	case "updates":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -163,12 +185,22 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 // InitiativeInfoNode is a virtual file containing initiative metadata
 type InitiativeInfoNode struct {
 	BaseNode
-	initiative api.Initiative
+	initiative   api.Initiative
+	initiativeID string
+
+	// Write buffer and cached content
+	mu           sync.Mutex
+	content      []byte
+	contentReady bool
+	dirty        bool
 }
 
 var _ fs.NodeGetattrer = (*InitiativeInfoNode)(nil)
 var _ fs.NodeOpener = (*InitiativeInfoNode)(nil)
 var _ fs.NodeReader = (*InitiativeInfoNode)(nil)
+var _ fs.NodeWriter = (*InitiativeInfoNode)(nil)
+var _ fs.NodeFlusher = (*InitiativeInfoNode)(nil)
+var _ fs.NodeSetattrer = (*InitiativeInfoNode)(nil)
 
 func (i *InitiativeInfoNode) generateContent() []byte {
 	var ownerYAML string
@@ -185,12 +217,12 @@ func (i *InitiativeInfoNode) generateContent() []byte {
 		targetDate = fmt.Sprintf("targetDate: %q\n", *i.initiative.TargetDate)
 	}
 
-	// Build project list
+	// Build project list (editable - use slugs like how projects use initiative names)
 	var projectsYAML string
 	if len(i.initiative.Projects.Nodes) > 0 {
 		projectsYAML = "projects:\n"
 		for _, p := range i.initiative.Projects.Nodes {
-			projectsYAML += fmt.Sprintf("  - id: %s\n    name: %q\n    slug: %s\n", p.ID, p.Name, p.Slug)
+			projectsYAML += fmt.Sprintf("  - %q\n", p.Slug)
 		}
 	}
 
@@ -229,10 +261,18 @@ updated: %q
 }
 
 func (i *InitiativeInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := i.generateContent()
-	out.Mode = 0444 | syscall.S_IFREG
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	var size int
+	if i.contentReady && i.content != nil {
+		size = len(i.content)
+	} else {
+		size = len(i.generateContent())
+	}
+	out.Mode = 0644 | syscall.S_IFREG
 	i.SetOwner(out)
-	out.Size = uint64(len(content))
+	out.Size = uint64(size)
 	out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 	return 0
 }
@@ -242,15 +282,216 @@ func (i *InitiativeInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHan
 }
 
 func (i *InitiativeInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := i.generateContent()
-	if off >= int64(len(content)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if !i.contentReady {
+		i.content = i.generateContent()
+		i.contentReady = true
+	}
+
+	if off >= int64(len(i.content)) {
 		return fuse.ReadResultData(nil), 0
 	}
 	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
+	if end > int64(len(i.content)) {
+		end = int64(len(i.content))
 	}
-	return fuse.ReadResultData(content[off:end]), 0
+	return fuse.ReadResultData(i.content[off:end]), 0
+}
+
+func (i *InitiativeInfoNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	// Initialize content if not ready
+	if !i.contentReady {
+		i.content = i.generateContent()
+		i.contentReady = true
+	}
+
+	// Expand buffer if needed
+	end := off + int64(len(data))
+	if end > int64(len(i.content)) {
+		newContent := make([]byte, end)
+		copy(newContent, i.content)
+		i.content = newContent
+	}
+
+	copy(i.content[off:], data)
+	i.dirty = true
+	return uint32(len(data)), 0
+}
+
+func (i *InitiativeInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if sz, ok := in.GetSize(); ok {
+		if !i.contentReady {
+			i.content = i.generateContent()
+			i.contentReady = true
+		}
+		if int(sz) < len(i.content) {
+			i.content = i.content[:sz]
+			i.dirty = true
+		}
+	}
+
+	var size int
+	if i.contentReady && i.content != nil {
+		size = len(i.content)
+	} else {
+		size = len(i.generateContent())
+	}
+	out.Mode = 0644 | syscall.S_IFREG
+	out.Size = uint64(size)
+	return 0
+}
+
+func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	if !i.dirty || i.content == nil {
+		return 0
+	}
+
+	// Add timeout for API operations
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if i.lfs.debug {
+		log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)
+	}
+
+	// Parse the modified content
+	doc, err := marshal.Parse(i.content)
+	if err != nil {
+		log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
+		return syscall.EIO
+	}
+
+	// Extract projects from frontmatter
+	var newProjectSlugs []string
+	if projectsRaw, ok := doc.Frontmatter["projects"]; ok {
+		switch v := projectsRaw.(type) {
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					newProjectSlugs = append(newProjectSlugs, s)
+				}
+			}
+		case []string:
+			newProjectSlugs = v
+		}
+	}
+
+	// Get current project slugs
+	var currentProjectSlugs []string
+	for _, proj := range i.initiative.Projects.Nodes {
+		currentProjectSlugs = append(currentProjectSlugs, proj.Slug)
+	}
+
+	// Build sets for comparison
+	currentSet := make(map[string]bool)
+	for _, slug := range currentProjectSlugs {
+		currentSet[slug] = true
+	}
+	newSet := make(map[string]bool)
+	for _, slug := range newProjectSlugs {
+		newSet[slug] = true
+	}
+
+	// Track resolved project IDs for SQLite sync
+	addedProjectIDs := make(map[string]string)   // slug -> ID
+	removedProjectIDs := make(map[string]string) // slug -> ID
+
+	// Find projects to add (in new but not in current)
+	for _, slug := range newProjectSlugs {
+		if !currentSet[slug] {
+			projectID, err := i.lfs.ResolveProjectSlugToID(ctx, slug)
+			if err != nil {
+				log.Printf("Failed to resolve project slug '%s': %v", slug, err)
+				return syscall.EIO
+			}
+			if err := i.lfs.client.AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
+				log.Printf("Failed to add project to initiative '%s': %v", slug, err)
+				return syscall.EIO
+			}
+			addedProjectIDs[slug] = projectID
+			if i.lfs.debug {
+				log.Printf("Added project %s to initiative %s", slug, i.initiative.Name)
+			}
+		}
+	}
+
+	// Find projects to remove (in current but not in new)
+	for _, slug := range currentProjectSlugs {
+		if !newSet[slug] {
+			projectID, err := i.lfs.ResolveProjectSlugToID(ctx, slug)
+			if err != nil {
+				log.Printf("Failed to resolve project slug '%s' for removal: %v", slug, err)
+				return syscall.EIO
+			}
+			if err := i.lfs.client.RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
+				log.Printf("Failed to remove project from initiative '%s': %v", slug, err)
+				return syscall.EIO
+			}
+			removedProjectIDs[slug] = projectID
+			if i.lfs.debug {
+				log.Printf("Removed project %s from initiative %s", slug, i.initiative.Name)
+			}
+		}
+	}
+
+	// Fetch fresh initiative from API and upsert to SQLite for immediate visibility
+	freshInitiative, err := i.lfs.client.GetInitiative(ctx, i.initiativeID)
+	if err != nil {
+		log.Printf("Warning: failed to fetch fresh initiative after update: %v", err)
+	} else {
+		i.initiative = *freshInitiative
+		if err := i.lfs.UpsertInitiative(ctx, *freshInitiative); err != nil {
+			log.Printf("Warning: failed to upsert initiative to SQLite: %v", err)
+		}
+	}
+
+	// Sync initiative-project associations to SQLite
+	if i.lfs.store != nil {
+		for _, projID := range addedProjectIDs {
+			if err := i.lfs.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+				InitiativeID: i.initiativeID,
+				ProjectID:    projID,
+				SyncedAt:     db.Now(),
+			}); err != nil {
+				log.Printf("Warning: failed to upsert initiative-project to SQLite: %v", err)
+			}
+		}
+		for _, projID := range removedProjectIDs {
+			if err := i.lfs.store.Queries().DeleteInitiativeProject(ctx, db.DeleteInitiativeProjectParams{
+				InitiativeID: i.initiativeID,
+				ProjectID:    projID,
+			}); err != nil {
+				log.Printf("Warning: failed to delete initiative-project from SQLite: %v", err)
+			}
+		}
+	}
+
+	if i.lfs.debug {
+		log.Printf("Flush: initiative %s updated successfully", i.initiative.Name)
+	}
+
+	// Invalidate caches
+	i.lfs.InvalidateInitiatives()
+
+	// Invalidate kernel inode cache
+	i.lfs.InvalidateKernelInode(initiativeInfoIno(i.initiativeID))
+	i.lfs.InvalidateKernelInode(initiativeProjectsIno(i.initiativeID))
+
+	i.dirty = false
+	i.contentReady = false // Force re-generate on next read
+
+	return 0
 }
 
 // InitiativeProjectsNode represents the projects/ directory within an initiative

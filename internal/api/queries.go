@@ -397,6 +397,47 @@ query TeamProjects($teamId: String!) {
 }
 `
 
+const queryProject = `
+query Project($id: String!) {
+  project(id: $id) {
+    id
+    name
+    slugId
+    description
+    url
+    state
+    startDate
+    targetDate
+    createdAt
+    updatedAt
+    lead {
+      id
+      name
+      email
+    }
+    status {
+      id
+      name
+    }
+    initiatives {
+      nodes {
+        id
+        name
+      }
+    }
+    projectMilestones {
+      nodes {
+        id
+        name
+        description
+        targetDate
+        sortOrder
+      }
+    }
+  }
+}
+`
+
 const queryProjectIssues = `
 query ProjectIssues($projectId: String!, $after: String) {
   project(id: $projectId) {
@@ -980,6 +1021,36 @@ query Initiatives {
           name
           slugId
         }
+      }
+    }
+  }
+}
+`
+
+const queryInitiative = `
+query Initiative($id: String!) {
+  initiative(id: $id) {
+    id
+    name
+    slugId
+    description
+    status
+    color
+    icon
+    targetDate
+    url
+    createdAt
+    updatedAt
+    owner {
+      id
+      name
+      email
+    }
+    projects {
+      nodes {
+        id
+        name
+        slugId
       }
     }
   }

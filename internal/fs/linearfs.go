@@ -344,6 +344,18 @@ func (lfs *LinearFS) UpsertInitiativeUpdate(ctx context.Context, initiativeID st
 	return lfs.store.Queries().UpsertInitiativeUpdate(ctx, params)
 }
 
+// UpsertInitiative inserts or updates an initiative in SQLite.
+func (lfs *LinearFS) UpsertInitiative(ctx context.Context, initiative api.Initiative) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIInitiativeToDBInitiative(initiative)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertInitiative(ctx, params)
+}
+
 // GetIssueByIdentifier returns an issue by identifier (e.g., "ENG-123")
 func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
 	issue, err := lfs.repo.GetIssueByIdentifier(context.Background(), identifier)
@@ -741,6 +753,30 @@ func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projec
 	}
 
 	return "", fmt.Errorf("unknown project: %s", projectName)
+}
+
+// ResolveProjectSlugToID converts a project slug to its ID by searching all teams.
+// Used by initiatives which are workspace-level and can link to projects from any team.
+func (lfs *LinearFS) ResolveProjectSlugToID(ctx context.Context, projectSlug string) (string, error) {
+	teams, err := lfs.GetTeams(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Search all teams for a project with this slug
+	for _, team := range teams {
+		projects, err := lfs.GetTeamProjects(ctx, team.ID)
+		if err != nil {
+			continue // Skip teams with errors
+		}
+		for _, project := range projects {
+			if project.Slug == projectSlug {
+				return project.ID, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("unknown project slug: %s", projectSlug)
 }
 
 // GetProjectMilestones fetches milestones for a project
