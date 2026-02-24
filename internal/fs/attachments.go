@@ -64,6 +64,9 @@ func (n *AttachmentsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fu
 }
 
 func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	// Trigger background refresh of sub-resources if stale
+	n.lfs.MaybeRefreshIssueDetails(n.issueID)
+
 	// Start with _create entry
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},

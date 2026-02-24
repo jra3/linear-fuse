@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -27,6 +28,10 @@ type Client struct {
 	httpClient *http.Client
 	limiter    *rate.Limiter
 	stats      *APIStats
+
+	// M-3: server-reported rate limit reset time (from X-RateLimit-Reset header)
+	rateLimitMu      gosync.RWMutex
+	rateLimitResetAt time.Time
 }
 
 // ClientOptions configures the API client.
@@ -39,9 +44,9 @@ func NewClient(apiKey string) *Client {
 }
 
 func NewClientWithOptions(apiKey string, opts ClientOptions) *Client {
-	// Linear allows 1,500 requests/hour (25/min).
-	// Burst of 50 handles cold cache scenarios; rate of 2/sec for sustained use.
-	limiter := rate.NewLimiter(rate.Limit(2), 50)
+	// Linear allows 1,500 requests/hour (0.417/sec sustained).
+	// Burst of 10 absorbs brief spikes; sustained rate stays within budget.
+	limiter := rate.NewLimiter(rate.Limit(1500.0/3600.0), 10)
 
 	return &Client{
 		apiKey:     apiKey,
@@ -196,8 +201,19 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	return nil
 }
 
-// checkRateLimitHeaders logs warnings when Linear's rate limit headers indicate low remaining budget.
+// checkRateLimitHeaders logs warnings when Linear's rate limit headers indicate low remaining budget
+// and records the reset time for adaptive backoff.
 func (c *Client) checkRateLimitHeaders(resp *http.Response, opName string) {
+	// M-3: Parse X-RateLimit-Reset for adaptive backoff in sync worker
+	if resetStr := resp.Header.Get("X-RateLimit-Reset"); resetStr != "" {
+		if resetUnix, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
+			resetTime := time.Unix(resetUnix, 0)
+			c.rateLimitMu.Lock()
+			c.rateLimitResetAt = resetTime
+			c.rateLimitMu.Unlock()
+		}
+	}
+
 	remaining := resp.Header.Get("X-RateLimit-Requests-Remaining")
 	limit := resp.Header.Get("X-RateLimit-Requests-Limit")
 
@@ -221,6 +237,14 @@ func (c *Client) checkRateLimitHeaders(resp *http.Response, opName string) {
 	if lim > 0 && float64(rem)/float64(lim) < 0.20 {
 		log.Printf("[ratelimit] Linear API: %d/%d requests remaining this hour (after %s)", rem, lim, opName)
 	}
+}
+
+// RateLimitResetAt returns the server-reported time when the rate limit window resets.
+// Returns zero time if no X-RateLimit-Reset header has been seen yet.
+func (c *Client) RateLimitResetAt() time.Time {
+	c.rateLimitMu.RLock()
+	defer c.rateLimitMu.RUnlock()
+	return c.rateLimitResetAt
 }
 
 // Stats returns the client's API stats tracker for external inspection.

@@ -291,5 +291,40 @@ The .error file is cleared on successful writes.
 - Timestamps: mtime=updatedAt, ctime=createdAt from Linear
 - Project slugs: Use slug (e.g., "api-gateway"), not name, in initiative.md
 </important_notes>
-`, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint)
+
+<claude_code_instructions>
+Instructions for Claude Code agents working with this filesystem:
+
+READING FILES:
+- Use the Read tool (not Bash cat) to read issue.md, project.md, etc.
+- When reading multiple files, make all Read calls in parallel in a single message
+- Never use shell for loops to read multiple files; use parallel Read tool calls instead
+- Example: to read ENG-100, ENG-101, ENG-102 — issue three Read tool calls simultaneously
+
+LISTING DIRECTORIES:
+- Use Bash(ls %s/teams/ENG/issues/) to list issues
+- Use Bash(ls -lt %s/my/active/) to list by recency (mtime = updatedAt)
+- ls output shows symlinks; follow them with Read to get content
+
+EDITING FILES:
+- Use the Edit tool to modify issue.md, project.md, initiative.md frontmatter
+- The Edit tool works correctly because it reads then writes (unlike raw editors on _create)
+- After editing, changes sync to Linear immediately
+
+CREATING ITEMS:
+- Use Bash(echo "text" > path/_create) — never use the Write tool on _create files
+- _create is write-only; reading it always returns empty, so Write/Edit tools fail
+- For docs with a title: Bash(echo "content" > path/docs/"Title.md")
+
+WRITING ISSUE CONTENT:
+- To update an issue: use Edit tool on the issue.md file
+- Only edit fields you intend to change; leave others untouched
+- Check <mount>/teams/ENG/states.md and labels.md for valid values before editing
+
+BASH PATTERNS TO AVOID:
+- Avoid: for x in list; do cat $x; done  → instead: parallel Read tool calls
+- Avoid: cat file | grep pattern          → instead: use Grep tool
+- Avoid: find . -name "*.md"             → instead: use Glob tool
+</claude_code_instructions>
+`, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint, mountPoint)
 }

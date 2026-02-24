@@ -407,3 +407,24 @@ CREATE TABLE IF NOT EXISTS issue_history_cache (
     synced_at DATETIME NOT NULL,
     data JSON NOT NULL  -- JSON array of IssueHistoryEntry
 );
+
+-- =============================================================================
+-- Viewer Cache (which user is the current authenticated viewer)
+-- Singleton table: exactly one row, enforced by CHECK (singleton = 1).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS viewer_cache (
+    singleton INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),
+    user_id TEXT NOT NULL,
+    synced_at DATETIME NOT NULL
+);
+
+-- =============================================================================
+-- Pending Detail Sync Queue
+-- Issues that need comments/docs/attachments synced but were skipped due to
+-- rate limiting.  Drained at the start of each sync cycle if not rate-limited.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS pending_detail_sync (
+    issue_id   TEXT PRIMARY KEY,
+    identifier TEXT NOT NULL,
+    queued_at  DATETIME NOT NULL
+);

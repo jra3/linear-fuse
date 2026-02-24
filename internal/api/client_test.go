@@ -3,7 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jra3/linear-fuse/internal/testutil"
 )
@@ -1235,5 +1240,58 @@ func TestGetTeamMembers(t *testing.T) {
 
 	if members[0].Email != "test@example.com" {
 		t.Errorf("expected email 'test@example.com', got %q", members[0].Email)
+	}
+}
+
+// TestRateLimitResetHeaderParsed verifies M-3: the X-RateLimit-Reset response header
+// is parsed and stored so the sync worker can use it for adaptive backoff.
+func TestRateLimitResetHeaderParsed(t *testing.T) {
+	t.Parallel()
+
+	resetUnix := time.Now().Add(60 * time.Second).Unix()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetUnix, 10))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	// Before any request, RateLimitResetAt should be zero
+	if !client.RateLimitResetAt().IsZero() {
+		t.Error("expected zero RateLimitResetAt before any request")
+	}
+
+	_, _ = client.GetTeams(context.Background())
+
+	got := client.RateLimitResetAt()
+	expected := time.Unix(resetUnix, 0)
+	if !got.Equal(expected) {
+		t.Errorf("RateLimitResetAt() = %v, want %v", got, expected)
+	}
+}
+
+// TestRateLimitResetHeaderMissing verifies M-3: when no X-RateLimit-Reset header is sent,
+// RateLimitResetAt() remains zero.
+func TestRateLimitResetHeaderMissing(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No X-RateLimit-Reset header
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	_, _ = client.GetTeams(context.Background())
+
+	if !client.RateLimitResetAt().IsZero() {
+		t.Errorf("RateLimitResetAt() = %v, want zero when header is absent", client.RateLimitResetAt())
 	}
 }

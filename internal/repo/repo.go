@@ -5,6 +5,7 @@ package repo
 
 import (
 	"context"
+	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
@@ -168,11 +169,19 @@ type Repository interface {
 	DeleteProjectMilestone(ctx context.Context, milestoneID string) error
 
 	// ==========================================================================
+	// Sub-resource refresh
+	// ==========================================================================
+
+	// MaybeRefreshIssueDetails triggers a background refresh of comments,
+	// documents, and attachments if any are stale. Call from FS layer when
+	// the user browses into comments/, docs/, or attachments/ directories.
+	MaybeRefreshIssueDetails(issueID string)
+
+	// ==========================================================================
 	// Comments (on-demand fetch)
 	// ==========================================================================
 
 	// GetIssueComments returns comments for an issue
-	// May trigger background refresh if data is stale
 	GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error)
 
 	// GetCommentByID returns a comment by ID
@@ -254,4 +263,12 @@ type Repository interface {
 
 	// GetIssueRelationByID returns a relation by ID
 	GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error)
+
+	// ==========================================================================
+	// Sync Operations
+	// ==========================================================================
+
+	// TouchIssueSubResources bumps the synced_at timestamp for all sub-resources
+	// (comments, documents, attachments, history) to prevent staleness-based refreshes
+	TouchIssueSubResources(ctx context.Context, issueID string, syncedAt time.Time)
 }

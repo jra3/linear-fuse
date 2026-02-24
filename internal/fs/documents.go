@@ -55,6 +55,8 @@ func (n *DocsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrO
 
 func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 	if n.issueID != "" {
+		// Trigger background refresh of sub-resources if stale
+		n.lfs.MaybeRefreshIssueDetails(n.issueID)
 		return n.lfs.GetIssueDocuments(ctx, n.issueID)
 	}
 	if n.teamID != "" {

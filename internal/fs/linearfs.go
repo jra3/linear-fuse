@@ -140,14 +140,53 @@ func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error
 	// Create repository with API client for on-demand fetching
 	lfs.repo = repo.NewSQLiteRepository(store, lfs.client)
 
-	// Fetch and set the current user (for /my views)
-	viewer, err := lfs.client.GetViewer(ctx)
-	if err != nil {
-		log.Printf("[sqlite] Warning: failed to get viewer: %v", err)
-	} else if viewer != nil {
-		lfs.repo.SetCurrentUser(viewer)
-		log.Printf("[sqlite] Current user: %s (%s)", viewer.Email, viewer.ID)
+	// H-1: Load viewer from SQLite cache immediately for /my views (no API wait)
+	if cachedViewerID, err := store.Queries().GetViewerUserID(ctx); err == nil {
+		if dbUser, err := store.Queries().GetUser(ctx, cachedViewerID); err == nil {
+			apiUser := db.DBUserToAPIUser(dbUser)
+			lfs.repo.SetCurrentUser(&apiUser)
+			log.Printf("[sqlite] Loaded cached viewer: %s (%s)", apiUser.Email, apiUser.ID)
+		}
 	}
+
+	// Refresh viewer from API in background to keep cache fresh
+	go func() {
+		delays := []time.Duration{0, 5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second}
+		for i := 0; ; i++ {
+			delay := delays[min(i, len(delays)-1)]
+			if delay > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
+			}
+			v, err := lfs.client.GetViewer(ctx)
+			if err != nil {
+				if i == 0 {
+					log.Printf("[sqlite] Warning: failed to get viewer: %v", err)
+				} else {
+					log.Printf("[sqlite] Warning: failed to get viewer (retry %d): %v", i, err)
+				}
+				if i == 0 {
+					continue // retry immediately after first failure
+				}
+				continue
+			}
+			if v != nil {
+				lfs.repo.SetCurrentUser(v)
+				// Persist viewer ID so next startup is instant
+				if err := store.Queries().SetViewerUserID(ctx, db.SetViewerUserIDParams{
+					UserID:   v.ID,
+					SyncedAt: db.Now(),
+				}); err != nil {
+					log.Printf("[sqlite] Warning: failed to persist viewer: %v", err)
+				}
+				log.Printf("[sqlite] Current user: %s (%s)", v.Email, v.ID)
+			}
+			return
+		}
+	}()
 
 	// Create and start sync worker
 	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())
@@ -538,6 +577,10 @@ func (lfs *LinearFS) GetIssueChildren(ctx context.Context, parentID string) ([]a
 // InvalidateUserIssues is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateUserIssues(userID string) {
 	// No-op: SQLite is source of truth
+}
+
+func (lfs *LinearFS) MaybeRefreshIssueDetails(issueID string) {
+	lfs.repo.MaybeRefreshIssueDetails(issueID)
 }
 
 func (lfs *LinearFS) GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error) {

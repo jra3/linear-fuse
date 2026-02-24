@@ -173,6 +173,18 @@ ON CONFLICT(id) DO UPDATE SET
 -- name: GetIssueUpdatedAt :one
 SELECT updated_at FROM issues WHERE id = ?;
 
+-- name: TouchIssueComments :exec
+UPDATE comments SET synced_at = ? WHERE issue_id = ?;
+
+-- name: TouchIssueDocuments :exec
+UPDATE documents SET synced_at = ? WHERE issue_id = ?;
+
+-- name: TouchIssueAttachments :exec
+UPDATE attachments SET synced_at = ? WHERE issue_id = ?;
+
+-- name: TouchIssueHistoryCache :exec
+UPDATE issue_history_cache SET synced_at = ? WHERE issue_id = ?;
+
 -- name: ListTeamIssueIDs :many
 SELECT id, updated_at FROM issues WHERE team_id = ? ORDER BY updated_at DESC;
 
@@ -813,3 +825,35 @@ SELECT issue_id, synced_at, data FROM issue_history_cache WHERE issue_id = ?;
 
 -- name: GetIssueHistorySyncedAt :one
 SELECT synced_at FROM issue_history_cache WHERE issue_id = ?;
+
+-- =============================================================================
+-- Viewer Cache
+-- =============================================================================
+
+-- name: GetViewerUserID :one
+SELECT user_id FROM viewer_cache LIMIT 1;
+
+-- name: SetViewerUserID :exec
+INSERT INTO viewer_cache (singleton, user_id, synced_at)
+VALUES (1, ?, ?)
+ON CONFLICT(singleton) DO UPDATE SET
+    user_id = excluded.user_id,
+    synced_at = excluded.synced_at;
+
+-- =============================================================================
+-- Pending Detail Sync Queue
+-- =============================================================================
+
+-- name: UpsertPendingDetailSync :exec
+INSERT INTO pending_detail_sync (issue_id, identifier, queued_at)
+VALUES (?, ?, ?)
+ON CONFLICT(issue_id) DO UPDATE SET queued_at = excluded.queued_at;
+
+-- name: DeletePendingDetailSync :exec
+DELETE FROM pending_detail_sync WHERE issue_id = ?;
+
+-- name: ListPendingDetailSync :many
+SELECT issue_id, identifier FROM pending_detail_sync ORDER BY queued_at;
+
+-- name: ClearPendingDetailSync :exec
+DELETE FROM pending_detail_sync;

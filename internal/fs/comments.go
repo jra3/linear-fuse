@@ -54,6 +54,9 @@ func (n *CommentsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 }
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	// Trigger background refresh of sub-resources if stale
+	n.lfs.MaybeRefreshIssueDetails(n.issueID)
+
 	// Fetch comments (uses cache if available)
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
 	if err != nil {

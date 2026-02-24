@@ -14,9 +14,9 @@ import (
 )
 
 // Default staleness threshold for on-demand data (comments, documents, updates).
-// The sync worker refreshes changed issues every 2 minutes, so 30 minutes is
-// generous — only issues unchanged for >30 min trigger on-demand API calls.
-const defaultStalenessThreshold = 30 * time.Minute
+// Set to 5 minutes (2.5× the 2-minute sync interval) so genuinely missed syncs
+// get caught by user access without causing redundant refreshes on every read.
+const defaultStalenessThreshold = 5 * time.Minute
 
 // SQLiteRepository implements Repository using SQLite as the data store.
 // It reads from SQLite and optionally falls back to the API client
@@ -620,29 +620,46 @@ func (r *SQLiteRepository) GetIssueComments(ctx context.Context, issueID string)
 		return nil, fmt.Errorf("list issue comments: %w", err)
 	}
 
-	// Check staleness and trigger combined background refresh if needed
-	r.maybeRefreshIssueDetails(issueID)
-
 	return db.DBCommentsToAPIComments(comments)
 }
 
-// maybeRefreshIssueDetails triggers a combined refresh of comments, documents,
+// MaybeRefreshIssueDetails triggers a combined refresh of comments, documents,
 // and attachments for an issue if any of them are stale. Uses a single API call
 // via GetIssueDetails instead of three separate calls.
-func (r *SQLiteRepository) maybeRefreshIssueDetails(issueID string) {
+//
+// This is NOT called automatically by Get* methods — callers in the FS layer
+// should invoke it explicitly when the user browses into comments/, docs/, or
+// attachments/ directories. This avoids triggering API calls when reading
+// issue.md (which calls GetIssueAttachments for the links: frontmatter field).
+func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 	if r.client == nil {
 		return
 	}
 
-	// Check staleness of any sub-resource — if any is stale, refresh all
 	bgCtx := context.Background()
-	commentsSyncedAt, err1 := r.store.Queries().GetIssueCommentsSyncedAt(bgCtx, issueID)
-	docsSyncedAt, err2 := r.store.Queries().GetIssueDocumentsSyncedAt(bgCtx, sql.NullString{String: issueID, Valid: true})
-	attachSyncedAt, err3 := r.store.Queries().GetIssueAttachmentsSyncedAt(bgCtx, issueID)
 
-	commentsStale := err1 != nil || commentsSyncedAt == nil || time.Since(parseTime(commentsSyncedAt)) > r.stalenessThreshold
-	docsStale := err2 != nil || docsSyncedAt == nil || time.Since(parseTime(docsSyncedAt)) > r.stalenessThreshold
-	attachStale := err3 != nil || attachSyncedAt == nil || time.Since(parseTime(attachSyncedAt)) > r.stalenessThreshold
+	// Get issue's updated_at
+	issueUpdatedAt, err := r.store.Queries().GetIssueUpdatedAt(bgCtx, issueID)
+	if err != nil {
+		// Issue not in DB yet — let sync worker handle it
+		return
+	}
+
+	// Get sub-resource synced_at timestamps (MAX across rows, or nil if none)
+	commentsSyncedAt, _ := r.store.Queries().GetIssueCommentsSyncedAt(bgCtx, issueID)
+	docsSyncedAt, _ := r.store.Queries().GetIssueDocumentsSyncedAt(bgCtx, sql.NullString{String: issueID, Valid: true})
+	attachSyncedAt, _ := r.store.Queries().GetIssueAttachmentsSyncedAt(bgCtx, issueID)
+
+	// Parse timestamps (handle SQLite space-separated format + nil for empty tables)
+	issueTime := issueUpdatedAt
+	commentsTime := parseTime(commentsSyncedAt)
+	docsTime := parseTime(docsSyncedAt)
+	attachTime := parseTime(attachSyncedAt)
+
+	// Refresh if issue changed after last sync OR never synced (zero time)
+	commentsStale := commentsTime.IsZero() || issueTime.After(commentsTime)
+	docsStale := docsTime.IsZero() || issueTime.After(docsTime)
+	attachStale := attachTime.IsZero() || issueTime.After(attachTime)
 
 	if commentsStale || docsStale || attachStale {
 		r.triggerBackgroundRefresh("issue-details:"+issueID, func(ctx context.Context) error {
@@ -705,9 +722,10 @@ var sqliteTimeFormats = []string{
 
 // parseTime converts interface{} from SQLite to time.Time
 // Handles both RFC3339 (API) and SQLite's space-separated format
+// Returns zero time for nil (no rows exist)
 func parseTime(v interface{}) time.Time {
 	if v == nil {
-		return time.Time{}
+		return time.Time{} // Zero time for "never synced"
 	}
 	switch t := v.(type) {
 	case time.Time:
@@ -748,9 +766,6 @@ func (r *SQLiteRepository) GetIssueDocuments(ctx context.Context, issueID string
 	if err != nil {
 		return nil, fmt.Errorf("list issue documents: %w", err)
 	}
-
-	// Check staleness and trigger combined background refresh if needed
-	r.maybeRefreshIssueDetails(issueID)
 
 	return db.DBDocumentsToAPIDocuments(docs)
 }
@@ -1025,9 +1040,6 @@ func (r *SQLiteRepository) GetIssueAttachments(ctx context.Context, issueID stri
 		return nil, fmt.Errorf("list issue attachments: %w", err)
 	}
 
-	// Check staleness and trigger combined background refresh if needed
-	r.maybeRefreshIssueDetails(issueID)
-
 	return db.DBAttachmentsToAPIAttachments(attachments)
 }
 
@@ -1080,26 +1092,39 @@ func (r *SQLiteRepository) GetIssueHistory(ctx context.Context, issueID string) 
 		return entries, nil
 	}
 
-	// No cached data — fetch synchronously on first access
+	// No cached data — trigger a background fetch and return empty immediately.
+	// This avoids blocking the FUSE dispatch goroutine on a cold-cache API call.
+	// History will be available on next access once the background fetch completes.
 	if r.client == nil {
 		return nil, nil
 	}
-	entries, fetchErr := r.client.GetIssueHistory(ctx, issueID)
-	if fetchErr != nil {
-		return nil, fetchErr
-	}
-
-	// Cache the result
-	r.upsertHistoryCache(ctx, issueID, entries)
-	return entries, nil
+	r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
+		entries, err := r.client.GetIssueHistory(ctx, issueID)
+		if err != nil {
+			return err
+		}
+		r.upsertHistoryCache(ctx, issueID, entries)
+		return nil
+	})
+	return nil, nil
 }
 
-func (r *SQLiteRepository) maybeRefreshHistory(issueID string, syncedAt time.Time) {
+func (r *SQLiteRepository) maybeRefreshHistory(issueID string, cachedSyncedAt time.Time) {
 	if r.client == nil {
 		return
 	}
 
-	if time.Since(syncedAt) > r.stalenessThreshold {
+	bgCtx := context.Background()
+	issueUpdatedAt, err := r.store.Queries().GetIssueUpdatedAt(bgCtx, issueID)
+	if err != nil {
+		return
+	}
+
+	issueTime := issueUpdatedAt
+	historyTime := cachedSyncedAt
+
+	// Refresh if issue changed after history was cached OR never cached
+	if historyTime.IsZero() || issueTime.After(historyTime) {
 		r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
 			entries, err := r.client.GetIssueHistory(ctx, issueID)
 			if err != nil {
@@ -1124,6 +1149,17 @@ func (r *SQLiteRepository) upsertHistoryCache(ctx context.Context, issueID strin
 	}); err != nil {
 		log.Printf("[repo] upsert history cache %s failed: %v", issueID, err)
 	}
+}
+
+// TouchIssueSubResources bumps the synced_at timestamp for all sub-resources
+// (comments, documents, attachments, history) to the given time. Used by the
+// sync worker to prevent staleness-based refreshes for unchanged issues.
+func (r *SQLiteRepository) TouchIssueSubResources(ctx context.Context, issueID string, syncedAt time.Time) {
+	q := r.store.Queries()
+	q.TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: syncedAt, IssueID: issueID})
+	q.TouchIssueDocuments(ctx, db.TouchIssueDocumentsParams{SyncedAt: syncedAt, IssueID: sql.NullString{String: issueID, Valid: true}})
+	q.TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: syncedAt, IssueID: issueID})
+	q.TouchIssueHistoryCache(ctx, db.TouchIssueHistoryCacheParams{SyncedAt: syncedAt, IssueID: issueID})
 }
 
 // =============================================================================

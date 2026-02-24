@@ -44,9 +44,12 @@ type APIClient interface {
 
 	// Auth
 	AuthHeader() string
+
+	// M-3: server-reported rate limit window reset time (zero if not yet seen)
+	RateLimitResetAt() time.Time
 }
 
-const detailsBatchSize = 20 // Number of issues to fetch details for in one API call (Linear has 10k complexity limit)
+const detailsBatchSize = 15 // Number of issues to fetch details for in one API call (Linear has 10k complexity limit; 20 was 80-90% of budget)
 
 // SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
 var sqliteTimeFormats = []string{
@@ -203,6 +206,9 @@ func (w *Worker) run(ctx context.Context) {
 }
 
 func (w *Worker) syncAllTeams(ctx context.Context) error {
+	// H-5: Drain any issues that were queued during a previous rate-limit backoff
+	w.drainPendingDetailSync(ctx)
+
 	// First, sync workspace-level entities
 	if err := w.syncWorkspace(ctx); err != nil {
 		log.Printf("[sync] workspace sync failed: %v", err)
@@ -327,6 +333,12 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 		for _, issue := range issues {
 			// Check if this issue is unchanged (updatedAt <= lastSyncedUpdatedAt)
 			if !lastSyncedUpdatedAt.IsZero() && !issue.UpdatedAt.After(lastSyncedUpdatedAt) {
+				// Bump sub-resource synced_at to avoid triggering background refresh
+				now := db.Now()
+				w.store.Queries().TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: now, IssueID: issue.ID})
+				w.store.Queries().TouchIssueDocuments(ctx, db.TouchIssueDocumentsParams{SyncedAt: now, IssueID: sql.NullString{String: issue.ID, Valid: true}})
+				w.store.Queries().TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: now, IssueID: issue.ID})
+				w.store.Queries().TouchIssueHistoryCache(ctx, db.TouchIssueHistoryCacheParams{SyncedAt: now, IssueID: issue.ID})
 				unchangedCount++
 				continue
 			}
@@ -599,20 +611,28 @@ func (w *Worker) isRateLimited() bool {
 	return time.Now().Before(w.rateLimitExpiry)
 }
 
-// setRateLimited marks that we've hit a rate limit
+// setRateLimited marks that we've hit a rate limit.
+// M-3: Uses the server-provided X-RateLimit-Reset time when available for accurate backoff;
+// falls back to a 15-minute fixed backoff.
 func (w *Worker) setRateLimited() {
 	w.rateLimitMu.Lock()
 	defer w.rateLimitMu.Unlock()
 	w.rateLimitedAt = time.Now()
-	// Linear rate limit is per hour, wait 15 minutes before retrying
-	w.rateLimitExpiry = w.rateLimitedAt.Add(15 * time.Minute)
+
+	// Use server-provided reset time if it's in the future (M-3)
+	backoff := 15 * time.Minute
+	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(time.Now()) {
+		backoff = time.Until(resetAt) + 5*time.Second // 5s buffer past the reset
+	}
+	w.rateLimitExpiry = w.rateLimitedAt.Add(backoff)
+
 	if w.budget != nil {
 		count, pct := w.budget.BudgetSnapshot()
-		log.Printf("[sync] rate limited, pausing issue details sync until %s (budget: %d/1500 used this hour, %.0f%%)",
-			w.rateLimitExpiry.Format(time.RFC3339), count, pct)
+		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s, budget: %d/1500 used this hour, %.0f%%)",
+			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second), count, pct)
 	} else {
-		log.Printf("[sync] rate limited, pausing issue details sync until %s",
-			w.rateLimitExpiry.Format(time.RFC3339))
+		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s)",
+			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second))
 	}
 }
 
@@ -625,8 +645,16 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 	ID         string
 	Identifier string
 }) {
-	// Skip if rate limited
+	// H-5: If rate limited, persist issues to pending_detail_sync so they survive the backoff
 	if w.isRateLimited() {
+		now := db.Now()
+		for _, issue := range issues {
+			_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+				IssueID:    issue.ID,
+				Identifier: issue.Identifier,
+				QueuedAt:   now,
+			})
+		}
 		return
 	}
 
@@ -643,6 +671,15 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 	if err != nil {
 		if isRateLimitError(err) {
 			w.setRateLimited()
+			// H-5: Persist the issues we couldn't sync so they survive the backoff
+			now := db.Now()
+			for _, issue := range issues {
+				_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+					IssueID:    issue.ID,
+					Identifier: issue.Identifier,
+					QueuedAt:   now,
+				})
+			}
 			return
 		}
 		log.Printf("[sync] batch fetch details failed: %v", err)
@@ -692,7 +729,72 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		}
 	}
 
+	// Touch synced_at for all fetched issues so the FS layer doesn't immediately
+	// re-trigger on-demand fetches for the data we just stored.
+	now := db.Now()
+	for _, issue := range issues {
+		if err := w.store.Queries().TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
+			log.Printf("[sync] touch comments %s: %v", issue.Identifier, err)
+		}
+		if err := w.store.Queries().TouchIssueDocuments(ctx, db.TouchIssueDocumentsParams{SyncedAt: now, IssueID: sql.NullString{String: issue.ID, Valid: true}}); err != nil {
+			log.Printf("[sync] touch documents %s: %v", issue.Identifier, err)
+		}
+		if err := w.store.Queries().TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
+			log.Printf("[sync] touch attachments %s: %v", issue.Identifier, err)
+		}
+		// H-5: Remove successfully synced issues from pending queue
+		_ = w.store.Queries().DeletePendingDetailSync(ctx, issue.ID)
+	}
 	log.Printf("[sync] batch synced details for %d issues", len(detailsMap))
+}
+
+// drainPendingDetailSync processes issues that were queued for detail sync but skipped
+// due to rate limiting.  Called at the start of each sync cycle when not rate-limited.
+func (w *Worker) drainPendingDetailSync(ctx context.Context) {
+	if w.isRateLimited() {
+		return
+	}
+
+	pending, err := w.store.Queries().ListPendingDetailSync(ctx)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+
+	log.Printf("[sync] draining %d pending detail syncs", len(pending))
+
+	// Convert to the same struct used by syncIssueDetailsBatch
+	type issueRef struct {
+		ID         string
+		Identifier string
+	}
+	issues := make([]issueRef, len(pending))
+	for i, row := range pending {
+		issues[i] = issueRef{ID: row.IssueID, Identifier: row.Identifier}
+	}
+
+	// Process in batches
+	for len(issues) > 0 {
+		if w.isRateLimited() {
+			break
+		}
+		batch := issues
+		if len(batch) > detailsBatchSize {
+			batch = issues[:detailsBatchSize]
+		}
+		issues = issues[len(batch):]
+
+		batchArg := make([]struct {
+			ID         string
+			Identifier string
+		}, len(batch))
+		for i, ref := range batch {
+			batchArg[i] = struct {
+				ID         string
+				Identifier string
+			}{ID: ref.ID, Identifier: ref.Identifier}
+		}
+		w.syncIssueDetailsBatch(ctx, batchArg)
+	}
 }
 
 

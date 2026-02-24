@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -14,19 +15,20 @@ import (
 
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
-	teams           []api.Team
-	issuesByTeam    map[string][]api.Issue   // teamID -> all issues (will be paginated)
-	statesByTeam    map[string][]api.State   // teamID -> states
-	labelsByTeam    map[string][]api.Label   // teamID -> labels
-	cyclesByTeam    map[string][]api.Cycle   // teamID -> cycles
-	projectsByTeam  map[string][]api.Project // teamID -> projects
-	membersByTeam   map[string][]api.User    // teamID -> members
-	users           []api.User
-	initiatives     []api.Initiative
-	pageSize        int
-	getTeamsCalls   int32
-	getIssuesCalls  int32
-	simulateError   error
+	teams              []api.Team
+	issuesByTeam       map[string][]api.Issue   // teamID -> all issues (will be paginated)
+	statesByTeam       map[string][]api.State   // teamID -> states
+	labelsByTeam       map[string][]api.Label   // teamID -> labels
+	cyclesByTeam       map[string][]api.Cycle   // teamID -> cycles
+	projectsByTeam     map[string][]api.Project // teamID -> projects
+	membersByTeam      map[string][]api.User    // teamID -> members
+	users              []api.User
+	initiatives        []api.Initiative
+	pageSize           int
+	getTeamsCalls      int32
+	getIssuesCalls     int32
+	simulateError      error
+	rateLimitResetAt   time.Time // M-3: configurable reset time for adaptive backoff tests
 }
 
 func newMockAPIClient() *mockAPIClient {
@@ -169,6 +171,10 @@ func (m *mockAPIClient) GetIssueAttachments(ctx context.Context, issueID string)
 
 func (m *mockAPIClient) AuthHeader() string {
 	return "Bearer test-token"
+}
+
+func (m *mockAPIClient) RateLimitResetAt() time.Time {
+	return m.rateLimitResetAt
 }
 
 func TestWorkerStartStop(t *testing.T) {
@@ -692,6 +698,172 @@ func openTestStore(t *testing.T) *db.Store {
 		t.Fatalf("Open failed: %v", err)
 	}
 	return store
+}
+
+// =============================================================================
+// Phase 3 & 4 Sync Fix Tests (H-1, H-5, M-3)
+// =============================================================================
+
+// TestViewerCacheRoundTrip verifies H-1: SetViewerUserID / GetViewerUserID round-trip
+// and that the singleton constraint holds (only one row ever exists).
+func TestViewerCacheRoundTrip(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// Before any write, GetViewerUserID should return sql.ErrNoRows
+	_, err := store.Queries().GetViewerUserID(ctx)
+	if err == nil {
+		t.Error("expected error when viewer cache is empty, got nil")
+	}
+
+	// Set a viewer
+	now := time.Now()
+	err = store.Queries().SetViewerUserID(ctx, db.SetViewerUserIDParams{
+		UserID:   "user-1",
+		SyncedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("SetViewerUserID failed: %v", err)
+	}
+
+	// Read it back
+	id, err := store.Queries().GetViewerUserID(ctx)
+	if err != nil {
+		t.Fatalf("GetViewerUserID failed: %v", err)
+	}
+	if id != "user-1" {
+		t.Errorf("GetViewerUserID = %q, want %q", id, "user-1")
+	}
+
+	// Upsert a different user — singleton constraint should replace the row
+	err = store.Queries().SetViewerUserID(ctx, db.SetViewerUserIDParams{
+		UserID:   "user-2",
+		SyncedAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("SetViewerUserID (overwrite) failed: %v", err)
+	}
+
+	// Should now return the new value
+	id, err = store.Queries().GetViewerUserID(ctx)
+	if err != nil {
+		t.Fatalf("GetViewerUserID (after overwrite) failed: %v", err)
+	}
+	if id != "user-2" {
+		t.Errorf("GetViewerUserID after overwrite = %q, want %q", id, "user-2")
+	}
+}
+
+// TestPendingDetailSyncQueueAndDrain verifies H-5: issues skipped due to rate limiting
+// are persisted in pending_detail_sync and drained on the next sync cycle.
+func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	// Return a rate-limit error so syncIssueDetailsBatch persists to the pending queue
+	mock.simulateError = fmt.Errorf("rate limit exceeded")
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	issues := []struct {
+		ID         string
+		Identifier string
+	}{
+		{ID: "issue-1", Identifier: "TST-1"},
+		{ID: "issue-2", Identifier: "TST-2"},
+	}
+
+	// Call syncIssueDetailsBatch directly; the rate-limit error should queue the issues
+	worker.syncIssueDetailsBatch(ctx, issues)
+
+	// Verify both issues landed in the pending queue
+	pending, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync failed: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("expected 2 pending issues, got %d", len(pending))
+	}
+
+	// Clear the simulated error and reset the rate-limit expiry so the drain runs
+	mock.simulateError = nil
+	worker.rateLimitMu.Lock()
+	worker.rateLimitExpiry = time.Time{}
+	worker.rateLimitMu.Unlock()
+
+	// Drain the pending queue
+	worker.drainPendingDetailSync(ctx)
+
+	// Pending queue should now be empty (DeletePendingDetailSync called per issue)
+	pending, err = store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync (after drain) failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending issues after drain, got %d", len(pending))
+	}
+}
+
+// TestSetRateLimitedAdaptiveBackoff verifies M-3: when the API client reports a non-zero
+// RateLimitResetAt(), setRateLimited() uses that time (+ 5s buffer) instead of the 15-min default.
+func TestSetRateLimitedAdaptiveBackoff(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	serverResetAt := time.Now().Add(30 * time.Minute)
+	mock.rateLimitResetAt = serverResetAt
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	worker.setRateLimited()
+
+	expected := serverResetAt.Add(5 * time.Second)
+	got := worker.rateLimitExpiry
+
+	diff := got.Sub(expected)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 2*time.Second {
+		t.Errorf("rateLimitExpiry = %v, want ~%v (diff %v)", got, expected, diff)
+	}
+}
+
+// TestSetRateLimitedFallback verifies M-3: when no server reset time is available,
+// setRateLimited() falls back to the 15-minute fixed backoff.
+func TestSetRateLimitedFallback(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	// rateLimitResetAt is zero (the default)
+
+	cfg := Config{Interval: time.Hour}
+	worker := NewWorker(mock, store, cfg)
+
+	before := time.Now()
+	worker.setRateLimited()
+
+	expected := before.Add(15 * time.Minute)
+	got := worker.rateLimitExpiry
+
+	diff := got.Sub(expected)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 2*time.Second {
+		t.Errorf("rateLimitExpiry = %v, want ~%v (diff %v)", got, expected, diff)
+	}
 }
 
 // =============================================================================

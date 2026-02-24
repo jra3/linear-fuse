@@ -1438,9 +1438,9 @@ func TestSQLiteRepository_SetStalenessThreshold(t *testing.T) {
 	repo := NewSQLiteRepository(store, nil)
 	defer repo.Close()
 
-	// Default threshold should be 30 minutes
-	if repo.stalenessThreshold != 30*time.Minute {
-		t.Errorf("Expected default threshold of 30m, got %v", repo.stalenessThreshold)
+	// Default threshold should be 5 minutes (2.5× the 2-minute sync interval)
+	if repo.stalenessThreshold != 5*time.Minute {
+		t.Errorf("Expected default threshold of 5m, got %v", repo.stalenessThreshold)
 	}
 
 	// Set custom threshold
@@ -1840,8 +1840,8 @@ func TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient(t *testing.T) {
 	defer repo.Close()
 
 	// Should be a no-op - no panic
-	repo.maybeRefreshIssueDetails("issue-1")
-	repo.maybeRefreshIssueDetails("issue-2")
+	repo.MaybeRefreshIssueDetails("issue-1")
+	repo.MaybeRefreshIssueDetails("issue-2")
 }
 
 func TestSQLiteRepository_MaybeRefreshProjectDocuments_NoClient(t *testing.T) {

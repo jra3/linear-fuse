@@ -192,6 +192,12 @@ type Label struct {
 	Data        json.RawMessage `json:"data"`
 }
 
+type PendingDetailSync struct {
+	IssueID    string    `json:"issue_id"`
+	Identifier string    `json:"identifier"`
+	QueuedAt   time.Time `json:"queued_at"`
+}
+
 type Project struct {
 	ID          string          `json:"id"`
 	SlugID      string          `json:"slug_id"`
@@ -294,4 +300,10 @@ type User struct {
 	UpdatedAt   sql.NullTime    `json:"updated_at"`
 	SyncedAt    time.Time       `json:"synced_at"`
 	Data        json.RawMessage `json:"data"`
+}
+
+type ViewerCache struct {
+	Singleton int64     `json:"singleton"`
+	UserID    string    `json:"user_id"`
+	SyncedAt  time.Time `json:"synced_at"`
 }

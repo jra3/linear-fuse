@@ -16,6 +16,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
@@ -560,6 +561,10 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		newSet[name] = true
 	}
 
+	// Track resolved initiative IDs for SQLite sync
+	addedInitiativeIDs := make(map[string]string)   // name -> ID
+	removedInitiativeIDs := make(map[string]string) // name -> ID
+
 	// Find initiatives to add (in new but not in current)
 	for _, name := range newInitiatives {
 		if !currentSet[name] {
@@ -572,6 +577,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				log.Printf("Failed to add project to initiative '%s': %v", name, err)
 				return syscall.EIO
 			}
+			addedInitiativeIDs[name] = initiativeID
 			if p.lfs.debug {
 				log.Printf("Added project %s to initiative %s", p.project.Name, name)
 			}
@@ -590,8 +596,41 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				log.Printf("Failed to remove project from initiative '%s': %v", name, err)
 				return syscall.EIO
 			}
+			removedInitiativeIDs[name] = initiativeID
 			if p.lfs.debug {
 				log.Printf("Removed project %s from initiative %s", p.project.Name, name)
+			}
+		}
+	}
+
+	// Fetch fresh project from API and upsert to SQLite for immediate visibility
+	freshProject, err := p.lfs.client.GetProject(ctx, p.project.ID)
+	if err != nil {
+		log.Printf("Warning: failed to fetch fresh project after update: %v", err)
+	} else {
+		p.project = *freshProject
+		if err := p.lfs.UpsertProject(ctx, p.team.ID, *freshProject); err != nil {
+			log.Printf("Warning: failed to upsert project to SQLite: %v", err)
+		}
+	}
+
+	// Sync initiative-project associations to SQLite
+	if p.lfs.store != nil {
+		for _, initID := range addedInitiativeIDs {
+			if err := p.lfs.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+				InitiativeID: initID,
+				ProjectID:    p.project.ID,
+				SyncedAt:     db.Now(),
+			}); err != nil {
+				log.Printf("Warning: failed to upsert initiative-project to SQLite: %v", err)
+			}
+		}
+		for _, initID := range removedInitiativeIDs {
+			if err := p.lfs.store.Queries().DeleteInitiativeProject(ctx, db.DeleteInitiativeProjectParams{
+				InitiativeID: initID,
+				ProjectID:    p.project.ID,
+			}); err != nil {
+				log.Printf("Warning: failed to delete initiative-project from SQLite: %v", err)
 			}
 		}
 	}

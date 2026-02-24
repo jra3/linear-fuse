@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
@@ -445,6 +446,12 @@ func (m *MockRepository) DeleteProjectMilestone(ctx context.Context, milestoneID
 }
 
 // =============================================================================
+// Sub-resource refresh
+// =============================================================================
+
+func (m *MockRepository) MaybeRefreshIssueDetails(issueID string) {}
+
+// =============================================================================
 // Comments
 // =============================================================================
 
@@ -577,6 +584,10 @@ func (m *MockRepository) GetIssueInverseRelations(ctx context.Context, issueID s
 
 func (m *MockRepository) GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error) {
 	return nil, nil // Mock returns nil
+}
+
+func (m *MockRepository) TouchIssueSubResources(ctx context.Context, issueID string, syncedAt time.Time) {
+	// No-op for mock
 }
 
 // Ensure MockRepository implements Repository

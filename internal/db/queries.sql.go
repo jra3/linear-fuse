@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+const clearPendingDetailSync = `-- name: ClearPendingDetailSync :exec
+DELETE FROM pending_detail_sync
+`
+
+func (q *Queries) ClearPendingDetailSync(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearPendingDetailSync)
+	return err
+}
+
 const deleteAttachment = `-- name: DeleteAttachment :exec
 DELETE FROM attachments WHERE id = ?
 `
@@ -194,6 +203,15 @@ DELETE FROM labels WHERE id = ?
 
 func (q *Queries) DeleteLabel(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteLabel, id)
+	return err
+}
+
+const deletePendingDetailSync = `-- name: DeletePendingDetailSync :exec
+DELETE FROM pending_detail_sync WHERE issue_id = ?
+`
+
+func (q *Queries) DeletePendingDetailSync(ctx context.Context, issueID string) error {
+	_, err := q.db.ExecContext(ctx, deletePendingDetailSync, issueID)
 	return err
 }
 
@@ -1315,6 +1333,21 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 	return i, err
 }
 
+const getViewerUserID = `-- name: GetViewerUserID :one
+
+SELECT user_id FROM viewer_cache LIMIT 1
+`
+
+// =============================================================================
+// Viewer Cache
+// =============================================================================
+func (q *Queries) GetViewerUserID(ctx context.Context) (string, error) {
+	row := q.db.QueryRowContext(ctx, getViewerUserID)
+	var user_id string
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const listAllIdentifiers = `-- name: ListAllIdentifiers :many
 
 SELECT identifier, team_id FROM issues ORDER BY identifier
@@ -1949,6 +1982,38 @@ func (q *Queries) ListIssueRelationsByType(ctx context.Context, arg ListIssueRel
 			&i.UpdatedAt,
 			&i.SyncedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingDetailSync = `-- name: ListPendingDetailSync :many
+SELECT issue_id, identifier FROM pending_detail_sync ORDER BY queued_at
+`
+
+type ListPendingDetailSyncRow struct {
+	IssueID    string `json:"issue_id"`
+	Identifier string `json:"identifier"`
+}
+
+func (q *Queries) ListPendingDetailSync(ctx context.Context) ([]ListPendingDetailSyncRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingDetailSync)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingDetailSyncRow{}
+	for rows.Next() {
+		var i ListPendingDetailSyncRow
+		if err := rows.Scan(&i.IssueID, &i.Identifier); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3832,6 +3897,80 @@ func (q *Queries) SetIssueParent(ctx context.Context, arg SetIssueParentParams) 
 	return err
 }
 
+const setViewerUserID = `-- name: SetViewerUserID :exec
+INSERT INTO viewer_cache (singleton, user_id, synced_at)
+VALUES (1, ?, ?)
+ON CONFLICT(singleton) DO UPDATE SET
+    user_id = excluded.user_id,
+    synced_at = excluded.synced_at
+`
+
+type SetViewerUserIDParams struct {
+	UserID   string    `json:"user_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+func (q *Queries) SetViewerUserID(ctx context.Context, arg SetViewerUserIDParams) error {
+	_, err := q.db.ExecContext(ctx, setViewerUserID, arg.UserID, arg.SyncedAt)
+	return err
+}
+
+const touchIssueAttachments = `-- name: TouchIssueAttachments :exec
+UPDATE attachments SET synced_at = ? WHERE issue_id = ?
+`
+
+type TouchIssueAttachmentsParams struct {
+	SyncedAt time.Time `json:"synced_at"`
+	IssueID  string    `json:"issue_id"`
+}
+
+func (q *Queries) TouchIssueAttachments(ctx context.Context, arg TouchIssueAttachmentsParams) error {
+	_, err := q.db.ExecContext(ctx, touchIssueAttachments, arg.SyncedAt, arg.IssueID)
+	return err
+}
+
+const touchIssueComments = `-- name: TouchIssueComments :exec
+UPDATE comments SET synced_at = ? WHERE issue_id = ?
+`
+
+type TouchIssueCommentsParams struct {
+	SyncedAt time.Time `json:"synced_at"`
+	IssueID  string    `json:"issue_id"`
+}
+
+func (q *Queries) TouchIssueComments(ctx context.Context, arg TouchIssueCommentsParams) error {
+	_, err := q.db.ExecContext(ctx, touchIssueComments, arg.SyncedAt, arg.IssueID)
+	return err
+}
+
+const touchIssueDocuments = `-- name: TouchIssueDocuments :exec
+UPDATE documents SET synced_at = ? WHERE issue_id = ?
+`
+
+type TouchIssueDocumentsParams struct {
+	SyncedAt time.Time      `json:"synced_at"`
+	IssueID  sql.NullString `json:"issue_id"`
+}
+
+func (q *Queries) TouchIssueDocuments(ctx context.Context, arg TouchIssueDocumentsParams) error {
+	_, err := q.db.ExecContext(ctx, touchIssueDocuments, arg.SyncedAt, arg.IssueID)
+	return err
+}
+
+const touchIssueHistoryCache = `-- name: TouchIssueHistoryCache :exec
+UPDATE issue_history_cache SET synced_at = ? WHERE issue_id = ?
+`
+
+type TouchIssueHistoryCacheParams struct {
+	SyncedAt time.Time `json:"synced_at"`
+	IssueID  string    `json:"issue_id"`
+}
+
+func (q *Queries) TouchIssueHistoryCache(ctx context.Context, arg TouchIssueHistoryCacheParams) error {
+	_, err := q.db.ExecContext(ctx, touchIssueHistoryCache, arg.SyncedAt, arg.IssueID)
+	return err
+}
+
 const updateEmbeddedFileCache = `-- name: UpdateEmbeddedFileCache :exec
 UPDATE embedded_files SET cache_path = ?, file_size = ? WHERE id = ?
 `
@@ -4462,6 +4601,27 @@ func (q *Queries) UpsertLabel(ctx context.Context, arg UpsertLabelParams) error 
 		arg.SyncedAt,
 		arg.Data,
 	)
+	return err
+}
+
+const upsertPendingDetailSync = `-- name: UpsertPendingDetailSync :exec
+
+INSERT INTO pending_detail_sync (issue_id, identifier, queued_at)
+VALUES (?, ?, ?)
+ON CONFLICT(issue_id) DO UPDATE SET queued_at = excluded.queued_at
+`
+
+type UpsertPendingDetailSyncParams struct {
+	IssueID    string    `json:"issue_id"`
+	Identifier string    `json:"identifier"`
+	QueuedAt   time.Time `json:"queued_at"`
+}
+
+// =============================================================================
+// Pending Detail Sync Queue
+// =============================================================================
+func (q *Queries) UpsertPendingDetailSync(ctx context.Context, arg UpsertPendingDetailSyncParams) error {
+	_, err := q.db.ExecContext(ctx, upsertPendingDetailSync, arg.IssueID, arg.Identifier, arg.QueuedAt)
 	return err
 }
 
