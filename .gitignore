@@ -33,4 +33,5 @@ go.work.sum
 # .vscode/
 .claude/settings.local.json
 docs/
+!docs/plans/
 coverage.out
