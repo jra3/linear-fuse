@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/jra3/linear-fuse/internal/config"
@@ -34,6 +36,11 @@ func runMount(cmd *cobra.Command, args []string) error {
 	mountpoint := cfg.Mount.DefaultPath
 	if len(args) > 0 {
 		mountpoint = args[0]
+	}
+
+	if strings.HasPrefix(mountpoint, "~/") {
+		home, _ := os.UserHomeDir()
+		mountpoint = filepath.Join(home, mountpoint[2:])
 	}
 
 	if mountpoint == "" {

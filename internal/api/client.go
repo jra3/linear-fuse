@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	gosync "sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -21,6 +22,13 @@ var debugRateLimit = os.Getenv("LINEARFS_DEBUG_RATE") != ""
 var debugAPI = os.Getenv("LINEARFS_DEBUG_API") != ""
 
 const defaultAPIURL = "https://api.linear.app/graphql"
+
+// Circuit breaker constants: after consecutive failures, stop wasting rate
+// limiter tokens on requests that will fail (e.g., DNS outage).
+const (
+	circuitBreakerThreshold = 5                // consecutive errors to trip
+	circuitBreakerCooldown  = 30 * time.Second // how long to stay open
+)
 
 type Client struct {
 	apiKey     string
@@ -32,6 +40,10 @@ type Client struct {
 	// M-3: server-reported rate limit reset time (from X-RateLimit-Reset header)
 	rateLimitMu      gosync.RWMutex
 	rateLimitResetAt time.Time
+
+	// Circuit breaker: stop burning rate limiter tokens during connectivity loss
+	consecutiveErrors atomic.Int32
+	circuitOpenUntil  atomic.Int64 // unix timestamp; 0 = closed
 }
 
 // ClientOptions configures the API client.
@@ -91,6 +103,24 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	opName := extractOpName(query)
 	if debugAPI {
 		log.Printf("[API] Calling %s vars=%v", opName, variables)
+	}
+
+	// Circuit breaker: skip requests when connectivity is known to be down.
+	// This prevents burning rate limiter tokens on requests that will fail.
+	if openUntil := c.circuitOpenUntil.Load(); openUntil > 0 {
+		if time.Now().Unix() < openUntil {
+			return fmt.Errorf("circuit breaker open: skipping %s (connectivity down)", opName)
+		}
+		// Cooldown expired — allow one probe request through
+		c.circuitOpenUntil.Store(0)
+	}
+
+	// Mutation priority: reserve the last 2 burst tokens for user-facing writes.
+	// Non-mutation queries are rejected when tokens are critically low, so writes
+	// don't get stuck behind a queue of background reads.
+	isMutation := strings.HasPrefix(strings.TrimSpace(query), "mutation")
+	if !isMutation && c.limiter.Tokens() < 2 {
+		return fmt.Errorf("rate limit: query %s deferred (reserving capacity for writes)", opName)
 	}
 
 	// Log token bucket exhaustion before blocking
@@ -153,10 +183,18 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// Network/DNS error — track for circuit breaker
+		if n := c.consecutiveErrors.Add(1); n >= circuitBreakerThreshold {
+			c.circuitOpenUntil.Store(time.Now().Add(circuitBreakerCooldown).Unix())
+			log.Printf("[circuit-breaker] opened after %d consecutive errors, cooling down %s", n, circuitBreakerCooldown)
+		}
 		queryErr = fmt.Errorf("failed to execute request: %w", err)
 		return queryErr
 	}
 	defer resp.Body.Close()
+
+	// Request succeeded at the network level — reset circuit breaker
+	c.consecutiveErrors.Store(0)
 
 	// Check server-side rate limit headers
 	c.checkRateLimitHeaders(resp, opName)

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1293,5 +1295,129 @@ func TestRateLimitResetHeaderMissing(t *testing.T) {
 
 	if !client.RateLimitResetAt().IsZero() {
 		t.Errorf("RateLimitResetAt() = %v, want zero when header is absent", client.RateLimitResetAt())
+	}
+}
+
+// =============================================================================
+// Circuit Breaker Tests
+// =============================================================================
+
+func TestCircuitBreakerTripsAfterConsecutiveErrors(t *testing.T) {
+	t.Parallel()
+
+	// Use a listener on a port that refuses connections to simulate network errors
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	listener.Close() // Close immediately so connections are refused
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL("http://" + addr)
+
+	// Make requests until circuit breaker trips (threshold = 5)
+	for i := 0; i < circuitBreakerThreshold; i++ {
+		_, _ = client.GetTeams(context.Background())
+	}
+
+	// Circuit should now be open
+	if client.circuitOpenUntil.Load() == 0 {
+		t.Fatal("expected circuit breaker to be open after consecutive errors")
+	}
+
+	// Next request should fail immediately with circuit breaker error
+	_, err = client.GetTeams(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "circuit breaker open") {
+		t.Errorf("expected circuit breaker error, got: %v", err)
+	}
+}
+
+func TestCircuitBreakerResetsOnSuccess(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	// Simulate some consecutive errors
+	client.consecutiveErrors.Store(3)
+
+	// Successful request should reset the counter
+	_, _ = client.GetTeams(context.Background())
+
+	if client.consecutiveErrors.Load() != 0 {
+		t.Errorf("expected consecutive errors to reset to 0, got %d", client.consecutiveErrors.Load())
+	}
+}
+
+func TestCircuitBreakerCooldownAllowsProbe(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	// Set circuit open but with expired cooldown (in the past)
+	client.circuitOpenUntil.Store(time.Now().Add(-1 * time.Second).Unix())
+
+	// Should allow a probe request through (cooldown expired)
+	_, err := client.GetTeams(context.Background())
+	if err != nil {
+		t.Errorf("expected probe request to succeed after cooldown, got: %v", err)
+	}
+
+	// Circuit should be closed now
+	if client.circuitOpenUntil.Load() != 0 {
+		t.Error("expected circuit to be closed after successful probe")
+	}
+}
+
+// =============================================================================
+// Mutation Priority Tests
+// =============================================================================
+
+func TestMutationPriorityReservesTokensForWrites(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	// Drain the token bucket to near-empty (burst=10, drain all but 1)
+	for i := 0; i < 10; i++ {
+		client.limiter.Allow()
+	}
+
+	// Non-mutation query should be rejected when tokens < 2
+	var result struct {
+		Teams struct {
+			Nodes []struct{} `json:"nodes"`
+		} `json:"teams"`
+	}
+	err := client.query(context.Background(), "query Teams { teams { nodes { id } } }", nil, &result)
+	if err == nil || !strings.Contains(err.Error(), "reserving capacity for writes") {
+		t.Errorf("expected query to be rejected for write reservation, got: %v", err)
+	}
+
+	// Mutation should still be allowed through
+	err = client.query(context.Background(), "mutation UpdateIssue($id: String!) { issueUpdate(id: $id) { success } }", nil, &result)
+	if err != nil && strings.Contains(err.Error(), "reserving capacity") {
+		t.Errorf("mutation should bypass write reservation, got: %v", err)
 	}
 }

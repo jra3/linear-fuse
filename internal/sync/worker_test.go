@@ -13,6 +13,16 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
+// mockBudgetReporter implements BudgetReporter for testing
+type mockBudgetReporter struct {
+	count int
+	pct   float64
+}
+
+func (m *mockBudgetReporter) BudgetSnapshot() (int, float64) {
+	return m.count, m.pct
+}
+
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
 	teams              []api.Team
@@ -1079,5 +1089,126 @@ https://uploads.linear.app/workspace1/issue1/design-spec.pdf`
 	}
 	if !foundPDF {
 		t.Error("Did not find design-spec.pdf in stored files")
+	}
+}
+
+// =============================================================================
+// Budget Gate Tests
+// =============================================================================
+
+func TestSyncAllTeamsSkipsWhenBudgetExceeded(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	cfg := Config{Interval: 1 * time.Hour} // won't tick
+	worker := NewWorker(mock, store, cfg)
+	worker.SetBudgetReporter(&mockBudgetReporter{count: 1300, pct: 87.0}) // >80%
+
+	err := worker.syncAllTeams(context.Background())
+	if err != nil {
+		t.Fatalf("syncAllTeams should succeed (skip), got: %v", err)
+	}
+
+	// GetTeams should NOT have been called since we skipped
+	if atomic.LoadInt32(&mock.getTeamsCalls) != 0 {
+		t.Errorf("expected 0 GetTeams calls when budget exceeded, got %d", mock.getTeamsCalls)
+	}
+}
+
+func TestSyncAllTeamsProceedsWhenBudgetOK(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	cfg := Config{Interval: 1 * time.Hour}
+	worker := NewWorker(mock, store, cfg)
+	worker.SetBudgetReporter(&mockBudgetReporter{count: 500, pct: 33.0}) // <80%
+
+	_ = worker.syncAllTeams(context.Background())
+
+	if atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
+		t.Error("expected GetTeams to be called when budget is OK")
+	}
+}
+
+func TestSyncOrDeferDetailBatchDefersWhenBudgetHigh(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	cfg := Config{Interval: 1 * time.Hour}
+	worker := NewWorker(mock, store, cfg)
+	worker.SetBudgetReporter(&mockBudgetReporter{count: 1100, pct: 73.0}) // >70%
+
+	issues := []struct {
+		ID         string
+		Identifier string
+	}{
+		{ID: "issue-1", Identifier: "TST-1"},
+		{ID: "issue-2", Identifier: "TST-2"},
+	}
+
+	worker.syncOrDeferDetailBatch(context.Background(), issues)
+
+	// Should have been queued to pending_detail_sync, not API-called
+	pending, err := store.Queries().ListPendingDetailSync(context.Background())
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync failed: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("expected 2 pending detail syncs, got %d", len(pending))
+	}
+}
+
+func TestSyncOrDeferDetailBatchSyncsWhenBudgetOK(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	cfg := Config{Interval: 1 * time.Hour}
+	worker := NewWorker(mock, store, cfg)
+	worker.SetBudgetReporter(&mockBudgetReporter{count: 300, pct: 20.0}) // <70%
+
+	issues := []struct {
+		ID         string
+		Identifier string
+	}{
+		{ID: "issue-1", Identifier: "TST-1"},
+	}
+
+	worker.syncOrDeferDetailBatch(context.Background(), issues)
+
+	// Should NOT be in pending queue (was synced directly)
+	pending, err := store.Queries().ListPendingDetailSync(context.Background())
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("expected 0 pending detail syncs (direct sync), got %d", len(pending))
+	}
+}
+
+func TestBudgetExceedsWithNilReporter(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	cfg := Config{Interval: 1 * time.Hour}
+	worker := NewWorker(mock, store, cfg)
+	// No budget reporter set
+
+	// Should return false (safe default)
+	if worker.budgetExceeds(50.0) {
+		t.Error("budgetExceeds should return false with nil reporter")
 	}
 }

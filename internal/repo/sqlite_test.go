@@ -3,7 +3,9 @@ package repo
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2071,3 +2073,142 @@ func TestSQLiteRepository_UpdateEmbeddedFileCache(t *testing.T) {
 
 // TestSQLiteRepository_MaybeRefreshAttachments_NoClient removed — covered by
 // TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient (consolidated refresh)
+
+// =============================================================================
+// Background Refresh Timeout & Semaphore Tests
+// =============================================================================
+
+func TestTriggerBackgroundRefresh_Timeout(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	// Use a very short timeout for testing
+	origTimeout := refreshTimeout
+	// We can't modify the const, but we can test the behavior by using a
+	// client that would block. Instead, test that the context has a deadline.
+
+	// Create a repo with a non-nil client to enable refreshes
+	client := &api.Client{}
+	repoWithClient := NewSQLiteRepository(store, client)
+	defer repoWithClient.Close()
+
+	// Track whether refresh was called and whether context had deadline
+	called := make(chan bool, 1)
+	repoWithClient.triggerBackgroundRefresh("test-timeout", func(ctx context.Context) error {
+		_, hasDeadline := ctx.Deadline()
+		called <- hasDeadline
+		return nil
+	})
+
+	select {
+	case hasDeadline := <-called:
+		if !hasDeadline {
+			t.Error("expected refresh context to have a deadline (timeout)")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh function was never called")
+	}
+
+	_ = repo
+	_ = origTimeout
+}
+
+func TestTriggerBackgroundRefresh_SemaphoreDropsExcess(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	client := &api.Client{}
+	repo := NewSQLiteRepository(store, client)
+	defer repo.Close()
+
+	// Fill the semaphore with blocking refreshes
+	blocker := make(chan struct{})
+	for i := 0; i < maxConcurrentRefreshes; i++ {
+		key := fmt.Sprintf("blocker-%d", i)
+		repo.triggerBackgroundRefresh(key, func(ctx context.Context) error {
+			<-blocker // block until released
+			return nil
+		})
+	}
+
+	// Give goroutines a moment to start
+	time.Sleep(50 * time.Millisecond)
+
+	// This refresh should be dropped (semaphore full)
+	dropped := true
+	repo.triggerBackgroundRefresh("should-be-dropped", func(ctx context.Context) error {
+		dropped = false
+		return nil
+	})
+
+	// Give a moment for it to potentially execute
+	time.Sleep(50 * time.Millisecond)
+
+	if !dropped {
+		t.Error("expected excess refresh to be dropped when semaphore is full")
+	}
+
+	// Clean up: release all blockers
+	close(blocker)
+}
+
+func TestTriggerBackgroundRefresh_DeduplicatesByKey(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	client := &api.Client{}
+	repo := NewSQLiteRepository(store, client)
+	defer repo.Close()
+
+	callCount := int32(0)
+	blocker := make(chan struct{})
+
+	// First call should start
+	repo.triggerBackgroundRefresh("same-key", func(ctx context.Context) error {
+		atomic.AddInt32(&callCount, 1)
+		<-blocker
+		return nil
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Second call with same key should be deduplicated
+	repo.triggerBackgroundRefresh("same-key", func(ctx context.Context) error {
+		atomic.AddInt32(&callCount, 1)
+		return nil
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	close(blocker)
+	time.Sleep(50 * time.Millisecond)
+
+	if atomic.LoadInt32(&callCount) != 1 {
+		t.Errorf("expected 1 call (deduplicated), got %d", callCount)
+	}
+}
+
+func TestSetCatchUpMode(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+
+	if repo.stalenessThreshold != defaultStalenessThreshold {
+		t.Fatalf("expected default staleness %v, got %v", defaultStalenessThreshold, repo.stalenessThreshold)
+	}
+
+	repo.SetCatchUpMode(true)
+	if repo.stalenessThreshold != catchUpStaleness {
+		t.Errorf("expected catch-up staleness %v, got %v", catchUpStaleness, repo.stalenessThreshold)
+	}
+
+	repo.SetCatchUpMode(false)
+	if repo.stalenessThreshold != defaultStalenessThreshold {
+		t.Errorf("expected default staleness %v after disabling catch-up, got %v", defaultStalenessThreshold, repo.stalenessThreshold)
+	}
+}

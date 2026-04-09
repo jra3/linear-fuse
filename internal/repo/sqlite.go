@@ -25,6 +25,15 @@ const defaultStalenessThreshold = 5 * time.Minute
 // For on-demand data (comments, documents, updates), it implements
 // stale-while-revalidate: returns cached data immediately and triggers
 // a background refresh if the data is stale.
+// maxConcurrentRefreshes limits how many background refresh goroutines can
+// be in-flight at once. When the limit is reached, new refresh requests are
+// silently dropped — callers already have cached data to return.
+const maxConcurrentRefreshes = 10
+
+// refreshTimeout caps how long a background refresh can block waiting for
+// a rate limiter token. Prevents indefinite blocking during budget exhaustion.
+const refreshTimeout = 30 * time.Second
+
 type SQLiteRepository struct {
 	store              *db.Store
 	client             *api.Client   // Optional: for fallback/on-demand fetch
@@ -36,6 +45,9 @@ type SQLiteRepository struct {
 	refreshing     map[string]bool
 	refreshContext context.Context
 	refreshCancel  context.CancelFunc
+
+	// Semaphore to limit concurrent background refreshes
+	refreshSem chan struct{}
 }
 
 // NewSQLiteRepository creates a new SQLite-backed repository.
@@ -49,6 +61,7 @@ func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository 
 		refreshing:         make(map[string]bool),
 		refreshContext:     ctx,
 		refreshCancel:      cancel,
+		refreshSem:         make(chan struct{}, maxConcurrentRefreshes),
 	}
 }
 
@@ -57,12 +70,30 @@ func (r *SQLiteRepository) SetStalenessThreshold(d time.Duration) {
 	r.stalenessThreshold = d
 }
 
+// catchUpStaleness is the staleness threshold used during catch-up syncs.
+// Suppresses on-demand refreshes while the sync worker is already fetching the same data.
+const catchUpStaleness = 30 * time.Minute
+
+// SetCatchUpMode toggles between normal (5min) and catch-up (30min) staleness thresholds.
+// Called by the sync worker when it detects a large batch of changed issues.
+func (r *SQLiteRepository) SetCatchUpMode(active bool) {
+	if active {
+		r.stalenessThreshold = catchUpStaleness
+		log.Printf("[repo] catch-up mode enabled: staleness threshold increased to %s", catchUpStaleness)
+	} else {
+		r.stalenessThreshold = defaultStalenessThreshold
+		log.Printf("[repo] catch-up mode disabled: staleness threshold restored to %s", defaultStalenessThreshold)
+	}
+}
+
 // Close stops any background refresh operations
 func (r *SQLiteRepository) Close() {
 	r.refreshCancel()
 }
 
-// triggerBackgroundRefresh starts a background refresh if not already in progress
+// triggerBackgroundRefresh starts a background refresh if not already in progress.
+// Uses a semaphore to limit concurrency — if too many refreshes are in-flight,
+// new requests are dropped. This prevents stampedes after connectivity loss.
 func (r *SQLiteRepository) triggerBackgroundRefresh(key string, refreshFn func(context.Context) error) {
 	if r.client == nil {
 		return
@@ -76,15 +107,29 @@ func (r *SQLiteRepository) triggerBackgroundRefresh(key string, refreshFn func(c
 	r.refreshing[key] = true
 	r.refreshMu.Unlock()
 
+	// Try to acquire semaphore without blocking. If full, drop this refresh —
+	// the caller already has cached data to return.
+	select {
+	case r.refreshSem <- struct{}{}:
+	default:
+		r.refreshMu.Lock()
+		delete(r.refreshing, key)
+		r.refreshMu.Unlock()
+		return
+	}
+
 	go func() {
 		defer func() {
+			<-r.refreshSem
 			r.refreshMu.Lock()
 			delete(r.refreshing, key)
 			r.refreshMu.Unlock()
 		}()
 
-		if err := refreshFn(r.refreshContext); err != nil {
-			if r.refreshContext.Err() == nil {
+		ctx, cancel := context.WithTimeout(r.refreshContext, refreshTimeout)
+		defer cancel()
+		if err := refreshFn(ctx); err != nil {
+			if r.refreshContext.Err() == nil && ctx.Err() == nil {
 				log.Printf("[repo] background refresh %s failed: %v", key, err)
 			}
 		}

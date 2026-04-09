@@ -191,6 +191,7 @@ func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error
 	// Create and start sync worker
 	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())
 	lfs.syncWorker.SetBudgetReporter(lfs.client.Stats())
+	lfs.syncWorker.SetCatchUpModeToggler(lfs.repo)
 	lfs.syncWorker.Start(ctx)
 
 	log.Printf("[sqlite] Enabled persistent cache at %s", dbPath)

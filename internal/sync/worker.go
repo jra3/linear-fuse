@@ -51,6 +51,13 @@ type APIClient interface {
 
 const detailsBatchSize = 15 // Number of issues to fetch details for in one API call (Linear has 10k complexity limit; 20 was 80-90% of budget)
 
+// Budget thresholds for rate limit awareness.
+// Detail batches (~2001 complexity each) are expensive; we defer them when budget is tight.
+const (
+	budgetSkipSyncPct    = 80.0 // Skip entire sync cycle when budget exceeds this
+	budgetDeferDetailPct = 70.0 // Defer detail batches to pending_detail_sync above this
+)
+
 // SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
 var sqliteTimeFormats = []string{
 	time.RFC3339,
@@ -77,6 +84,11 @@ type BudgetReporter interface {
 	BudgetSnapshot() (count int, pct float64)
 }
 
+// CatchUpModeToggler controls the repo staleness threshold during large syncs.
+type CatchUpModeToggler interface {
+	SetCatchUpMode(active bool)
+}
+
 // Worker handles background synchronization of Linear issues to SQLite
 type Worker struct {
 	client   APIClient
@@ -87,7 +99,8 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
-	budget   BudgetReporter // optional: for rate limit budget logging
+	budget  BudgetReporter     // optional: for rate limit budget logging
+	catchUp CatchUpModeToggler // optional: controls repo staleness during catch-up
 
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
@@ -128,6 +141,12 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 // SetBudgetReporter sets the rate limit budget reporter for enhanced logging.
 func (w *Worker) SetBudgetReporter(b BudgetReporter) {
 	w.budget = b
+}
+
+// SetCatchUpModeToggler sets the repo reference for toggling catch-up mode
+// during large sync operations.
+func (w *Worker) SetCatchUpModeToggler(t CatchUpModeToggler) {
+	w.catchUp = t
 }
 
 // Start begins the background sync process
@@ -206,6 +225,17 @@ func (w *Worker) run(ctx context.Context) {
 }
 
 func (w *Worker) syncAllTeams(ctx context.Context) error {
+	// Skip entire sync cycle when budget is critically high
+	if w.budgetExceeds(budgetSkipSyncPct) {
+		count, pct := 0, 0.0
+		if w.budget != nil {
+			count, pct = w.budget.BudgetSnapshot()
+		}
+		log.Printf("[sync] skipping sync cycle: budget at %d/1500 (%.0f%%), threshold %.0f%%",
+			count, pct, budgetSkipSyncPct)
+		return nil
+	}
+
 	// H-5: Drain any issues that were queued during a previous rate-limit backoff
 	w.drainPendingDetailSync(ctx)
 
@@ -266,6 +296,12 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 	}
 
 	added, updated, pages, err := w.syncTeamIssues(ctx, team.ID, lastSyncedUpdatedAt)
+
+	// Disable catch-up mode after sync completes (or fails)
+	if w.catchUp != nil && (added+updated) > 50 {
+		w.catchUp.SetCatchUpMode(false)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -370,9 +406,9 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 				Identifier string
 			}{ID: issue.ID, Identifier: issue.Identifier})
 
-			// Sync details in batches
+			// Sync details in batches (or defer if budget is tight)
 			if len(pendingDetailIssues) >= detailsBatchSize {
-				w.syncIssueDetailsBatch(ctx, pendingDetailIssues)
+				w.syncOrDeferDetailBatch(ctx, pendingDetailIssues)
 				pendingDetailIssues = nil
 			}
 
@@ -381,6 +417,12 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 			} else {
 				updated++
 			}
+		}
+
+		// Enable catch-up mode when we detect a large sync, suppressing
+		// on-demand refreshes that would duplicate the sync worker's effort
+		if w.catchUp != nil && (added+updated) > 50 {
+			w.catchUp.SetCatchUpMode(true)
 		}
 
 		// If all issues in this page are unchanged, we're done
@@ -399,7 +441,7 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 
 	// Sync any remaining pending issue details
 	if len(pendingDetailIssues) > 0 {
-		w.syncIssueDetailsBatch(ctx, pendingDetailIssues)
+		w.syncOrDeferDetailBatch(ctx, pendingDetailIssues)
 	}
 
 	return added, updated, pages, nil
@@ -604,6 +646,16 @@ func isRateLimitError(err error) bool {
 		strings.Contains(errStr, "rate limit")
 }
 
+// budgetExceeds returns true if the current hourly budget usage exceeds the given threshold.
+// Returns false if no budget reporter is configured.
+func (w *Worker) budgetExceeds(pct float64) bool {
+	if w.budget == nil {
+		return false
+	}
+	_, usage := w.budget.BudgetSnapshot()
+	return usage > pct
+}
+
 // isRateLimited returns true if we're currently rate limited for issue details
 func (w *Worker) isRateLimited() bool {
 	w.rateLimitMu.RLock()
@@ -639,6 +691,26 @@ func (w *Worker) setRateLimited() {
 // =============================================================================
 // Issue Details Sync (Comments and Documents)
 // =============================================================================
+
+// syncOrDeferDetailBatch syncs issue details if budget allows, otherwise
+// defers to pending_detail_sync for a later cycle.
+func (w *Worker) syncOrDeferDetailBatch(ctx context.Context, issues []struct {
+	ID         string
+	Identifier string
+}) {
+	if w.budgetExceeds(budgetDeferDetailPct) {
+		now := db.Now()
+		for _, issue := range issues {
+			_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+				IssueID:    issue.ID,
+				Identifier: issue.Identifier,
+				QueuedAt:   now,
+			})
+		}
+		return
+	}
+	w.syncIssueDetailsBatch(ctx, issues)
+}
 
 // syncIssueDetailsBatch fetches and stores comments and documents for multiple issues in a single API call
 func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
@@ -774,7 +846,7 @@ func (w *Worker) drainPendingDetailSync(ctx context.Context) {
 
 	// Process in batches
 	for len(issues) > 0 {
-		if w.isRateLimited() {
+		if w.isRateLimited() || w.budgetExceeds(budgetDeferDetailPct) {
 			break
 		}
 		batch := issues
