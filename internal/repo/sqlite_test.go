@@ -2548,3 +2548,75 @@ func TestMaybeScheduleReconcile_NilClient(t *testing.T) {
 		t.Error("trigger fired with nil client")
 	}
 }
+
+func TestSetDiff(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		local, api    []string
+		wantOrphanIDs []string
+	}{
+		{"all present", []string{"a", "b"}, []string{"a", "b", "c"}, nil},
+		{"one missing", []string{"a", "b", "c"}, []string{"a", "c"}, []string{"b"}},
+		{"all missing", []string{"a", "b"}, []string{}, []string{"a", "b"}},
+		{"empty local", []string{}, []string{"a"}, nil},
+	}
+	for _, c := range cases {
+		got := setDiff(c.local, c.api)
+		// Order-independent compare.
+		gotSet := make(map[string]bool, len(got))
+		for _, id := range got {
+			gotSet[id] = true
+		}
+		if len(gotSet) != len(c.wantOrphanIDs) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.wantOrphanIDs)
+			continue
+		}
+		for _, want := range c.wantOrphanIDs {
+			if !gotSet[want] {
+				t.Errorf("%s: missing %q in %v", c.name, want, got)
+			}
+		}
+	}
+}
+
+func TestReconcileIssuesForTeam_DeletesOrphans(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+	now := time.Now()
+
+	team := api.Team{ID: "team-1", Key: "TST", Name: "T", CreatedAt: now, UpdatedAt: now}
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+
+	// Seed three local issues; "alive" stays on API, "gone" and "alsogone" do not.
+	for _, id := range []string{"alive", "gone", "alsogone"} {
+		issue := api.Issue{
+			ID: id, Identifier: id, Title: id, Team: &team,
+			State: api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+			CreatedAt: now, UpdatedAt: now,
+		}
+		data, _ := db.APIIssueToDBIssue(issue)
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
+	// Authoritative list from "Linear": only "alive" exists.
+	deleted := repo.reconcileIssuesForTeam(ctx, "team-1", []string{"alive"})
+	if deleted != 2 {
+		t.Errorf("got deleted=%d, want 2", deleted)
+	}
+
+	if _, err := store.Queries().GetIssueByID(ctx, "alive"); err != nil {
+		t.Errorf("alive issue was deleted: %v", err)
+	}
+	if _, err := store.Queries().GetIssueByID(ctx, "gone"); err != sql.ErrNoRows {
+		t.Errorf("gone issue still present: err=%v", err)
+	}
+}

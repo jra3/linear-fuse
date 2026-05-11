@@ -177,16 +177,148 @@ func (r *SQLiteRepository) maybeScheduleReconcile() {
 
 // runReconcile performs a full sweep across issues, projects, and
 // initiatives, deleting any local row whose ID is absent from Linear's
-// authoritative response. Stubbed here; the body is implemented in the
-// reconciliation task.
+// authoritative response. Triggered by maybeScheduleReconcile.
 func (r *SQLiteRepository) runReconcile() {
 	defer r.reconcilePending.Store(false)
+	ctx, cancel := context.WithTimeout(r.refreshContext, 10*time.Minute)
+	defer cancel()
 
-	// Task 6 will replace this stub with the real per-entity reconcile calls.
+	log.Printf("[reconcile] adaptive trigger after orphan delete; pass starting")
+	start := time.Now()
+
+	issues := r.reconcileIssues(ctx)
+	projects := r.reconcileProjects(ctx)
+	initiatives := r.reconcileInitiatives(ctx)
+
 	r.reconcileMu.Lock()
 	r.lastReconcileAt = time.Now()
 	r.reconcileMu.Unlock()
-	log.Printf("[reconcile] pass complete: stub (no work yet)")
+
+	log.Printf("[reconcile] pass complete: issues=%d projects=%d initiatives=%d duration=%s",
+		issues, projects, initiatives, time.Since(start).Round(time.Millisecond))
+}
+
+// reconcileIssues walks every team in SQLite and, for each, fetches the
+// authoritative issue ID set from Linear, diffs against the local set,
+// and deletes the orphans. Returns the total number of orphans removed.
+func (r *SQLiteRepository) reconcileIssues(ctx context.Context) int {
+	teams, err := r.store.Queries().ListTeams(ctx)
+	if err != nil {
+		log.Printf("[reconcile] list teams: %v", err)
+		return 0
+	}
+	deleted := 0
+	for _, team := range teams {
+		if r.client.LowBudget() {
+			log.Printf("[reconcile] budget low; deferring remaining teams")
+			return deleted
+		}
+		apiIDs, err := r.client.GetTeamIssueIDs(ctx, team.ID)
+		if err != nil {
+			log.Printf("[reconcile] issues team %s: %v (skipping)", team.Key, err)
+			continue
+		}
+		deleted += r.reconcileIssuesForTeam(ctx, team.ID, apiIDs)
+	}
+	return deleted
+}
+
+// reconcileIssuesForTeam diffs apiIDs against SQLite's issue IDs for the
+// given team and deletes any locals missing from the API set. Split out
+// so tests can drive the diff/delete logic without needing a live client.
+func (r *SQLiteRepository) reconcileIssuesForTeam(ctx context.Context, teamID string, apiIDs []string) int {
+	rows, err := r.store.Queries().ListTeamIssueIDs(ctx, teamID)
+	if err != nil {
+		log.Printf("[reconcile] list local issues for team %s: %v", teamID, err)
+		return 0
+	}
+	localIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		localIDs = append(localIDs, row.ID)
+	}
+	deleted := 0
+	for _, id := range setDiff(localIDs, apiIDs) {
+		r.deleteOrphanIssue(ctx, id)
+		deleted++
+	}
+	return deleted
+}
+
+// reconcileProjects fetches the authoritative project ID set from Linear,
+// diffs against SQLite, and deletes the orphans.
+func (r *SQLiteRepository) reconcileProjects(ctx context.Context) int {
+	if r.client.LowBudget() {
+		log.Printf("[reconcile] budget low; skipping projects")
+		return 0
+	}
+	apiIDs, err := r.client.GetWorkspaceProjectIDs(ctx)
+	if err != nil {
+		log.Printf("[reconcile] projects fetch: %v (skipping)", err)
+		return 0
+	}
+	rows, err := r.store.Queries().ListProjects(ctx)
+	if err != nil {
+		log.Printf("[reconcile] list local projects: %v", err)
+		return 0
+	}
+	localIDs := make([]string, 0, len(rows))
+	for _, p := range rows {
+		localIDs = append(localIDs, p.ID)
+	}
+	deleted := 0
+	for _, id := range setDiff(localIDs, apiIDs) {
+		r.deleteOrphanProject(ctx, id)
+		deleted++
+	}
+	return deleted
+}
+
+// reconcileInitiatives fetches the authoritative initiative ID set,
+// diffs against SQLite, and deletes the orphans.
+func (r *SQLiteRepository) reconcileInitiatives(ctx context.Context) int {
+	if r.client.LowBudget() {
+		log.Printf("[reconcile] budget low; skipping initiatives")
+		return 0
+	}
+	apiIDs, err := r.client.GetWorkspaceInitiativeIDs(ctx)
+	if err != nil {
+		log.Printf("[reconcile] initiatives fetch: %v (skipping)", err)
+		return 0
+	}
+	rows, err := r.store.Queries().ListInitiatives(ctx)
+	if err != nil {
+		log.Printf("[reconcile] list local initiatives: %v", err)
+		return 0
+	}
+	localIDs := make([]string, 0, len(rows))
+	for _, i := range rows {
+		localIDs = append(localIDs, i.ID)
+	}
+	deleted := 0
+	for _, id := range setDiff(localIDs, apiIDs) {
+		r.deleteOrphanInitiative(ctx, id)
+		deleted++
+	}
+	return deleted
+}
+
+// setDiff returns elements in `local` that are not in `api`. Used by the
+// reconciliation pass to identify orphan rows.
+func setDiff(local, api []string) []string {
+	if len(local) == 0 {
+		return nil
+	}
+	apiSet := make(map[string]struct{}, len(api))
+	for _, id := range api {
+		apiSet[id] = struct{}{}
+	}
+	var orphans []string
+	for _, id := range local {
+		if _, ok := apiSet[id]; !ok {
+			orphans = append(orphans, id)
+		}
+	}
+	return orphans
 }
 
 // =============================================================================
