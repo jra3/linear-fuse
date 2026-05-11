@@ -2090,7 +2090,7 @@ func TestTriggerBackgroundRefresh_Timeout(t *testing.T) {
 	// client that would block. Instead, test that the context has a deadline.
 
 	// Create a repo with a non-nil client to enable refreshes
-	client := &api.Client{}
+	client := api.NewClient("test-key")
 	repoWithClient := NewSQLiteRepository(store, client)
 	defer repoWithClient.Close()
 
@@ -2120,7 +2120,7 @@ func TestTriggerBackgroundRefresh_SemaphoreDropsExcess(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	client := &api.Client{}
+	client := api.NewClient("test-key")
 	repo := NewSQLiteRepository(store, client)
 	defer repo.Close()
 
@@ -2160,7 +2160,7 @@ func TestTriggerBackgroundRefresh_DeduplicatesByKey(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	client := &api.Client{}
+	client := api.NewClient("test-key")
 	repo := NewSQLiteRepository(store, client)
 	defer repo.Close()
 
@@ -2487,7 +2487,7 @@ func TestMaybeScheduleReconcile_ColdStart(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	client := &api.Client{} // non-nil so the trigger isn't skipped
+	client := api.NewClient("test-key") // non-nil so the trigger isn't skipped
 	repo := NewSQLiteRepository(store, client)
 	defer repo.Close()
 
@@ -2521,7 +2521,7 @@ func TestMaybeScheduleReconcile_CooldownGate(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	client := &api.Client{}
+	client := api.NewClient("test-key")
 	repo := NewSQLiteRepository(store, client)
 	defer repo.Close()
 

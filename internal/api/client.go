@@ -118,9 +118,6 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	// Mutation priority: reserve the last 2 burst tokens for user-facing writes.
 	// Non-mutation queries are rejected when tokens are critically low, so writes
 	// don't get stuck behind a queue of background reads.
-	if c.limiter == nil {
-		return fmt.Errorf("client not initialised: no rate limiter")
-	}
 	isMutation := strings.HasPrefix(strings.TrimSpace(query), "mutation")
 	if !isMutation && c.limiter.Tokens() < 2 {
 		return fmt.Errorf("rate limit: query %s deferred (reserving capacity for writes)", opName)
@@ -2101,9 +2098,6 @@ func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) erro
 // The reconciliation pass uses this to defer the next per-team page when
 // budget is tight, leaving headroom for user-facing writes and ongoing sync.
 func (c *Client) LowBudget() bool {
-	if c.limiter == nil {
-		return false
-	}
 	// 5 = write-reserve (2, see c.query) + sync headroom (~3 pages).
 	return c.limiter.Tokens() < 5
 }
