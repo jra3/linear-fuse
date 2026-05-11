@@ -2488,6 +2488,10 @@ func TestMaybeScheduleReconcile_ColdStart(t *testing.T) {
 	defer cleanup()
 
 	client := api.NewClient("test-key") // non-nil so the trigger isn't skipped
+	// Point at an unreachable address so the goroutine's API calls fail
+	// fast with a connection error rather than hitting Linear's production
+	// API with an invalid key.
+	client.SetAPIURL("http://127.0.0.1:1/")
 	repo := NewSQLiteRepository(store, client)
 	defer repo.Close()
 
