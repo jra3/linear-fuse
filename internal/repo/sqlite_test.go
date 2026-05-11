@@ -2623,4 +2623,7 @@ func TestReconcileIssuesForTeam_DeletesOrphans(t *testing.T) {
 	if _, err := store.Queries().GetIssueByID(ctx, "gone"); err != sql.ErrNoRows {
 		t.Errorf("gone issue still present: err=%v", err)
 	}
+	if _, err := store.Queries().GetIssueByID(ctx, "alsogone"); err != sql.ErrNoRows {
+		t.Errorf("alsogone issue still present: err=%v", err)
+	}
 }
