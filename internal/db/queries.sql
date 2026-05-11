@@ -617,6 +617,9 @@ DELETE FROM initiative_projects WHERE initiative_id = ? AND project_id = ?;
 -- name: DeleteInitiativeProjects :exec
 DELETE FROM initiative_projects WHERE initiative_id = ?;
 
+-- name: DeleteInitiativeProjectsByProject :exec
+DELETE FROM initiative_projects WHERE project_id = ?;
+
 -- name: ListInitiativeProjectIDs :many
 SELECT project_id FROM initiative_projects WHERE initiative_id = ?;
 

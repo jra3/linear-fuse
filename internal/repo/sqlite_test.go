@@ -2334,3 +2334,85 @@ func TestDeleteOrphanIssue(t *testing.T) {
 		t.Errorf("keeper comment was clobbered: %d remain", len(got))
 	}
 }
+
+func TestDeleteOrphanProject(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+	now := time.Now()
+	const projectID = "proj-orphan"
+	const otherID = "proj-keep"
+
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: now, UpdatedAt: now}
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+
+	q := store.Queries()
+	mustExec := func(name string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	// Seed both projects.
+	for _, id := range []string{projectID, otherID} {
+		mustExec("project", q.UpsertProject(ctx, db.UpsertProjectParams{
+			ID: id, SlugID: id, Name: id, SyncedAt: now, Data: []byte("{}"),
+		}))
+	}
+	// Sub-resources on the orphan.
+	mustExec("project-team", q.UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
+		ProjectID: projectID, TeamID: "team-1", SyncedAt: now,
+	}))
+	mustExec("project-doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
+		ID: "pd1", SlugID: "pd1", Title: "Doc",
+		ProjectID: sql.NullString{String: projectID, Valid: true},
+		SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("project-update", q.UpsertProjectUpdate(ctx, db.UpsertProjectUpdateParams{
+		ID: "pu1", ProjectID: projectID, Body: "ok", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("project-milestone", q.UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
+		ID: "pm1", ProjectID: projectID, Name: "MS", SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("initiative-project link", q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+		InitiativeID: "init-1", ProjectID: projectID, SyncedAt: now,
+	}))
+	// Sub-resources on the keeper.
+	mustExec("keeper doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
+		ID: "pd-keep", SlugID: "pd-keep", Title: "Keep",
+		ProjectID: sql.NullString{String: otherID, Valid: true},
+		SyncedAt: now, Data: []byte("{}"),
+	}))
+
+	repo.deleteOrphanProject(ctx, projectID)
+
+	// Orphan gone.
+	if _, err := q.GetProject(ctx, projectID); err != sql.ErrNoRows {
+		t.Errorf("orphan project not deleted: err=%v", err)
+	}
+	if got, _ := q.ListProjectTeamIDs(ctx, projectID); len(got) != 0 {
+		t.Errorf("orphan project-team links not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan project docs not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListProjectUpdates(ctx, projectID); len(got) != 0 {
+		t.Errorf("orphan project updates not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListProjectMilestones(ctx, projectID); len(got) != 0 {
+		t.Errorf("orphan milestones not deleted: %d remain", len(got))
+	}
+	// Keeper survives.
+	if _, err := q.GetProject(ctx, otherID); err != nil {
+		t.Errorf("keeper project was deleted: %v", err)
+	}
+	if got, _ := q.ListProjectDocuments(ctx, sql.NullString{String: otherID, Valid: true}); len(got) != 1 {
+		t.Errorf("keeper doc clobbered: %d remain", len(got))
+	}
+}

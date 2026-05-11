@@ -756,6 +756,34 @@ func (r *SQLiteRepository) deleteOrphanIssue(ctx context.Context, issueID string
 	log.Printf("[repo] deleted orphan issue %s (no longer exists in Linear)", issueID)
 }
 
+// deleteOrphanProject removes a project and all its sub-resources from SQLite.
+// Mirrors deleteOrphanIssue. Does not modify the issues.project_id column on
+// issues that referenced this project — those stay until the issue is next
+// synced.
+func (r *SQLiteRepository) deleteOrphanProject(ctx context.Context, projectID string) {
+	q := r.store.Queries()
+	if err := q.DeleteProjectTeams(ctx, projectID); err != nil {
+		log.Printf("[repo] orphan cleanup: project-teams for %s: %v", projectID, err)
+	}
+	if err := q.DeleteProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true}); err != nil {
+		log.Printf("[repo] orphan cleanup: project documents for %s: %v", projectID, err)
+	}
+	if err := q.DeleteProjectUpdates(ctx, projectID); err != nil {
+		log.Printf("[repo] orphan cleanup: project updates for %s: %v", projectID, err)
+	}
+	if err := q.DeleteProjectMilestones(ctx, projectID); err != nil {
+		log.Printf("[repo] orphan cleanup: project milestones for %s: %v", projectID, err)
+	}
+	if err := q.DeleteInitiativeProjectsByProject(ctx, projectID); err != nil {
+		log.Printf("[repo] orphan cleanup: initiative-project links for %s: %v", projectID, err)
+	}
+	if err := q.DeleteProject(ctx, projectID); err != nil {
+		log.Printf("[repo] orphan cleanup: project %s: %v", projectID, err)
+		return
+	}
+	log.Printf("[repo] deleted orphan project %s (no longer exists in Linear)", projectID)
+}
+
 // refreshIssueDetails fetches comments, documents, and attachments in a single
 // API call and stores them all in SQLite.
 func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID string) error {

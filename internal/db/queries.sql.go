@@ -107,6 +107,15 @@ func (q *Queries) DeleteInitiativeProjects(ctx context.Context, initiativeID str
 	return err
 }
 
+const deleteInitiativeProjectsByProject = `-- name: DeleteInitiativeProjectsByProject :exec
+DELETE FROM initiative_projects WHERE project_id = ?
+`
+
+func (q *Queries) DeleteInitiativeProjectsByProject(ctx context.Context, projectID string) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiativeProjectsByProject, projectID)
+	return err
+}
+
 const deleteInitiativeUpdate = `-- name: DeleteInitiativeUpdate :exec
 DELETE FROM initiative_updates WHERE id = ?
 `
