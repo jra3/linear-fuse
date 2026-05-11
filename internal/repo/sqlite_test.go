@@ -2481,3 +2481,66 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 		t.Errorf("keeper init update clobbered: %d remain", len(got))
 	}
 }
+
+func TestMaybeScheduleReconcile_ColdStart(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	client := &api.Client{} // non-nil so the trigger isn't skipped
+	repo := NewSQLiteRepository(store, client)
+	defer repo.Close()
+
+	// Cold start: lastReconcileAt is zero, so the first call should schedule.
+	repo.maybeScheduleReconcile()
+
+	// reconcilePending should be set immediately (sync part of the trigger).
+	// The goroutine clears it; we only check that the gate engaged.
+	if !repo.reconcilePending.Load() && repo.lastReconcileAt.IsZero() {
+		// Race: goroutine may have run and finished by now. Either pending
+		// was momentarily set, or lastReconcileAt is now non-zero. Wait briefly
+		// for the latter.
+		for i := 0; i < 50; i++ {
+			if !repo.lastReconcileAt.IsZero() {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if repo.lastReconcileAt.IsZero() {
+			t.Fatal("trigger did not fire on cold start (lastReconcileAt still zero)")
+		}
+	}
+}
+
+func TestMaybeScheduleReconcile_CooldownGate(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	client := &api.Client{}
+	repo := NewSQLiteRepository(store, client)
+	defer repo.Close()
+
+	// Simulate a recent reconcile.
+	repo.reconcileMu.Lock()
+	repo.lastReconcileAt = time.Now()
+	repo.reconcileMu.Unlock()
+
+	// Should not fire while within cooldown.
+	repo.maybeScheduleReconcile()
+	if repo.reconcilePending.Load() {
+		t.Error("trigger fired despite cooldown")
+	}
+}
+
+func TestMaybeScheduleReconcile_NilClient(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	repo.maybeScheduleReconcile() // must not panic
+	if repo.reconcilePending.Load() {
+		t.Error("trigger fired with nil client")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -18,6 +19,11 @@ import (
 // Set to 5 minutes (2.5× the 2-minute sync interval) so genuinely missed syncs
 // get caught by user access without causing redundant refreshes on every read.
 const defaultStalenessThreshold = 5 * time.Minute
+
+// reconcileCooldown is the minimum gap between proactive reconciliation
+// passes. The pass is triggered by reactive orphan deletions, then
+// suppressed for this window to bound API cost.
+const reconcileCooldown = 6 * time.Hour
 
 // SQLiteRepository implements Repository using SQLite as the data store.
 // It reads from SQLite and optionally falls back to the API client
@@ -49,6 +55,12 @@ type SQLiteRepository struct {
 
 	// Semaphore to limit concurrent background refreshes
 	refreshSem chan struct{}
+
+	// Adaptive reconciliation: triggered by reactive orphan deletions,
+	// rate-limited by reconcileCooldown.
+	reconcileMu      sync.Mutex
+	lastReconcileAt  time.Time
+	reconcilePending atomic.Bool
 }
 
 // NewSQLiteRepository creates a new SQLite-backed repository.
@@ -135,6 +147,46 @@ func (r *SQLiteRepository) triggerBackgroundRefresh(key string, refreshFn func(c
 			}
 		}
 	}()
+}
+
+// maybeScheduleReconcile fires a proactive reconciliation pass if no pass
+// has run within reconcileCooldown. Called from every deleteOrphan* helper
+// after a successful orphan deletion — the deletion itself is evidence of
+// drift between SQLite and Linear, justifying a full sweep to find siblings.
+func (r *SQLiteRepository) maybeScheduleReconcile() {
+	if r.client == nil {
+		return
+	}
+	if r.reconcilePending.Load() {
+		return
+	}
+
+	r.reconcileMu.Lock()
+	elapsed := time.Since(r.lastReconcileAt)
+	r.reconcileMu.Unlock()
+
+	if elapsed < reconcileCooldown {
+		return
+	}
+	if !r.reconcilePending.CompareAndSwap(false, true) {
+		return
+	}
+
+	go r.runReconcile()
+}
+
+// runReconcile performs a full sweep across issues, projects, and
+// initiatives, deleting any local row whose ID is absent from Linear's
+// authoritative response. Stubbed here; the body is implemented in the
+// reconciliation task.
+func (r *SQLiteRepository) runReconcile() {
+	defer r.reconcilePending.Store(false)
+
+	// Task 6 will replace this stub with the real per-entity reconcile calls.
+	r.reconcileMu.Lock()
+	r.lastReconcileAt = time.Now()
+	r.reconcileMu.Unlock()
+	log.Printf("[reconcile] pass complete: stub (no work yet)")
 }
 
 // =============================================================================
@@ -754,6 +806,7 @@ func (r *SQLiteRepository) deleteOrphanIssue(ctx context.Context, issueID string
 		return
 	}
 	log.Printf("[repo] deleted orphan issue %s (no longer exists in Linear)", issueID)
+	r.maybeScheduleReconcile()
 }
 
 // deleteOrphanProject removes a project and all its sub-resources from SQLite.
@@ -784,6 +837,7 @@ func (r *SQLiteRepository) deleteOrphanProject(ctx context.Context, projectID st
 		return
 	}
 	log.Printf("[repo] deleted orphan project %s (no longer exists in Linear)", projectID)
+	r.maybeScheduleReconcile()
 }
 
 // deleteOrphanInitiative removes an initiative and all its sub-resources from SQLite.
@@ -806,6 +860,7 @@ func (r *SQLiteRepository) deleteOrphanInitiative(ctx context.Context, initiativ
 		return
 	}
 	log.Printf("[repo] deleted orphan initiative %s (no longer exists in Linear)", initiativeID)
+	r.maybeScheduleReconcile()
 }
 
 // refreshIssueDetails fetches comments, documents, and attachments in a single
