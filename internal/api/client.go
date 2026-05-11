@@ -2098,6 +2098,7 @@ func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) erro
 // The reconciliation pass uses this to defer the next per-team page when
 // budget is tight, leaving headroom for user-facing writes and ongoing sync.
 func (c *Client) LowBudget() bool {
+	// 5 = write-reserve (2, see c.query) + sync headroom (~3 pages).
 	return c.limiter.Tokens() < 5
 }
 
@@ -2105,7 +2106,7 @@ func (c *Client) LowBudget() bool {
 // reconciliation pass — much cheaper than fetching full IssueFields.
 func (c *Client) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, error) {
 	var ids []string
-	var cursor string
+	var cursor *string
 	const pageSize = 100
 
 	for {
@@ -2124,8 +2125,8 @@ func (c *Client) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, 
 			"teamId": teamID,
 			"first":  pageSize,
 		}
-		if cursor != "" {
-			vars["after"] = cursor
+		if cursor != nil {
+			vars["after"] = *cursor
 		}
 
 		if err := c.query(ctx, queryTeamIssueIDs, vars, &result); err != nil {
@@ -2139,7 +2140,7 @@ func (c *Client) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, 
 		if !result.Team.Issues.PageInfo.HasNextPage {
 			break
 		}
-		cursor = result.Team.Issues.PageInfo.EndCursor
+		cursor = &result.Team.Issues.PageInfo.EndCursor
 	}
 
 	return ids, nil

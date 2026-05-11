@@ -1180,19 +1180,21 @@ query TeamIssueIDs($teamId: String!, $first: Int!, $after: String) {
 `
 
 // queryWorkspaceProjectIDs returns IDs of all projects in the workspace.
-// Linear's project list is small (~10s–100s); pagination not required.
+// first: 250 matches Linear's max page size — workspaces with more than
+// 250 active projects would need pagination here.
 const queryWorkspaceProjectIDs = `
 query WorkspaceProjectIDs {
-  projects {
+  projects(first: 250) {
     nodes { id }
   }
 }
 `
 
 // queryWorkspaceInitiativeIDs returns IDs of all initiatives in the workspace.
+// See queryWorkspaceProjectIDs for the first: 250 rationale.
 const queryWorkspaceInitiativeIDs = `
 query WorkspaceInitiativeIDs {
-  initiatives {
+  initiatives(first: 250) {
     nodes { id }
   }
 }
