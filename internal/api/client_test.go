@@ -1421,3 +1421,75 @@ func TestMutationPriorityReservesTokensForWrites(t *testing.T) {
 		t.Errorf("mutation should bypass write reservation, got: %v", err)
 	}
 }
+
+func TestClient_LowBudget(t *testing.T) {
+	c := NewClient("test-key")
+	// Fresh limiter has full burst (10 tokens). Should not be low.
+	if c.LowBudget() {
+		t.Error("LowBudget true with full burst")
+	}
+	// Drain burst.
+	for i := 0; i < 9; i++ {
+		c.limiter.Reserve()
+	}
+	if !c.LowBudget() {
+		t.Error("LowBudget false with <5 tokens remaining")
+	}
+}
+
+func TestClient_GetTeamIssueIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"i1"},{"id":"i2"},{"id":"i3"}]}}}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("test-key")
+	c.SetAPIURL(server.URL)
+
+	ids, err := c.GetTeamIssueIDs(context.Background(), "team-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.Join(ids, ","); got != "i1,i2,i3" {
+		t.Errorf("got %q, want i1,i2,i3", got)
+	}
+}
+
+func TestClient_GetWorkspaceProjectIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"projects":{"nodes":[{"id":"p1"},{"id":"p2"}]}}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("test-key")
+	c.SetAPIURL(server.URL)
+
+	ids, err := c.GetWorkspaceProjectIDs(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.Join(ids, ","); got != "p1,p2" {
+		t.Errorf("got %q, want p1,p2", got)
+	}
+}
+
+func TestClient_GetWorkspaceInitiativeIDs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"initiatives":{"nodes":[{"id":"i1"}]}}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("test-key")
+	c.SetAPIURL(server.URL)
+
+	ids, err := c.GetWorkspaceInitiativeIDs(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := strings.Join(ids, ","); got != "i1" {
+		t.Errorf("got %q, want i1", got)
+	}
+}

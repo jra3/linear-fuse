@@ -2093,3 +2093,92 @@ func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) erro
 
 	return nil
 }
+
+// LowBudget reports whether the rate limiter has fewer than 5 tokens left.
+// The reconciliation pass uses this to defer the next per-team page when
+// budget is tight, leaving headroom for user-facing writes and ongoing sync.
+func (c *Client) LowBudget() bool {
+	return c.limiter.Tokens() < 5
+}
+
+// GetTeamIssueIDs paginates issue IDs for the given team. Used by the
+// reconciliation pass — much cheaper than fetching full IssueFields.
+func (c *Client) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, error) {
+	var ids []string
+	var cursor string
+	const pageSize = 100
+
+	for {
+		var result struct {
+			Team struct {
+				Issues struct {
+					PageInfo PageInfo `json:"pageInfo"`
+					Nodes    []struct {
+						ID string `json:"id"`
+					} `json:"nodes"`
+				} `json:"issues"`
+			} `json:"team"`
+		}
+
+		vars := map[string]any{
+			"teamId": teamID,
+			"first":  pageSize,
+		}
+		if cursor != "" {
+			vars["after"] = cursor
+		}
+
+		if err := c.query(ctx, queryTeamIssueIDs, vars, &result); err != nil {
+			return nil, err
+		}
+
+		for _, node := range result.Team.Issues.Nodes {
+			ids = append(ids, node.ID)
+		}
+
+		if !result.Team.Issues.PageInfo.HasNextPage {
+			break
+		}
+		cursor = result.Team.Issues.PageInfo.EndCursor
+	}
+
+	return ids, nil
+}
+
+// GetWorkspaceProjectIDs returns IDs of every project in the workspace.
+func (c *Client) GetWorkspaceProjectIDs(ctx context.Context) ([]string, error) {
+	var result struct {
+		Projects struct {
+			Nodes []struct {
+				ID string `json:"id"`
+			} `json:"nodes"`
+		} `json:"projects"`
+	}
+	if err := c.query(ctx, queryWorkspaceProjectIDs, nil, &result); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(result.Projects.Nodes))
+	for _, n := range result.Projects.Nodes {
+		ids = append(ids, n.ID)
+	}
+	return ids, nil
+}
+
+// GetWorkspaceInitiativeIDs returns IDs of every initiative in the workspace.
+func (c *Client) GetWorkspaceInitiativeIDs(ctx context.Context) ([]string, error) {
+	var result struct {
+		Initiatives struct {
+			Nodes []struct {
+				ID string `json:"id"`
+			} `json:"nodes"`
+		} `json:"initiatives"`
+	}
+	if err := c.query(ctx, queryWorkspaceInitiativeIDs, nil, &result); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(result.Initiatives.Nodes))
+	for _, n := range result.Initiatives.Nodes {
+		ids = append(ids, n.ID)
+	}
+	return ids, nil
+}

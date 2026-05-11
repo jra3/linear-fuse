@@ -1164,3 +1164,36 @@ query IssueHistory($issueId: String!) {
   }
 }
 `
+
+// queryTeamIssueIDs paginates issue IDs for a team. Used by the
+// reconciliation pass to enumerate the authoritative set of issue IDs
+// without paying the cost of full IssueFields.
+const queryTeamIssueIDs = `
+query TeamIssueIDs($teamId: String!, $first: Int!, $after: String) {
+  team(id: $teamId) {
+    issues(first: $first, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id }
+    }
+  }
+}
+`
+
+// queryWorkspaceProjectIDs returns IDs of all projects in the workspace.
+// Linear's project list is small (~10s–100s); pagination not required.
+const queryWorkspaceProjectIDs = `
+query WorkspaceProjectIDs {
+  projects {
+    nodes { id }
+  }
+}
+`
+
+// queryWorkspaceInitiativeIDs returns IDs of all initiatives in the workspace.
+const queryWorkspaceInitiativeIDs = `
+query WorkspaceInitiativeIDs {
+  initiatives {
+    nodes { id }
+  }
+}
+`
