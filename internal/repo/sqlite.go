@@ -946,6 +946,9 @@ func (r *SQLiteRepository) maybeRefreshProjectDocuments(projectID string, isEmpt
 func (r *SQLiteRepository) refreshProjectDocuments(ctx context.Context, projectID string) error {
 	docs, err := r.client.GetProjectDocuments(ctx, projectID)
 	if err != nil {
+		if isEntityNotFound(err) {
+			r.deleteOrphanProject(ctx, projectID)
+		}
 		return err
 	}
 
@@ -994,6 +997,9 @@ func (r *SQLiteRepository) maybeRefreshInitiativeDocuments(initiativeID string, 
 func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initiativeID string) error {
 	docs, err := r.client.GetInitiativeDocuments(ctx, initiativeID)
 	if err != nil {
+		if isEntityNotFound(err) {
+			r.deleteOrphanInitiative(ctx, initiativeID)
+		}
 		return err
 	}
 
@@ -1096,6 +1102,9 @@ func (r *SQLiteRepository) maybeRefreshProjectUpdates(projectID string, isEmpty 
 func (r *SQLiteRepository) refreshProjectUpdates(ctx context.Context, projectID string) error {
 	updates, err := r.client.GetProjectUpdates(ctx, projectID)
 	if err != nil {
+		if isEntityNotFound(err) {
+			r.deleteOrphanProject(ctx, projectID)
+		}
 		return err
 	}
 
@@ -1144,6 +1153,9 @@ func (r *SQLiteRepository) maybeRefreshInitiativeUpdates(initiativeID string, is
 func (r *SQLiteRepository) refreshInitiativeUpdates(ctx context.Context, initiativeID string) error {
 	updates, err := r.client.GetInitiativeUpdates(ctx, initiativeID)
 	if err != nil {
+		if isEntityNotFound(err) {
+			r.deleteOrphanInitiative(ctx, initiativeID)
+		}
 		return err
 	}
 
