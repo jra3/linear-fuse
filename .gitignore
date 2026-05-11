@@ -32,6 +32,6 @@ go.work.sum
 # .idea/
 # .vscode/
 .claude/settings.local.json
-docs/
+docs/*
 !docs/plans/
 coverage.out
