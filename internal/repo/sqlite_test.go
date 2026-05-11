@@ -2408,6 +2408,9 @@ func TestDeleteOrphanProject(t *testing.T) {
 	if got, _ := q.ListProjectMilestones(ctx, projectID); len(got) != 0 {
 		t.Errorf("orphan milestones not deleted: %d remain", len(got))
 	}
+	if got, _ := q.ListProjectInitiativeIDs(ctx, projectID); len(got) != 0 {
+		t.Errorf("orphan initiative-project links not deleted: %d remain", len(got))
+	}
 	// Keeper survives.
 	if _, err := q.GetProject(ctx, otherID); err != nil {
 		t.Errorf("keeper project was deleted: %v", err)

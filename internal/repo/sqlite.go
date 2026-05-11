@@ -757,13 +757,15 @@ func (r *SQLiteRepository) deleteOrphanIssue(ctx context.Context, issueID string
 }
 
 // deleteOrphanProject removes a project and all its sub-resources from SQLite.
-// Mirrors deleteOrphanIssue. Does not modify the issues.project_id column on
-// issues that referenced this project — those stay until the issue is next
-// synced.
+// Called when Linear reports the project no longer exists. Errors are logged
+// but not propagated — partial cleanup beats no cleanup, and the caller has
+// no recovery action available. Does not modify the issues.project_id column
+// on issues that referenced this project — those rows stay until the issue is
+// next synced.
 func (r *SQLiteRepository) deleteOrphanProject(ctx context.Context, projectID string) {
 	q := r.store.Queries()
 	if err := q.DeleteProjectTeams(ctx, projectID); err != nil {
-		log.Printf("[repo] orphan cleanup: project-teams for %s: %v", projectID, err)
+		log.Printf("[repo] orphan cleanup: project teams for %s: %v", projectID, err)
 	}
 	if err := q.DeleteProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true}); err != nil {
 		log.Printf("[repo] orphan cleanup: project documents for %s: %v", projectID, err)
