@@ -185,6 +185,9 @@ UPDATE attachments SET synced_at = ? WHERE issue_id = ?;
 -- name: TouchIssueHistoryCache :exec
 UPDATE issue_history_cache SET synced_at = ? WHERE issue_id = ?;
 
+-- name: DeleteIssueHistoryCache :exec
+DELETE FROM issue_history_cache WHERE issue_id = ?;
+
 -- name: ListTeamIssueIDs :many
 SELECT id, updated_at FROM issues WHERE team_id = ? ORDER BY updated_at DESC;
 

@@ -179,6 +179,15 @@ func (q *Queries) DeleteIssueEmbeddedFiles(ctx context.Context, issueID string) 
 	return err
 }
 
+const deleteIssueHistoryCache = `-- name: DeleteIssueHistoryCache :exec
+DELETE FROM issue_history_cache WHERE issue_id = ?
+`
+
+func (q *Queries) DeleteIssueHistoryCache(ctx context.Context, issueID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueHistoryCache, issueID)
+	return err
+}
+
 const deleteIssueRelation = `-- name: DeleteIssueRelation :exec
 DELETE FROM issue_relations WHERE id = ?
 `

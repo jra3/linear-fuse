@@ -2212,3 +2212,125 @@ func TestSetCatchUpMode(t *testing.T) {
 		t.Errorf("expected default staleness %v after disabling catch-up, got %v", defaultStalenessThreshold, repo.stalenessThreshold)
 	}
 }
+
+func TestIsEntityNotFound(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"unrelated error", fmt.Errorf("connection refused"), false},
+		{"linear not-found wrapped", fmt.Errorf("GraphQL error: Entity not found: Issue"), true},
+		{"raw not-found", fmt.Errorf("Entity not found"), true},
+		{"rate limit", fmt.Errorf("rate limit wait cancelled: context canceled"), false},
+	}
+	for _, c := range cases {
+		if got := isEntityNotFound(c.err); got != c.want {
+			t.Errorf("%s: isEntityNotFound(%v) = %v, want %v", c.name, c.err, got, c.want)
+		}
+	}
+}
+
+func TestDeleteOrphanIssue(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+	now := time.Now()
+	const issueID = "orphan-1"
+	const otherID = "keeper-1"
+
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test", CreatedAt: now, UpdatedAt: now}
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("setup team: %v", err)
+	}
+
+	// Seed two issues — only the orphan should be deleted; the keeper stays.
+	for _, id := range []string{issueID, otherID} {
+		issue := api.Issue{
+			ID: id, Identifier: id, Title: id, Team: &team,
+			State: api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+			CreatedAt: now, UpdatedAt: now,
+		}
+		data, _ := db.APIIssueToDBIssue(issue)
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("seed issue %s: %v", id, err)
+		}
+	}
+
+	// Seed every sub-resource type for the orphan.
+	q := store.Queries()
+	mustExec := func(name string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+	mustExec("comment", q.UpsertComment(ctx, db.UpsertCommentParams{
+		ID: "c1", IssueID: issueID, Body: "hi", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("document", q.UpsertDocument(ctx, db.UpsertDocumentParams{
+		ID: "d1", SlugID: "d1", Title: "Doc",
+		IssueID: sql.NullString{String: issueID, Valid: true},
+		SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("attachment", q.UpsertAttachment(ctx, db.UpsertAttachmentParams{
+		ID: "a1", IssueID: issueID, Title: "Att", Url: "https://e", Metadata: []byte("{}"), SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("embedded", q.UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
+		ID: "e1", IssueID: issueID, Url: "https://e", Filename: "x", Source: "comment", CreatedAt: now, SyncedAt: now,
+	}))
+	mustExec("relation", q.UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
+		ID: "r1", IssueID: issueID, RelatedIssueID: otherID, Type: "related", SyncedAt: now,
+	}))
+	mustExec("history", q.UpsertIssueHistoryCache(ctx, db.UpsertIssueHistoryCacheParams{
+		IssueID: issueID, SyncedAt: now, Data: []byte("[]"),
+	}))
+	mustExec("pending", q.UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+		IssueID: issueID, Identifier: issueID, QueuedAt: now,
+	}))
+	// Also seed a sibling resource on the keeper to confirm we don't clobber it.
+	mustExec("keeper comment", q.UpsertComment(ctx, db.UpsertCommentParams{
+		ID: "c-keep", IssueID: otherID, Body: "stay", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
+	}))
+
+	repo.deleteOrphanIssue(ctx, issueID)
+
+	// Orphan rows are gone.
+	if got, _ := q.ListIssueComments(ctx, issueID); len(got) != 0 {
+		t.Errorf("orphan comments not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListIssueDocuments(ctx, sql.NullString{String: issueID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan documents not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListIssueAttachments(ctx, issueID); len(got) != 0 {
+		t.Errorf("orphan attachments not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListIssueEmbeddedFiles(ctx, issueID); len(got) != 0 {
+		t.Errorf("orphan embedded files not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListIssueRelations(ctx, issueID); len(got) != 0 {
+		t.Errorf("orphan relations not deleted: %d remain", len(got))
+	}
+	if _, err := q.GetIssueHistoryCache(ctx, issueID); err != sql.ErrNoRows {
+		t.Errorf("orphan history cache not deleted: err=%v", err)
+	}
+	if got, _ := q.ListPendingDetailSync(ctx); len(got) != 0 {
+		t.Errorf("orphan pending sync not deleted: %d remain", len(got))
+	}
+	if _, err := q.GetIssueByID(ctx,issueID); err != sql.ErrNoRows {
+		t.Errorf("orphan issue itself not deleted: err=%v", err)
+	}
+
+	// Keeper survives.
+	if _, err := q.GetIssueByID(ctx,otherID); err != nil {
+		t.Errorf("keeper issue was accidentally deleted: %v", err)
+	}
+	if got, _ := q.ListIssueComments(ctx, otherID); len(got) != 1 {
+		t.Errorf("keeper comment was clobbered: %d remain", len(got))
+	}
+}

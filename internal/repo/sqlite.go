@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -713,11 +714,56 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 	}
 }
 
+// isEntityNotFound reports whether err is Linear's "Entity not found" GraphQL
+// error, indicating the issue (or other entity) no longer exists upstream.
+// When seen on a refresh, the local row is an orphan and should be deleted —
+// otherwise every FUSE traversal retriggers the same failing refresh forever.
+func isEntityNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Entity not found")
+}
+
+// deleteOrphanIssue removes an issue and all its sub-resources from SQLite.
+// Called when Linear reports the issue no longer exists. Errors are logged
+// but not propagated — partial cleanup beats no cleanup, and the caller has
+// no recovery action available.
+func (r *SQLiteRepository) deleteOrphanIssue(ctx context.Context, issueID string) {
+	q := r.store.Queries()
+	if err := q.DeleteIssueComments(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: comments for %s: %v", issueID, err)
+	}
+	if err := q.DeleteIssueDocuments(ctx, sql.NullString{String: issueID, Valid: true}); err != nil {
+		log.Printf("[repo] orphan cleanup: documents for %s: %v", issueID, err)
+	}
+	if err := q.DeleteIssueAttachments(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: attachments for %s: %v", issueID, err)
+	}
+	if err := q.DeleteIssueEmbeddedFiles(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: embedded files for %s: %v", issueID, err)
+	}
+	if err := q.DeleteIssueRelations(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: relations for %s: %v", issueID, err)
+	}
+	if err := q.DeleteIssueHistoryCache(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: history for %s: %v", issueID, err)
+	}
+	if err := q.DeletePendingDetailSync(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: pending sync for %s: %v", issueID, err)
+	}
+	if err := q.DeleteIssue(ctx, issueID); err != nil {
+		log.Printf("[repo] orphan cleanup: issue %s: %v", issueID, err)
+		return
+	}
+	log.Printf("[repo] deleted orphan issue %s (no longer exists in Linear)", issueID)
+}
+
 // refreshIssueDetails fetches comments, documents, and attachments in a single
 // API call and stores them all in SQLite.
 func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID string) error {
 	details, err := r.client.GetIssueDetails(ctx, issueID)
 	if err != nil {
+		if isEntityNotFound(err) {
+			r.deleteOrphanIssue(ctx, issueID)
+		}
 		return err
 	}
 
@@ -1146,6 +1192,9 @@ func (r *SQLiteRepository) GetIssueHistory(ctx context.Context, issueID string) 
 	r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
 		entries, err := r.client.GetIssueHistory(ctx, issueID)
 		if err != nil {
+			if isEntityNotFound(err) {
+				r.deleteOrphanIssue(ctx, issueID)
+			}
 			return err
 		}
 		r.upsertHistoryCache(ctx, issueID, entries)
@@ -1173,6 +1222,9 @@ func (r *SQLiteRepository) maybeRefreshHistory(issueID string, cachedSyncedAt ti
 		r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
 			entries, err := r.client.GetIssueHistory(ctx, issueID)
 			if err != nil {
+				if isEntityNotFound(err) {
+					r.deleteOrphanIssue(ctx, issueID)
+				}
 				return err
 			}
 			r.upsertHistoryCache(ctx, issueID, entries)
