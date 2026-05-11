@@ -2494,21 +2494,25 @@ func TestMaybeScheduleReconcile_ColdStart(t *testing.T) {
 	// Cold start: lastReconcileAt is zero, so the first call should schedule.
 	repo.maybeScheduleReconcile()
 
-	// reconcilePending should be set immediately (sync part of the trigger).
-	// The goroutine clears it; we only check that the gate engaged.
-	if !repo.reconcilePending.Load() && repo.lastReconcileAt.IsZero() {
-		// Race: goroutine may have run and finished by now. Either pending
-		// was momentarily set, or lastReconcileAt is now non-zero. Wait briefly
-		// for the latter.
-		for i := 0; i < 50; i++ {
-			if !repo.lastReconcileAt.IsZero() {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
+	// Wait for the scheduled goroutine to finish. reconcilePending is
+	// atomic.Bool — safe to poll without the mutex. The stub runReconcile
+	// clears it via defer when done.
+	for i := 0; i < 100; i++ {
+		if !repo.reconcilePending.Load() {
+			break
 		}
-		if repo.lastReconcileAt.IsZero() {
-			t.Fatal("trigger did not fire on cold start (lastReconcileAt still zero)")
-		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if repo.reconcilePending.Load() {
+		t.Fatal("scheduled reconcile goroutine did not finish in time")
+	}
+
+	// Now safe to inspect lastReconcileAt under the mutex.
+	repo.reconcileMu.Lock()
+	lastAt := repo.lastReconcileAt
+	repo.reconcileMu.Unlock()
+	if lastAt.IsZero() {
+		t.Fatal("trigger did not fire on cold start (lastReconcileAt still zero)")
 	}
 }
 
