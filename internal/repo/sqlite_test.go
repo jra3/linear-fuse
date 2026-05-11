@@ -2419,3 +2419,65 @@ func TestDeleteOrphanProject(t *testing.T) {
 		t.Errorf("keeper doc clobbered: %d remain", len(got))
 	}
 }
+
+func TestDeleteOrphanInitiative(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+	now := time.Now()
+	const initID = "init-orphan"
+	const otherID = "init-keep"
+
+	q := store.Queries()
+	mustExec := func(name string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
+	}
+
+	for _, id := range []string{initID, otherID} {
+		mustExec("initiative", q.UpsertInitiative(ctx, db.UpsertInitiativeParams{
+			ID: id, SlugID: id, Name: id, SyncedAt: now, Data: []byte("{}"),
+		}))
+	}
+	mustExec("init-doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
+		ID: "id1", SlugID: "id1", Title: "Doc",
+		InitiativeID: sql.NullString{String: initID, Valid: true},
+		SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("init-update", q.UpsertInitiativeUpdate(ctx, db.UpsertInitiativeUpdateParams{
+		ID: "iu1", InitiativeID: initID, Body: "ok", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
+	}))
+	mustExec("init-project link", q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+		InitiativeID: initID, ProjectID: "some-proj", SyncedAt: now,
+	}))
+	// Keeper sub-resource.
+	mustExec("keeper update", q.UpsertInitiativeUpdate(ctx, db.UpsertInitiativeUpdateParams{
+		ID: "iu-keep", InitiativeID: otherID, Body: "keep", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
+	}))
+
+	repo.deleteOrphanInitiative(ctx, initID)
+
+	if _, err := q.GetInitiative(ctx, initID); err != sql.ErrNoRows {
+		t.Errorf("orphan initiative not deleted: err=%v", err)
+	}
+	if got, _ := q.ListInitiativeDocuments(ctx, sql.NullString{String: initID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan init docs not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListInitiativeUpdates(ctx, initID); len(got) != 0 {
+		t.Errorf("orphan init updates not deleted: %d remain", len(got))
+	}
+	if got, _ := q.ListInitiativeProjectIDs(ctx, initID); len(got) != 0 {
+		t.Errorf("orphan init-project links not deleted: %d remain", len(got))
+	}
+	if _, err := q.GetInitiative(ctx, otherID); err != nil {
+		t.Errorf("keeper initiative was deleted: %v", err)
+	}
+	if got, _ := q.ListInitiativeUpdates(ctx, otherID); len(got) != 1 {
+		t.Errorf("keeper init update clobbered: %d remain", len(got))
+	}
+}

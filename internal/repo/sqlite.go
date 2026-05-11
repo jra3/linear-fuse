@@ -786,6 +786,28 @@ func (r *SQLiteRepository) deleteOrphanProject(ctx context.Context, projectID st
 	log.Printf("[repo] deleted orphan project %s (no longer exists in Linear)", projectID)
 }
 
+// deleteOrphanInitiative removes an initiative and all its sub-resources from SQLite.
+// Called when Linear reports the initiative no longer exists. Errors are logged
+// but not propagated — partial cleanup beats no cleanup, and the caller has no
+// recovery action available.
+func (r *SQLiteRepository) deleteOrphanInitiative(ctx context.Context, initiativeID string) {
+	q := r.store.Queries()
+	if err := q.DeleteInitiativeDocuments(ctx, sql.NullString{String: initiativeID, Valid: true}); err != nil {
+		log.Printf("[repo] orphan cleanup: initiative documents for %s: %v", initiativeID, err)
+	}
+	if err := q.DeleteInitiativeUpdates(ctx, initiativeID); err != nil {
+		log.Printf("[repo] orphan cleanup: initiative updates for %s: %v", initiativeID, err)
+	}
+	if err := q.DeleteInitiativeProjects(ctx, initiativeID); err != nil {
+		log.Printf("[repo] orphan cleanup: initiative-project links for %s: %v", initiativeID, err)
+	}
+	if err := q.DeleteInitiative(ctx, initiativeID); err != nil {
+		log.Printf("[repo] orphan cleanup: initiative %s: %v", initiativeID, err)
+		return
+	}
+	log.Printf("[repo] deleted orphan initiative %s (no longer exists in Linear)", initiativeID)
+}
+
 // refreshIssueDetails fetches comments, documents, and attachments in a single
 // API call and stores them all in SQLite.
 func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID string) error {
