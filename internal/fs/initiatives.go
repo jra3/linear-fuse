@@ -129,6 +129,7 @@ func (i *InitiativeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "initiative.md", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
 		{Name: "updates", Mode: syscall.S_IFDIR},
@@ -150,6 +151,9 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			Mode: syscall.S_IFREG,
 			Ino:  initiativeInfoIno(i.initiative.ID),
 		}), 0
+
+	case ".error":
+		return i.lfs.lookupErrorFile(ctx, i, i.initiative.ID, out), 0
 
 	case "docs":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -377,7 +381,8 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	doc, err := marshal.Parse(i.content)
 	if err != nil {
 		log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
-		return syscall.EIO
+		i.lfs.SetWriteError(i.initiativeID, "Parse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	// Extract projects from frontmatter
@@ -421,10 +426,12 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			projectID, err := i.lfs.ResolveProjectSlugToID(ctx, slug)
 			if err != nil {
 				log.Printf("Failed to resolve project slug '%s': %v", slug, err)
-				return syscall.EIO
+				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: "+err.Error()+". Use a project slug from teams/<KEY>/projects/.")
+				return syscall.EINVAL
 			}
 			if err := i.lfs.client.AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
 				log.Printf("Failed to add project to initiative '%s': %v", slug, err)
+				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: failed to link project to initiative: "+err.Error())
 				return syscall.EIO
 			}
 			addedProjectIDs[slug] = projectID
@@ -440,10 +447,12 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			projectID, err := i.lfs.ResolveProjectSlugToID(ctx, slug)
 			if err != nil {
 				log.Printf("Failed to resolve project slug '%s' for removal: %v", slug, err)
-				return syscall.EIO
+				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: cannot resolve project to remove: "+err.Error())
+				return syscall.EINVAL
 			}
 			if err := i.lfs.client.RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
 				log.Printf("Failed to remove project from initiative '%s': %v", slug, err)
+				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: failed to unlink project from initiative: "+err.Error())
 				return syscall.EIO
 			}
 			removedProjectIDs[slug] = projectID
@@ -469,6 +478,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	if fieldChanged {
 		if err := i.lfs.client.UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
 			log.Printf("Failed to update initiative %s: %v", i.initiative.Name, err)
+			i.lfs.SetWriteError(i.initiativeID, "Field: name/description\nError: failed to update initiative: "+err.Error())
 			return syscall.EIO
 		}
 		if i.lfs.debug {
@@ -519,6 +529,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	i.lfs.InvalidateKernelInode(initiativeInfoIno(i.initiativeID))
 	i.lfs.InvalidateKernelInode(initiativeProjectsIno(i.initiativeID))
 
+	i.lfs.ClearWriteError(i.initiativeID)
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 

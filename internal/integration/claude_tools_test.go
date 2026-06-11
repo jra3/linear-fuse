@@ -174,6 +174,51 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 	}
 }
 
+// TestErrorFileExposedOnWritableSurfaces is the #140 structural guard: every
+// writable entity directory must expose a readable `.error` feedback file so a
+// failed write is legible to an LLM/script instead of a bare errno. It runs in
+// fixture mode (no API): with no prior failed write the file reads empty.
+func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  func(t *testing.T) string
+	}{
+		{
+			name: "issue",
+			dir:  func(t *testing.T) string { return issueDirPath(testTeamKey, "TST-1") },
+		},
+		{
+			name: "project",
+			dir: func(t *testing.T) string {
+				return filepath.Join(projectsPath(testTeamKey), "test-project")
+			},
+		},
+		{
+			name: "initiative",
+			dir: func(t *testing.T) string {
+				dir, err := firstInitiativeDir()
+				if err != nil {
+					t.Skipf("no initiative fixture: %v", err)
+				}
+				return dir
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errPath := filepath.Join(tc.dir(t), ".error")
+			data, err := os.ReadFile(errPath)
+			if err != nil {
+				t.Fatalf("read %s: %v", errPath, err)
+			}
+			if len(data) != 0 {
+				t.Fatalf("expected empty .error with no prior failed write, got %q", data)
+			}
+		})
+	}
+}
+
 // TestClaudeToolEditPersistsProjectDescription covers the second half of #139:
 // a write+fsync to project.md must actually persist the description to Linear.
 // It edits a real project and restores it, so it requires live-API write mode.

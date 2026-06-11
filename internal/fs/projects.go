@@ -209,26 +209,30 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// +4 for project.md, docs/, updates/, and milestones/
-	entries := make([]fuse.DirEntry, len(issues)+4)
+	// +5 for project.md, .error, docs/, updates/, and milestones/
+	entries := make([]fuse.DirEntry, len(issues)+5)
 	entries[0] = fuse.DirEntry{
 		Name: "project.md",
 		Mode: syscall.S_IFREG,
 	}
 	entries[1] = fuse.DirEntry{
+		Name: ".error",
+		Mode: syscall.S_IFREG,
+	}
+	entries[2] = fuse.DirEntry{
 		Name: "docs",
 		Mode: syscall.S_IFDIR,
 	}
-	entries[2] = fuse.DirEntry{
+	entries[3] = fuse.DirEntry{
 		Name: "updates",
 		Mode: syscall.S_IFDIR,
 	}
-	entries[3] = fuse.DirEntry{
+	entries[4] = fuse.DirEntry{
 		Name: "milestones",
 		Mode: syscall.S_IFDIR,
 	}
 	for i, issue := range issues {
-		entries[i+4] = fuse.DirEntry{
+		entries[i+5] = fuse.DirEntry{
 			Name: issue.Identifier,
 			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
@@ -251,6 +255,11 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 			Mode: syscall.S_IFREG,
 			Ino:  projectInfoIno(p.project.ID),
 		}), 0
+	}
+
+	// Handle .error feedback file (last failed write to project.md)
+	if name == ".error" {
+		return p.lfs.lookupErrorFile(ctx, p, p.project.ID, out), 0
 	}
 
 	// Handle docs/ directory
@@ -533,7 +542,8 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	doc, err := marshal.Parse(p.content)
 	if err != nil {
 		log.Printf("Failed to parse project changes for %s: %v", p.project.Name, err)
-		return syscall.EIO
+		p.lfs.SetWriteError(p.project.ID, "Parse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	// Extract initiatives from frontmatter
@@ -579,10 +589,12 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			initiativeID, err := p.lfs.ResolveInitiativeID(ctx, name)
 			if err != nil {
 				log.Printf("Failed to resolve initiative '%s': %v", name, err)
-				return syscall.EIO
+				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: "+err.Error()+". See initiatives/ for valid initiative names.")
+				return syscall.EINVAL
 			}
 			if err := p.lfs.client.AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
 				log.Printf("Failed to add project to initiative '%s': %v", name, err)
+				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to link project to initiative: "+err.Error())
 				return syscall.EIO
 			}
 			addedInitiativeIDs[name] = initiativeID
@@ -598,10 +610,12 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			initiativeID, err := p.lfs.ResolveInitiativeID(ctx, name)
 			if err != nil {
 				log.Printf("Failed to resolve initiative '%s' for removal: %v", name, err)
-				return syscall.EIO
+				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: cannot resolve initiative to remove: "+err.Error())
+				return syscall.EINVAL
 			}
 			if err := p.lfs.client.RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
 				log.Printf("Failed to remove project from initiative '%s': %v", name, err)
+				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to unlink project from initiative: "+err.Error())
 				return syscall.EIO
 			}
 			removedInitiativeIDs[name] = initiativeID
@@ -627,6 +641,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	if fieldChanged {
 		if err := p.lfs.client.UpdateProject(ctx, p.project.ID, projectInput); err != nil {
 			log.Printf("Failed to update project %s: %v", p.project.Name, err)
+			p.lfs.SetWriteError(p.project.ID, "Field: name/description\nError: failed to update project: "+err.Error())
 			return syscall.EIO
 		}
 		if p.lfs.debug {
@@ -677,6 +692,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))
 
+	p.lfs.ClearWriteError(p.project.ID)
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read
 
