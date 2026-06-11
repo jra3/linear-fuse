@@ -69,6 +69,23 @@ func claudeToolWrite(t *testing.T, path string, content []byte) {
 	}
 }
 
+// claudeToolWriteExpectingError emulates a save (truncate, write, close) and
+// returns the error surfaced at close, where Flush runs. Used to assert that
+// invalid writes fail loudly rather than succeeding silently.
+func claudeToolWriteExpectingError(t *testing.T, path string, content []byte) error {
+	t.Helper()
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("open %s for write: %v", path, err)
+	}
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // firstWritableFile returns the first non-hidden, non-_create entry in dir.
 func firstWritableFile(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
@@ -203,6 +220,28 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 				return dir
 			},
 		},
+		{
+			name: "comments",
+			dir:  func(t *testing.T) string { return commentsPath(testTeamKey, "TST-1") },
+		},
+		{
+			name: "docs",
+			dir:  func(t *testing.T) string { return docsPath(testTeamKey, "TST-1") },
+		},
+		{
+			name: "labels",
+			dir:  func(t *testing.T) string { return labelsPath(testTeamKey) },
+		},
+		{
+			name: "milestones",
+			dir: func(t *testing.T) string {
+				dir := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")
+				if _, err := os.Stat(dir); err != nil {
+					t.Skipf("no milestones fixture: %v", err)
+				}
+				return dir
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -217,6 +256,61 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWriteInvalidInputIsLoud is the #140/#142 "loud invalid input" guard:
+// writing an unresolvable initiative to project.md must fail with EINVAL and
+// leave a populated .error naming the bad value — never a bare EIO and never
+// silent success. The unknown-initiative check resolves against local SQLite,
+// so this runs in fixture mode with no network.
+func TestWriteInvalidInputIsLoud(t *testing.T) {
+	dir := filepath.Join(projectsPath(testTeamKey), "test-project")
+	path := filepath.Join(dir, "project.md")
+	errPath := filepath.Join(dir, ".error")
+
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read project.md: %v", err)
+	}
+	// Restore original content (clears .error on a clean flush).
+	defer func() {
+		if f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			_, _ = f.Write(orig)
+			_ = f.Close()
+		}
+	}()
+
+	const badValue = "__no_such_initiative__"
+	bad := []byte("---\nname: Test Project\ninitiatives: [\"" + badValue + "\"]\n---\n\nbody\n")
+
+	werr := claudeToolWriteExpectingError(t, path, bad)
+	if !errors.Is(werr, syscall.EINVAL) {
+		t.Fatalf("expected EINVAL writing unknown initiative, got %v", werr)
+	}
+
+	// The .error becomes visible once the kernel's attr-cache invalidation
+	// (InodeNotify) propagates; poll briefly. An agent reads .error well after
+	// this window, so eventual visibility is the real-world contract.
+	data := readFileUntilContains(t, errPath, badValue, defaultWaitTime)
+	if !strings.Contains(string(data), badValue) {
+		t.Fatalf(".error should name the rejected value %q, got %q", badValue, data)
+	}
+}
+
+// readFileUntilContains polls path until its content contains want or maxWait
+// elapses, returning the last content read.
+func readFileUntilContains(t *testing.T, path, want string, maxWait time.Duration) []byte {
+	t.Helper()
+	deadline := time.Now().Add(maxWait)
+	var data []byte
+	for time.Now().Before(deadline) {
+		data, _ = os.ReadFile(path)
+		if strings.Contains(string(data), want) {
+			return data
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return data
 }
 
 // TestClaudeToolEditPersistsProjectDescription covers the second half of #139:

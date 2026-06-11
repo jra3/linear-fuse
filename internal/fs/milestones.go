@@ -58,15 +58,17 @@ func (n *MilestonesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
 	if err != nil {
-		// On error, return just _create
+		// On error, return just _create and .error
 		return fs.NewListDirStream([]fuse.DirEntry{
 			{Name: "_create", Mode: syscall.S_IFREG},
+			{Name: ".error", Mode: syscall.S_IFREG},
 		}), 0
 	}
 
-	// Always include _create for creating milestones
+	// Always include _create for creating milestones and .error for feedback
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 	}
 
 	for _, m := range milestones {
@@ -98,6 +100,11 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			Mode: syscall.S_IFREG,
 			Ino:  milestonesCreateIno(n.projectID),
 		}), 0
+	}
+
+	// Handle .error feedback file (last failed milestone write in this dir)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("milestones", n.projectID), out), 0
 	}
 
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
@@ -159,6 +166,7 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 			err := n.lfs.DeleteProjectMilestone(ctx, m.ID)
 			if err != nil {
 				log.Printf("Failed to delete milestone: %v", err)
+				n.lfs.SetWriteError(collectionErrorKey("milestones", n.projectID), "Operation: delete milestone "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
 			// Invalidate kernel cache
@@ -291,16 +299,20 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	milestoneErrKey := collectionErrorKey("milestones", n.projectID)
+
 	// Parse the markdown and get update fields
 	input, err := marshal.MarkdownToMilestoneUpdate(n.content, &n.milestone)
 	if err != nil {
 		log.Printf("Failed to parse milestone: %v", err)
-		return syscall.EIO
+		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nParse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	// Validate input
 	if err := marshal.ValidateMilestoneUpdate(input); err != nil {
 		log.Printf("Milestone validation failed: %v", err)
+		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nValidation error: "+err.Error())
 		return syscall.EINVAL
 	}
 
@@ -320,8 +332,10 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	updated, err := n.lfs.UpdateProjectMilestone(ctx, n.milestone.ID, input)
 	if err != nil {
 		log.Printf("Failed to update milestone: %v", err)
+		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(milestoneErrKey)
 
 	// Update local data with API response
 	if updated != nil {
@@ -439,11 +453,14 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	milestoneErrKey := collectionErrorKey("milestones", n.projectID)
+
 	// Parse the new milestone content
 	name, description := marshal.ParseNewMilestone(n.content)
 
 	if name == "" {
 		log.Printf("New milestone has no name")
+		n.lfs.SetWriteError(milestoneErrKey, "Operation: create milestone\nError: milestone has no name. Add a 'name:' field to the frontmatter.")
 		return syscall.EINVAL
 	}
 
@@ -454,8 +471,10 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	_, err := n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
 	if err != nil {
 		log.Printf("Failed to create milestone: %v", err)
+		n.lfs.SetWriteError(milestoneErrKey, "Operation: create milestone\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(milestoneErrKey)
 
 	n.created = true
 

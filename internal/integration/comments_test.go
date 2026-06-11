@@ -34,10 +34,10 @@ func TestCommentsDirectoryListing(t *testing.T) {
 	hasNewMd := false
 	hasComment := false
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			hasNewMd = true
 		}
-		if strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "_create" {
+		if strings.HasSuffix(entry.Name(), ".md") && !isControlFile(entry.Name()) {
 			hasComment = true
 		}
 	}
@@ -74,7 +74,7 @@ func TestCommentFilenameFormat(t *testing.T) {
 	// Find comment files (not _create)
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "_create" {
+		if isControlFile(name) {
 			continue
 		}
 		// Should be in format: NNN-YYYY-MM-DDTHH-MM.md
@@ -111,7 +111,7 @@ func TestCommentFileContents(t *testing.T) {
 
 	// Find and read a comment file
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 
@@ -172,7 +172,7 @@ func TestCreateCommentViaNewMd(t *testing.T) {
 
 	found := false
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 		content, err := os.ReadFile(commentFilePath(testTeamKey, issue.Identifier, entry.Name()))
@@ -214,7 +214,7 @@ func TestDeleteComment(t *testing.T) {
 
 	var commentFile string
 	for _, entry := range entries {
-		if entry.Name() != "_create" && strings.HasSuffix(entry.Name(), ".md") {
+		if !isControlFile(entry.Name()) && strings.HasSuffix(entry.Name(), ".md") {
 			commentFile = entry.Name()
 			break
 		}

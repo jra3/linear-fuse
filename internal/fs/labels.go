@@ -57,17 +57,21 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// +1 for _create
-	entries := make([]fuse.DirEntry, len(labels)+1)
+	// +2 for _create and .error
+	entries := make([]fuse.DirEntry, len(labels)+2)
 
-	// Always include _create for creating labels
+	// Always include _create for creating labels and .error for feedback
 	entries[0] = fuse.DirEntry{
 		Name: "_create",
 		Mode: syscall.S_IFREG,
 	}
+	entries[1] = fuse.DirEntry{
+		Name: ".error",
+		Mode: syscall.S_IFREG,
+	}
 
 	for i, label := range labels {
-		entries[i+1] = fuse.DirEntry{
+		entries[i+2] = fuse.DirEntry{
 			Name: labelFilename(label),
 			Mode: syscall.S_IFREG,
 		}
@@ -94,6 +98,11 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFREG,
 		}), 0
+	}
+
+	// Handle .error feedback file (last failed label write in this dir)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("labels", n.teamID), out), 0
 	}
 
 	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
@@ -151,6 +160,7 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			err := n.lfs.DeleteLabel(ctx, label.ID, n.teamID)
 			if err != nil {
 				log.Printf("Failed to delete label: %v", err)
+				n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: delete label "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
 			if n.lfs.debug {
@@ -203,6 +213,7 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 			updatedLabel, err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
 			if err != nil {
 				log.Printf("Failed to rename label: %v", err)
+				n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: rename label "+name+" -> "+newName+"\nError: "+err.Error())
 				return syscall.EIO
 			}
 			// Upsert to SQLite so it's immediately visible
@@ -391,7 +402,8 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	update, err := parseLabelMarkdown(n.content, &n.label)
 	if err != nil {
 		log.Printf("Failed to parse label: %v", err)
-		return syscall.EIO
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nParse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	if len(update) == 0 {
@@ -409,8 +421,10 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	updatedLabel, err := n.lfs.UpdateLabel(ctx, n.label.ID, update, n.teamID)
 	if err != nil {
 		log.Printf("Failed to update label: %v", err)
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(collectionErrorKey("labels", n.teamID))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
@@ -524,11 +538,13 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	name, color, description, err := parseNewLabelMarkdown(n.content)
 	if err != nil {
 		log.Printf("Failed to parse new label: %v", err)
-		return syscall.EIO
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nParse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	if name == "" {
 		log.Printf("New label has no name")
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nError: label has no name. Add a 'name:' field to the frontmatter.")
 		return syscall.EINVAL
 	}
 
@@ -555,8 +571,10 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	label, err := n.lfs.CreateLabel(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create label: %v", err)
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(collectionErrorKey("labels", n.teamID))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertLabel(ctx, n.teamID, *label); err != nil {

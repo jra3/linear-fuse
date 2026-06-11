@@ -33,10 +33,10 @@ func TestDocsDirectoryListing(t *testing.T) {
 	hasNewMd := false
 	hasDoc := false
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			hasNewMd = true
 		}
-		if strings.HasSuffix(entry.Name(), ".md") && entry.Name() != "_create" {
+		if strings.HasSuffix(entry.Name(), ".md") && !isControlFile(entry.Name()) {
 			hasDoc = true
 		}
 	}
@@ -73,7 +73,7 @@ func TestDocumentFilenameFormat(t *testing.T) {
 	// Find document files (not _create)
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "_create" {
+		if isControlFile(name) {
 			continue
 		}
 		// Should be {slugId}.md format
@@ -107,7 +107,7 @@ func TestDocumentFileContents(t *testing.T) {
 
 	// Find and read a document file
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 
@@ -172,7 +172,7 @@ func TestCreateDocumentViaNewMd(t *testing.T) {
 	found := false
 	var createdDocFile string
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
@@ -221,7 +221,7 @@ func TestUpdateDocument(t *testing.T) {
 
 	var docFile string
 	for _, entry := range entries {
-		if entry.Name() != "_create" {
+		if !isControlFile(entry.Name()) {
 			docFile = entry.Name()
 			break
 		}
@@ -279,7 +279,7 @@ func TestDeleteDocument(t *testing.T) {
 
 	var docFile string
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
@@ -433,7 +433,7 @@ func TestCreateDocumentViaFilename(t *testing.T) {
 	found := false
 	var createdDocFile string
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
@@ -487,7 +487,7 @@ func TestCreateDocumentViaFilenameWithDashes(t *testing.T) {
 	found := false
 	var createdDocFile string
 	for _, entry := range entries {
-		if entry.Name() == "_create" {
+		if isControlFile(entry.Name()) {
 			continue
 		}
 		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))

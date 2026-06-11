@@ -154,7 +154,7 @@ func TestFixtureCommentFilenameFormat(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "_create" {
+		if isControlFile(name) {
 			continue
 		}
 		// Should be in format: NNN-YYYY-MM-DDTHH-MM.md
@@ -269,7 +269,7 @@ func TestFixtureDocumentFilenameFormat(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "_create" {
+		if isControlFile(name) {
 			continue
 		}
 		if !strings.HasSuffix(name, ".md") {

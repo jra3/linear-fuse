@@ -72,31 +72,40 @@ func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 }
 
 func (n *DocsNode) parentID() string {
-	if n.issueID != "" {
-		return n.issueID
+	return docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)
+}
+
+// docParentID returns the single non-empty parent ID for a docs surface, in
+// precedence order (issue, team, project, initiative). Used both for kernel
+// cache inodes and as the parent for the docs/ .error key.
+func docParentID(issueID, teamID, projectID, initiativeID string) string {
+	switch {
+	case issueID != "":
+		return issueID
+	case teamID != "":
+		return teamID
+	case projectID != "":
+		return projectID
+	default:
+		return initiativeID
 	}
-	if n.teamID != "" {
-		return n.teamID
-	}
-	if n.projectID != "" {
-		return n.projectID
-	}
-	return n.initiativeID
 }
 
 func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Fetch documents (uses cache if available)
 	docs, err := n.getDocuments(ctx)
 	if err != nil {
-		// On error, return just _create
+		// On error, return just _create and .error
 		return fs.NewListDirStream([]fuse.DirEntry{
 			{Name: "_create", Mode: syscall.S_IFREG},
+			{Name: ".error", Mode: syscall.S_IFREG},
 		}), 0
 	}
 
-	// Always include _create for creating documents
+	// Always include _create for creating documents and .error for feedback
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 	}
 
 	for _, doc := range docs {
@@ -130,6 +139,11 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFREG,
 		}), 0
+	}
+
+	// Handle .error feedback file (last failed doc write in this dir)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("docs", n.parentID()), out), 0
 	}
 
 	docs, err := n.getDocuments(ctx)
@@ -193,6 +207,7 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			err := n.lfs.DeleteDocument(ctx, doc.ID, n.issueID, n.teamID, n.projectID)
 			if err != nil {
 				log.Printf("Failed to delete document: %v", err)
+				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: delete document "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
 			// Invalidate kernel cache - both directory inode and entry
@@ -245,6 +260,7 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 			updatedDoc, err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
 			if err != nil {
 				log.Printf("Failed to rename document: %v", err)
+				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: rename document "+name+" -> "+newName+"\nError: "+err.Error())
 				return syscall.EIO
 			}
 			// Upsert to SQLite so it's immediately visible
@@ -412,11 +428,14 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	docErrKey := collectionErrorKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID))
+
 	// Parse the markdown and get update fields
 	update, err := marshal.MarkdownToDocumentUpdate(n.content, &n.document)
 	if err != nil {
 		log.Printf("Failed to parse document: %v", err)
-		return syscall.EIO
+		n.lfs.SetWriteError(docErrKey, "Operation: update document "+documentFilename(n.document)+"\nParse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	if len(update) == 0 {
@@ -434,8 +453,10 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	updatedDoc, err := n.lfs.UpdateDocument(ctx, n.document.ID, update, n.issueID, n.teamID, n.projectID)
 	if err != nil {
 		log.Printf("Failed to update document: %v", err)
+		n.lfs.SetWriteError(docErrKey, "Operation: update document "+documentFilename(n.document)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(docErrKey)
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
@@ -554,11 +575,14 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	docErrKey := collectionErrorKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID))
+
 	// Parse the new document content
 	title, body, err := marshal.ParseNewDocument(n.content)
 	if err != nil {
 		log.Printf("Failed to parse new document: %v", err)
-		return syscall.EIO
+		n.lfs.SetWriteError(docErrKey, "Operation: create document\nParse error: "+err.Error())
+		return syscall.EINVAL
 	}
 
 	// If no title in content, use filename (unless it's _create)
@@ -572,6 +596,7 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	if title == "" {
 		log.Printf("New document has no title")
+		n.lfs.SetWriteError(docErrKey, "Operation: create document\nError: document has no title. Add a '# Title' heading or name the file <title>.md.")
 		return syscall.EINVAL
 	}
 
@@ -602,8 +627,10 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	doc, err := n.lfs.CreateDocument(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create document: %v", err)
+		n.lfs.SetWriteError(docErrKey, "Operation: create document\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(docErrKey)
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertDocument(ctx, *doc); err != nil {
@@ -613,16 +640,7 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	n.created = true
 
 	// Invalidate kernel cache for docs directory
-	parentID := n.issueID
-	if parentID == "" {
-		parentID = n.teamID
-	}
-	if parentID == "" {
-		parentID = n.projectID
-	}
-	if parentID == "" {
-		parentID = n.initiativeID
-	}
+	parentID := docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)
 	// Invalidate the directory inode so the kernel re-reads the listing
 	n.lfs.InvalidateKernelInode(docsDirIno(parentID))
 	// Also invalidate specific entries

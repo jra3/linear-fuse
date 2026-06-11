@@ -10,6 +10,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// isControlFile reports whether a directory entry is a virtual control/feedback
+// file (the _create trigger or the .error feedback file) rather than a real
+// entity file. Listing-assertion loops skip these.
+func isControlFile(name string) bool {
+	return name == "_create" || name == ".error"
+}
+
 // Path builders
 
 func rootPath() string {

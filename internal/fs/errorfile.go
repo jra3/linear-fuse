@@ -22,18 +22,25 @@ type WriteError struct {
 // its (globally-unique) Linear ID. Visible at the entity's `.error` file.
 func (lfs *LinearFS) SetWriteError(entityID, message string) {
 	lfs.writeErrorsMu.Lock()
-	defer lfs.writeErrorsMu.Unlock()
 	lfs.writeErrors[entityID] = &WriteError{
 		Message:   message,
 		Timestamp: time.Now(),
 	}
+	lfs.writeErrorsMu.Unlock()
+	// Drop the kernel's cached size/content for the .error file so the next
+	// stat/read reflects this error instead of a stale (often empty) value.
+	lfs.InvalidateKernelInode(errorIno(entityID))
 }
 
 // ClearWriteError removes the error for an entity (called on a successful write).
 func (lfs *LinearFS) ClearWriteError(entityID string) {
 	lfs.writeErrorsMu.Lock()
-	defer lfs.writeErrorsMu.Unlock()
+	_, had := lfs.writeErrors[entityID]
 	delete(lfs.writeErrors, entityID)
+	lfs.writeErrorsMu.Unlock()
+	if had {
+		lfs.InvalidateKernelInode(errorIno(entityID))
+	}
 }
 
 // GetWriteError returns the last failed-write message for an entity, or nil.
@@ -49,6 +56,16 @@ func (lfs *LinearFS) SetIssueError(issueID, message string) { lfs.SetWriteError(
 func (lfs *LinearFS) ClearIssueError(issueID string)        { lfs.ClearWriteError(issueID) }
 func (lfs *LinearFS) GetIssueError(issueID string) *WriteError {
 	return lfs.GetWriteError(issueID)
+}
+
+// collectionErrorKey returns the write-error store key for a collection
+// directory (comments/, docs/, labels/, milestones/), keyed by its kind and
+// parent ID. Collection surfaces hold many files, so their `.error` is
+// directory-level: it reflects the last failed write to any file in the
+// directory. The "kind:" prefix keeps these keys distinct from the per-entity
+// IDs used by issue/project/initiative .error files.
+func collectionErrorKey(kind, parentID string) string {
+	return kind + ":" + parentID
 }
 
 // lookupErrorFile mounts the `.error` virtual file for an entity as a child of
@@ -68,8 +85,11 @@ func (lfs *LinearFS) lookupErrorFile(ctx context.Context, parent fs.InodeEmbedde
 	out.Attr.Uid = lfs.uid
 	out.Attr.Gid = lfs.gid
 	out.Attr.Size = size
-	out.SetAttrTimeout(1 * time.Second)  // Short - errors change on every write
-	out.SetEntryTimeout(1 * time.Second)
+	// Do not cache: a feedback file must always reflect the most recent write.
+	// Any nonzero timeout lets the kernel serve a stale (often empty) size and
+	// short-circuit the read.
+	out.SetAttrTimeout(0)
+	out.SetEntryTimeout(0)
 	out.Attr.SetTimes(&now, &now, &now)
 
 	return parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{
@@ -104,7 +124,8 @@ func (e *ErrorFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 }
 
 func (e *ErrorFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
+	// No FOPEN_KEEP_CACHE: the content is volatile and must be re-read each open.
+	return nil, 0, 0
 }
 
 func (e *ErrorFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

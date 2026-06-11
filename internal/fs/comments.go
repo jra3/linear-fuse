@@ -60,15 +60,17 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	// Fetch comments (uses cache if available)
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
 	if err != nil {
-		// On error, return just _create
+		// On error, return just _create and .error
 		return fs.NewListDirStream([]fuse.DirEntry{
 			{Name: "_create", Mode: syscall.S_IFREG},
+			{Name: ".error", Mode: syscall.S_IFREG},
 		}), 0
 	}
 
-	// Always include _create for creating comments
+	// Always include _create for creating comments and .error for feedback
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 	}
 
 	// Sort comments by creation time
@@ -107,6 +109,11 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return n.NewInode(ctx, node, fs.StableAttr{
 			Mode: syscall.S_IFREG,
 		}), 0
+	}
+
+	// Handle .error feedback file (last failed comment write in this dir)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("comments", n.issueID), out), 0
 	}
 
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
@@ -178,6 +185,7 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			err := n.lfs.DeleteComment(ctx, n.issueID, comment.ID)
 			if err != nil {
 				log.Printf("Failed to delete comment: %v", err)
+				n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: delete comment "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
 			// Invalidate kernel cache - both directory inode and entry
@@ -355,8 +363,10 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	updatedComment, err := n.lfs.UpdateComment(ctx, n.issueID, n.comment.ID, body)
 	if err != nil {
 		log.Printf("Failed to update comment: %v", err)
+		n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: update comment\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(collectionErrorKey("comments", n.issueID))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertComment(ctx, n.issueID, *updatedComment); err != nil {
@@ -499,8 +509,10 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 	comment, err := n.lfs.CreateComment(ctx, n.issueID, body)
 	if err != nil {
 		log.Printf("Failed to create comment: %v", err)
+		n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: create comment\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(collectionErrorKey("comments", n.issueID))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertComment(ctx, n.issueID, *comment); err != nil {
