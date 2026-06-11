@@ -330,28 +330,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		}), 0
 
 	case ".error":
-		node := &ErrorFileNode{
-			BaseNode: BaseNode{lfs: n.lfs},
-			issueID:  n.issue.ID,
-		}
-		// Get error to determine size
-		issueErr := n.lfs.GetIssueError(n.issue.ID)
-		size := uint64(0)
-		if issueErr != nil {
-			size = uint64(len(issueErr.Message) + 1) // +1 for newline
-		}
-		now := time.Now()
-		out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = size
-		out.SetAttrTimeout(1 * time.Second)  // Short timeout - errors change on writes
-		out.SetEntryTimeout(1 * time.Second)
-		out.Attr.SetTimes(&now, &now, &now)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  errorIno(n.issue.ID),
-		}), 0
+		return n.lfs.lookupErrorFile(ctx, n, n.issue.ID, out), 0
 
 	case "comments":
 		teamID := ""
@@ -1040,52 +1019,3 @@ func (h *HistoryFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte
 	return fuse.ReadResultData(h.content[off:end]), 0
 }
 
-// ErrorFileNode represents a .error file inside /teams/{KEY}/issues/{ID}/
-// It shows the last validation error from a failed write operation.
-type ErrorFileNode struct {
-	BaseNode
-	issueID string
-}
-
-var _ fs.NodeGetattrer = (*ErrorFileNode)(nil)
-var _ fs.NodeOpener = (*ErrorFileNode)(nil)
-var _ fs.NodeReader = (*ErrorFileNode)(nil)
-
-func (e *ErrorFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0444 // Read-only
-	e.SetOwner(out)
-
-	// Get current error to determine size
-	issueErr := e.lfs.GetIssueError(e.issueID)
-	if issueErr != nil {
-		out.Size = uint64(len(issueErr.Message) + 1) // +1 for newline
-	} else {
-		out.Size = 0
-	}
-
-	return 0
-}
-
-func (e *ErrorFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (e *ErrorFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	issueErr := e.lfs.GetIssueError(e.issueID)
-	if issueErr == nil {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	content := []byte(issueErr.Message + "\n")
-
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-
-	return fuse.ReadResultData(content[off:end]), 0
-}

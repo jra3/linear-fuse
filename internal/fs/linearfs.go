@@ -22,10 +22,6 @@ import (
 )
 
 // IssueError represents a validation error from a failed write operation
-type IssueError struct {
-	Message   string
-	Timestamp time.Time
-}
 
 // LinearFS implements a FUSE filesystem backed by Linear.
 // Read operations go through the Repository (SQLite + on-demand API fetch).
@@ -45,9 +41,9 @@ type LinearFS struct {
 	fileCacheDir  string
 	fileCacheMu   gosync.RWMutex
 	fileCache     map[string][]byte // in-memory cache (file ID -> content)
-	// Issue write errors (for .error virtual files)
-	issueErrors   map[string]*IssueError
-	issueErrorsMu gosync.RWMutex
+	// Per-entity write errors (surfaced via .error virtual files)
+	writeErrors   map[string]*WriteError
+	writeErrorsMu gosync.RWMutex
 }
 
 // BaseNode provides common functionality for all LinearFS nodes.
@@ -98,7 +94,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		debug:        debug,
 		fileCacheDir: cacheDir,
 		fileCache:    make(map[string][]byte),
-		issueErrors:  make(map[string]*IssueError),
+		writeErrors:  make(map[string]*WriteError),
 	}, nil
 }
 
@@ -238,30 +234,6 @@ func (lfs *LinearFS) MountPoint() string {
 		return os.Getenv("HOME") + "/linear" // fallback for tests
 	}
 	return lfs.mountPoint
-}
-
-// SetIssueError stores a validation error for an issue (visible via .error file)
-func (lfs *LinearFS) SetIssueError(issueID, message string) {
-	lfs.issueErrorsMu.Lock()
-	defer lfs.issueErrorsMu.Unlock()
-	lfs.issueErrors[issueID] = &IssueError{
-		Message:   message,
-		Timestamp: time.Now(),
-	}
-}
-
-// ClearIssueError removes the error for an issue (called on successful write)
-func (lfs *LinearFS) ClearIssueError(issueID string) {
-	lfs.issueErrorsMu.Lock()
-	defer lfs.issueErrorsMu.Unlock()
-	delete(lfs.issueErrors, issueID)
-}
-
-// GetIssueError returns the last validation error for an issue, or nil if none
-func (lfs *LinearFS) GetIssueError(issueID string) *IssueError {
-	lfs.issueErrorsMu.RLock()
-	defer lfs.issueErrorsMu.RUnlock()
-	return lfs.issueErrors[issueID]
 }
 
 // InvalidateKernelInode tells the kernel to drop cached data for an inode
