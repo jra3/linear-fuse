@@ -1,9 +1,11 @@
 package fs
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // =============================================================================
@@ -60,6 +62,43 @@ func TestInitiativeUpdatesDirInoStability(t *testing.T) {
 
 	if ino1 == infoIno || ino1 == projectsIno {
 		t.Errorf("Updates inode collides with other inodes")
+	}
+}
+
+// =============================================================================
+// Content Round-Trip Tests
+// =============================================================================
+
+// TestInitiativeContentBodyRoundTripsDescription guards against the description
+// "heading fold" bug: generateContent() must emit the description as the bare
+// body — exactly like project.md — so Flush's body->description mapping is
+// idempotent. Previously the body carried a rendered "# <Name>" H1 heading that
+// Flush (comparing TrimSpace(body) against initiative.Description) folded into
+// the description on every write, doubling the heading with each save.
+func TestInitiativeContentBodyRoundTripsDescription(t *testing.T) {
+	node := &InitiativeInfoNode{
+		initiative: api.Initiative{
+			ID:          "init-1",
+			Name:        "Activate users in the webapp",
+			Description: "Increase webapp adoption to improve the feedback flywheel.",
+		},
+	}
+
+	doc, err := marshal.Parse(node.generateContent())
+	if err != nil {
+		t.Fatalf("parse generated initiative.md: %v", err)
+	}
+
+	// The body Flush would read back must equal the description it would write —
+	// i.e. a no-op save must not mutate the description.
+	if got := strings.TrimSpace(doc.Body); got != node.initiative.Description {
+		t.Fatalf("body does not round-trip to description:\n got: %q\nwant: %q", got, node.initiative.Description)
+	}
+
+	// The rendered name heading must not appear in the body; its presence is the
+	// signature of the fold bug (the title lives in the `name:` frontmatter).
+	if heading := "# " + node.initiative.Name; strings.Contains(doc.Body, heading) {
+		t.Fatalf("body contains rendered name heading %q; it would be folded into the description on write:\n%s", heading, doc.Body)
 	}
 }
 
