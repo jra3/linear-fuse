@@ -243,8 +243,6 @@ icon: %q
 updated: %q
 ---
 
-# %s
-
 %s
 `,
 		i.initiative.ID,
@@ -259,7 +257,6 @@ updated: %q
 		projectsYAML,
 		i.initiative.CreatedAt.Format(time.RFC3339),
 		i.initiative.UpdatedAt.Format(time.RFC3339),
-		i.initiative.Name,
 		i.initiative.Description,
 	)
 	return []byte(content)

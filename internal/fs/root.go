@@ -238,7 +238,7 @@ Description body (editable)
 <initiative_frontmatter>
 ---
 id: 719a9756-326e-40cf-935d-38cf899a1f50   [read-only]
-name: "Platform Modernization"              [read-only]
+name: "Platform Modernization"              [editable]
 slug: 77d439e363bb                          [read-only]
 status: Active                              [read-only]
 projects:                                   [editable - project slugs]
@@ -253,9 +253,10 @@ targetDate: "2026-03-31"                    [read-only]
 created: "2026-01-24T22:15:26Z"             [read-only]
 updated: "2026-01-27T16:03:38Z"             [read-only]
 ---
-Initiative description (read-only)
+Initiative description (editable - the body maps to the description)
 
 Usage:
+- Edit name (frontmatter) and description (body); they sync to Linear
 - Edit projects: list to link/unlink projects (use project slugs)
 - Projects are resolved workspace-wide across all teams
 - Changes sync immediately to Linear API and SQLite cache
