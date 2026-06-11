@@ -651,9 +651,22 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Fetch fresh project from API and upsert to SQLite for immediate visibility
 	freshProject, err := p.lfs.client.GetProject(ctx, p.project.ID)
+	var divergence []string
 	if err != nil {
 		log.Printf("Warning: failed to fetch fresh project after update: %v", err)
 	} else {
+		// Read-your-writes verification on the free-text fields we sent, using
+		// the pre-write values (p.project) to classify the divergence.
+		if projectInput.Name != nil {
+			if d := writeBackDivergence("name", *projectInput.Name, freshProject.Name, p.project.Name); d != "" {
+				divergence = append(divergence, d)
+			}
+		}
+		if projectInput.Description != nil {
+			if d := writeBackDivergence("description (body)", *projectInput.Description, freshProject.Description, p.project.Description); d != "" {
+				divergence = append(divergence, d)
+			}
+		}
 		p.project = *freshProject
 		if err := p.lfs.UpsertProject(ctx, p.team.ID, *freshProject); err != nil {
 			log.Printf("Warning: failed to upsert project to SQLite: %v", err)
@@ -692,9 +705,16 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))
 
-	p.lfs.ClearWriteError(p.project.ID)
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read
+
+	if len(divergence) > 0 {
+		log.Printf("Read-your-writes violation on project %s:\n%s", p.project.Name, strings.Join(divergence, "\n"))
+		p.lfs.SetWriteError(p.project.ID, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+strings.Join(divergence, "\n"))
+		return syscall.EIO
+	}
+
+	p.lfs.ClearWriteError(p.project.ID)
 
 	return 0
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -777,20 +778,51 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if err != nil {
 		log.Printf("Warning: failed to fetch fresh issue after update: %v", err)
 		// Don't fail - the issue was updated in Linear, sync will eventually pick it up
-	} else {
-		// Update local copy with fresh data
-		i.issue = *freshIssue
+		i.dirty = false
+		i.contentReady = false
+		return 0
+	}
 
-		// Upsert fresh issue to SQLite so it's immediately visible
-		if err := i.lfs.UpsertIssue(ctx, *freshIssue); err != nil {
-			log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
-		}
+	// Read-your-writes verification: confirm the free-text values we sent
+	// actually persisted. Compare against the fresh fetch using the pre-write
+	// values (i.issue, not yet overwritten) to distinguish a silent revert from
+	// a truncation. This catches #136 (large body silently reverts).
+	divergence := i.verifyWriteBack(updates, freshIssue)
+
+	// Update local copy with fresh data (reflects reality, even on divergence)
+	i.issue = *freshIssue
+	if err := i.lfs.UpsertIssue(ctx, *freshIssue); err != nil {
+		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
 	}
 
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 
+	if divergence != "" {
+		log.Printf("Read-your-writes violation on %s:\n%s", i.issue.Identifier, divergence)
+		i.lfs.SetIssueError(i.issue.ID, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+divergence)
+		return syscall.EIO
+	}
+
 	return 0
+}
+
+// verifyWriteBack compares the free-text fields we sent (title, description) in
+// updates against what persisted in fresh, using the pre-write values on i.issue
+// to classify the divergence. Returns "" when everything persisted faithfully.
+func (i *IssueFileNode) verifyWriteBack(updates map[string]any, fresh *api.Issue) string {
+	var problems []string
+	if want, ok := updates["title"].(string); ok {
+		if d := writeBackDivergence("title", want, fresh.Title, i.issue.Title); d != "" {
+			problems = append(problems, d)
+		}
+	}
+	if want, ok := updates["description"].(string); ok {
+		if d := writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description); d != "" {
+			problems = append(problems, d)
+		}
+	}
+	return strings.Join(problems, "\n")
 }
 
 func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {

@@ -327,6 +327,54 @@ func readFileUntilContains(t *testing.T, path, want string, maxWait time.Duratio
 	return data
 }
 
+// TestReadYourWritesLargeBody is the #141/#136 guard: a normal large-body write
+// to issue.md must persist faithfully and must NOT trip a false-positive
+// read-your-writes violation. claudeToolWrite fails the test if close returns an
+// error, so a spurious EIO from the write-back check would fail here. Requires
+// live-API write mode (it creates and edits a real issue).
+func TestReadYourWritesLargeBody(t *testing.T) {
+	skipIfNoWriteTests(t)
+
+	issue, cleanup, err := createTestIssue("Read Your Writes Large Body")
+	if err != nil {
+		t.Fatalf("create test issue: %v", err)
+	}
+	defer cleanup()
+
+	path := issueFilePath(testTeamKey, issue.Identifier)
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read issue.md: %v", err)
+	}
+
+	// Build a >3KB unique body (the #136 threshold) and append it after the
+	// existing frontmatter+content.
+	marker := fmt.Sprintf("linearfs-ryw-%d", time.Now().UnixNano())
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(string(orig), "\n"))
+	b.WriteString("\n\n## " + marker + "\n\n")
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&b, "Line %d of the large body for %s, padded to exceed the 3KB write threshold.\n", i, marker)
+	}
+	claudeToolWrite(t, path, []byte(b.String())) // fails if close returns an error
+
+	waitForCacheExpiry()
+
+	after, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("re-read issue.md: %v", err)
+	}
+	if !strings.Contains(string(after), marker) {
+		t.Fatalf("large body did not persist (read-your-writes failed); marker %q missing", marker)
+	}
+
+	// And .error must be empty — the write was faithful.
+	errData, _ := os.ReadFile(filepath.Join(issueDirPath(testTeamKey, issue.Identifier), ".error"))
+	if strings.TrimSpace(string(errData)) != "" {
+		t.Fatalf("expected empty .error after a faithful write, got: %q", errData)
+	}
+}
+
 // TestClaudeToolEditPersistsProjectDescription covers the second half of #139:
 // a write+fsync to project.md must actually persist the description to Linear.
 // It edits a real project and restores it, so it requires live-API write mode.

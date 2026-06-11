@@ -488,9 +488,22 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 
 	// Fetch fresh initiative from API and upsert to SQLite for immediate visibility
 	freshInitiative, err := i.lfs.client.GetInitiative(ctx, i.initiativeID)
+	var divergence []string
 	if err != nil {
 		log.Printf("Warning: failed to fetch fresh initiative after update: %v", err)
 	} else {
+		// Read-your-writes verification on the free-text fields we sent, using
+		// the pre-write values (i.initiative) to classify the divergence.
+		if initiativeInput.Name != nil {
+			if d := writeBackDivergence("name", *initiativeInput.Name, freshInitiative.Name, i.initiative.Name); d != "" {
+				divergence = append(divergence, d)
+			}
+		}
+		if initiativeInput.Description != nil {
+			if d := writeBackDivergence("description (body)", *initiativeInput.Description, freshInitiative.Description, i.initiative.Description); d != "" {
+				divergence = append(divergence, d)
+			}
+		}
 		i.initiative = *freshInitiative
 		if err := i.lfs.UpsertInitiative(ctx, *freshInitiative); err != nil {
 			log.Printf("Warning: failed to upsert initiative to SQLite: %v", err)
@@ -529,10 +542,16 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	i.lfs.InvalidateKernelInode(initiativeInfoIno(i.initiativeID))
 	i.lfs.InvalidateKernelInode(initiativeProjectsIno(i.initiativeID))
 
-	i.lfs.ClearWriteError(i.initiativeID)
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 
+	if len(divergence) > 0 {
+		log.Printf("Read-your-writes violation on initiative %s:\n%s", i.initiative.Name, strings.Join(divergence, "\n"))
+		i.lfs.SetWriteError(i.initiativeID, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+strings.Join(divergence, "\n"))
+		return syscall.EIO
+	}
+
+	i.lfs.ClearWriteError(i.initiativeID)
 	return 0
 }
 
