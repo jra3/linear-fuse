@@ -12,20 +12,39 @@ import (
 )
 
 // =============================================================================
-// Claude Code tool smoke tests
+// Write-contract suite (#142)
 //
-// These tests emulate the I/O pattern Claude Code's Edit and Write tools use
-// when saving a file: open, write the new contents, fsync, then close. Other
-// fsync-ing editors (vim, VS Code) follow the same pattern.
+// These tests codify, in CI, the invariants every writable surface must uphold
+// to be friendly to LLM/editor tools. They emulate the I/O patterns Claude
+// Code's Edit/Write tools and fsync-ing editors (vim, VS Code) use: open, write,
+// fsync, close — and temp-file + rename.
 //
-// Regression target: issue #139. Several writable nodes (project.md,
-// initiative.md, comment .md, and the _create files) did not implement
-// NodeFsyncer, so the kernel's FUSE_FSYNC was answered with ENOTSUP. Editors
-// treat a failed fsync as a failed save and drop the write, which made project
-// and initiative descriptions impossible to edit. The second half of #139 was
-// that even on a successful flush the description was never sent to the API —
-// ProjectInfoNode/InitiativeInfoNode.Flush only synced initiative associations.
+// The contract (per surface):
+//
+//  1. fsync is supported — write+fsync never returns ENOTSUP (#139).
+//     - TestClaudeToolFsyncSupportedOnWritableFiles (editable files)
+//     - TestWriteContractFsyncOnCreateFiles (_create trigger files)
+//  2. Read-your-writes — after a successful write, a re-read reflects the
+//     written content; a silent revert/truncation is surfaced, never hidden
+//     (#141/#136).
+//     - TestReadYourWritesLargeBody (live) + writeback_test.go (unit)
+//  3. Loud invalid input — bad input yields EINVAL + a populated .error, never
+//     a bare EIO and never silent success (#140).
+//     - TestWriteInvalidInputIsLoud, TestMkdirIssueFailureIsLegible
+//     - TestErrorFileExposedOnWritableSurfaces (every surface exposes .error)
+//  4. Atomic-rename / overwrite writes don't corrupt the node (#137).
+//     - TestOverwriteDocKeepsNodeReadable, TestWriteContractAtomicRenameNoCorruption
+//
+// Layers: fixture mode (default `make test`, no API) covers the structural
+// invariants (1)(3)(4); live write mode (LINEARFS_WRITE_TESTS=1) covers the
+// persistence invariant (2).
 // =============================================================================
+
+// errorVisibilityWait bounds how long a test polls for a freshly-set .error to
+// become visible. Setting an error invalidates the kernel inode asynchronously
+// (InodeNotify), so under full-suite load the new content can take a beat to
+// surface; a generous deadline keeps the assertion robust without flaking.
+const errorVisibilityWait = 3 * time.Second
 
 // claudeToolFsync opens path read-write and calls fsync, returning the fsync
 // error. This isolates the exact syscall #139 was about: ENOTSUP is returned
@@ -191,10 +210,84 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 	}
 }
 
+// TestWriteContractFsyncOnCreateFiles extends the #139 fsync guarantee to the
+// write-only _create trigger files (#142 contract item 1). Editors that
+// write-then-fsync must be able to save through a _create file; fsync must
+// never return ENOTSUP. _create is mode 0200, so it is opened write-only.
+func TestWriteContractFsyncOnCreateFiles(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"comments/_create", newCommentPath(testTeamKey, "TST-1")},
+		{"docs/_create", newDocPath(testTeamKey, "TST-1")},
+		{"labels/_create", filepath.Join(labelsPath(testTeamKey), "_create")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := os.OpenFile(tc.path, os.O_WRONLY, 0200)
+			if err != nil {
+				t.Fatalf("open %s write-only: %v", tc.path, err)
+			}
+			defer f.Close()
+			if err := f.Sync(); err != nil {
+				if errors.Is(err, syscall.ENOTSUP) {
+					t.Fatalf("fsync returned ENOTSUP on %s (issue #139 regression): %v", tc.path, err)
+				}
+				t.Fatalf("fsync %s: %v", tc.path, err)
+			}
+		})
+	}
+}
+
+// TestWriteContractAtomicRenameNoCorruption covers #142 contract item 4 for the
+// failure direction: writing a temp file and rename()-ing it over an existing
+// doc must never leave the target corrupted (unreadable/EACCES) — the #137
+// failure mode. In fixture mode the rename itself may not succeed (no API), but
+// the target document node must remain readable either way.
+func TestWriteContractAtomicRenameNoCorruption(t *testing.T) {
+	target, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
+	if err != nil {
+		t.Skipf("no document fixture: %v", err)
+	}
+
+	orig, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target doc: %v", err)
+	}
+	// Restore the target's in-memory content so this test doesn't pollute others.
+	defer func() {
+		if f, err := os.OpenFile(target, os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			_, _ = f.Write(orig)
+			_ = f.Close()
+		}
+	}()
+
+	// Write a temp file in the same directory, then rename it over the target.
+	tmp := filepath.Join(docsPath(testTeamKey, "TST-1"), "atomic-rename-tmp.md")
+	if f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644); err == nil {
+		_, _ = f.Write([]byte("---\ntitle: Atomic\n---\n\nrenamed body\n"))
+		_ = f.Close()
+	}
+	_ = os.Rename(tmp, target) // may fail (EXDEV/ENOENT/EIO); must not corrupt target
+	_ = os.Remove(tmp)         // best-effort cleanup if the rename did not consume it
+
+	// The target must still be readable — never EACCES (the #137 corruption).
+	if _, err := os.ReadFile(target); err != nil {
+		if errors.Is(err, syscall.EACCES) {
+			t.Fatalf("target doc became unreadable after rename-over (#137 regression): %v", err)
+		}
+		t.Fatalf("target doc not readable after rename-over: %v", err)
+	}
+}
+
 // TestErrorFileExposedOnWritableSurfaces is the #140 structural guard: every
 // writable entity directory must expose a readable `.error` feedback file so a
-// failed write is legible to an LLM/script instead of a bare errno. It runs in
-// fixture mode (no API): with no prior failed write the file reads empty.
+// failed write is legible to an LLM/script instead of a bare errno. It asserts
+// the file exists and is readable on every surface; that a failed write
+// *populates* it is covered by TestWriteInvalidInputIsLoud and
+// TestMkdirIssueFailureIsLegible. (Emptiness is not asserted: in the shared-mount
+// suite another test may have left a collection .error populated.)
 func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 	cases := []struct {
 		name string
@@ -261,12 +354,8 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			errPath := filepath.Join(tc.dir(t), ".error")
-			data, err := os.ReadFile(errPath)
-			if err != nil {
+			if _, err := os.ReadFile(errPath); err != nil {
 				t.Fatalf("read %s: %v", errPath, err)
-			}
-			if len(data) != 0 {
-				t.Fatalf("expected empty .error with no prior failed write, got %q", data)
 			}
 		})
 	}
@@ -305,7 +394,7 @@ func TestWriteInvalidInputIsLoud(t *testing.T) {
 	// The .error becomes visible once the kernel's attr-cache invalidation
 	// (InodeNotify) propagates; poll briefly. An agent reads .error well after
 	// this window, so eventual visibility is the real-world contract.
-	data := readFileUntilContains(t, errPath, badValue, defaultWaitTime)
+	data := readFileUntilContains(t, errPath, badValue, errorVisibilityWait)
 	if !strings.Contains(string(data), badValue) {
 		t.Fatalf(".error should name the rejected value %q, got %q", badValue, data)
 	}
@@ -327,7 +416,7 @@ func TestMkdirIssueFailureIsLegible(t *testing.T) {
 	}
 
 	errPath := filepath.Join(issuesPath(testTeamKey), ".error")
-	data := readFileUntilContains(t, errPath, "create issue", defaultWaitTime)
+	data := readFileUntilContains(t, errPath, "create issue", errorVisibilityWait)
 	if !strings.Contains(string(data), "create issue") {
 		t.Fatalf("issues/.error should explain the failed creation, got: %q", data)
 	}

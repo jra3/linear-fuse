@@ -124,8 +124,11 @@ func (e *ErrorFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 }
 
 func (e *ErrorFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	// No FOPEN_KEEP_CACHE: the content is volatile and must be re-read each open.
-	return nil, 0, 0
+	// FOPEN_DIRECT_IO: .error content is volatile (it changes on every write to
+	// the entity). Direct I/O makes the kernel issue a real READ on every open
+	// instead of trusting a cached size — which could be a stale 0 from an
+	// earlier read, causing the kernel to short-circuit and return empty.
+	return nil, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func (e *ErrorFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
