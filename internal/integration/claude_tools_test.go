@@ -242,6 +242,20 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 				return dir
 			},
 		},
+		{
+			name: "attachments",
+			dir:  func(t *testing.T) string { return attachmentsPath(testTeamKey, "TST-1") },
+		},
+		{
+			name: "relations",
+			dir: func(t *testing.T) string {
+				dir := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "relations")
+				if _, err := os.Stat(dir); err != nil {
+					t.Skipf("no relations dir: %v", err)
+				}
+				return dir
+			},
+		},
 	}
 
 	for _, tc := range cases {

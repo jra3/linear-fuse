@@ -727,15 +727,21 @@ func TestFixtureAttachmentsDirectoryExists(t *testing.T) {
 
 func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 	// TST-1 has 2 embedded files: screenshot.png and design.pdf
-	// Plus _create trigger file = 3 entries
+	// Plus the _create and .error control files = 4 entries
 	attachPath := attachmentsPath(testTeamKey, "TST-1")
 	entries, err := os.ReadDir(attachPath)
 	if err != nil {
 		t.Fatalf("Failed to read attachments directory: %v", err)
 	}
 
-	if len(entries) != 3 {
-		t.Errorf("Expected 3 entries (2 files + _create), got %d", len(entries))
+	realCount := 0
+	for _, entry := range entries {
+		if !isControlFile(entry.Name()) {
+			realCount++
+		}
+	}
+	if realCount != 2 {
+		t.Errorf("Expected 2 attachment files (excluding control files), got %d", realCount)
 	}
 
 	// Check for expected files
@@ -821,18 +827,16 @@ func TestFixtureIssueDirectoryContainsAttachments(t *testing.T) {
 }
 
 func TestFixtureEmptyAttachmentsDirectory(t *testing.T) {
-	// TST-2 has no embedded files, but has _create trigger file
+	// TST-2 has no embedded files, only the _create and .error control files
 	attachPath := attachmentsPath(testTeamKey, "TST-2")
 	entries, err := os.ReadDir(attachPath)
 	if err != nil {
 		t.Fatalf("Failed to read attachments directory: %v", err)
 	}
 
-	if len(entries) != 1 {
-		t.Errorf("Expected 1 entry (_create only) for TST-2, got %d", len(entries))
-	}
-
-	if len(entries) > 0 && entries[0].Name() != "_create" {
-		t.Errorf("Expected _create as only entry, got %s", entries[0].Name())
+	for _, entry := range entries {
+		if !isControlFile(entry.Name()) {
+			t.Errorf("Expected only control files for TST-2, got %s", entry.Name())
+		}
 	}
 }

@@ -67,9 +67,10 @@ func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errn
 		return nil, syscall.EIO
 	}
 
-	// Build entries: _create + relation files
+	// Build entries: _create + .error + relation files
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 	}
 
 	// Add outgoing relations (e.g., "blocks-ENG-123.rel")
@@ -112,6 +113,11 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 		}), 0
 	}
 
+	// Handle .error feedback file (last failed relation write in this dir)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("relations", n.issueID), out), 0
+	}
+
 	// Parse relation filename: "type-IDENTIFIER.rel"
 	if !strings.HasSuffix(name, ".rel") {
 		return nil, syscall.ENOENT
@@ -149,6 +155,7 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, rel api.Issu
 		BaseNode:  BaseNode{lfs: n.lfs},
 		relation:  rel,
 		isInverse: isInverse,
+		issueID:   n.issueID,
 	}
 	now := time.Now()
 	content := node.generateContent()
@@ -186,6 +193,7 @@ type RelationFileNode struct {
 	BaseNode
 	relation  api.IssueRelation
 	isInverse bool
+	issueID   string // parent issue (for the relations/ .error key)
 }
 
 var _ fs.NodeGetattrer = (*RelationFileNode)(nil)
@@ -246,6 +254,7 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 
 	// Delete via API
 	if err := n.lfs.client.DeleteIssueRelation(ctx, n.relation.ID); err != nil {
+		n.lfs.SetWriteError(collectionErrorKey("relations", n.issueID), "Operation: delete relation "+name+"\nError: "+err.Error())
 		return syscall.EIO
 	}
 
@@ -254,6 +263,7 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 		log.Printf("[relations] delete from DB failed: %v", err)
 	}
 
+	n.lfs.ClearWriteError(collectionErrorKey("relations", n.issueID))
 	return 0
 }
 
@@ -313,11 +323,14 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 		return 0
 	}
 
+	relErrKey := collectionErrorKey("relations", n.issueID)
+
 	// Parse the content: "type identifier" or just "identifier" (defaults to "related")
 	content := strings.TrimSpace(string(handle.buffer))
 	handle.buffer = nil
 
 	if content == "" {
+		n.lfs.SetWriteError(relErrKey, "Operation: create relation\nError: empty content. Write \"<type> <ISSUE-ID>\", e.g. \"blocks ENG-123\".")
 		return syscall.EINVAL
 	}
 
@@ -336,20 +349,24 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 	// Validate relation type
 	validTypes := map[string]bool{"blocks": true, "duplicate": true, "related": true, "similar": true}
 	if !validTypes[relationType] {
+		n.lfs.SetWriteError(relErrKey, "Field: type\nValue: \""+relationType+"\"\nError: invalid relation type. Use one of: blocks, duplicate, related, similar.")
 		return syscall.EINVAL
 	}
 
 	// Lookup the related issue
 	relatedIssue, err := n.lfs.repo.GetIssueByIdentifier(ctx, relatedIdentifier)
 	if err != nil || relatedIssue == nil {
+		n.lfs.SetWriteError(relErrKey, "Field: identifier\nValue: \""+relatedIdentifier+"\"\nError: unknown issue. Use an existing issue identifier like ENG-123.")
 		return syscall.ENOENT
 	}
 
 	// Create the relation via API
 	rel, err := n.lfs.client.CreateIssueRelation(ctx, n.issueID, relatedIssue.ID, relationType)
 	if err != nil {
+		n.lfs.SetWriteError(relErrKey, "Operation: create relation\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(relErrKey)
 
 	// Store in local DB
 	now := time.Now()

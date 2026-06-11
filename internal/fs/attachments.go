@@ -67,9 +67,10 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	// Trigger background refresh of sub-resources if stale
 	n.lfs.MaybeRefreshIssueDetails(n.issueID)
 
-	// Start with _create entry
+	// Start with _create and .error entries
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
 	}
 
 	// Add embedded files (images, etc.)
@@ -119,6 +120,11 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 			Mode: syscall.S_IFREG,
 			Ino:  attachmentsCreateIno(n.issueID),
 		}), 0
+	}
+
+	// Handle .error feedback file (last failed attachment write in this dir)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("attachments", n.issueID), out), 0
 	}
 
 	// Handle .link files (external attachments)
@@ -337,6 +343,7 @@ func (n *ExternalAttachmentNode) Read(ctx context.Context, fh fs.FileHandle, des
 func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Delete via API
 	if err := n.lfs.client.DeleteAttachment(ctx, n.attachment.ID); err != nil {
+		n.lfs.SetWriteError(collectionErrorKey("attachments", n.issueID), "Operation: delete attachment "+name+"\nError: "+err.Error())
 		return syscall.EIO
 	}
 
@@ -346,6 +353,7 @@ func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscal
 	}
 
 	// Invalidate caches
+	n.lfs.ClearWriteError(collectionErrorKey("attachments", n.issueID))
 	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
 
 	return 0
@@ -407,11 +415,14 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 		return 0
 	}
 
+	attErrKey := collectionErrorKey("attachments", n.issueID)
+
 	// Parse the content: "url [title]" or just "url"
 	content := strings.TrimSpace(string(handle.buffer))
 	handle.buffer = nil
 
 	if content == "" {
+		n.lfs.SetWriteError(attErrKey, "Operation: create attachment\nError: empty content. Write \"<url> [title]\".")
 		return syscall.EINVAL
 	}
 
@@ -426,8 +437,10 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 	// Create the attachment via API (LinkURL for external links)
 	att, err := n.lfs.client.LinkURL(ctx, n.issueID, url, title)
 	if err != nil {
+		n.lfs.SetWriteError(attErrKey, "Operation: create attachment\nValue: \""+url+"\"\nError: "+err.Error())
 		return syscall.EIO
 	}
+	n.lfs.ClearWriteError(attErrKey)
 
 	// Upsert to SQLite for immediate visibility
 	now := time.Now()
