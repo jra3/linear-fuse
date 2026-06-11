@@ -29,6 +29,7 @@ var _ fs.NodeOpener = (*NewIssueNode)(nil)
 var _ fs.NodeReader = (*NewIssueNode)(nil)
 var _ fs.NodeWriter = (*NewIssueNode)(nil)
 var _ fs.NodeFlusher = (*NewIssueNode)(nil)
+var _ fs.NodeFsyncer = (*NewIssueNode)(nil)
 var _ fs.NodeSetattrer = (*NewIssueNode)(nil)
 
 func (n *NewIssueNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -101,6 +102,13 @@ func (n *NewIssueNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Se
 	out.Mode = 0644
 	out.Size = uint64(len(n.content))
 
+	return 0
+}
+
+// Fsync is a no-op; actual persistence happens in Flush. It must be
+// implemented (not return ENOTSUP) so editors that write-then-fsync
+// (e.g. Claude Code's Edit tool, vim, VS Code) can save the _create file.
+func (n *NewIssueNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
 	return 0
 }
 

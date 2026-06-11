@@ -351,6 +351,7 @@ var _ fs.NodeOpener = (*ProjectInfoNode)(nil)
 var _ fs.NodeReader = (*ProjectInfoNode)(nil)
 var _ fs.NodeWriter = (*ProjectInfoNode)(nil)
 var _ fs.NodeFlusher = (*ProjectInfoNode)(nil)
+var _ fs.NodeFsyncer = (*ProjectInfoNode)(nil)
 var _ fs.NodeSetattrer = (*ProjectInfoNode)(nil)
 
 func (p *ProjectInfoNode) generateContent() []byte {
@@ -505,6 +506,13 @@ func (p *ProjectInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse
 	return 0
 }
 
+// Fsync is a no-op; actual persistence happens in Flush. It must be
+// implemented (not return ENOTSUP) so editors that write-then-fsync
+// (e.g. Claude Code's Edit tool, vim, VS Code) can save project.md.
+func (p *ProjectInfoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	return 0
+}
+
 func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -600,6 +608,29 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			if p.lfs.debug {
 				log.Printf("Removed project %s from initiative %s", p.project.Name, name)
 			}
+		}
+	}
+
+	// Persist editable scalar fields (name in frontmatter, description in body).
+	// The body maps to the project's description, matching generateContent().
+	var projectInput api.ProjectUpdateInput
+	fieldChanged := false
+	if newDesc := strings.TrimSpace(doc.Body); newDesc != strings.TrimSpace(p.project.Description) {
+		projectInput.Description = &newDesc
+		fieldChanged = true
+	}
+	if name, ok := doc.Frontmatter["name"].(string); ok && name != "" && name != p.project.Name {
+		nameCopy := name
+		projectInput.Name = &nameCopy
+		fieldChanged = true
+	}
+	if fieldChanged {
+		if err := p.lfs.client.UpdateProject(ctx, p.project.ID, projectInput); err != nil {
+			log.Printf("Failed to update project %s: %v", p.project.Name, err)
+			return syscall.EIO
+		}
+		if p.lfs.debug {
+			log.Printf("Updated project %s scalar fields", p.project.Name)
 		}
 	}
 

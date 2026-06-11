@@ -200,6 +200,7 @@ var _ fs.NodeOpener = (*InitiativeInfoNode)(nil)
 var _ fs.NodeReader = (*InitiativeInfoNode)(nil)
 var _ fs.NodeWriter = (*InitiativeInfoNode)(nil)
 var _ fs.NodeFlusher = (*InitiativeInfoNode)(nil)
+var _ fs.NodeFsyncer = (*InitiativeInfoNode)(nil)
 var _ fs.NodeSetattrer = (*InitiativeInfoNode)(nil)
 
 func (i *InitiativeInfoNode) generateContent() []byte {
@@ -349,6 +350,13 @@ func (i *InitiativeInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *f
 	return 0
 }
 
+// Fsync is a no-op; actual persistence happens in Flush. It must be
+// implemented (not return ENOTSUP) so editors that write-then-fsync
+// (e.g. Claude Code's Edit tool, vim, VS Code) can save initiative.md.
+func (i *InitiativeInfoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	return 0
+}
+
 func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -442,6 +450,29 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			if i.lfs.debug {
 				log.Printf("Removed project %s from initiative %s", slug, i.initiative.Name)
 			}
+		}
+	}
+
+	// Persist editable scalar fields (name in frontmatter, description in body).
+	// The body maps to the initiative's description, matching generateContent().
+	var initiativeInput api.InitiativeUpdateInput
+	fieldChanged := false
+	if newDesc := strings.TrimSpace(doc.Body); newDesc != strings.TrimSpace(i.initiative.Description) {
+		initiativeInput.Description = &newDesc
+		fieldChanged = true
+	}
+	if name, ok := doc.Frontmatter["name"].(string); ok && name != "" && name != i.initiative.Name {
+		nameCopy := name
+		initiativeInput.Name = &nameCopy
+		fieldChanged = true
+	}
+	if fieldChanged {
+		if err := i.lfs.client.UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
+			log.Printf("Failed to update initiative %s: %v", i.initiative.Name, err)
+			return syscall.EIO
+		}
+		if i.lfs.debug {
+			log.Printf("Updated initiative %s scalar fields", i.initiative.Name)
 		}
 	}
 

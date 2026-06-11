@@ -362,6 +362,7 @@ var _ fs.NodeSetattrer = (*NewAttachmentNode)(nil)
 var _ fs.NodeOpener = (*NewAttachmentNode)(nil)
 var _ fs.NodeWriter = (*NewAttachmentNode)(nil)
 var _ fs.NodeFlusher = (*NewAttachmentNode)(nil)
+var _ fs.NodeFsyncer = (*NewAttachmentNode)(nil)
 
 func (n *NewAttachmentNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	now := time.Now()
@@ -391,6 +392,13 @@ func (n *NewAttachmentNode) Write(ctx context.Context, fh fs.FileHandle, data []
 	}
 	handle.buffer = append(handle.buffer, data...)
 	return uint32(len(data)), 0
+}
+
+// Fsync is a no-op; actual persistence happens in Flush. It must be
+// implemented (not return ENOTSUP) so editors that write-then-fsync
+// (e.g. Claude Code's Edit tool, vim, VS Code) can save the _create file.
+func (n *NewAttachmentNode) Fsync(ctx context.Context, fh fs.FileHandle, flags uint32) syscall.Errno {
+	return 0
 }
 
 func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {

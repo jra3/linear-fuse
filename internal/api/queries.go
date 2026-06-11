@@ -482,6 +482,22 @@ query ProjectMilestones($projectId: String!) {
 // Project Milestones Mutations
 // =============================================================================
 
+const mutationUpdateProject = `
+mutation UpdateProject($id: String!, $input: ProjectUpdateInput!) {
+  projectUpdate(id: $id, input: $input) {
+    success
+  }
+}
+`
+
+const mutationUpdateInitiative = `
+mutation UpdateInitiative($id: String!, $input: InitiativeUpdateInput!) {
+  initiativeUpdate(id: $id, input: $input) {
+    success
+  }
+}
+`
+
 const mutationCreateProjectMilestone = `
 mutation CreateProjectMilestone($projectId: String!, $name: String!, $description: String) {
   projectMilestoneCreate(input: { projectId: $projectId, name: $name, description: $description }) {

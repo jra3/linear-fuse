@@ -231,6 +231,7 @@ var _ fs.NodeOpener = (*CommentNode)(nil)
 var _ fs.NodeReader = (*CommentNode)(nil)
 var _ fs.NodeWriter = (*CommentNode)(nil)
 var _ fs.NodeFlusher = (*CommentNode)(nil)
+var _ fs.NodeFsyncer = (*CommentNode)(nil)
 var _ fs.NodeSetattrer = (*CommentNode)(nil)
 
 func (n *CommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -306,6 +307,13 @@ func (n *CommentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Set
 
 	out.Mode = 0644
 	out.Size = uint64(len(n.content))
+	return 0
+}
+
+// Fsync is a no-op; actual persistence happens in Flush. It must be
+// implemented (not return ENOTSUP) so editors that write-then-fsync
+// (e.g. Claude Code's Edit tool, vim, VS Code) can save comment edits.
+func (n *CommentNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
 	return 0
 }
 

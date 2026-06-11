@@ -999,6 +999,54 @@ func (c *Client) UpdateProjectMilestone(ctx context.Context, milestoneID string,
 	return &result.ProjectMilestoneUpdate.ProjectMilestone, nil
 }
 
+// UpdateProject updates a project's mutable fields (name, description).
+func (c *Client) UpdateProject(ctx context.Context, projectID string, input ProjectUpdateInput) error {
+	var result struct {
+		ProjectUpdate struct {
+			Success bool `json:"success"`
+		} `json:"projectUpdate"`
+	}
+
+	vars := map[string]any{
+		"id":    projectID,
+		"input": input,
+	}
+
+	if err := c.query(ctx, mutationUpdateProject, vars, &result); err != nil {
+		return err
+	}
+
+	if !result.ProjectUpdate.Success {
+		return fmt.Errorf("project update failed")
+	}
+
+	return nil
+}
+
+// UpdateInitiative updates an initiative's mutable fields (name, description).
+func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, input InitiativeUpdateInput) error {
+	var result struct {
+		InitiativeUpdate struct {
+			Success bool `json:"success"`
+		} `json:"initiativeUpdate"`
+	}
+
+	vars := map[string]any{
+		"id":    initiativeID,
+		"input": input,
+	}
+
+	if err := c.query(ctx, mutationUpdateInitiative, vars, &result); err != nil {
+		return err
+	}
+
+	if !result.InitiativeUpdate.Success {
+		return fmt.Errorf("initiative update failed")
+	}
+
+	return nil
+}
+
 // DeleteProjectMilestone deletes a milestone
 func (c *Client) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
 	var result struct {

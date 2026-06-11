@@ -157,6 +157,18 @@ type ProjectMilestone struct {
 	SortOrder   float64 `json:"sortOrder"`
 }
 
+// ProjectUpdateInput is the input for updating a project's mutable fields.
+type ProjectUpdateInput struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+// InitiativeUpdateInput is the input for updating an initiative's mutable fields.
+type InitiativeUpdateInput struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
 // ProjectMilestoneUpdateInput is the input for updating a project milestone
 type ProjectMilestoneUpdateInput struct {
 	Name        *string `json:"name,omitempty"`
