@@ -141,24 +141,32 @@ teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
   issues/{ID}/
     issue.md                        [read/write]
-    .error                          [read-only: last validation error]
-    comments/{id}.md                [read/write, _create=trigger]
-    docs/{slug}.md                  [read/write, _create=trigger]
+    .error                          [read-only: last failed write here]
+    comments/                       [_create=trigger, .error=feedback]
+      {id}.md                       [read/write]
+    docs/                           [_create=trigger, .error=feedback]
+      {slug}.md                     [read/write]
     attachments/                    [embedded files + external links]
       _create                       [write "URL [title]" to link]
+      .error                        [read-only: last failed write here]
       *.png, *.pdf                  [read-only: embedded images/files]
       *.link                        [read-only: external link info]
     relations/                      [issue dependencies/links]
       _create                       [write "type ID" to create]
+      .error                        [read-only: last failed write here]
       {type}-{ID}.rel               [read-only info, rm to delete]
     children/                       [symlinks to sub-issues, mkdir to create]
   by/status|label|assignee/{value}/ [issue symlinks]
+  labels/                           [_create=trigger, .error=feedback]
+    {name}.md                       [read/write, rm to delete]
   projects/{slug}/
     project.md                      [read/write]
+    .error                          [read-only: last failed write here]
     docs/                           [same as issues]
     updates/                        [_create with health: onTrack|atRisk|offTrack]
     milestones/                     [project milestones]
       _create                       [write "name\ndescription" to create]
+      .error                        [read-only: last failed write here]
       {name}.md                     [read/write, rm to delete]
     {ISSUE-ID} symlinks
   cycles/
@@ -167,7 +175,9 @@ teams/{KEY}/
 
 initiatives/{slug}/
   initiative.md                     [read/write]
-  docs/{slug}.md                    [read/write, _create=trigger]
+  .error                            [read-only: last failed write here]
+  docs/                             [_create=trigger, .error=feedback]
+    {slug}.md                       [read/write]
   projects/                         [symlinks to team projects]
     {project-slug}                  [symlink to ../../teams/{KEY}/projects/{slug}]
   updates/                          [status updates]
@@ -266,8 +276,8 @@ _create is a write-only trigger file (like /proc/sysrq-trigger):
 </_create_behavior>
 
 <validation_errors>
-Writes fail with EINVAL (Invalid argument) for invalid frontmatter values.
-After a failed write, cat .error to see what went wrong:
+Every writable directory has a .error feedback file. After a failed write,
+cat the .error next to the file (or _create) you wrote to see what went wrong:
 
   $ echo "priority: critical" >> issue.md  # invalid priority
   $ cat .error
@@ -275,9 +285,14 @@ After a failed write, cat .error to see what went wrong:
   Value: "critical"
   Error: invalid priority "critical": must be none, low, medium, high, or urgent
 
-Validated fields: status, assignee, labels, priority, project, milestone, cycle, parent
-Reference files: states.md (valid statuses), labels.md (valid labels)
-The .error file is cleared on successful writes.
+Failure model (every writable surface follows this contract):
+- Bad input (invalid field, unknown name, missing required field) -> EINVAL
+- Backend/API failure -> EIO
+- Either way the reason lands in .error; success clears it.
+So an edit that "fails" or appears to no-op is explained at the sibling .error.
+
+Validated issue fields: status, assignee, labels, priority, project, milestone, cycle, parent
+Reference files: states.md (valid statuses), labels.md (valid labels), initiatives/ (valid initiatives)
 </validation_errors>
 
 <important_notes>
