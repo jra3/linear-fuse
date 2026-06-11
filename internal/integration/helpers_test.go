@@ -17,6 +17,19 @@ func isControlFile(name string) bool {
 	return name == "_create" || name == ".error"
 }
 
+// firstRealEntry returns the name of the first directory entry that is not a
+// control file (.error / _create), or "" if there is none. Use this instead of
+// entries[0] when a dir may contain control files, since os.ReadDir sorts
+// ".error" ahead of real entries.
+func firstRealEntry(entries []os.DirEntry) string {
+	for _, e := range entries {
+		if !isControlFile(e.Name()) {
+			return e.Name()
+		}
+	}
+	return ""
+}
+
 // Path builders
 
 func rootPath() string {

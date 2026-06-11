@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log"
@@ -84,18 +85,25 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, len(issues))
-	for i, issue := range issues {
-		entries[i] = fuse.DirEntry{
+	// _create-style feedback: .error reports the last failed issue creation.
+	entries := make([]fuse.DirEntry, 0, len(issues)+1)
+	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
+	for _, issue := range issues {
+		entries = append(entries, fuse.DirEntry{
 			Name: issue.Identifier,
 			Mode: syscall.S_IFDIR,
-		}
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// Handle .error feedback file (last failed issue creation in this team)
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("issues", n.team.ID), out), 0
+	}
+
 	// Check if name looks like a valid issue identifier (e.g., "ENG-123")
 	// to avoid unnecessary API calls for invalid names
 	if !looksLikeIdentifier(name) {
@@ -156,6 +164,19 @@ func looksLikeIdentifier(name string) bool {
 	return true
 }
 
+// retryableCreateErr reports whether a create/mutation error is transient —
+// rate limiting, a cancelled/timed-out rate-limit wait, or the connectivity
+// circuit breaker — and therefore worth retrying, versus a permanent failure.
+// Transient creation failures are surfaced as EAGAIN so the caller (or an LLM)
+// knows to retry rather than treating it as a hard error.
+func retryableCreateErr(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "rate limit") || strings.Contains(msg, "circuit breaker")
+}
+
 // Mkdir creates a new issue from a directory name
 func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if n.lfs.debug {
@@ -168,11 +189,24 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		"title":  name,
 	}
 
+	// Bound the create so a rate-limited request fails legibly instead of
+	// hanging indefinitely (#131). On a transient failure we surface EAGAIN and
+	// a retry hint via .error rather than a bare EIO.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	errKey := collectionErrorKey("issues", n.team.ID)
 	issue, err := n.lfs.client.CreateIssue(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create issue: %v", err)
+		if retryableCreateErr(err) {
+			n.lfs.SetWriteError(errKey, "Operation: create issue \""+name+"\"\nError: the request was rate-limited or timed out before it completed, so no issue was created. Wait a few seconds and try the mkdir again.")
+			return nil, syscall.EAGAIN
+		}
+		n.lfs.SetWriteError(errKey, "Operation: create issue \""+name+"\"\nError: "+err.Error())
 		return nil, syscall.EIO
 	}
+	n.lfs.ClearWriteError(errKey)
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
@@ -912,11 +946,23 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		"parentId": n.issue.ID,
 	}
 
+	// Bound the create so a rate-limited request fails legibly instead of
+	// hanging (#131). Sub-issue creation failures surface on the parent issue's
+	// own .error (issues/{ID}/.error), the nearest writable feedback file.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	issue, err := n.lfs.client.CreateIssue(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create sub-issue: %v", err)
+		if retryableCreateErr(err) {
+			n.lfs.SetWriteError(n.issue.ID, "Operation: create sub-issue \""+name+"\"\nError: the request was rate-limited or timed out before it completed, so no sub-issue was created. Wait a few seconds and try the mkdir again.")
+			return nil, syscall.EAGAIN
+		}
+		n.lfs.SetWriteError(n.issue.ID, "Operation: create sub-issue \""+name+"\"\nError: "+err.Error())
 		return nil, syscall.EIO
 	}
+	n.lfs.ClearWriteError(n.issue.ID)
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {

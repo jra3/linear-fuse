@@ -255,8 +255,12 @@ func TestIssuesDirectoryListing(t *testing.T) {
 		t.Fatalf("Failed to read issues directory: %v", err)
 	}
 
-	// All entries should be directories with issue identifiers
+	// All entries (besides the .error feedback file) should be directories with
+	// issue identifiers
 	for _, entry := range entries {
+		if isControlFile(entry.Name()) {
+			continue
+		}
 		if !entry.IsDir() {
 			t.Errorf("Expected %s to be a directory", entry.Name())
 		}

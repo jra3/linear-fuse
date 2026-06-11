@@ -311,6 +311,28 @@ func TestWriteInvalidInputIsLoud(t *testing.T) {
 	}
 }
 
+// TestMkdirIssueFailureIsLegible is the #131 guard: when creating an issue via
+// mkdir fails, it must fail loudly with a populated issues/.error rather than
+// hanging or silently no-opping. In fixture mode the API call fails (no auth),
+// which is non-retryable, so mkdir returns an error and issues/.error explains
+// it. (A rate-limited/timed-out create instead returns EAGAIN; same .error.)
+func TestMkdirIssueFailureIsLegible(t *testing.T) {
+	newIssueDir := filepath.Join(issuesPath(testTeamKey), "Mkdir Legibility Probe")
+
+	err := os.Mkdir(newIssueDir, 0755)
+	if err == nil {
+		// Should not happen in fixture mode (no API); clean up if it somehow did.
+		_ = os.Remove(newIssueDir)
+		t.Skip("issue creation unexpectedly succeeded (live API?); skipping legibility check")
+	}
+
+	errPath := filepath.Join(issuesPath(testTeamKey), ".error")
+	data := readFileUntilContains(t, errPath, "create issue", defaultWaitTime)
+	if !strings.Contains(string(data), "create issue") {
+		t.Fatalf("issues/.error should explain the failed creation, got: %q", data)
+	}
+}
+
 // TestOverwriteDocKeepsNodeReadable guards #137: overwriting an existing doc
 // file in place — the truncate+write pattern cp / mv / editor save-over use —
 // must leave the node readable and writable, never a write-only _create node

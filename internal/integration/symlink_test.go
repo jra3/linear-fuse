@@ -271,8 +271,11 @@ func TestProjectsDirectoryContainsProjects(t *testing.T) {
 		t.Fatalf("Failed to read projects directory: %v", err)
 	}
 
-	// All entries should be directories
+	// All entries besides the .error feedback file should be directories
 	for _, entry := range entries {
+		if isControlFile(entry.Name()) {
+			continue
+		}
 		if !entry.IsDir() {
 			t.Errorf("Expected %s to be a directory", entry.Name())
 		}
@@ -285,12 +288,13 @@ func TestProjectDirectoryContainsInfoFile(t *testing.T) {
 		t.Fatalf("Failed to read projects directory: %v", err)
 	}
 
-	if len(entries) == 0 {
+	proj := firstRealEntry(entries)
+	if proj == "" {
 		t.Skip("No projects to test")
 	}
 
 	// Check first project directory
-	projectDir := filepath.Join(projectsPath(testTeamKey), entries[0].Name())
+	projectDir := filepath.Join(projectsPath(testTeamKey), proj)
 	projectEntries, err := os.ReadDir(projectDir)
 	if err != nil {
 		t.Fatalf("Failed to read project directory: %v", err)
@@ -315,12 +319,13 @@ func TestProjectInfoFile(t *testing.T) {
 		t.Fatalf("Failed to read projects directory: %v", err)
 	}
 
-	if len(entries) == 0 {
+	proj := firstRealEntry(entries)
+	if proj == "" {
 		t.Skip("No projects to test")
 	}
 
 	// Read project.md from first project
-	projectInfoPath := filepath.Join(projectsPath(testTeamKey), entries[0].Name(), "project.md")
+	projectInfoPath := filepath.Join(projectsPath(testTeamKey), proj, "project.md")
 	content, err := os.ReadFile(projectInfoPath)
 	if err != nil {
 		t.Fatalf("Failed to read project.md: %v", err)
@@ -346,12 +351,13 @@ func TestProjectIssueSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read projects directory: %v", err)
 	}
 
-	if len(entries) == 0 {
+	proj := firstRealEntry(entries)
+	if proj == "" {
 		t.Skip("No projects to test")
 	}
 
 	// Check first project directory for symlinks
-	projectDir := filepath.Join(projectsPath(testTeamKey), entries[0].Name())
+	projectDir := filepath.Join(projectsPath(testTeamKey), proj)
 	projectEntries, err := os.ReadDir(projectDir)
 	if err != nil {
 		t.Fatalf("Failed to read project directory: %v", err)

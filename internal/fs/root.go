@@ -139,6 +139,8 @@ Mount point: %s (all paths below are relative to this mount point)
 <directory_structure>
 teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
+  issues/                           [mkdir "Title" to create an issue]
+    .error                          [read-only: last failed issue creation]
   issues/{ID}/
     issue.md                        [read/write]
     .error                          [read-only: last failed write here]
@@ -159,6 +161,8 @@ teams/{KEY}/
   by/status|label|assignee/{value}/ [issue symlinks]
   labels/                           [_create=trigger, .error=feedback]
     {name}.md                       [read/write, rm to delete]
+  projects/                         [mkdir "Name" to create a project]
+    .error                          [read-only: last failed project creation]
   projects/{slug}/
     project.md                      [read/write]
     .error                          [read-only: last failed write here]

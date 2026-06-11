@@ -67,18 +67,25 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, len(projects))
-	for i, project := range projects {
-		entries[i] = fuse.DirEntry{
+	// .error reports the last failed project creation in this team.
+	entries := make([]fuse.DirEntry, 0, len(projects)+1)
+	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
+	for _, project := range projects {
+		entries = append(entries, fuse.DirEntry{
 			Name: projectDirName(project),
 			Mode: syscall.S_IFDIR,
-		}
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
 func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// Handle .error feedback file (last failed project creation in this team)
+	if name == ".error" {
+		return p.lfs.lookupErrorFile(ctx, p, collectionErrorKey("projects", p.team.ID), out), 0
+	}
+
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
 	if err != nil {
 		return nil, syscall.EIO
@@ -109,11 +116,23 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		"teamIds": []string{p.team.ID},
 	}
 
+	// Bound the create so a rate-limited request fails legibly instead of
+	// hanging (#131); surface EAGAIN + a retry hint via projects/.error.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	errKey := collectionErrorKey("projects", p.team.ID)
 	project, err := p.lfs.CreateProject(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create project: %v", err)
+		if retryableCreateErr(err) {
+			p.lfs.SetWriteError(errKey, "Operation: create project \""+name+"\"\nError: the request was rate-limited or timed out before it completed, so no project was created. Wait a few seconds and try the mkdir again.")
+			return nil, syscall.EAGAIN
+		}
+		p.lfs.SetWriteError(errKey, "Operation: create project \""+name+"\"\nError: "+err.Error())
 		return nil, syscall.EIO
 	}
+	p.lfs.ClearWriteError(errKey)
 
 	// Upsert to SQLite so it's immediately visible
 	if err := p.lfs.UpsertProject(ctx, p.team.ID, *project); err != nil {
