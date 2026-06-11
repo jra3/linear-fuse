@@ -154,32 +154,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	// Match by filename
 	for _, doc := range docs {
 		if documentFilename(doc) == name {
-			content, err := marshal.DocumentToMarkdown(&doc)
-			if err != nil {
-				log.Printf("Failed to marshal document: %v", err)
-				return nil, syscall.EIO
-			}
-			node := &DocumentFileNode{
-				BaseNode:     BaseNode{lfs: n.lfs},
-				document:     doc,
-				issueID:      n.issueID,
-				teamID:       n.teamID,
-				projectID:    n.projectID,
-				initiativeID: n.initiativeID,
-				content:      content,
-				contentReady: true,
-			}
-			out.Attr.Mode = 0644 | syscall.S_IFREG
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
-			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
-			out.Attr.SetTimes(&doc.UpdatedAt, &doc.UpdatedAt, &doc.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  documentIno(doc.ID),
-			}), 0
+			return n.newDocumentInode(ctx, doc, out)
 		}
 	}
 
@@ -280,6 +255,37 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	return syscall.ENOENT
 }
 
+// newDocumentInode builds the read/write DocumentFileNode inode for an existing
+// document, populated with its current content. Shared by Lookup and Create.
+func (n *DocsNode) newDocumentInode(ctx context.Context, doc api.Document, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	content, err := marshal.DocumentToMarkdown(&doc)
+	if err != nil {
+		log.Printf("Failed to marshal document: %v", err)
+		return nil, syscall.EIO
+	}
+	node := &DocumentFileNode{
+		BaseNode:     BaseNode{lfs: n.lfs},
+		document:     doc,
+		issueID:      n.issueID,
+		teamID:       n.teamID,
+		projectID:    n.projectID,
+		initiativeID: n.initiativeID,
+		content:      content,
+		contentReady: true,
+	}
+	out.Attr.Mode = 0644 | syscall.S_IFREG
+	out.Attr.Uid = n.lfs.uid
+	out.Attr.Gid = n.lfs.gid
+	out.Attr.Size = uint64(len(content))
+	out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
+	out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
+	out.Attr.SetTimes(&doc.UpdatedAt, &doc.UpdatedAt, &doc.CreatedAt)
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFREG,
+		Ino:  documentIno(doc.ID),
+	}), 0
+}
+
 func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	if n.lfs.debug {
 		log.Printf("Create document file: %s", name)
@@ -288,6 +294,23 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 	// Only allow creating .md files
 	if !strings.HasSuffix(name, ".md") {
 		return nil, nil, 0, syscall.EINVAL
+	}
+
+	// If a document already exists with this name, return its read/write node so
+	// an overwrite (mv tmp doc.md, cp, editor save-over) updates it in place via
+	// the normal truncate+write+flush path. Previously Create always bound a
+	// write-only _create node to the name, leaving the file unreadable and
+	// unwritable (#137).
+	if docs, err := n.getDocuments(ctx); err == nil {
+		for _, doc := range docs {
+			if documentFilename(doc) == name {
+				inode, errno := n.newDocumentInode(ctx, doc, out)
+				if errno != 0 {
+					return nil, nil, 0, errno
+				}
+				return inode, nil, 0, 0
+			}
+		}
 	}
 
 	node := &NewDocumentNode{

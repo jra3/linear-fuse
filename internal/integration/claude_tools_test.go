@@ -311,6 +311,58 @@ func TestWriteInvalidInputIsLoud(t *testing.T) {
 	}
 }
 
+// TestOverwriteDocKeepsNodeReadable guards #137: overwriting an existing doc
+// file in place — the truncate+write pattern cp / mv / editor save-over use —
+// must leave the node readable and writable, never a write-only _create node
+// that returns EACCES on every subsequent read. Runs in fixture mode: the write
+// itself won't persist (no API), but the node must stay a real document node.
+func TestOverwriteDocKeepsNodeReadable(t *testing.T) {
+	docPath, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
+	if err != nil {
+		t.Skipf("no document fixture: %v", err)
+	}
+
+	orig, err := os.ReadFile(docPath)
+	if err != nil {
+		t.Fatalf("doc not readable before overwrite: %v", err)
+	}
+	// Restore the in-memory content so this test doesn't pollute the shared
+	// fixture doc for other tests (the overwrite below does not persist without
+	// an API, but it does dirty the node's cached content).
+	defer func() {
+		if f, err := os.OpenFile(docPath, os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			_, _ = f.Write(orig)
+			_ = f.Close()
+		}
+	}()
+
+	// Overwrite in place the way cp/mv/editors do: O_CREAT|O_TRUNC|O_WRONLY.
+	f, err := os.OpenFile(docPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("open doc for overwrite: %v", err)
+	}
+	_, _ = f.Write([]byte("---\ntitle: Overwritten\n---\n\nnew body\n"))
+	_ = f.Close() // may fail at flush (no API in fixture mode); the node must survive
+
+	// The node must still be readable — not EACCES (the #137 corruption signature).
+	if _, err := os.ReadFile(docPath); err != nil {
+		if errors.Is(err, syscall.EACCES) {
+			t.Fatalf("doc became unreadable after overwrite (#137 regression): %v", err)
+		}
+		t.Fatalf("doc not readable after overwrite: %v", err)
+	}
+
+	// ...and still writable (open for write must not EACCES).
+	wf, err := os.OpenFile(docPath, os.O_WRONLY, 0644)
+	if err != nil {
+		if errors.Is(err, syscall.EACCES) {
+			t.Fatalf("doc became unwritable after overwrite (#137 regression): %v", err)
+		}
+		t.Fatalf("doc not writable after overwrite: %v", err)
+	}
+	_ = wf.Close()
+}
+
 // readFileUntilContains polls path until its content contains want or maxWait
 // elapses, returning the last content read.
 func readFileUntilContains(t *testing.T, path, want string, maxWait time.Duration) []byte {

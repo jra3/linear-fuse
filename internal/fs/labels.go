@@ -113,30 +113,36 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Match by filename
 	for _, label := range labels {
 		if labelFilename(label) == name {
-			content := labelToMarkdown(&label)
-			node := &LabelFileNode{
-				BaseNode:     BaseNode{lfs: n.lfs},
-				label:        label,
-				teamID:       n.teamID,
-				content:      content,
-				contentReady: true,
-			}
-			now := time.Now()
-			out.Attr.Mode = 0644 | syscall.S_IFREG
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.Size = uint64(len(content))
-			out.Attr.SetTimes(&now, &now, &now)
-			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
-			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
-			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  labelIno(label.ID),
-			}), 0
+			return n.newLabelInode(ctx, label, out)
 		}
 	}
 
 	return nil, syscall.ENOENT
+}
+
+// newLabelInode builds the read/write LabelFileNode inode for an existing label,
+// populated with its current content. Shared by Lookup and Create.
+func (n *LabelsNode) newLabelInode(ctx context.Context, label api.Label, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	content := labelToMarkdown(&label)
+	node := &LabelFileNode{
+		BaseNode:     BaseNode{lfs: n.lfs},
+		label:        label,
+		teamID:       n.teamID,
+		content:      content,
+		contentReady: true,
+	}
+	now := time.Now()
+	out.Attr.Mode = 0644 | syscall.S_IFREG
+	out.Attr.Uid = n.lfs.uid
+	out.Attr.Gid = n.lfs.gid
+	out.Attr.Size = uint64(len(content))
+	out.Attr.SetTimes(&now, &now, &now)
+	out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
+	out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFREG,
+		Ino:  labelIno(label.ID),
+	}), 0
 }
 
 func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -241,6 +247,21 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 	// Only allow creating .md files
 	if !strings.HasSuffix(name, ".md") {
 		return nil, nil, 0, syscall.EINVAL
+	}
+
+	// If a label already exists with this name, return its read/write node so an
+	// overwrite (mv/cp/editor save-over) updates it in place instead of binding a
+	// write-only _create node to the name and corrupting it (#137).
+	if labels, err := n.lfs.GetTeamLabels(ctx, n.teamID); err == nil {
+		for _, label := range labels {
+			if labelFilename(label) == name {
+				inode, errno := n.newLabelInode(ctx, label, out)
+				if errno != 0 {
+					return nil, nil, 0, errno
+				}
+				return inode, nil, 0, 0
+			}
+		}
 	}
 
 	node := &NewLabelNode{
