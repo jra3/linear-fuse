@@ -434,16 +434,57 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 		title = parts[1]
 	}
 
+	// Idempotency (#146): if this URL is already attached, linking it again is a
+	// no-op, not a failure. Linear rejects the duplicate with an opaque "Unable
+	// to create issue attachment", which is indistinguishable from a genuine
+	// failure (auth, bad URL, outage). This is the common case when Linear's
+	// GitHub integration has already auto-linked a branch-named PR. Mirror the
+	// LabelsNode "already exists -> success" idiom: clear .error and return 0,
+	// leaving the existing .link in place.
+	if existing, err := n.lfs.GetIssueAttachments(ctx, n.issueID); err == nil {
+		for _, att := range existing {
+			if attachmentURLsEqual(att.URL, url) {
+				n.lfs.ClearWriteError(attErrKey)
+				return 0
+			}
+		}
+	}
+
 	// Create the attachment via API (LinkURL for external links)
 	att, err := n.lfs.client.LinkURL(ctx, n.issueID, url, title)
 	if err != nil {
+		// The local cache may be stale relative to Linear (e.g. an auto-link that
+		// hasn't synced yet), so the pre-check above can miss a duplicate. On
+		// failure, re-check authoritatively against the API: if the URL is in
+		// fact already attached, treat it as the idempotent no-op it is rather
+		// than surfacing the raw GraphQL rejection.
+		if live, lerr := n.lfs.client.GetIssueAttachments(ctx, n.issueID); lerr == nil {
+			for _, ex := range live {
+				if attachmentURLsEqual(ex.URL, url) {
+					n.upsertAttachment(ctx, ex)
+					n.lfs.ClearWriteError(attErrKey)
+					n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
+					return 0
+				}
+			}
+		}
 		n.lfs.SetWriteError(attErrKey, "Operation: create attachment\nValue: \""+url+"\"\nError: "+err.Error())
 		return syscall.EIO
 	}
 	n.lfs.ClearWriteError(attErrKey)
 
 	// Upsert to SQLite for immediate visibility
-	now := time.Now()
+	n.upsertAttachment(ctx, *att)
+
+	// Invalidate cache
+	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
+
+	return 0
+}
+
+// upsertAttachment writes an attachment to SQLite for immediate visibility.
+// Failures are logged, not fatal: the sync worker will reconcile.
+func (n *NewAttachmentNode) upsertAttachment(ctx context.Context, att api.Attachment) {
 	data, _ := json.Marshal(att)
 	if err := n.lfs.store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
 		ID:         att.ID,
@@ -453,16 +494,19 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 		Url:        att.URL,
 		SourceType: sql.NullString{String: att.SourceType, Valid: att.SourceType != ""},
 		Metadata:   json.RawMessage("{}"),
-		SyncedAt:   now,
+		SyncedAt:   time.Now(),
 		Data:       data,
 	}); err != nil {
 		log.Printf("[attachments] upsert to DB failed: %v", err)
 	}
+}
 
-	// Invalidate cache
-	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
-
-	return 0
+// attachmentURLsEqual reports whether two attachment URLs refer to the same
+// target, ignoring surrounding whitespace and trailing slashes. Linear stores
+// auto-linked URLs verbatim, so a trailing-slash-tolerant exact match is enough
+// to recognize a duplicate without false positives.
+func attachmentURLsEqual(a, b string) bool {
+	return strings.TrimRight(strings.TrimSpace(a), "/") == strings.TrimRight(strings.TrimSpace(b), "/")
 }
 
 type attachmentCreateHandle struct {
