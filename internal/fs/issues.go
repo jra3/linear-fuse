@@ -286,6 +286,9 @@ type IssueDirectoryNode struct {
 var _ fs.NodeReaddirer = (*IssueDirectoryNode)(nil)
 var _ fs.NodeLookuper = (*IssueDirectoryNode)(nil)
 var _ fs.NodeGetattrer = (*IssueDirectoryNode)(nil)
+var _ fs.NodeCreater = (*IssueDirectoryNode)(nil)
+var _ fs.NodeRenamer = (*IssueDirectoryNode)(nil)
+var _ fs.NodeUnlinker = (*IssueDirectoryNode)(nil)
 
 func (n *IssueDirectoryNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
@@ -460,6 +463,84 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 	}
 
 	return nil, syscall.ENOENT
+}
+
+// Create accepts an editor's atomic-save temp file (e.g. issue.md.tmp.<pid>.<rand>)
+// as an in-memory scratch buffer. Rename then routes its bytes into issue.md's
+// write path. Without this, go-fuse rejects the temp-file create with a
+// misleading EROFS even though the mount is rw and issue.md is writable (#145).
+func (n *IssueDirectoryNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if n.lfs.debug {
+		log.Printf("Create scratch file in %s: %s", n.issue.Identifier, name)
+	}
+	return newScratchInode(ctx, &n.BaseNode, issueDirIno(n.issue.ID), name, out)
+}
+
+// Rename persists an editor's atomic save: when a scratch temp file is renamed
+// onto issue.md, its buffered bytes are written through the same path a direct
+// in-place edit uses (frontmatter validation, read-your-writes verification,
+// .error handling, cache invalidation). issue.md is the only writable file here,
+// so renames onto any other target — or of the canonical files themselves — are
+// rejected.
+func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	if n.lfs.debug {
+		log.Printf("Rename in %s: %s -> %s", n.issue.Identifier, name, newName)
+	}
+
+	// The atomic-save pattern keeps the temp file a sibling of issue.md.
+	if newParent.EmbeddedInode().StableAttr().Ino != n.EmbeddedInode().StableAttr().Ino {
+		return syscall.EXDEV
+	}
+
+	content, ok := scratchRenameBytes(n, name)
+	if !ok {
+		// name isn't a scratch file we created — e.g. an attempt to rename issue.md
+		// itself. The canonical files aren't renamable.
+		return syscall.ENOTSUP
+	}
+
+	if newName != "issue.md" {
+		// A scratch file only has somewhere to persist when renamed onto issue.md,
+		// the one editable file in this directory.
+		n.lfs.SetIssueError(n.issue.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only issue.md is writable in this directory; save your changes onto issue.md (atomic save-via-rename onto issue.md is supported).", name, newName))
+		return syscall.ENOTSUP
+	}
+
+	// Route the buffered bytes through the normal issue write path via a transient
+	// file node. Flush returns 0 on success, EINVAL on a parse/validation error,
+	// and EIO only on a fatal read-your-writes divergence (the write still reached
+	// Linear in that case).
+	fileNode := &IssueFileNode{
+		BaseNode:     BaseNode{lfs: n.lfs},
+		issue:        n.issue,
+		content:      content,
+		contentReady: true,
+		dirty:        true,
+	}
+	errno := fileNode.Flush(ctx, nil)
+
+	if errno == 0 || errno == syscall.EIO {
+		// The write reached Linear. Adopt the fresh issue so issue.md re-renders the
+		// stored content, and drop the kernel caches: go-fuse will MvChild the spent
+		// scratch inode over issue.md, so issue.md must re-Lookup to a fresh
+		// IssueFileNode rather than serve the consumed scratch node.
+		n.issue = fileNode.issue
+		n.lfs.InvalidateKernelEntry(issueDirIno(n.issue.ID), name)
+		n.lfs.InvalidateKernelEntry(issueDirIno(n.issue.ID), newName)
+		n.lfs.InvalidateKernelInode(issueIno(n.issue.ID))
+	}
+
+	return errno
+}
+
+// Unlink lets editors clean up an abandoned atomic-save temp file (when a save
+// is aborted before the rename). Only scratch files we created are removable;
+// the canonical entries (issue.md, comments, etc.) are not.
+func (n *IssueDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	if _, ok := scratchRenameBytes(n, name); ok {
+		return 0
+	}
+	return syscall.EPERM
 }
 
 // IssueFileNode represents an issue.md file inside /teams/{KEY}/issues/{ID}/
@@ -821,7 +902,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// actually persisted. Compare against the fresh fetch using the pre-write
 	// values (i.issue, not yet overwritten) to distinguish a silent revert from
 	// a truncation. This catches #136 (large body silently reverts).
-	divergence := i.verifyWriteBack(updates, freshIssue)
+	divergence, fatal := i.verifyWriteBack(updates, freshIssue)
 
 	// Update local copy with fresh data (reflects reality, even on divergence)
 	i.issue = *freshIssue
@@ -832,10 +913,15 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 
+	// The error was already cleared on the successful API update above; only
+	// re-set it here when the persisted value diverged. A fatal divergence
+	// (revert/truncation) fails the close; a benign reformat just leaves a note.
 	if divergence != "" {
-		log.Printf("Read-your-writes violation on %s:\n%s", i.issue.Identifier, divergence)
-		i.lfs.SetIssueError(i.issue.ID, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+divergence)
-		return syscall.EIO
+		log.Printf("Read-your-writes %s on %s:\n%s", writeBackKind(fatal), i.issue.Identifier, divergence)
+		i.lfs.SetIssueError(i.issue.ID, divergence)
+		if fatal {
+			return syscall.EIO
+		}
 	}
 
 	return 0
@@ -843,20 +929,18 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 // verifyWriteBack compares the free-text fields we sent (title, description) in
 // updates against what persisted in fresh, using the pre-write values on i.issue
-// to classify the divergence. Returns "" when everything persisted faithfully.
-func (i *IssueFileNode) verifyWriteBack(updates map[string]any, fresh *api.Issue) string {
-	var problems []string
+// to classify the divergence. Returns ("", false) when everything persisted
+// faithfully, and reports whether any divergence is fatal (real loss) vs a
+// benign server-side reformat.
+func (i *IssueFileNode) verifyWriteBack(updates map[string]any, fresh *api.Issue) (string, bool) {
+	var results []writeBackResult
 	if want, ok := updates["title"].(string); ok {
-		if d := writeBackDivergence("title", want, fresh.Title, i.issue.Title); d != "" {
-			problems = append(problems, d)
-		}
+		results = append(results, writeBackDivergence("title", want, fresh.Title, i.issue.Title))
 	}
 	if want, ok := updates["description"].(string); ok {
-		if d := writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description); d != "" {
-			problems = append(problems, d)
-		}
+		results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
 	}
-	return strings.Join(problems, "\n")
+	return writeBackError(results...)
 }
 
 func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {

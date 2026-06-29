@@ -214,6 +214,9 @@ type ProjectNode struct {
 var _ fs.NodeReaddirer = (*ProjectNode)(nil)
 var _ fs.NodeLookuper = (*ProjectNode)(nil)
 var _ fs.NodeGetattrer = (*ProjectNode)(nil)
+var _ fs.NodeCreater = (*ProjectNode)(nil)
+var _ fs.NodeRenamer = (*ProjectNode)(nil)
+var _ fs.NodeUnlinker = (*ProjectNode)(nil)
 
 func (p *ProjectNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
@@ -336,6 +339,69 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	}
 
 	return nil, syscall.ENOENT
+}
+
+// Create accepts an editor's atomic-save temp file (e.g. project.md.tmp.<pid>.<rand>)
+// as an in-memory scratch buffer so Rename can route its bytes into project.md's
+// write path. Without it, go-fuse rejects the temp-file create with a misleading
+// EROFS on the rw mount (#145).
+func (p *ProjectNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if p.lfs.debug {
+		log.Printf("Create scratch file in project %s: %s", p.project.Name, name)
+	}
+	return newScratchInode(ctx, &p.BaseNode, p.EmbeddedInode().StableAttr().Ino, name, out)
+}
+
+// Rename persists an editor's atomic save: a scratch temp file renamed onto
+// project.md is written through project.md's normal Flush path. project.md is the
+// only writable file here, so other rename targets are rejected.
+func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	if p.lfs.debug {
+		log.Printf("Rename in project %s: %s -> %s", p.project.Name, name, newName)
+	}
+
+	dirIno := p.EmbeddedInode().StableAttr().Ino
+	if newParent.EmbeddedInode().StableAttr().Ino != dirIno {
+		return syscall.EXDEV
+	}
+
+	content, ok := scratchRenameBytes(p, name)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+
+	if newName != "project.md" {
+		p.lfs.SetWriteError(p.project.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only project.md is writable in this directory; save your changes onto project.md (atomic save-via-rename onto project.md is supported).", name, newName))
+		return syscall.ENOTSUP
+	}
+
+	fileNode := &ProjectInfoNode{
+		BaseNode:     BaseNode{lfs: p.lfs},
+		team:         p.team,
+		project:      p.project,
+		content:      content,
+		contentReady: true,
+		dirty:        true,
+	}
+	errno := fileNode.Flush(ctx, nil)
+
+	if errno == 0 || errno == syscall.EIO {
+		p.project = fileNode.project
+		p.lfs.InvalidateKernelEntry(dirIno, name)
+		p.lfs.InvalidateKernelEntry(dirIno, newName)
+		p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))
+	}
+
+	return errno
+}
+
+// Unlink lets editors clean up an abandoned atomic-save temp file. Only scratch
+// files we created are removable; the canonical entries are not.
+func (p *ProjectNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	if _, ok := scratchRenameBytes(p, name); ok {
+		return 0
+	}
+	return syscall.EPERM
 }
 
 // ProjectIssueSymlink is a symlink pointing to an issue directory
@@ -670,22 +736,21 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Fetch fresh project from API and upsert to SQLite for immediate visibility
 	freshProject, err := p.lfs.client.GetProject(ctx, p.project.ID)
-	var divergence []string
+	var divergence string
+	var fatal bool
 	if err != nil {
 		log.Printf("Warning: failed to fetch fresh project after update: %v", err)
 	} else {
 		// Read-your-writes verification on the free-text fields we sent, using
 		// the pre-write values (p.project) to classify the divergence.
+		var results []writeBackResult
 		if projectInput.Name != nil {
-			if d := writeBackDivergence("name", *projectInput.Name, freshProject.Name, p.project.Name); d != "" {
-				divergence = append(divergence, d)
-			}
+			results = append(results, writeBackDivergence("name", *projectInput.Name, freshProject.Name, p.project.Name))
 		}
 		if projectInput.Description != nil {
-			if d := writeBackDivergence("description (body)", *projectInput.Description, freshProject.Description, p.project.Description); d != "" {
-				divergence = append(divergence, d)
-			}
+			results = append(results, writeBackDivergence("description (body)", *projectInput.Description, freshProject.Description, p.project.Description))
 		}
+		divergence, fatal = writeBackError(results...)
 		p.project = *freshProject
 		if err := p.lfs.UpsertProject(ctx, p.team.ID, *freshProject); err != nil {
 			log.Printf("Warning: failed to upsert project to SQLite: %v", err)
@@ -727,10 +792,13 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read
 
-	if len(divergence) > 0 {
-		log.Printf("Read-your-writes violation on project %s:\n%s", p.project.Name, strings.Join(divergence, "\n"))
-		p.lfs.SetWriteError(p.project.ID, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+strings.Join(divergence, "\n"))
-		return syscall.EIO
+	if divergence != "" {
+		log.Printf("Read-your-writes %s on project %s:\n%s", writeBackKind(fatal), p.project.Name, divergence)
+		p.lfs.SetWriteError(p.project.ID, divergence)
+		if fatal {
+			return syscall.EIO
+		}
+		return 0
 	}
 
 	p.lfs.ClearWriteError(p.project.ID)

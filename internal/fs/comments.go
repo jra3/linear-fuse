@@ -370,7 +370,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 
 	// Read-your-writes verification on the comment body (free text). The update
 	// returns the persisted comment, so compare directly against what we sent.
-	divergence := writeBackDivergence("comment body", body, updatedComment.Body, n.comment.Body)
+	divergence, fatal := writeBackError(writeBackDivergence("comment body", body, updatedComment.Body, n.comment.Body))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertComment(ctx, n.issueID, *updatedComment); err != nil {
@@ -385,11 +385,14 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	n.contentReady = false // Force regenerate on next read
 
 	if divergence != "" {
-		log.Printf("Read-your-writes violation on comment %s:\n%s", n.comment.ID, divergence)
-		n.lfs.SetWriteError(commentErrKey, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+divergence)
-		return syscall.EIO
+		log.Printf("Read-your-writes %s on comment %s:\n%s", writeBackKind(fatal), n.comment.ID, divergence)
+		n.lfs.SetWriteError(commentErrKey, divergence)
+		if fatal {
+			return syscall.EIO
+		}
+	} else {
+		n.lfs.ClearWriteError(commentErrKey)
 	}
-	n.lfs.ClearWriteError(commentErrKey)
 
 	if n.lfs.debug {
 		log.Printf("Comment updated successfully")
