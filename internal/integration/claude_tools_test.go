@@ -88,21 +88,35 @@ func claudeToolWrite(t *testing.T, path string, content []byte) {
 	}
 }
 
-// claudeToolWriteExpectingError emulates a save (truncate, write, close) and
-// returns the error surfaced at close, where Flush runs. Used to assert that
-// invalid writes fail loudly rather than succeeding silently.
-func claudeToolWriteExpectingError(t *testing.T, path string, content []byte) error {
+// claudeToolSaveExpectingError emulates the atomic save-via-rename that Claude
+// Code's Edit/Write tools and editors (vim, VS Code) actually use: write a
+// sibling temp file, then rename it over the target. It returns the error the
+// rename surfaces. Unlike a raw truncate+write+close, the rename routes the bytes
+// straight through the directory's Rename handler, which runs the target's Flush
+// (and its validation) inline and returns the errno directly — so a rejected
+// write fails loudly and deterministically, instead of having the verdict masked
+// when the kernel serves an O_TRUNC+write entirely from a primed page cache.
+// Used to assert that invalid writes fail loudly rather than succeeding silently.
+func claudeToolSaveExpectingError(t *testing.T, path string, content []byte) error {
 	t.Helper()
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644)
+	tmp := path + ".tmp.999.deadbeef"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		t.Fatalf("open %s for write: %v", path, err)
+		t.Fatalf("create temp file for %s: %v", path, err)
 	}
 	if _, err := f.Write(content); err != nil {
 		_ = f.Close()
-		return err
+		_ = os.Remove(tmp)
+		t.Fatalf("write temp file for %s: %v", path, err)
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		t.Fatalf("close temp file for %s: %v", path, err)
+	}
+	err = os.Rename(tmp, path)
+	_ = os.Remove(tmp) // best-effort cleanup if the rename did not consume it
+	return err
 }
 
 // firstWritableFile returns the first non-hidden, non-_create entry in dir.
@@ -475,7 +489,7 @@ func TestWriteInvalidInputIsLoud(t *testing.T) {
 	const badValue = "__no_such_initiative__"
 	bad := []byte("---\nname: Test Project\ninitiatives: [\"" + badValue + "\"]\n---\n\nbody\n")
 
-	werr := claudeToolWriteExpectingError(t, path, bad)
+	werr := claudeToolSaveExpectingError(t, path, bad)
 	if !errors.Is(werr, syscall.EINVAL) {
 		t.Fatalf("expected EINVAL writing unknown initiative, got %v", werr)
 	}
