@@ -482,17 +482,14 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 
 	// Read-your-writes verification on the free-text fields we sent. The update
 	// returns the persisted document, so compare directly against what we sent.
-	var divergence []string
+	var results []writeBackResult
 	if want, ok := update["title"].(string); ok {
-		if d := writeBackDivergence("title", want, updatedDoc.Title, n.document.Title); d != "" {
-			divergence = append(divergence, d)
-		}
+		results = append(results, writeBackDivergence("title", want, updatedDoc.Title, n.document.Title))
 	}
 	if want, ok := update["content"].(string); ok {
-		if d := writeBackDivergence("content (body)", want, updatedDoc.Content, n.document.Content); d != "" {
-			divergence = append(divergence, d)
-		}
+		results = append(results, writeBackDivergence("content (body)", want, updatedDoc.Content, n.document.Content))
 	}
+	divergence, fatal := writeBackError(results...)
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
@@ -506,12 +503,15 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	n.dirty = false
 	n.contentReady = false // Force regenerate on next read
 
-	if len(divergence) > 0 {
-		log.Printf("Read-your-writes violation on document %s:\n%s", n.document.ID, strings.Join(divergence, "\n"))
-		n.lfs.SetWriteError(docErrKey, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+strings.Join(divergence, "\n"))
-		return syscall.EIO
+	if divergence != "" {
+		log.Printf("Read-your-writes %s on document %s:\n%s", writeBackKind(fatal), n.document.ID, divergence)
+		n.lfs.SetWriteError(docErrKey, divergence)
+		if fatal {
+			return syscall.EIO
+		}
+	} else {
+		n.lfs.ClearWriteError(docErrKey)
 	}
-	n.lfs.ClearWriteError(docErrKey)
 
 	if n.lfs.debug {
 		log.Printf("Document updated successfully")

@@ -118,6 +118,9 @@ type InitiativeNode struct {
 var _ fs.NodeReaddirer = (*InitiativeNode)(nil)
 var _ fs.NodeLookuper = (*InitiativeNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativeNode)(nil)
+var _ fs.NodeCreater = (*InitiativeNode)(nil)
+var _ fs.NodeRenamer = (*InitiativeNode)(nil)
+var _ fs.NodeUnlinker = (*InitiativeNode)(nil)
 
 func (i *InitiativeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0755 | syscall.S_IFDIR
@@ -184,6 +187,69 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	return nil, syscall.ENOENT
+}
+
+// Create accepts an editor's atomic-save temp file (e.g. initiative.md.tmp.<pid>.<rand>)
+// as an in-memory scratch buffer so Rename can route its bytes into
+// initiative.md's write path. Without it, go-fuse rejects the temp-file create
+// with a misleading EROFS on the rw mount (#145).
+func (i *InitiativeNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if i.lfs.debug {
+		log.Printf("Create scratch file in initiative %s: %s", i.initiative.Name, name)
+	}
+	return newScratchInode(ctx, &i.BaseNode, i.EmbeddedInode().StableAttr().Ino, name, out)
+}
+
+// Rename persists an editor's atomic save: a scratch temp file renamed onto
+// initiative.md is written through initiative.md's normal Flush path.
+// initiative.md is the only writable file here, so other targets are rejected.
+func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	if i.lfs.debug {
+		log.Printf("Rename in initiative %s: %s -> %s", i.initiative.Name, name, newName)
+	}
+
+	dirIno := i.EmbeddedInode().StableAttr().Ino
+	if newParent.EmbeddedInode().StableAttr().Ino != dirIno {
+		return syscall.EXDEV
+	}
+
+	content, ok := scratchRenameBytes(i, name)
+	if !ok {
+		return syscall.ENOTSUP
+	}
+
+	if newName != "initiative.md" {
+		i.lfs.SetWriteError(i.initiative.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only initiative.md is writable in this directory; save your changes onto initiative.md (atomic save-via-rename onto initiative.md is supported).", name, newName))
+		return syscall.ENOTSUP
+	}
+
+	fileNode := &InitiativeInfoNode{
+		BaseNode:     BaseNode{lfs: i.lfs},
+		initiative:   i.initiative,
+		initiativeID: i.initiative.ID,
+		content:      content,
+		contentReady: true,
+		dirty:        true,
+	}
+	errno := fileNode.Flush(ctx, nil)
+
+	if errno == 0 || errno == syscall.EIO {
+		i.initiative = fileNode.initiative
+		i.lfs.InvalidateKernelEntry(dirIno, name)
+		i.lfs.InvalidateKernelEntry(dirIno, newName)
+		i.lfs.InvalidateKernelInode(initiativeInfoIno(i.initiative.ID))
+	}
+
+	return errno
+}
+
+// Unlink lets editors clean up an abandoned atomic-save temp file. Only scratch
+// files we created are removable; the canonical entries are not.
+func (i *InitiativeNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	if _, ok := scratchRenameBytes(i, name); ok {
+		return 0
+	}
+	return syscall.EPERM
 }
 
 // InitiativeInfoNode is a virtual file containing initiative metadata
@@ -485,22 +551,21 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 
 	// Fetch fresh initiative from API and upsert to SQLite for immediate visibility
 	freshInitiative, err := i.lfs.client.GetInitiative(ctx, i.initiativeID)
-	var divergence []string
+	var divergence string
+	var fatal bool
 	if err != nil {
 		log.Printf("Warning: failed to fetch fresh initiative after update: %v", err)
 	} else {
 		// Read-your-writes verification on the free-text fields we sent, using
 		// the pre-write values (i.initiative) to classify the divergence.
+		var results []writeBackResult
 		if initiativeInput.Name != nil {
-			if d := writeBackDivergence("name", *initiativeInput.Name, freshInitiative.Name, i.initiative.Name); d != "" {
-				divergence = append(divergence, d)
-			}
+			results = append(results, writeBackDivergence("name", *initiativeInput.Name, freshInitiative.Name, i.initiative.Name))
 		}
 		if initiativeInput.Description != nil {
-			if d := writeBackDivergence("description (body)", *initiativeInput.Description, freshInitiative.Description, i.initiative.Description); d != "" {
-				divergence = append(divergence, d)
-			}
+			results = append(results, writeBackDivergence("description (body)", *initiativeInput.Description, freshInitiative.Description, i.initiative.Description))
 		}
+		divergence, fatal = writeBackError(results...)
 		i.initiative = *freshInitiative
 		if err := i.lfs.UpsertInitiative(ctx, *freshInitiative); err != nil {
 			log.Printf("Warning: failed to upsert initiative to SQLite: %v", err)
@@ -542,10 +607,13 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
 
-	if len(divergence) > 0 {
-		log.Printf("Read-your-writes violation on initiative %s:\n%s", i.initiative.Name, strings.Join(divergence, "\n"))
-		i.lfs.SetWriteError(i.initiativeID, "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"+strings.Join(divergence, "\n"))
-		return syscall.EIO
+	if divergence != "" {
+		log.Printf("Read-your-writes %s on initiative %s:\n%s", writeBackKind(fatal), i.initiative.Name, divergence)
+		i.lfs.SetWriteError(i.initiativeID, divergence)
+		if fatal {
+			return syscall.EIO
+		}
+		return 0
 	}
 
 	i.lfs.ClearWriteError(i.initiativeID)

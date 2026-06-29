@@ -281,6 +281,95 @@ func TestWriteContractAtomicRenameNoCorruption(t *testing.T) {
 	}
 }
 
+// TestWriteContractAtomicRenameCreateNoEROFS covers #145 symptom #1 on every
+// single-editable-file surface: an editor's atomic save (create a sibling temp
+// file, write it, rename it over the editable file) must not be rejected with a
+// misleading EROFS ("read-only file system") on an rw mount. The decisive
+// assertion is that *creating* the temp file in the directory succeeds — that
+// was the EROFS the Claude Code Edit tool, vim, and VS Code all hit. The rename
+// itself may fail in fixture mode (no live API), but it must never leave the
+// target unreadable/corrupted.
+func TestWriteContractAtomicRenameCreateNoEROFS(t *testing.T) {
+	cases := []struct {
+		name    string
+		dirFile func(t *testing.T) (dir, file string) // directory + editable filename
+	}{
+		{
+			name: "issue",
+			dirFile: func(t *testing.T) (string, string) {
+				return issueDirPath(testTeamKey, "TST-1"), "issue.md"
+			},
+		},
+		{
+			name: "project",
+			dirFile: func(t *testing.T) (string, string) {
+				return filepath.Join(projectsPath(testTeamKey), "test-project"), "project.md"
+			},
+		},
+		{
+			name: "initiative",
+			dirFile: func(t *testing.T) (string, string) {
+				dir, err := firstInitiativeDir()
+				if err != nil {
+					t.Skipf("no initiative fixture: %v", err)
+				}
+				return dir, "initiative.md"
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, editable := tc.dirFile(t)
+			target := filepath.Join(dir, editable)
+
+			orig, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("read %s: %v", editable, err)
+			}
+
+			// Create a sibling temp file the way an atomic-save editor does. Before
+			// #145 this returned EROFS even though the mount is rw and the editable
+			// file is writable.
+			tmp := filepath.Join(dir, editable+".tmp.999.deadbeef")
+			f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			if err != nil {
+				if errors.Is(err, syscall.EROFS) {
+					t.Fatalf("creating an atomic-save temp file returned EROFS on an rw mount (#145 regression): %v", err)
+				}
+				t.Fatalf("create temp file in %s dir: %v", tc.name, err)
+			}
+			if _, err := f.Write(orig); err != nil {
+				_ = f.Close()
+				t.Fatalf("write temp file: %v", err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatalf("close temp file: %v", err)
+			}
+
+			// The temp file must read back what we wrote while it's still a scratch file.
+			if got, err := os.ReadFile(tmp); err != nil {
+				t.Fatalf("read scratch temp file: %v", err)
+			} else if string(got) != string(orig) {
+				t.Fatalf("scratch temp file content mismatch: wrote %d bytes, read %d", len(orig), len(got))
+			}
+
+			// Rename it over the editable file. In fixture mode the persisting write
+			// fails (no API), so the rename may return an error; what matters is no
+			// corruption.
+			_ = os.Rename(tmp, target)
+			_ = os.Remove(tmp) // best-effort cleanup if the rename did not consume it
+
+			if _, err := os.ReadFile(target); err != nil {
+				if errors.Is(err, syscall.EACCES) {
+					t.Fatalf("%s became unreadable after rename-over (#145 corruption): %v", editable, err)
+				}
+				t.Fatalf("%s not readable after rename-over: %v", editable, err)
+			}
+		})
+	}
+}
+
 // TestErrorFileExposedOnWritableSurfaces is the #140 structural guard: every
 // writable entity directory must expose a readable `.error` feedback file so a
 // failed write is legible to an LLM/script instead of a bare errno. It asserts
