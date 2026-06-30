@@ -335,14 +335,29 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
-	n.lfs.ClearWriteError(milestoneErrKey)
+	// Edit-commit tail. repo.UpdateProjectMilestone already upserted to SQLite, so
+	// persist is nil; verify read-your-writes against the API's echoed response
+	// (milestones have no single-entity getter) and surface divergence via .error.
+	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.ProjectMilestone]{
+		errKey:  milestoneErrKey,
+		fetch:   func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
+		persist: nil,
+		compare: func(fresh *api.ProjectMilestone) []writeBackResult {
+			var results []writeBackResult
+			if input.Name != nil {
+				results = append(results, writeBackDivergence("name", *input.Name, fresh.Name, n.milestone.Name))
+			}
+			if input.Description != nil {
+				results = append(results, writeBackDivergence("description", *input.Description, fresh.Description, n.milestone.Description))
+			}
+			return results
+		},
+	})
 
-	// Update local data with API response
-	if updated != nil {
-		n.milestone = *updated
-		// Regenerate content from updated milestone
-		newContent, err := marshal.MilestoneToMarkdown(updated)
-		if err == nil {
+	// Update local data with the fresh value (reflects reality, even on divergence)
+	if fresh != nil {
+		n.milestone = *fresh
+		if newContent, err := marshal.MilestoneToMarkdown(fresh); err == nil {
 			n.content = newContent
 		}
 	}
@@ -351,12 +366,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	n.lfs.InvalidateKernelInode(milestoneIno(n.milestone.ID))
 
 	n.dirty = false
-
-	if n.lfs.debug {
-		log.Printf("Milestone updated successfully")
-	}
-
-	return 0
+	return errno
 }
 
 func (n *MilestoneFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {

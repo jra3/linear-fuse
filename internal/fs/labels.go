@@ -445,11 +445,27 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
-	n.lfs.ClearWriteError(collectionErrorKey("labels", n.teamID))
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
-		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
+	// Edit-commit tail: persist the label, verify read-your-writes against the
+	// API's echoed response (labels have no single-entity getter), and surface
+	// divergence via .error — verification this handler previously skipped.
+	labelErrKey := collectionErrorKey("labels", n.teamID)
+	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.Label]{
+		errKey:  labelErrKey,
+		fetch:   func(ctx context.Context) (*api.Label, error) { return updatedLabel, nil },
+		persist: func(ctx context.Context, fresh *api.Label) error { return n.lfs.UpsertLabel(ctx, n.teamID, *fresh) },
+		compare: func(fresh *api.Label) []writeBackResult {
+			var results []writeBackResult
+			if want, ok := update["name"].(string); ok {
+				results = append(results, writeBackDivergence("name", want, fresh.Name, n.label.Name))
+			}
+			if want, ok := update["description"].(string); ok {
+				results = append(results, writeBackDivergence("description", want, fresh.Description, n.label.Description))
+			}
+			return results
+		},
+	})
+	if fresh != nil {
+		n.label = *fresh
 	}
 
 	n.dirty = false
@@ -458,11 +474,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Invalidate kernel inode cache
 	n.lfs.InvalidateKernelInode(labelIno(n.label.ID))
 
-	if n.lfs.debug {
-		log.Printf("Label updated successfully")
-	}
-
-	return 0
+	return errno
 }
 
 func (n *LabelFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {

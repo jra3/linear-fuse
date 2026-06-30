@@ -845,9 +845,6 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return syscall.EIO
 	}
 
-	// Clear any previous error on successful write
-	i.lfs.ClearIssueError(i.issue.ID)
-
 	if i.lfs.debug {
 		log.Printf("Flush: %s updated successfully", i.issue.Identifier)
 	}
@@ -886,61 +883,32 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Invalidate kernel cache for this file
 	i.lfs.InvalidateKernelInode(issueIno(i.issue.ID))
 
-	// Fetch fresh issue from API and upsert to SQLite for immediate visibility.
-	// This ensures all fields (assignee, labels, project, etc.) are correctly persisted,
-	// rather than manually updating a subset of fields which was causing bugs #128 and #129.
-	freshIssue, err := i.lfs.client.GetIssue(ctx, i.issue.ID)
-	if err != nil {
-		log.Printf("Warning: failed to fetch fresh issue after update: %v", err)
-		// Don't fail - the issue was updated in Linear, sync will eventually pick it up
-		i.dirty = false
-		i.contentReady = false
-		return 0
+	// Edit-commit tail: re-fetch from the API (an independent read catches #136,
+	// where a large body silently reverts), verify read-your-writes against the
+	// pre-write values still on i.issue, upsert the fresh value, and surface any
+	// divergence via .error. The compare closure runs inside commitWriteBack,
+	// before i.issue is overwritten below.
+	fresh, errno := commitWriteBack(ctx, i.lfs, writeBackSpec[api.Issue]{
+		errKey:  i.issue.ID,
+		fetch:   func(ctx context.Context) (*api.Issue, error) { return i.lfs.client.GetIssue(ctx, i.issue.ID) },
+		persist: func(ctx context.Context, fresh *api.Issue) error { return i.lfs.UpsertIssue(ctx, *fresh) },
+		compare: func(fresh *api.Issue) []writeBackResult {
+			var results []writeBackResult
+			if want, ok := updates["title"].(string); ok {
+				results = append(results, writeBackDivergence("title", want, fresh.Title, i.issue.Title))
+			}
+			if want, ok := updates["description"].(string); ok {
+				results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
+			}
+			return results
+		},
+	})
+	if fresh != nil {
+		i.issue = *fresh
 	}
-
-	// Read-your-writes verification: confirm the free-text values we sent
-	// actually persisted. Compare against the fresh fetch using the pre-write
-	// values (i.issue, not yet overwritten) to distinguish a silent revert from
-	// a truncation. This catches #136 (large body silently reverts).
-	divergence, fatal := i.verifyWriteBack(updates, freshIssue)
-
-	// Update local copy with fresh data (reflects reality, even on divergence)
-	i.issue = *freshIssue
-	if err := i.lfs.UpsertIssue(ctx, *freshIssue); err != nil {
-		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
-	}
-
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
-
-	// The error was already cleared on the successful API update above; only
-	// re-set it here when the persisted value diverged. A fatal divergence
-	// (revert/truncation) fails the close; a benign reformat just leaves a note.
-	if divergence != "" {
-		log.Printf("Read-your-writes %s on %s:\n%s", writeBackKind(fatal), i.issue.Identifier, divergence)
-		i.lfs.SetIssueError(i.issue.ID, divergence)
-		if fatal {
-			return syscall.EIO
-		}
-	}
-
-	return 0
-}
-
-// verifyWriteBack compares the free-text fields we sent (title, description) in
-// updates against what persisted in fresh, using the pre-write values on i.issue
-// to classify the divergence. Returns ("", false) when everything persisted
-// faithfully, and reports whether any divergence is fatal (real loss) vs a
-// benign server-side reformat.
-func (i *IssueFileNode) verifyWriteBack(updates map[string]any, fresh *api.Issue) (string, bool) {
-	var results []writeBackResult
-	if want, ok := updates["title"].(string); ok {
-		results = append(results, writeBackDivergence("title", want, fresh.Title, i.issue.Title))
-	}
-	if want, ok := updates["description"].(string); ok {
-		results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
-	}
-	return writeBackError(results...)
+	return errno
 }
 
 func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
@@ -1180,4 +1148,3 @@ func (h *HistoryFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte
 
 	return fuse.ReadResultData(h.content[off:end]), 0
 }
-
