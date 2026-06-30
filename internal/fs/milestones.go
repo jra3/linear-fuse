@@ -169,9 +169,8 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 				n.lfs.SetWriteError(collectionErrorKey("milestones", n.projectID), "Operation: delete milestone "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
-			// Invalidate kernel cache
-			n.lfs.InvalidateKernelInode(milestonesDirIno(n.projectID))
-			n.lfs.InvalidateKernelEntry(milestonesDirIno(n.projectID), name)
+			// Invalidate kernel cache for the milestones directory
+			n.lfs.InvalidateDeleted(milestonesDirIno(n.projectID), name)
 			if n.lfs.debug {
 				log.Printf("Milestone deleted successfully")
 			}
@@ -363,7 +362,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	}
 
 	// Invalidate kernel cache for this milestone file
-	n.lfs.InvalidateKernelInode(milestoneIno(n.milestone.ID))
+	n.lfs.InvalidateUpdated(milestoneIno(n.milestone.ID))
 
 	n.dirty = false
 	return errno
@@ -489,8 +488,7 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	n.created = true
 
 	// Invalidate kernel cache for milestones directory
-	n.lfs.InvalidateKernelInode(milestonesDirIno(n.projectID))
-	n.lfs.InvalidateKernelEntry(milestonesDirIno(n.projectID), "_create")
+	n.lfs.InvalidateCreated(milestonesDirIno(n.projectID), "")
 
 	if n.lfs.debug {
 		log.Printf("Milestone created successfully")

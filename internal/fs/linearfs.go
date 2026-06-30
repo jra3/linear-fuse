@@ -38,9 +38,9 @@ type LinearFS struct {
 	mountPoint string // Filesystem mount path (for README generation)
 
 	// File cache for embedded files
-	fileCacheDir  string
-	fileCacheMu   gosync.RWMutex
-	fileCache     map[string][]byte // in-memory cache (file ID -> content)
+	fileCacheDir string
+	fileCacheMu  gosync.RWMutex
+	fileCache    map[string][]byte // in-memory cache (file ID -> content)
 	// Per-entity write errors (surfaced via .error virtual files)
 	writeErrors   map[string]*WriteError
 	writeErrorsMu gosync.RWMutex
@@ -248,6 +248,23 @@ func (lfs *LinearFS) InvalidateKernelEntry(parent uint64, name string) {
 	if lfs.server != nil {
 		lfs.server.EntryNotify(parent, name)
 	}
+}
+
+// InvalidateCreated keeps the kernel coherent after a child is created in a
+// directory. See invalidateCreated for the policy. name may be "".
+func (lfs *LinearFS) InvalidateCreated(dirIno uint64, name string) {
+	invalidateCreated(lfs, dirIno, name)
+}
+
+// InvalidateDeleted keeps the kernel coherent after a child is removed from a
+// directory. See invalidateDeleted for the policy.
+func (lfs *LinearFS) InvalidateDeleted(dirIno uint64, name string) {
+	invalidateDeleted(lfs, dirIno, name)
+}
+
+// InvalidateUpdated keeps the kernel coherent after a file's content changes.
+func (lfs *LinearFS) InvalidateUpdated(fileIno uint64) {
+	invalidateUpdated(lfs, fileIno)
 }
 
 // InvalidateFilteredIssues clears all filtered issue cache entries for a team

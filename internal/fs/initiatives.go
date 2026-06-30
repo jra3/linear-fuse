@@ -600,9 +600,9 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	// Invalidate caches
 	i.lfs.InvalidateInitiatives()
 
-	// Invalidate kernel inode cache
-	i.lfs.InvalidateKernelInode(initiativeInfoIno(i.initiativeID))
-	i.lfs.InvalidateKernelInode(initiativeProjectsIno(i.initiativeID))
+	// Invalidate kernel inode cache (initiative.md and the projects/ listing)
+	i.lfs.InvalidateUpdated(initiativeInfoIno(i.initiativeID))
+	i.lfs.InvalidateUpdated(initiativeProjectsIno(i.initiativeID))
 
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
@@ -997,8 +997,9 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 
 	n.created = true
 
-	// Invalidate kernel cache entry for updates directory
-	n.lfs.InvalidateKernelEntry(initiativeUpdatesDirIno(n.initiativeID), "_create")
+	// Invalidate kernel cache for the updates directory (previously skipped the
+	// dir inode, so a newly-created update was missing from the listing).
+	n.lfs.InvalidateCreated(initiativeUpdatesDirIno(n.initiativeID), "")
 
 	if n.lfs.debug {
 		log.Printf("Initiative update created successfully")

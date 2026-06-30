@@ -185,9 +185,8 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: delete document "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
-			// Invalidate kernel cache - both directory inode and entry
-			n.lfs.InvalidateKernelInode(docsDirIno(n.parentID()))
-			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), name)
+			// Invalidate kernel cache for the docs directory
+			n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), name)
 			if n.lfs.debug {
 				log.Printf("Document deleted successfully")
 			}
@@ -499,7 +498,7 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	})
 
 	// Invalidate kernel cache for this document file
-	n.lfs.InvalidateKernelInode(documentIno(n.document.ID))
+	n.lfs.InvalidateUpdated(documentIno(n.document.ID))
 
 	if fresh != nil {
 		n.document = *fresh
@@ -674,11 +673,7 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Invalidate kernel cache for docs directory
 	parentID := docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)
-	// Invalidate the directory inode so the kernel re-reads the listing
-	n.lfs.InvalidateKernelInode(docsDirIno(parentID))
-	// Also invalidate specific entries
-	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), "_create")
-	n.lfs.InvalidateKernelEntry(docsDirIno(parentID), documentFilename(*doc))
+	n.lfs.InvalidateCreated(docsDirIno(parentID), documentFilename(*doc))
 
 	if n.lfs.debug {
 		log.Printf("Document created successfully")

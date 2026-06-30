@@ -218,7 +218,9 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	n.lfs.InvalidateTeamIssues(n.team.ID)
 	n.lfs.InvalidateMyIssues()
 	n.lfs.InvalidateFilteredIssues(n.team.ID)
-	n.lfs.InvalidateKernelEntry(issuesDirIno(n.team.ID), issue.Identifier)
+	// Keep the kernel's directory listing coherent (previously skipped the dir
+	// inode, so a newly-created issue was missing from the listing).
+	n.lfs.InvalidateCreated(issuesDirIno(n.team.ID), issue.Identifier)
 
 	node := &IssueDirectoryNode{
 		BaseNode: BaseNode{lfs: n.lfs},
@@ -265,7 +267,7 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 			if issue.Project != nil {
 				n.lfs.InvalidateProjectIssues(issue.Project.ID)
 			}
-			n.lfs.InvalidateKernelEntry(issuesDirIno(n.team.ID), name)
+			n.lfs.InvalidateDeleted(issuesDirIno(n.team.ID), name)
 
 			if n.lfs.debug {
 				log.Printf("Issue %s archived successfully", name)
@@ -881,7 +883,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	}
 
 	// Invalidate kernel cache for this file
-	i.lfs.InvalidateKernelInode(issueIno(i.issue.ID))
+	i.lfs.InvalidateUpdated(issueIno(i.issue.ID))
 
 	// Edit-commit tail: re-fetch from the API (an independent read catches #136,
 	// where a large body silently reverts), verify read-your-writes against the
@@ -1025,8 +1027,9 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	n.lfs.InvalidateTeamIssues(teamID)
 	n.lfs.InvalidateMyIssues()
 	n.lfs.InvalidateFilteredIssues(teamID)
-	n.lfs.InvalidateKernelInode(childrenDirIno(n.issue.ID))
-	n.lfs.InvalidateKernelEntry(issuesDirIno(teamID), issue.Identifier)
+	// A sub-issue appears in both children/ and the team's issues/ listing.
+	n.lfs.InvalidateCreated(childrenDirIno(n.issue.ID), issue.Identifier)
+	n.lfs.InvalidateCreated(issuesDirIno(teamID), issue.Identifier)
 
 	// Return the new issue as a directory node (Mkdir must return a directory)
 	node := &IssueDirectoryNode{

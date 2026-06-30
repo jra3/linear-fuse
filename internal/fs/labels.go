@@ -172,8 +172,9 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			if n.lfs.debug {
 				log.Printf("Label deleted successfully")
 			}
-			// Invalidate kernel cache entry
-			n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), name)
+			// Invalidate kernel cache (previously skipped the dir inode, so a
+			// deleted label lingered in the listing until the cache TTL).
+			n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), name)
 			return 0
 		}
 	}
@@ -472,7 +473,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	n.contentReady = false // Force regenerate on next read
 
 	// Invalidate kernel inode cache
-	n.lfs.InvalidateKernelInode(labelIno(n.label.ID))
+	n.lfs.InvalidateUpdated(labelIno(n.label.ID))
 
 	return errno
 }
@@ -616,8 +617,9 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 
 	n.created = true
 
-	// Invalidate kernel cache entry for labels directory
-	n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), "_create")
+	// Invalidate kernel cache for labels directory (previously skipped the dir
+	// inode, so a newly-created label was missing from the listing).
+	n.lfs.InvalidateCreated(labelsDirIno(n.teamID), labelFilename(*label))
 
 	if n.lfs.debug {
 		log.Printf("Label created successfully")

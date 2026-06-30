@@ -188,9 +188,8 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 				n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: delete comment "+name+"\nError: "+err.Error())
 				return syscall.EIO
 			}
-			// Invalidate kernel cache - both directory inode and entry
-			n.lfs.InvalidateKernelInode(commentsDirIno(n.issueID))
-			n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), name)
+			// Invalidate kernel cache for the comments directory
+			n.lfs.InvalidateDeleted(commentsDirIno(n.issueID), name)
 			if n.lfs.debug {
 				log.Printf("Comment deleted successfully")
 			}
@@ -382,7 +381,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	})
 
 	// Invalidate kernel cache for this comment file
-	n.lfs.InvalidateKernelInode(commentIno(n.comment.ID))
+	n.lfs.InvalidateUpdated(commentIno(n.comment.ID))
 
 	if fresh != nil {
 		n.comment = *fresh
@@ -527,9 +526,8 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 
 	n.created = true
 
-	// Invalidate kernel cache - directory inode so listing is refreshed
-	n.lfs.InvalidateKernelInode(commentsDirIno(n.issueID))
-	n.lfs.InvalidateKernelEntry(commentsDirIno(n.issueID), "_create")
+	// Invalidate kernel cache for the comments directory
+	n.lfs.InvalidateCreated(commentsDirIno(n.issueID), "")
 
 	if n.lfs.debug {
 		log.Printf("Comment created successfully")

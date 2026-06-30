@@ -38,3 +38,18 @@ The minimal seam the WriteBack tail uses to record validation/divergence message
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`
 satisfies it directly (no adapter), so production wiring is zero-cost while tests
 inject a 2-method fake.
+
+### Kernel-cache coherence policy (`invalidateCreated`/`Deleted`/`Updated`)
+After a mutation the kernel still caches the old directory listing and name lookups.
+Two primitives fix it — `InvalidateKernelInode(dir)` refreshes a readdir,
+`InvalidateKernelEntry(dir, name)` drops a cached lookup — but *which* combination a
+mutation needs is a **policy** that used to live in each handler, so handlers drifted:
+relation `unlink` notified nothing (deleted item lingered), and label/project/issue
+creates skipped the dir inode (new item invisible).
+
+The **deep module** is the intent-named policy in `internal/fs/invalidate.go`: a handler
+says what happened — `InvalidateCreated` / `InvalidateDeleted` / `InvalidateUpdated` —
+and the correct notifies follow. Built on a `kernelNotifier` seam (the two primitives,
+satisfied by `*LinearFS`), so the policy is unit-tested with a recording fake — no FUSE
+server. The raw primitives remain only for the **rename** path (atomic save: old+new
+entry + file inode), a distinct intent, and the `.error` virtual file.

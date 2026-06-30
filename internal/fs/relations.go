@@ -264,6 +264,10 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 	}
 
 	n.lfs.ClearWriteError(collectionErrorKey("relations", n.issueID))
+
+	// Keep the kernel's directory listing coherent. This was previously omitted,
+	// so a deleted relation lingered in the listing until the cache TTL expired.
+	n.lfs.InvalidateDeleted(relationsDirIno(n.issueID), name)
 	return 0
 }
 
@@ -383,7 +387,7 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 	}
 
 	// Invalidate cache
-	n.lfs.InvalidateKernelInode(relationsDirIno(n.issueID))
+	n.lfs.InvalidateCreated(relationsDirIno(n.issueID), "")
 
 	return 0
 }

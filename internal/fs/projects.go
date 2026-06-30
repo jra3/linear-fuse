@@ -143,8 +143,9 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	// Invalidate cache
 	p.lfs.InvalidateTeamProjects(p.team.ID)
 
-	// Invalidate kernel cache entry for projects directory
-	p.lfs.InvalidateKernelEntry(projectsDirIno(p.team.ID), name)
+	// Keep the kernel's directory listing coherent (previously skipped the dir
+	// inode, so a newly-created project was missing from the listing).
+	p.lfs.InvalidateCreated(projectsDirIno(p.team.ID), name)
 
 	node := &ProjectNode{
 		BaseNode: BaseNode{lfs: p.lfs},
@@ -180,8 +181,9 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 			if p.lfs.debug {
 				log.Printf("Project %s archived successfully", name)
 			}
-			// Invalidate kernel cache entry for projects directory
-			p.lfs.InvalidateKernelEntry(projectsDirIno(p.team.ID), name)
+			// Keep the kernel's directory listing coherent (previously skipped the
+			// dir inode, so an archived project lingered in the listing).
+			p.lfs.InvalidateDeleted(projectsDirIno(p.team.ID), name)
 			return 0
 		}
 	}
@@ -788,7 +790,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	p.lfs.InvalidateInitiatives()
 
 	// Invalidate kernel inode cache
-	p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))
+	p.lfs.InvalidateUpdated(projectInfoIno(p.project.ID))
 
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read
@@ -1061,8 +1063,9 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	n.created = true
 
-	// Invalidate kernel cache entry for updates directory
-	n.lfs.InvalidateKernelEntry(updatesDirIno(n.projectID), "_create")
+	// Invalidate kernel cache for updates directory (previously skipped the dir
+	// inode, so a newly-created update was missing from the listing).
+	n.lfs.InvalidateCreated(updatesDirIno(n.projectID), "")
 
 	if n.lfs.debug {
 		log.Printf("Project update created successfully")

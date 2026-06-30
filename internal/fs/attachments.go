@@ -352,9 +352,9 @@ func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscal
 		log.Printf("[attachments] delete from DB failed: %v", err)
 	}
 
-	// Invalidate caches
+	// Invalidate caches (previously skipped the stale entry lookup).
 	n.lfs.ClearWriteError(collectionErrorKey("attachments", n.issueID))
-	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
+	n.lfs.InvalidateDeleted(attachmentsDirIno(n.issueID), name)
 
 	return 0
 }
@@ -463,7 +463,7 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 				if attachmentURLsEqual(ex.URL, url) {
 					n.upsertAttachment(ctx, ex)
 					n.lfs.ClearWriteError(attErrKey)
-					n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
+					n.lfs.InvalidateCreated(attachmentsDirIno(n.issueID), "")
 					return 0
 				}
 			}
@@ -476,8 +476,8 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 	// Upsert to SQLite for immediate visibility
 	n.upsertAttachment(ctx, *att)
 
-	// Invalidate cache
-	n.lfs.InvalidateKernelInode(attachmentsDirIno(n.issueID))
+	// Invalidate cache (previously skipped the dir inode and _create reset).
+	n.lfs.InvalidateCreated(attachmentsDirIno(n.issueID), "")
 
 	return 0
 }
