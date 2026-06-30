@@ -245,8 +245,7 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 				log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
 			}
 			// Invalidate kernel cache for old and new names
-			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), name)
-			n.lfs.InvalidateKernelEntry(docsDirIno(n.parentID()), newName)
+			n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), name, newName, 0)
 			return 0
 		}
 	}

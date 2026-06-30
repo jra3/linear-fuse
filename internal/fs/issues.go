@@ -527,9 +527,7 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 		// scratch inode over issue.md, so issue.md must re-Lookup to a fresh
 		// IssueFileNode rather than serve the consumed scratch node.
 		n.issue = fileNode.issue
-		n.lfs.InvalidateKernelEntry(issueDirIno(n.issue.ID), name)
-		n.lfs.InvalidateKernelEntry(issueDirIno(n.issue.ID), newName)
-		n.lfs.InvalidateKernelInode(issueIno(n.issue.ID))
+		n.lfs.InvalidateRenamed(issueDirIno(n.issue.ID), name, newName, issueIno(n.issue.ID))
 	}
 
 	return errno

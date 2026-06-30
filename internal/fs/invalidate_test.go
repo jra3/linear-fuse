@@ -57,3 +57,16 @@ func TestInvalidateUpdated(t *testing.T) {
 	invalidateUpdated(r, 42)
 	eq(t, r.calls, []string{`inode(42)`})
 }
+
+func TestInvalidateRenamed(t *testing.T) {
+	t.Run("atomic save drops both names and the file inode", func(t *testing.T) {
+		r := &recordingNotifier{}
+		invalidateRenamed(r, 3, "issue.md.tmp", "issue.md", 99)
+		eq(t, r.calls, []string{`entry(3,"issue.md.tmp")`, `entry(3,"issue.md")`, `inode(99)`})
+	})
+	t.Run("pure entry rename skips the file inode", func(t *testing.T) {
+		r := &recordingNotifier{}
+		invalidateRenamed(r, 3, "Old.md", "New.md", 0)
+		eq(t, r.calls, []string{`entry(3,"Old.md")`, `entry(3,"New.md")`})
+	})
+}

@@ -51,3 +51,18 @@ func invalidateDeleted(n kernelNotifier, dirIno uint64, name string) {
 func invalidateUpdated(n kernelNotifier, fileIno uint64) {
 	n.InvalidateKernelInode(fileIno)
 }
+
+// invalidateRenamed refreshes both names after a file is renamed within a
+// directory: the old name no longer resolves and the new one now does. When
+// fileIno is nonzero it also drops the renamed file's cached content — needed for
+// an atomic save (temp file renamed over a real .md), where go-fuse moves the
+// spent scratch inode into place and the real file must re-Lookup. Pass fileIno 0
+// for a pure entry rename (e.g. a doc/label title change) where no inode's content
+// changes.
+func invalidateRenamed(n kernelNotifier, dirIno uint64, oldName, newName string, fileIno uint64) {
+	n.InvalidateKernelEntry(dirIno, oldName)
+	n.InvalidateKernelEntry(dirIno, newName)
+	if fileIno != 0 {
+		n.InvalidateKernelInode(fileIno)
+	}
+}

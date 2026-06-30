@@ -235,9 +235,7 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 
 	if errno == 0 || errno == syscall.EIO {
 		i.initiative = fileNode.initiative
-		i.lfs.InvalidateKernelEntry(dirIno, name)
-		i.lfs.InvalidateKernelEntry(dirIno, newName)
-		i.lfs.InvalidateKernelInode(initiativeInfoIno(i.initiative.ID))
+		i.lfs.InvalidateRenamed(dirIno, name, newName, initiativeInfoIno(i.initiative.ID))
 	}
 
 	return errno

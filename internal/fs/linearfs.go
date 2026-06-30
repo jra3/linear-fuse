@@ -267,6 +267,12 @@ func (lfs *LinearFS) InvalidateUpdated(fileIno uint64) {
 	invalidateUpdated(lfs, fileIno)
 }
 
+// InvalidateRenamed keeps the kernel coherent after a file is renamed within a
+// directory. See invalidateRenamed for the policy. fileIno may be 0.
+func (lfs *LinearFS) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
+	invalidateRenamed(lfs, dirIno, oldName, newName, fileIno)
+}
+
 // InvalidateFilteredIssues clears all filtered issue cache entries for a team
 // No-op: SQLite is source of truth
 func (lfs *LinearFS) InvalidateFilteredIssues(teamID string) {

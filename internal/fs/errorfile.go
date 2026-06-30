@@ -29,7 +29,7 @@ func (lfs *LinearFS) SetWriteError(entityID, message string) {
 	lfs.writeErrorsMu.Unlock()
 	// Drop the kernel's cached size/content for the .error file so the next
 	// stat/read reflects this error instead of a stale (often empty) value.
-	lfs.InvalidateKernelInode(errorIno(entityID))
+	lfs.InvalidateUpdated(errorIno(entityID))
 }
 
 // ClearWriteError removes the error for an entity (called on a successful write).
@@ -39,7 +39,7 @@ func (lfs *LinearFS) ClearWriteError(entityID string) {
 	delete(lfs.writeErrors, entityID)
 	lfs.writeErrorsMu.Unlock()
 	if had {
-		lfs.InvalidateKernelInode(errorIno(entityID))
+		lfs.InvalidateUpdated(errorIno(entityID))
 	}
 }
 

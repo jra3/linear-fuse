@@ -389,9 +389,7 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 
 	if errno == 0 || errno == syscall.EIO {
 		p.project = fileNode.project
-		p.lfs.InvalidateKernelEntry(dirIno, name)
-		p.lfs.InvalidateKernelEntry(dirIno, newName)
-		p.lfs.InvalidateKernelInode(projectInfoIno(p.project.ID))
+		p.lfs.InvalidateRenamed(dirIno, name, newName, projectInfoIno(p.project.ID))
 	}
 
 	return errno

@@ -61,8 +61,10 @@ relation `unlink` notified nothing (deleted item lingered), and label/project/is
 creates skipped the dir inode (new item invisible).
 
 The **deep module** is the intent-named policy in `internal/fs/invalidate.go`: a handler
-says what happened — `InvalidateCreated` / `InvalidateDeleted` / `InvalidateUpdated` —
-and the correct notifies follow. Built on a `kernelNotifier` seam (the two primitives,
-satisfied by `*LinearFS`), so the policy is unit-tested with a recording fake — no FUSE
-server. The raw primitives remain only for the **rename** path (atomic save: old+new
-entry + file inode), a distinct intent, and the `.error` virtual file.
+says what happened — `InvalidateCreated` / `InvalidateDeleted` / `InvalidateUpdated` /
+`InvalidateRenamed` — and the correct notifies follow. `InvalidateRenamed` covers both
+an atomic save (temp → real `.md`, so it also drops the file inode) and a pure entry
+rename (a doc/label title change, `fileIno` 0). Built on a `kernelNotifier` seam (the
+two primitives, satisfied by `*LinearFS`), so the policy is unit-tested with a recording
+fake — no FUSE server. The raw `InvalidateKernelInode`/`Entry` primitives are now
+**internal-only**: every call site in the package goes through an intent method.

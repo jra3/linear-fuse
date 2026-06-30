@@ -231,8 +231,7 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 				log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
 			}
 			// Invalidate kernel cache for old and new names
-			n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), name)
-			n.lfs.InvalidateKernelEntry(labelsDirIno(n.teamID), newName)
+			n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), name, newName, 0)
 			return 0
 		}
 	}
