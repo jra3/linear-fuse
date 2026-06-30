@@ -734,27 +734,28 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		}
 	}
 
-	// Fetch fresh project from API and upsert to SQLite for immediate visibility
-	freshProject, err := p.lfs.client.GetProject(ctx, p.project.ID)
-	var divergence string
-	var fatal bool
-	if err != nil {
-		log.Printf("Warning: failed to fetch fresh project after update: %v", err)
-	} else {
-		// Read-your-writes verification on the free-text fields we sent, using
-		// the pre-write values (p.project) to classify the divergence.
-		var results []writeBackResult
-		if projectInput.Name != nil {
-			results = append(results, writeBackDivergence("name", *projectInput.Name, freshProject.Name, p.project.Name))
-		}
-		if projectInput.Description != nil {
-			results = append(results, writeBackDivergence("description (body)", *projectInput.Description, freshProject.Description, p.project.Description))
-		}
-		divergence, fatal = writeBackError(results...)
-		p.project = *freshProject
-		if err := p.lfs.UpsertProject(ctx, p.team.ID, *freshProject); err != nil {
-			log.Printf("Warning: failed to upsert project to SQLite: %v", err)
-		}
+	// Edit-commit tail: re-fetch the project, verify read-your-writes against the
+	// pre-write values still on p.project, upsert, and surface divergence via
+	// .error. The initiative-link side-work (above and below) stays in the handler.
+	fresh, errno := commitWriteBack(ctx, p.lfs, writeBackSpec[api.Project]{
+		errKey: p.project.ID,
+		fetch:  func(ctx context.Context) (*api.Project, error) { return p.lfs.client.GetProject(ctx, p.project.ID) },
+		persist: func(ctx context.Context, fresh *api.Project) error {
+			return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)
+		},
+		compare: func(fresh *api.Project) []writeBackResult {
+			var results []writeBackResult
+			if projectInput.Name != nil {
+				results = append(results, writeBackDivergence("name", *projectInput.Name, fresh.Name, p.project.Name))
+			}
+			if projectInput.Description != nil {
+				results = append(results, writeBackDivergence("description (body)", *projectInput.Description, fresh.Description, p.project.Description))
+			}
+			return results
+		},
+	})
+	if fresh != nil {
+		p.project = *fresh
 	}
 
 	// Sync initiative-project associations to SQLite
@@ -791,19 +792,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read
-
-	if divergence != "" {
-		log.Printf("Read-your-writes %s on project %s:\n%s", writeBackKind(fatal), p.project.Name, divergence)
-		p.lfs.SetWriteError(p.project.ID, divergence)
-		if fatal {
-			return syscall.EIO
-		}
-		return 0
-	}
-
-	p.lfs.ClearWriteError(p.project.ID)
-
-	return 0
+	return errno
 }
 
 // UpdatesNode represents /teams/{KEY}/projects/{slug}/updates/

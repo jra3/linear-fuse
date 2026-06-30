@@ -368,37 +368,28 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		return syscall.EIO
 	}
 
-	// Read-your-writes verification on the comment body (free text). The update
-	// returns the persisted comment, so compare directly against what we sent.
-	divergence, fatal := writeBackError(writeBackDivergence("comment body", body, updatedComment.Body, n.comment.Body))
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertComment(ctx, n.issueID, *updatedComment); err != nil {
-		log.Printf("Warning: failed to upsert comment to SQLite: %v", err)
-	}
+	// Edit-commit tail: verify read-your-writes against the API's echoed response,
+	// persist, and surface divergence via .error.
+	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.Comment]{
+		errKey: commentErrKey,
+		fetch:  func(ctx context.Context) (*api.Comment, error) { return updatedComment, nil },
+		persist: func(ctx context.Context, fresh *api.Comment) error {
+			return n.lfs.UpsertComment(ctx, n.issueID, *fresh)
+		},
+		compare: func(fresh *api.Comment) []writeBackResult {
+			return []writeBackResult{writeBackDivergence("comment body", body, fresh.Body, n.comment.Body)}
+		},
+	})
 
 	// Invalidate kernel cache for this comment file
 	n.lfs.InvalidateKernelInode(commentIno(n.comment.ID))
 
-	n.comment = *updatedComment
+	if fresh != nil {
+		n.comment = *fresh
+	}
 	n.dirty = false
 	n.contentReady = false // Force regenerate on next read
-
-	if divergence != "" {
-		log.Printf("Read-your-writes %s on comment %s:\n%s", writeBackKind(fatal), n.comment.ID, divergence)
-		n.lfs.SetWriteError(commentErrKey, divergence)
-		if fatal {
-			return syscall.EIO
-		}
-	} else {
-		n.lfs.ClearWriteError(commentErrKey)
-	}
-
-	if n.lfs.debug {
-		log.Printf("Comment updated successfully")
-	}
-
-	return 0
+	return errno
 }
 
 // extractCommentBody extracts the body from markdown with YAML frontmatter

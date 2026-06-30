@@ -480,44 +480,33 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		return syscall.EIO
 	}
 
-	// Read-your-writes verification on the free-text fields we sent. The update
-	// returns the persisted document, so compare directly against what we sent.
-	var results []writeBackResult
-	if want, ok := update["title"].(string); ok {
-		results = append(results, writeBackDivergence("title", want, updatedDoc.Title, n.document.Title))
-	}
-	if want, ok := update["content"].(string); ok {
-		results = append(results, writeBackDivergence("content (body)", want, updatedDoc.Content, n.document.Content))
-	}
-	divergence, fatal := writeBackError(results...)
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
-		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
-	}
+	// Edit-commit tail: verify read-your-writes against the API's echoed response,
+	// persist, and surface divergence via .error.
+	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.Document]{
+		errKey:  docErrKey,
+		fetch:   func(ctx context.Context) (*api.Document, error) { return updatedDoc, nil },
+		persist: func(ctx context.Context, fresh *api.Document) error { return n.lfs.UpsertDocument(ctx, *fresh) },
+		compare: func(fresh *api.Document) []writeBackResult {
+			var results []writeBackResult
+			if want, ok := update["title"].(string); ok {
+				results = append(results, writeBackDivergence("title", want, fresh.Title, n.document.Title))
+			}
+			if want, ok := update["content"].(string); ok {
+				results = append(results, writeBackDivergence("content (body)", want, fresh.Content, n.document.Content))
+			}
+			return results
+		},
+	})
 
 	// Invalidate kernel cache for this document file
 	n.lfs.InvalidateKernelInode(documentIno(n.document.ID))
 
-	n.document = *updatedDoc
+	if fresh != nil {
+		n.document = *fresh
+	}
 	n.dirty = false
 	n.contentReady = false // Force regenerate on next read
-
-	if divergence != "" {
-		log.Printf("Read-your-writes %s on document %s:\n%s", writeBackKind(fatal), n.document.ID, divergence)
-		n.lfs.SetWriteError(docErrKey, divergence)
-		if fatal {
-			return syscall.EIO
-		}
-	} else {
-		n.lfs.ClearWriteError(docErrKey)
-	}
-
-	if n.lfs.debug {
-		log.Printf("Document updated successfully")
-	}
-
-	return 0
+	return errno
 }
 
 func (n *DocumentFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
