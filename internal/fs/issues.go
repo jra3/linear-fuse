@@ -714,130 +714,13 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return 0
 	}
 
-	// Resolve status name to state ID if needed
-	if stateName, ok := updates["stateId"].(string); ok {
-		if i.issue.Team == nil {
-			log.Printf("Cannot resolve state '%s': issue has no team", stateName)
-			i.lfs.SetIssueError(i.issue.ID, "Field: status\nValue: \""+stateName+"\"\nError: Cannot resolve state - issue has no team")
-			return syscall.EINVAL
-		}
-		stateID, err := i.lfs.ResolveStateID(ctx, i.issue.Team.ID, stateName)
-		if err != nil {
-			log.Printf("Failed to resolve state '%s': %v", stateName, err)
-			i.lfs.SetIssueError(i.issue.ID, "Field: status\nValue: \""+stateName+"\"\nError: "+err.Error()+". See states.md for valid workflow states.")
-			return syscall.EINVAL
-		}
-		updates["stateId"] = stateID
-	}
-
-	// Resolve assignee email/name to user ID if needed
-	if assigneeID, ok := updates["assigneeId"].(string); ok {
-		userID, err := i.lfs.ResolveUserID(ctx, assigneeID)
-		if err != nil {
-			log.Printf("Failed to resolve assignee '%s': %v", assigneeID, err)
-			i.lfs.SetIssueError(i.issue.ID, "Field: assignee\nValue: \""+assigneeID+"\"\nError: "+err.Error()+". Use email address or display name.")
-			return syscall.EINVAL
-		}
-		updates["assigneeId"] = userID
-	}
-
-	// Resolve label names to IDs if needed
-	if labelNames, ok := updates["labelIds"].([]string); ok {
-		if len(labelNames) == 0 {
-			// Clearing all labels - use removedLabelIds instead of empty labelIds
-			// (Linear API rejects labelIds: [])
-			delete(updates, "labelIds")
-			if len(i.issue.Labels.Nodes) > 0 {
-				removedIDs := make([]string, len(i.issue.Labels.Nodes))
-				for idx, l := range i.issue.Labels.Nodes {
-					removedIDs[idx] = l.ID
-				}
-				updates["removedLabelIds"] = removedIDs
-			}
-		} else {
-			if i.issue.Team == nil {
-				log.Printf("Cannot resolve labels: issue has no team")
-				i.lfs.SetIssueError(i.issue.ID, "Field: labels\nError: Cannot resolve labels - issue has no team")
-				return syscall.EINVAL
-			}
-			labelIDs, notFound, err := i.lfs.ResolveLabelIDs(ctx, i.issue.Team.ID, labelNames)
-			if err != nil {
-				log.Printf("Failed to resolve labels: %v", err)
-				i.lfs.SetIssueError(i.issue.ID, "Field: labels\nError: "+err.Error())
-				return syscall.EINVAL
-			}
-			if len(notFound) > 0 {
-				log.Printf("Unknown labels: %v (see labels.md for valid labels)", notFound)
-				i.lfs.SetIssueError(i.issue.ID, "Field: labels\nValue: "+fmt.Sprintf("%v", notFound)+"\nError: Unknown labels. See labels.md for valid labels.")
-				return syscall.EINVAL
-			}
-			updates["labelIds"] = labelIDs
-		}
-	}
-
-	// Resolve parent issue identifier to ID if needed
-	if parentID, ok := updates["parentId"].(string); ok {
-		issueID, err := i.lfs.ResolveIssueID(ctx, parentID)
-		if err != nil {
-			log.Printf("Failed to resolve parent '%s': %v", parentID, err)
-			i.lfs.SetIssueError(i.issue.ID, "Field: parent\nValue: \""+parentID+"\"\nError: "+err.Error())
-			return syscall.EINVAL
-		}
-		updates["parentId"] = issueID
-	}
-
-	// Resolve project name to ID if needed
-	if projectName, ok := updates["projectId"].(string); ok {
-		if i.issue.Team == nil {
-			log.Printf("Cannot resolve project '%s': issue has no team", projectName)
-			i.lfs.SetIssueError(i.issue.ID, "Field: project\nValue: \""+projectName+"\"\nError: Cannot resolve project - issue has no team")
-			return syscall.EINVAL
-		}
-		projectID, err := i.lfs.ResolveProjectID(ctx, i.issue.Team.ID, projectName)
-		if err != nil {
-			log.Printf("Failed to resolve project '%s': %v", projectName, err)
-			i.lfs.SetIssueError(i.issue.ID, "Field: project\nValue: \""+projectName+"\"\nError: "+err.Error())
-			return syscall.EINVAL
-		}
-		updates["projectId"] = projectID
-	}
-
-	// Resolve milestone name to ID if needed
-	if milestoneName, ok := updates["projectMilestoneId"].(string); ok {
-		// Get project ID - prefer newly set project, fallback to existing
-		var projectID string
-		if newProjectID, ok := updates["projectId"].(string); ok {
-			projectID = newProjectID
-		} else if i.issue.Project != nil {
-			projectID = i.issue.Project.ID
-		} else {
-			log.Printf("Cannot resolve milestone '%s': issue has no project", milestoneName)
-			i.lfs.SetIssueError(i.issue.ID, "Field: milestone\nValue: \""+milestoneName+"\"\nError: Cannot resolve milestone - issue has no project. Set project first.")
-			return syscall.EINVAL
-		}
-		milestoneID, err := i.lfs.ResolveMilestoneID(ctx, projectID, milestoneName)
-		if err != nil {
-			log.Printf("Failed to resolve milestone '%s': %v", milestoneName, err)
-			i.lfs.SetIssueError(i.issue.ID, "Field: milestone\nValue: \""+milestoneName+"\"\nError: "+err.Error())
-			return syscall.EINVAL
-		}
-		updates["projectMilestoneId"] = milestoneID
-	}
-
-	// Resolve cycle name to ID if needed
-	if cycleName, ok := updates["cycleId"].(string); ok {
-		if i.issue.Team == nil {
-			log.Printf("Cannot resolve cycle '%s': issue has no team", cycleName)
-			i.lfs.SetIssueError(i.issue.ID, "Field: cycle\nValue: \""+cycleName+"\"\nError: Cannot resolve cycle - issue has no team")
-			return syscall.EINVAL
-		}
-		cycleID, err := i.lfs.ResolveCycleID(ctx, i.issue.Team.ID, cycleName)
-		if err != nil {
-			log.Printf("Failed to resolve cycle '%s': %v", cycleName, err)
-			i.lfs.SetIssueError(i.issue.ID, "Field: cycle\nValue: \""+cycleName+"\"\nError: "+err.Error())
-			return syscall.EINVAL
-		}
-		updates["cycleId"] = cycleID
+	// Resolve the name-bearing relational fields (status, assignee, labels,
+	// parent, project, milestone, cycle) to Linear IDs. The resolver owns field
+	// ordering, the label-clearing special case, and the per-field error messages.
+	if ferr := resolveIssueUpdate(ctx, i.lfs, &i.issue, updates); ferr != nil {
+		log.Printf("Failed to resolve update for %s: %s", i.issue.Identifier, ferr.Message)
+		i.lfs.SetIssueError(i.issue.ID, ferr.Detail())
+		return syscall.EINVAL
 	}
 
 	// Call Linear API to update

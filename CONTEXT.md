@@ -28,10 +28,23 @@ return `EIO` on fatal divergence. Generic over the entity type `T`. Lives in
 a small `ErrorSink` seam plus `Fetch`/`Persist`/`Compare` closures, so it is unit-
 tested with a fake sink and stub closures — no FUSE mount, SQLite, or API.
 
-The **front half** of each edit (parse, resolve, call API) stays per-entity; it is
-genuinely irreducible (issue uses an untyped `map[string]any` with 7 resolutions,
-others use typed input structs). Only the tail is shared, and it was the drift-prone
-part — `label` and `milestone` previously skipped verification entirely.
+The **front half** of each edit (parse, resolve, call API) stays per-entity. For
+issues the resolve step is itself a deep module — see Name→ID resolution below.
+
+### Name→ID resolution (`resolveIssueUpdate`)
+marshal returns an issue update whose relational fields hold *names* (a state name,
+assignee email, label names, parent identifier, project/milestone/cycle names);
+Linear's API needs IDs. `resolveIssueUpdate` (`internal/fs/resolve.go`) turns each
+name into its ID in place and owns the **field ordering** (project resolves before
+milestone, since a milestone resolves against the — possibly changing — project), the
+**label-clearing special case** (Linear rejects an empty `labelIds`, so clearing uses
+`removedLabelIds`), and the per-field error messages. A bad value returns a
+**`FieldError`** (`Field`/`Value`/`Message`, rendered to `.error` via `Detail()`) and
+the handler maps it to `EINVAL`. This collapsed the issue-`Flush` front half from
+~125 lines to one call. It depends on the **`issueResolver`** seam (the seven
+`Resolve*` lookups, satisfied by `*LinearFS`), so the whole path is unit-tested with a
+fake resolver — no repo, SQLite, or API. The individual `Resolve*` methods remain as
+shared primitives (also used singly by initiatives and projects).
 
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
