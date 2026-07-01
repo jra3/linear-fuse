@@ -90,10 +90,10 @@ func TestNewIssueNode_parseContent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			node := &NewIssueNode{
 				title:   tt.title,
-				content: []byte(tt.content),
+				content: contentBuffer{buf: []byte(tt.content), loaded: true},
 			}
 
-			input, err := node.parseContent()
+			input, err := node.parseContent([]byte(tt.content))
 			if err != nil {
 				t.Fatalf("parseContent() error: %v", err)
 			}
@@ -120,7 +120,7 @@ func TestNewIssueNode_parseContent(t *testing.T) {
 func TestNewIssueNode_Getattr(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
-		content: []byte("test content"),
+		content: contentBuffer{buf: []byte("test content"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -144,7 +144,7 @@ func TestNewIssueNode_Write(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
 		lfs:     &LinearFS{},
-		content: []byte{},
+		content: contentBuffer{buf: []byte{}, loaded: true},
 	}
 
 	ctx := context.Background()
@@ -159,8 +159,8 @@ func TestNewIssueNode_Write(t *testing.T) {
 		t.Errorf("written = %d, want %d", written, len(data))
 	}
 
-	if string(node.content) != "hello world" {
-		t.Errorf("content = %q, want %q", string(node.content), "hello world")
+	if string(node.content.buf) != "hello world" {
+		t.Errorf("content = %q, want %q", string(node.content.buf), "hello world")
 	}
 }
 
@@ -168,7 +168,7 @@ func TestNewIssueNode_WriteOffset(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
 		lfs:     &LinearFS{},
-		content: []byte("hello"),
+		content: contentBuffer{buf: []byte("hello"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -183,15 +183,15 @@ func TestNewIssueNode_WriteOffset(t *testing.T) {
 		t.Errorf("written = %d, want 6", written)
 	}
 
-	if string(node.content) != "hello world" {
-		t.Errorf("content = %q, want %q", string(node.content), "hello world")
+	if string(node.content.buf) != "hello world" {
+		t.Errorf("content = %q, want %q", string(node.content.buf), "hello world")
 	}
 }
 
 func TestNewIssueNode_Setattr_Truncate(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
-		content: []byte("hello world"),
+		content: contentBuffer{buf: []byte("hello world"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -205,8 +205,8 @@ func TestNewIssueNode_Setattr_Truncate(t *testing.T) {
 		t.Errorf("Setattr() errno = %d, want 0", errno)
 	}
 
-	if string(node.content) != "hello" {
-		t.Errorf("content = %q, want %q", string(node.content), "hello")
+	if string(node.content.buf) != "hello" {
+		t.Errorf("content = %q, want %q", string(node.content.buf), "hello")
 	}
 
 	if out.Size != 5 {
@@ -217,7 +217,7 @@ func TestNewIssueNode_Setattr_Truncate(t *testing.T) {
 func TestNewIssueNode_Setattr_Extend(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
-		content: []byte("hi"),
+		content: contentBuffer{buf: []byte("hi"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -231,20 +231,20 @@ func TestNewIssueNode_Setattr_Extend(t *testing.T) {
 		t.Errorf("Setattr() errno = %d, want 0", errno)
 	}
 
-	if len(node.content) != 10 {
-		t.Errorf("len(content) = %d, want 10", len(node.content))
+	if len(node.content.buf) != 10 {
+		t.Errorf("len(content) = %d, want 10", len(node.content.buf))
 	}
 
 	// Original content should be preserved
-	if string(node.content[:2]) != "hi" {
-		t.Errorf("content prefix = %q, want %q", string(node.content[:2]), "hi")
+	if string(node.content.buf[:2]) != "hi" {
+		t.Errorf("content prefix = %q, want %q", string(node.content.buf[:2]), "hi")
 	}
 }
 
 func TestNewIssueNode_Read(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
-		content: []byte("hello world"),
+		content: contentBuffer{buf: []byte("hello world"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -264,7 +264,7 @@ func TestNewIssueNode_Read(t *testing.T) {
 func TestNewIssueNode_ReadOffset(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
-		content: []byte("hello world"),
+		content: contentBuffer{buf: []byte("hello world"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -284,7 +284,7 @@ func TestNewIssueNode_ReadOffset(t *testing.T) {
 func TestNewIssueNode_ReadBeyondEnd(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
-		content: []byte("hi"),
+		content: contentBuffer{buf: []byte("hi"), loaded: true},
 	}
 
 	ctx := context.Background()
@@ -305,7 +305,7 @@ func TestNewIssueNode_FlushEmpty(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
 		lfs:     &LinearFS{},
-		content: []byte{},
+		content: contentBuffer{buf: []byte{}, loaded: true},
 	}
 
 	ctx := context.Background()
@@ -324,7 +324,7 @@ func TestNewIssueNode_FlushAlreadyCreated(t *testing.T) {
 	t.Parallel()
 	node := &NewIssueNode{
 		lfs:     &LinearFS{},
-		content: []byte("some content"),
+		content: contentBuffer{buf: []byte("some content"), loaded: true},
 		created: true,
 	}
 

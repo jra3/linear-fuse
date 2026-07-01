@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -15,26 +14,11 @@ import (
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
-// milestonesDirIno generates a stable inode for a milestones directory
-func milestonesDirIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestones:" + projectID))
-	return h.Sum64()
-}
+func milestonesDirIno(projectID string) uint64 { return ino("milestones", projectID) }
 
-// milestoneIno generates a stable inode for a milestone file
-func milestoneIno(milestoneID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestone:" + milestoneID))
-	return h.Sum64()
-}
+func milestoneIno(milestoneID string) uint64 { return ino("milestone", milestoneID) }
 
-// milestonesCreateIno generates a stable inode for the _create trigger file
-func milestonesCreateIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestones-create:" + projectID))
-	return h.Sum64()
-}
+func milestonesCreateIno(projectID string) uint64 { return ino("milestones-create", projectID) }
 
 // MilestonesNode represents a milestones/ directory within a project
 type MilestonesNode struct {
@@ -121,12 +105,12 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 				return nil, syscall.EIO
 			}
 			node := &MilestoneFileNode{
-				BaseNode:     BaseNode{lfs: n.lfs},
-				milestone:    m,
-				projectID:    n.projectID,
-				content:      content,
-				contentReady: true,
+				BaseNode:  BaseNode{lfs: n.lfs},
+				milestone: m,
+				projectID: n.projectID,
+				content:   contentBuffer{buf: content, loaded: true},
 			}
+			node.content.load = node.milestoneLoader()
 			now := time.Now()
 			out.Attr.Mode = 0644 | syscall.S_IFREG
 			out.Attr.Uid = n.lfs.uid
@@ -190,10 +174,8 @@ type MilestoneFileNode struct {
 	milestone api.ProjectMilestone
 	projectID string
 
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	mu      sync.Mutex
+	content contentBuffer
 }
 
 var _ fs.NodeGetattrer = (*MilestoneFileNode)(nil)
@@ -204,14 +186,24 @@ var _ fs.NodeFlusher = (*MilestoneFileNode)(nil)
 var _ fs.NodeFsyncer = (*MilestoneFileNode)(nil)
 var _ fs.NodeSetattrer = (*MilestoneFileNode)(nil)
 
+// milestoneLoader marshals the milestone to markdown; the contentBuffer's lazy
+// loader, used to re-materialize content after invalidate().
+func (n *MilestoneFileNode) milestoneLoader() func() ([]byte, error) {
+	return func() ([]byte, error) { return marshal.MilestoneToMarkdown(&n.milestone) }
+}
+
 func (n *MilestoneFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
 	now := time.Now()
 	out.Mode = 0644
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -224,38 +216,32 @@ func (n *MilestoneFileNode) Read(ctx context.Context, f fs.FileHandle, dest []by
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if off >= int64(len(n.content)) {
+	b, err := n.content.bytes()
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 
 	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
 
-	return fuse.ReadResultData(n.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (n *MilestoneFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write milestone %s: offset=%d len=%d", n.milestone.ID, off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	n.dirty = true
-
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *MilestoneFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -263,21 +249,17 @@ func (n *MilestoneFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fu
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if n.lfs.debug {
-			log.Printf("Setattr truncate milestone %s: size=%d", n.milestone.ID, sz)
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-		n.dirty = true
 	}
 
 	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -285,7 +267,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if !n.dirty || n.content == nil {
+	if !n.content.isDirty() {
 		return 0
 	}
 
@@ -293,10 +275,15 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	content, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	milestoneErrKey := collectionErrorKey("milestones", n.projectID)
 
 	// Parse the markdown and get update fields
-	input, err := marshal.MarkdownToMilestoneUpdate(n.content, &n.milestone)
+	input, err := marshal.MarkdownToMilestoneUpdate(content, &n.milestone)
 	if err != nil {
 		log.Printf("Failed to parse milestone: %v", err)
 		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nParse error: "+err.Error())
@@ -315,7 +302,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 		if n.lfs.debug {
 			log.Printf("Flush milestone %s: no changes", n.milestone.ID)
 		}
-		n.dirty = false
+		n.content.markClean()
 		return 0
 	}
 
@@ -351,15 +338,13 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	// Update local data with the fresh value (reflects reality, even on divergence)
 	if fresh != nil {
 		n.milestone = *fresh
-		if newContent, err := marshal.MilestoneToMarkdown(fresh); err == nil {
-			n.content = newContent
-		}
 	}
 
 	// Invalidate kernel cache for this milestone file
 	n.lfs.InvalidateUpdated(milestoneIno(n.milestone.ID))
 
-	n.dirty = false
+	// Drop the buffer so the next read re-marshals from the fresh milestone.
+	n.content.invalidate()
 	return errno
 }
 
@@ -373,7 +358,7 @@ type NewMilestoneNode struct {
 	projectID string
 
 	mu      sync.Mutex
-	content []byte
+	content contentBuffer
 	created bool
 }
 
@@ -390,9 +375,13 @@ func (n *NewMilestoneNode) Getattr(ctx context.Context, f fs.FileHandle, out *fu
 	defer n.mu.Unlock()
 
 	now := time.Now()
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
 	out.Mode = 0200
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -410,20 +399,11 @@ func (n *NewMilestoneNode) Write(ctx context.Context, f fs.FileHandle, data []by
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write new milestone: offset=%d len=%d", off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *NewMilestoneNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -431,17 +411,17 @@ func (n *NewMilestoneNode) Setattr(ctx context.Context, f fs.FileHandle, in *fus
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
 	out.Mode = 0200
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -449,7 +429,15 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.created || len(n.content) == 0 {
+	if n.created {
+		return 0
+	}
+
+	b, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+	if len(b) == 0 {
 		return 0
 	}
 
@@ -460,7 +448,7 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	milestoneErrKey := collectionErrorKey("milestones", n.projectID)
 
 	// Parse the new milestone content
-	name, description := marshal.ParseNewMilestone(n.content)
+	name, description := marshal.ParseNewMilestone(b)
 
 	if name == "" {
 		log.Printf("New milestone has no name")
@@ -472,7 +460,7 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		log.Printf("Creating milestone: name=%s", name)
 	}
 
-	_, err := n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
+	_, err = n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
 	// persist nil: CreateProjectMilestone goes through the repo, which upserts SQLite.
 	errno := commitMutation(ctx, n.lfs, mutationSpec{
 		errKey:     milestoneErrKey,

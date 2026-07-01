@@ -116,9 +116,9 @@ func TestDocumentFilename(t *testing.T) {
 func TestDocsNode_parentID(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name      string
-		node      DocsNode
-		wantID    string
+		name   string
+		node   DocsNode
+		wantID string
 	}{
 		{
 			name:   "issue docs",

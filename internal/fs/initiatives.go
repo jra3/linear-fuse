@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"regexp"
 	"sort"
@@ -20,25 +19,14 @@ import (
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
-// initiativeInfoIno generates a stable inode number for an initiative.md file
-func initiativeInfoIno(initiativeID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("initiative-info:" + initiativeID))
-	return h.Sum64()
-}
+func initiativeInfoIno(initiativeID string) uint64 { return ino("initiative-info", initiativeID) }
 
-// initiativeProjectsIno generates a stable inode number for an initiative projects directory
 func initiativeProjectsIno(initiativeID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("initiative-projects:" + initiativeID))
-	return h.Sum64()
+	return ino("initiative-projects", initiativeID)
 }
 
-// initiativeUpdatesDirIno generates a stable inode number for an initiative updates directory
 func initiativeUpdatesDirIno(initiativeID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("initiative-updates:" + initiativeID))
-	return h.Sum64()
+	return ino("initiative-updates", initiativeID)
 }
 
 // InitiativesNode represents the /initiatives directory
@@ -145,6 +133,7 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	case "initiative.md":
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
 		content := node.generateContent()
+		node.content = contentBuffer{buf: content, loaded: true, load: node.initiativeLoader()}
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Uid = i.lfs.uid
 		out.Attr.Gid = i.lfs.gid
@@ -227,10 +216,8 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 		BaseNode:     BaseNode{lfs: i.lfs},
 		initiative:   i.initiative,
 		initiativeID: i.initiative.ID,
-		content:      content,
-		contentReady: true,
-		dirty:        true,
 	}
+	fileNode.content = contentBuffer{buf: content, loaded: true, dirty: true, load: fileNode.initiativeLoader()}
 	errno := fileNode.Flush(ctx, nil)
 
 	if errno == 0 || errno == syscall.EIO {
@@ -256,11 +243,10 @@ type InitiativeInfoNode struct {
 	initiative   api.Initiative
 	initiativeID string
 
-	// Write buffer and cached content
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	// Write buffer and cached content. mu guards content and initiative together:
+	// content's loader reads initiative, which Flush also mutates.
+	mu      sync.Mutex
+	content contentBuffer
 }
 
 var _ fs.NodeGetattrer = (*InitiativeInfoNode)(nil)
@@ -326,19 +312,23 @@ updated: %q
 	return []byte(content)
 }
 
+// initiativeLoader generates initiative.md markdown; the contentBuffer's lazy
+// loader, used to re-materialize content after invalidate().
+func (i *InitiativeInfoNode) initiativeLoader() func() ([]byte, error) {
+	return func() ([]byte, error) { return i.generateContent(), nil }
+}
+
 func (i *InitiativeInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	var size int
-	if i.contentReady && i.content != nil {
-		size = len(i.content)
-	} else {
-		size = len(i.generateContent())
+	sz, err := i.content.size()
+	if err != nil {
+		return syscall.EIO
 	}
 	out.Mode = 0644 | syscall.S_IFREG
 	i.SetOwner(out)
-	out.Size = uint64(size)
+	out.Size = uint64(sz)
 	out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
 	return 0
 }
@@ -351,42 +341,30 @@ func (i *InitiativeInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []b
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if !i.contentReady {
-		i.content = i.generateContent()
-		i.contentReady = true
+	b, err := i.content.bytes()
+	if err != nil {
+		return nil, syscall.EIO
 	}
 
-	if off >= int64(len(i.content)) {
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 	end := off + int64(len(dest))
-	if end > int64(len(i.content)) {
-		end = int64(len(i.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
-	return fuse.ReadResultData(i.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (i *InitiativeInfoNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// Initialize content if not ready
-	if !i.contentReady {
-		i.content = i.generateContent()
-		i.contentReady = true
+	w, err := i.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	end := off + int64(len(data))
-	if end > int64(len(i.content)) {
-		newContent := make([]byte, end)
-		copy(newContent, i.content)
-		i.content = newContent
-	}
-
-	copy(i.content[off:], data)
-	i.dirty = true
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (i *InitiativeInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -394,24 +372,17 @@ func (i *InitiativeInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *f
 	defer i.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if !i.contentReady {
-			i.content = i.generateContent()
-			i.contentReady = true
-		}
-		if int(sz) < len(i.content) {
-			i.content = i.content[:sz]
-			i.dirty = true
+		if err := i.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
-	var size int
-	if i.contentReady && i.content != nil {
-		size = len(i.content)
-	} else {
-		size = len(i.generateContent())
+	sz, err := i.content.size()
+	if err != nil {
+		return syscall.EIO
 	}
 	out.Mode = 0644 | syscall.S_IFREG
-	out.Size = uint64(size)
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -426,7 +397,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if !i.dirty || i.content == nil {
+	if !i.content.isDirty() {
 		return 0
 	}
 
@@ -438,8 +409,13 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)
 	}
 
+	content, err := i.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Parse the modified content
-	doc, err := marshal.Parse(i.content)
+	doc, err := marshal.Parse(content)
 	if err != nil {
 		log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
 		i.lfs.SetWriteError(i.initiativeID, "Parse error: "+err.Error())
@@ -602,8 +578,8 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	i.lfs.InvalidateUpdated(initiativeInfoIno(i.initiativeID))
 	i.lfs.InvalidateUpdated(initiativeProjectsIno(i.initiativeID))
 
-	i.dirty = false
-	i.contentReady = false // Force re-generate on next read
+	// Drop the buffer so the next read re-generates from the fresh initiative.
+	i.content.invalidate()
 
 	if divergence != "" {
 		log.Printf("Read-your-writes %s on initiative %s:\n%s", writeBackKind(fatal), i.initiative.Name, divergence)
@@ -888,7 +864,7 @@ type NewInitiativeUpdateNode struct {
 	initiativeID string
 
 	mu      sync.Mutex
-	content []byte
+	content contentBuffer
 	created bool
 }
 
@@ -905,9 +881,13 @@ func (n *NewInitiativeUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, 
 	defer n.mu.Unlock()
 
 	now := time.Now()
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
 	out.Mode = 0200
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -925,20 +905,11 @@ func (n *NewInitiativeUpdateNode) Write(ctx context.Context, f fs.FileHandle, da
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write new initiative update: offset=%d len=%d", off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *NewInitiativeUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -946,17 +917,17 @@ func (n *NewInitiativeUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, 
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
 	out.Mode = 0200
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -964,12 +935,17 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.created || len(n.content) == 0 {
+	if n.created {
 		return 0
 	}
 
+	b, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Parse the content - could be plain text or markdown with frontmatter
-	body, health := parseInitiativeUpdateContent(n.content)
+	body, health := parseInitiativeUpdateContent(b)
 	if body == "" {
 		return 0
 	}

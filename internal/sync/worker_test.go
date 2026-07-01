@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -25,20 +24,20 @@ func (m *mockBudgetReporter) BudgetSnapshot() (int, float64) {
 
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
-	teams              []api.Team
-	issuesByTeam       map[string][]api.Issue   // teamID -> all issues (will be paginated)
-	statesByTeam       map[string][]api.State   // teamID -> states
-	labelsByTeam       map[string][]api.Label   // teamID -> labels
-	cyclesByTeam       map[string][]api.Cycle   // teamID -> cycles
-	projectsByTeam     map[string][]api.Project // teamID -> projects
-	membersByTeam      map[string][]api.User    // teamID -> members
-	users              []api.User
-	initiatives        []api.Initiative
-	pageSize           int
-	getTeamsCalls      int32
-	getIssuesCalls     int32
-	simulateError      error
-	rateLimitResetAt   time.Time // M-3: configurable reset time for adaptive backoff tests
+	teams            []api.Team
+	issuesByTeam     map[string][]api.Issue   // teamID -> all issues (will be paginated)
+	statesByTeam     map[string][]api.State   // teamID -> states
+	labelsByTeam     map[string][]api.Label   // teamID -> labels
+	cyclesByTeam     map[string][]api.Cycle   // teamID -> cycles
+	projectsByTeam   map[string][]api.Project // teamID -> projects
+	membersByTeam    map[string][]api.User    // teamID -> members
+	users            []api.User
+	initiatives      []api.Initiative
+	pageSize         int
+	getTeamsCalls    int32
+	getIssuesCalls   int32
+	simulateError    error
+	rateLimitResetAt time.Time // M-3: configurable reset time for adaptive backoff tests
 }
 
 func newMockAPIClient() *mockAPIClient {
@@ -776,7 +775,7 @@ func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
 
 	mock := newMockAPIClient()
 	// Return a rate-limit error so syncIssueDetailsBatch persists to the pending queue
-	mock.simulateError = fmt.Errorf("rate limit exceeded")
+	mock.simulateError = &api.RateLimitedError{Msg: "rate limit exceeded"}
 
 	cfg := Config{Interval: time.Hour}
 	worker := NewWorker(mock, store, cfg)

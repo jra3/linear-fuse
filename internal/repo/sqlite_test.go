@@ -1458,34 +1458,6 @@ func TestSQLiteRepository_SetStalenessThreshold(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_ParseTime(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input interface{}
-		want  bool // whether result should be zero
-	}{
-		{"nil", nil, true},
-		{"time.Time", time.Now(), false},
-		{"string RFC3339", "2024-01-15T10:30:00Z", false},
-		{"empty string", "", true},
-		{"invalid string", "not a date", true},
-		{"int (unsupported)", 12345, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := parseTime(tt.input)
-			if tt.want && !result.IsZero() {
-				t.Errorf("Expected zero time for %v, got %v", tt.input, result)
-			}
-			if !tt.want && result.IsZero() {
-				t.Errorf("Expected non-zero time for %v, got zero", tt.input)
-			}
-		})
-	}
-}
 
 func TestSQLiteRepository_GetIssueByID_NotFound(t *testing.T) {
 	t.Parallel()

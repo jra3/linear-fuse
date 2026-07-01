@@ -20,7 +20,7 @@ type NewIssueNode struct {
 	title  string
 
 	mu      sync.Mutex
-	content []byte
+	content contentBuffer
 	created bool
 }
 
@@ -38,7 +38,11 @@ func (n *NewIssueNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 
 	now := time.Now()
 	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 
 	return 0
@@ -52,37 +56,32 @@ func (n *NewIssueNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, o
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if off >= int64(len(n.content)) {
+	b, err := n.content.bytes()
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 
 	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
 
-	return fuse.ReadResultData(n.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (n *NewIssueNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("NewIssueNode.Write: offset=%d len=%d", off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *NewIssueNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -90,17 +89,17 @@ func (n *NewIssueNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Se
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
 	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 
 	return 0
 }
@@ -120,7 +119,12 @@ func (n *NewIssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		return 0
 	}
 
-	if len(n.content) == 0 {
+	b, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
+	if len(b) == 0 {
 		if n.lfs.debug {
 			log.Printf("NewIssueNode.Flush: empty content, skipping")
 		}
@@ -136,7 +140,7 @@ func (n *NewIssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	}
 
 	// Parse content to extract issue data
-	input, err := n.parseContent()
+	input, err := n.parseContent(b)
 	if err != nil {
 		log.Printf("Failed to parse new issue content: %v", err)
 		return syscall.EIO
@@ -168,16 +172,16 @@ func (n *NewIssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	return 0
 }
 
-func (n *NewIssueNode) parseContent() (map[string]any, error) {
+func (n *NewIssueNode) parseContent(b []byte) (map[string]any, error) {
 	input := make(map[string]any)
 
 	// If content has frontmatter, parse it
-	if len(n.content) > 0 {
-		doc, err := marshal.Parse(n.content)
+	if len(b) > 0 {
+		doc, err := marshal.Parse(b)
 		if err != nil {
 			// If parsing fails, treat entire content as description with title from filename
 			input["title"] = n.title
-			input["description"] = string(n.content)
+			input["description"] = string(b)
 			return input, nil
 		}
 

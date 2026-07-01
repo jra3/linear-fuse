@@ -58,27 +58,6 @@ const (
 	budgetDeferDetailPct = 70.0 // Defer detail batches to pending_detail_sync above this
 )
 
-// SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
-var sqliteTimeFormats = []string{
-	time.RFC3339,
-	time.RFC3339Nano,
-	"2006-01-02 15:04:05.999999999-07:00", // SQLite format with timezone
-	"2006-01-02 15:04:05.999999999Z07:00",
-	"2006-01-02 15:04:05-07:00",
-	"2006-01-02 15:04:05Z07:00",
-	"2006-01-02 15:04:05", // SQLite format without timezone
-}
-
-// parseSQLiteTime parses a time string from SQLite, trying multiple formats
-func parseSQLiteTime(s string) time.Time {
-	for _, layout := range sqliteTimeFormats {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
-}
-
 // BudgetReporter provides rate limit budget information.
 type BudgetReporter interface {
 	BudgetSnapshot() (count int, pct float64)
@@ -99,8 +78,8 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
-	budget  BudgetReporter     // optional: for rate limit budget logging
-	catchUp CatchUpModeToggler // optional: controls repo staleness during catch-up
+	budget   BudgetReporter     // optional: for rate limit budget logging
+	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
 
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
@@ -278,11 +257,11 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 
 // SyncTeamResult contains the results of syncing a single team
 type SyncTeamResult struct {
-	TeamID       string
-	IssuesAdded  int
+	TeamID        string
+	IssuesAdded   int
 	IssuesUpdated int
-	PagesFetched int
-	Duration     time.Duration
+	PagesFetched  int
+	Duration      time.Duration
 }
 
 func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
@@ -310,16 +289,9 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 	count, _ := w.store.Queries().GetTeamIssueCount(ctx, team.ID)
 	latestUpdatedAtRaw, _ := w.store.Queries().GetLatestTeamIssueUpdatedAt(ctx, team.ID)
 
-	var lastIssueUpdatedAt time.Time
-	if latestUpdatedAtRaw != nil {
-		// MAX() returns different types depending on the driver
-		switch v := latestUpdatedAtRaw.(type) {
-		case time.Time:
-			lastIssueUpdatedAt = v
-		case string:
-			lastIssueUpdatedAt = parseSQLiteTime(v)
-		}
-	}
+	// MAX() returns nil, time.Time, or a string depending on the driver;
+	// db.ParseTime handles all three (nil/unparseable → zero time).
+	lastIssueUpdatedAt := db.ParseTime(latestUpdatedAtRaw)
 
 	if err := w.store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
 		TeamID:             team.ID,
@@ -635,17 +607,6 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 // Rate Limit Handling
 // =============================================================================
 
-// isRateLimitError checks if an error indicates a rate limit
-func isRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "RATELIMITED") ||
-		strings.Contains(errStr, "Rate limit exceeded") ||
-		strings.Contains(errStr, "rate limit")
-}
-
 // budgetExceeds returns true if the current hourly budget usage exceeds the given threshold.
 // Returns false if no budget reporter is configured.
 func (w *Worker) budgetExceeds(pct float64) bool {
@@ -741,7 +702,7 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 	// Fetch all details in one API call
 	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
 	if err != nil {
-		if isRateLimitError(err) {
+		if api.IsRateLimited(err) {
 			w.setRateLimited()
 			// H-5: Persist the issues we couldn't sync so they survive the backoff
 			now := db.Now()
@@ -868,7 +829,6 @@ func (w *Worker) drainPendingDetailSync(ctx context.Context) {
 		w.syncIssueDetailsBatch(ctx, batchArg)
 	}
 }
-
 
 // =============================================================================
 // Embedded Files Extraction

@@ -882,9 +882,9 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 
 	// Parse timestamps (handle SQLite space-separated format + nil for empty tables)
 	issueTime := issueUpdatedAt
-	commentsTime := parseTime(commentsSyncedAt)
-	docsTime := parseTime(docsSyncedAt)
-	attachTime := parseTime(attachSyncedAt)
+	commentsTime := db.ParseTime(commentsSyncedAt)
+	docsTime := db.ParseTime(docsSyncedAt)
+	attachTime := db.ParseTime(attachSyncedAt)
 
 	// Refresh if issue changed after last sync OR never synced (zero time)
 	commentsStale := commentsTime.IsZero() || issueTime.After(commentsTime)
@@ -1039,39 +1039,6 @@ func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID stri
 	return nil
 }
 
-// SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
-var sqliteTimeFormats = []string{
-	time.RFC3339,
-	time.RFC3339Nano,
-	"2006-01-02 15:04:05.999999999-07:00", // SQLite format with timezone
-	"2006-01-02 15:04:05.999999999Z07:00",
-	"2006-01-02 15:04:05-07:00",
-	"2006-01-02 15:04:05Z07:00",
-	"2006-01-02 15:04:05", // SQLite format without timezone
-}
-
-// parseTime converts interface{} from SQLite to time.Time
-// Handles both RFC3339 (API) and SQLite's space-separated format
-// Returns zero time for nil (no rows exist)
-func parseTime(v interface{}) time.Time {
-	if v == nil {
-		return time.Time{} // Zero time for "never synced"
-	}
-	switch t := v.(type) {
-	case time.Time:
-		return t
-	case string:
-		for _, layout := range sqliteTimeFormats {
-			if parsed, err := time.Parse(layout, t); err == nil {
-				return parsed
-			}
-		}
-		return time.Time{}
-	default:
-		return time.Time{}
-	}
-}
-
 func (r *SQLiteRepository) GetCommentByID(ctx context.Context, id string) (*api.Comment, error) {
 	comment, err := r.store.Queries().GetComment(ctx, id)
 	if err != nil {
@@ -1119,7 +1086,7 @@ func (r *SQLiteRepository) maybeRefreshProjectDocuments(projectID string, isEmpt
 	}
 
 	syncedAt, err := r.store.Queries().GetProjectDocumentsSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+	isStale := err != nil || syncedAt == nil || time.Since(db.ParseTime(syncedAt)) > r.stalenessThreshold
 
 	// Always refresh in background to avoid blocking on directory listings (e.g., find)
 	if isStale {
@@ -1170,7 +1137,7 @@ func (r *SQLiteRepository) maybeRefreshInitiativeDocuments(initiativeID string, 
 	}
 
 	syncedAt, err := r.store.Queries().GetInitiativeDocumentsSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+	isStale := err != nil || syncedAt == nil || time.Since(db.ParseTime(syncedAt)) > r.stalenessThreshold
 
 	// Always refresh in background to avoid blocking on directory listings (e.g., find)
 	if isStale {
@@ -1275,7 +1242,7 @@ func (r *SQLiteRepository) maybeRefreshProjectUpdates(projectID string, isEmpty 
 	}
 
 	syncedAt, err := r.store.Queries().GetProjectUpdatesSyncedAt(context.Background(), projectID)
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+	isStale := err != nil || syncedAt == nil || time.Since(db.ParseTime(syncedAt)) > r.stalenessThreshold
 
 	// Always refresh in background to avoid blocking on directory listings (e.g., find)
 	if isStale {
@@ -1326,7 +1293,7 @@ func (r *SQLiteRepository) maybeRefreshInitiativeUpdates(initiativeID string, is
 	}
 
 	syncedAt, err := r.store.Queries().GetInitiativeUpdatesSyncedAt(context.Background(), initiativeID)
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
+	isStale := err != nil || syncedAt == nil || time.Since(db.ParseTime(syncedAt)) > r.stalenessThreshold
 
 	// Always refresh in background to avoid blocking on directory listings (e.g., find)
 	if isStale {

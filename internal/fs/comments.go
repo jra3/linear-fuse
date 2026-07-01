@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"sort"
 	"strings"
@@ -18,19 +17,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// commentsDirIno generates a stable inode number for a comments directory
-func commentsDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("comments:" + issueID))
-	return h.Sum64()
-}
+func commentsDirIno(issueID string) uint64 { return ino("comments", issueID) }
 
-// commentIno generates a stable inode number for a comment
-func commentIno(commentID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("comment:" + commentID))
-	return h.Sum64()
-}
+func commentIno(commentID string) uint64 { return ino("comment", commentID) }
 
 // CommentsNode represents /teams/{KEY}/issues/{ID}/comments/
 type CommentsNode struct {
@@ -133,11 +122,10 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		if expectedName == name {
 			content := commentToMarkdown(&comment)
 			node := &CommentNode{
-				BaseNode:     BaseNode{lfs: n.lfs},
-				issueID:      n.issueID,
-				comment:      comment,
-				content:      content,
-				contentReady: true,
+				BaseNode: BaseNode{lfs: n.lfs},
+				issueID:  n.issueID,
+				comment:  comment,
+				content:  contentBuffer{buf: content, loaded: true},
 			}
 			out.Attr.Mode = 0644 | syscall.S_IFREG // Read-write
 			out.Attr.Uid = n.lfs.uid
@@ -222,10 +210,8 @@ type CommentNode struct {
 	issueID string
 	comment api.Comment
 
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	mu      sync.Mutex
+	content contentBuffer
 }
 
 var _ fs.NodeGetattrer = (*CommentNode)(nil)
@@ -240,9 +226,13 @@ func (n *CommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.At
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
 	out.Mode = 0644
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	out.Size = uint64(sz)
 	out.SetTimes(&n.comment.UpdatedAt, &n.comment.UpdatedAt, &n.comment.CreatedAt)
 	return 0
 }
@@ -255,38 +245,32 @@ func (n *CommentNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, of
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if off >= int64(len(n.content)) {
+	b, err := n.content.bytes()
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 
 	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
 
-	return fuse.ReadResultData(n.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (n *CommentNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write comment %s: offset=%d len=%d", n.comment.ID, off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	n.dirty = true
-
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *CommentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -294,21 +278,17 @@ func (n *CommentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Set
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if n.lfs.debug {
-			log.Printf("Setattr truncate comment %s: size=%d", n.comment.ID, sz)
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-		n.dirty = true
 	}
 
 	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -323,7 +303,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if !n.dirty || n.content == nil {
+	if !n.content.isDirty() {
 		return 0
 	}
 
@@ -331,13 +311,18 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	content, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Extract body from the markdown (skip frontmatter)
-	body := extractCommentBody(n.content)
+	body := extractCommentBody(content)
 	if body == "" {
 		if n.lfs.debug {
 			log.Printf("Flush comment %s: empty body, skipping", n.comment.ID)
 		}
-		n.dirty = false
+		n.content.markClean()
 		return 0
 	}
 
@@ -346,7 +331,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		if n.lfs.debug {
 			log.Printf("Flush comment %s: no changes", n.comment.ID)
 		}
-		n.dirty = false
+		n.content.markClean()
 		return 0
 	}
 
@@ -381,8 +366,8 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	if fresh != nil {
 		n.comment = *fresh
 	}
-	n.dirty = false
-	n.contentReady = false // Force regenerate on next read
+	// Eager node with no loader: keep the edited buffer, just clear dirty.
+	n.content.markClean()
 	return errno
 }
 
@@ -413,7 +398,7 @@ type NewCommentNode struct {
 	teamID  string
 
 	mu      sync.Mutex
-	content []byte
+	content contentBuffer
 	created bool
 }
 
@@ -430,9 +415,13 @@ func (n *NewCommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	defer n.mu.Unlock()
 
 	now := time.Now()
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
 	out.Mode = 0200
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -450,20 +439,11 @@ func (n *NewCommentNode) Write(ctx context.Context, f fs.FileHandle, data []byte
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write new comment: offset=%d len=%d", off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *NewCommentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -471,17 +451,17 @@ func (n *NewCommentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
 	out.Mode = 0200
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -489,11 +469,15 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.created || len(n.content) == 0 {
+	if n.created {
 		return 0
 	}
 
-	body := strings.TrimSpace(string(n.content))
+	b, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+	body := strings.TrimSpace(string(b))
 	if body == "" {
 		return 0
 	}

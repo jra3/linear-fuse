@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"syscall"
@@ -16,26 +15,11 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
-// relationsDirIno generates a stable inode for an issue's relations directory
-func relationsDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("relations:" + issueID))
-	return h.Sum64()
-}
+func relationsDirIno(issueID string) uint64 { return ino("relations", issueID) }
 
-// relationIno generates a stable inode for a relation file
-func relationIno(relationID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("relation:" + relationID))
-	return h.Sum64()
-}
+func relationIno(relationID string) uint64 { return ino("relation", relationID) }
 
-// relationsCreateIno generates a stable inode for the _create trigger file
-func relationsCreateIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("relations-create:" + issueID))
-	return h.Sum64()
-}
+func relationsCreateIno(issueID string) uint64 { return ino("relations-create", issueID) }
 
 // RelationsNode represents the /teams/{KEY}/issues/{ID}/relations directory
 type RelationsNode struct {

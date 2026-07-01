@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,47 +15,12 @@ import (
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
-// issueIno generates a stable inode number from an issue ID
-func issueIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(issueID))
-	return h.Sum64()
-}
-
-// issuesDirIno generates a stable inode number for a team's issues directory
-func issuesDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("issues:" + teamID))
-	return h.Sum64()
-}
-
-// issueDirIno generates a stable inode number for an issue directory
-func issueDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("dir:" + issueID))
-	return h.Sum64()
-}
-
-// childrenDirIno generates a stable inode number for a children directory
-func childrenDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("children:" + issueID))
-	return h.Sum64()
-}
-
-// historyIno generates a stable inode number for an issue's history.md file
-func historyIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("history:" + issueID))
-	return h.Sum64()
-}
-
-// errorIno generates a stable inode number for an issue's .error file
-func errorIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("error:" + issueID))
-	return h.Sum64()
-}
+func issueIno(issueID string) uint64       { return ino("issue", issueID) }
+func issuesDirIno(teamID string) uint64    { return ino("issues", teamID) }
+func issueDirIno(issueID string) uint64    { return ino("dir", issueID) }
+func childrenDirIno(issueID string) uint64 { return ino("children", issueID) }
+func historyIno(issueID string) uint64     { return ino("history", issueID) }
+func errorIno(issueID string) uint64       { return ino("error", issueID) }
 
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
@@ -173,8 +136,7 @@ func retryableCreateErr(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "rate limit") || strings.Contains(msg, "circuit breaker")
+	return api.IsRetryable(err)
 }
 
 // Mkdir creates a new issue from a directory name
@@ -323,11 +285,11 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			return nil, syscall.EIO
 		}
 		node := &IssueFileNode{
-			BaseNode:     BaseNode{lfs: n.lfs},
-			issue:        n.issue,
-			content:      content,
-			contentReady: true,
+			BaseNode: BaseNode{lfs: n.lfs},
+			issue:    n.issue,
+			content:  contentBuffer{buf: content, loaded: true},
 		}
+		node.content.load = node.issueLoader()
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Uid = n.lfs.uid
 		out.Attr.Gid = n.lfs.gid
@@ -513,12 +475,11 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 	// and EIO only on a fatal read-your-writes divergence (the write still reached
 	// Linear in that case).
 	fileNode := &IssueFileNode{
-		BaseNode:     BaseNode{lfs: n.lfs},
-		issue:        n.issue,
-		content:      content,
-		contentReady: true,
-		dirty:        true,
+		BaseNode: BaseNode{lfs: n.lfs},
+		issue:    n.issue,
+		content:  contentBuffer{buf: content, loaded: true, dirty: true},
 	}
+	fileNode.content.load = fileNode.issueLoader()
 	errno := fileNode.Flush(ctx, nil)
 
 	if errno == 0 || errno == syscall.EIO {
@@ -548,11 +509,10 @@ type IssueFileNode struct {
 	BaseNode
 	issue api.Issue
 
-	// Write buffer and cached content
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	// Write buffer and cached content. mu guards content and issue together:
+	// content's loader reads issue, which Flush also mutates.
+	mu      sync.Mutex
+	content contentBuffer
 }
 
 var _ fs.NodeGetattrer = (*IssueFileNode)(nil)
@@ -563,33 +523,27 @@ var _ fs.NodeFlusher = (*IssueFileNode)(nil)
 var _ fs.NodeFsyncer = (*IssueFileNode)(nil)
 var _ fs.NodeSetattrer = (*IssueFileNode)(nil)
 
-// ensureContent generates markdown content if not already cached
-func (i *IssueFileNode) ensureContent() error {
-	if i.contentReady {
-		return nil
+// issueLoader marshals the issue (with its attachments) to markdown. It is the
+// contentBuffer's lazy loader, used to re-materialize content after invalidate().
+func (i *IssueFileNode) issueLoader() func() ([]byte, error) {
+	return func() ([]byte, error) {
+		attachments, _ := i.lfs.GetIssueAttachments(context.Background(), i.issue.ID)
+		return marshal.IssueToMarkdown(&i.issue, attachments...)
 	}
-	// Fetch attachments for the issue
-	attachments, _ := i.lfs.GetIssueAttachments(context.Background(), i.issue.ID)
-	content, err := marshal.IssueToMarkdown(&i.issue, attachments...)
-	if err != nil {
-		return err
-	}
-	i.content = content
-	i.contentReady = true
-	return nil
 }
 
 func (i *IssueFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if err := i.ensureContent(); err != nil {
+	sz, err := i.content.size()
+	if err != nil {
 		return syscall.EIO
 	}
 
 	out.Mode = 0644
 	i.SetOwner(out)
-	out.Size = uint64(len(i.content))
+	out.Size = uint64(sz)
 	out.SetTimes(nil, &i.issue.UpdatedAt, &i.issue.CreatedAt)
 
 	return 0
@@ -604,78 +558,50 @@ func (i *IssueFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, 
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if err := i.ensureContent(); err != nil {
+	b, err := i.content.bytes()
+	if err != nil {
 		return nil, syscall.EIO
 	}
 
-	if off >= int64(len(i.content)) {
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 
 	end := off + int64(len(dest))
-	if end > int64(len(i.content)) {
-		end = int64(len(i.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
 
-	return fuse.ReadResultData(i.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (i *IssueFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if i.lfs.debug {
-		log.Printf("Write: %s offset=%d len=%d", i.issue.Identifier, off, len(data))
-	}
-
-	// Initialize content buffer if needed
-	if err := i.ensureContent(); err != nil {
+	n, err := i.content.writeAt(off, data)
+	if err != nil {
 		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(i.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, i.content)
-		i.content = newContent
-	}
-
-	// Write data at offset
-	copy(i.content[off:], data)
-	i.dirty = true
-
-	return uint32(len(data)), 0
+	return uint32(n), 0
 }
 
 func (i *IssueFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	// Handle truncate
 	if sz, ok := in.GetSize(); ok {
-		if i.lfs.debug {
-			log.Printf("Setattr truncate: %s size=%d", i.issue.Identifier, sz)
-		}
-
-		if err := i.ensureContent(); err != nil {
+		if err := i.content.truncate(int64(sz)); err != nil {
 			return syscall.EIO
 		}
-
-		if int(sz) < len(i.content) {
-			i.content = i.content[:sz]
-		} else if int(sz) > len(i.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, i.content)
-			i.content = newContent
-		}
-		i.dirty = true
 	}
 
 	out.Mode = 0644
-	if i.content != nil {
-		out.Size = uint64(len(i.content))
+	sz, err := i.content.size()
+	if err != nil {
+		return syscall.EIO
 	}
+	out.Size = uint64(sz)
 
 	return 0
 }
@@ -684,7 +610,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if !i.dirty || i.content == nil {
+	if !i.content.isDirty() {
 		return 0
 	}
 
@@ -696,8 +622,13 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		log.Printf("Flush: %s (saving changes)", i.issue.Identifier)
 	}
 
+	content, err := i.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Parse the modified content and compute updates
-	updates, err := marshal.MarkdownToIssueUpdate(i.content, &i.issue)
+	updates, err := marshal.MarkdownToIssueUpdate(content, &i.issue)
 	if err != nil {
 		log.Printf("Failed to parse changes for %s: %v", i.issue.Identifier, err)
 		i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
@@ -708,7 +639,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		if i.lfs.debug {
 			log.Printf("Flush: %s no changes detected", i.issue.Identifier)
 		}
-		i.dirty = false
+		i.content.markClean()
 		return 0
 	}
 
@@ -789,8 +720,8 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	if fresh != nil {
 		i.issue = *fresh
 	}
-	i.dirty = false
-	i.contentReady = false // Force re-generate on next read
+	// Drop the buffer so the next read re-marshals from the fresh issue.
+	i.content.invalidate()
 	return errno
 }
 

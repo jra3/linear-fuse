@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"syscall"
@@ -17,33 +16,13 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
-// attachmentsDirIno generates a stable inode for an issue's attachments directory
-func attachmentsDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("attachments:" + issueID))
-	return h.Sum64()
-}
+func attachmentsDirIno(issueID string) uint64 { return ino("attachments", issueID) }
 
-// embeddedFileIno generates a stable inode for an embedded file
-func embeddedFileIno(fileID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("file:" + fileID))
-	return h.Sum64()
-}
+func embeddedFileIno(fileID string) uint64 { return ino("file", fileID) }
 
-// externalAttachmentIno generates a stable inode for an external attachment (.link file)
-func externalAttachmentIno(attachmentID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("extatt:" + attachmentID))
-	return h.Sum64()
-}
+func externalAttachmentIno(attachmentID string) uint64 { return ino("extatt", attachmentID) }
 
-// attachmentsCreateIno generates a stable inode for the _create trigger file
-func attachmentsCreateIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("attachments-create:" + issueID))
-	return h.Sum64()
-}
+func attachmentsCreateIno(issueID string) uint64 { return ino("attachments-create", issueID) }
 
 // AttachmentsNode represents the /teams/{KEY}/issues/{ID}/attachments directory
 type AttachmentsNode struct {

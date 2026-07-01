@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"regexp"
 	"sort"
@@ -20,26 +19,11 @@ import (
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
-// projectsDirIno generates a stable inode number for a projects directory
-func projectsDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("projects:" + teamID))
-	return h.Sum64()
-}
+func projectsDirIno(teamID string) uint64 { return ino("projects", teamID) }
 
-// projectInfoIno generates a stable inode number for a project info file
-func projectInfoIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("project-info:" + projectID))
-	return h.Sum64()
-}
+func projectInfoIno(projectID string) uint64 { return ino("project-info", projectID) }
 
-// updatesDirIno generates a stable inode number for a project updates directory
-func updatesDirIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("updates:" + projectID))
-	return h.Sum64()
-}
+func updatesDirIno(projectID string) uint64 { return ino("updates", projectID) }
 
 // ProjectsNode represents the /teams/{KEY}/projects directory
 type ProjectsNode struct {
@@ -270,6 +254,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if name == "project.md" {
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: p.project}
 		content := node.generateContent()
+		node.content = contentBuffer{buf: content, loaded: true, load: node.projectLoader()}
 		out.Attr.Mode = 0644 | syscall.S_IFREG
 		out.Attr.Uid = p.lfs.uid
 		out.Attr.Gid = p.lfs.gid
@@ -378,13 +363,11 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	}
 
 	fileNode := &ProjectInfoNode{
-		BaseNode:     BaseNode{lfs: p.lfs},
-		team:         p.team,
-		project:      p.project,
-		content:      content,
-		contentReady: true,
-		dirty:        true,
+		BaseNode: BaseNode{lfs: p.lfs},
+		team:     p.team,
+		project:  p.project,
 	}
+	fileNode.content = contentBuffer{buf: content, loaded: true, dirty: true, load: fileNode.projectLoader()}
 	errno := fileNode.Flush(ctx, nil)
 
 	if errno == 0 || errno == syscall.EIO {
@@ -432,12 +415,10 @@ func (s *ProjectIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out 
 // ProjectInfoNode is a virtual file containing project metadata
 type ProjectInfoNode struct {
 	BaseNode
-	team         api.Team
-	project      api.Project
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	team    api.Team
+	project api.Project
+	mu      sync.Mutex
+	content contentBuffer
 }
 
 var _ fs.NodeGetattrer = (*ProjectInfoNode)(nil)
@@ -511,19 +492,23 @@ updated: %q
 	return []byte(content)
 }
 
+// projectLoader generates project.md markdown; the contentBuffer's lazy loader,
+// used to re-materialize content after invalidate().
+func (p *ProjectInfoNode) projectLoader() func() ([]byte, error) {
+	return func() ([]byte, error) { return p.generateContent(), nil }
+}
+
 func (p *ProjectInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	var size int
-	if p.contentReady && p.content != nil {
-		size = len(p.content)
-	} else {
-		size = len(p.generateContent())
+	sz, err := p.content.size()
+	if err != nil {
+		return syscall.EIO
 	}
 	out.Mode = 0644 | syscall.S_IFREG
 	p.SetOwner(out)
-	out.Size = uint64(size)
+	out.Size = uint64(sz)
 	out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
 	return 0
 }
@@ -536,42 +521,30 @@ func (p *ProjectInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.contentReady {
-		p.content = p.generateContent()
-		p.contentReady = true
+	b, err := p.content.bytes()
+	if err != nil {
+		return nil, syscall.EIO
 	}
 
-	if off >= int64(len(p.content)) {
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 	end := off + int64(len(dest))
-	if end > int64(len(p.content)) {
-		end = int64(len(p.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
-	return fuse.ReadResultData(p.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (p *ProjectInfoNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Initialize content if not ready
-	if !p.contentReady {
-		p.content = p.generateContent()
-		p.contentReady = true
+	w, err := p.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	end := off + int64(len(data))
-	if end > int64(len(p.content)) {
-		newContent := make([]byte, end)
-		copy(newContent, p.content)
-		p.content = newContent
-	}
-
-	copy(p.content[off:], data)
-	p.dirty = true
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (p *ProjectInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -579,24 +552,17 @@ func (p *ProjectInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse
 	defer p.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if !p.contentReady {
-			p.content = p.generateContent()
-			p.contentReady = true
-		}
-		if int(sz) < len(p.content) {
-			p.content = p.content[:sz]
-			p.dirty = true
+		if err := p.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
-	var size int
-	if p.contentReady && p.content != nil {
-		size = len(p.content)
-	} else {
-		size = len(p.generateContent())
+	sz, err := p.content.size()
+	if err != nil {
+		return syscall.EIO
 	}
 	out.Mode = 0644 | syscall.S_IFREG
-	out.Size = uint64(size)
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -611,7 +577,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if !p.dirty || p.content == nil {
+	if !p.content.isDirty() {
 		return 0
 	}
 
@@ -623,8 +589,13 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		log.Printf("Flush: project %s (saving changes)", p.project.Name)
 	}
 
+	content, err := p.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Parse the modified content
-	doc, err := marshal.Parse(p.content)
+	doc, err := marshal.Parse(content)
 	if err != nil {
 		log.Printf("Failed to parse project changes for %s: %v", p.project.Name, err)
 		p.lfs.SetWriteError(p.project.ID, "Parse error: "+err.Error())
@@ -790,8 +761,8 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateUpdated(projectInfoIno(p.project.ID))
 
-	p.dirty = false
-	p.contentReady = false // Force re-generate on next read
+	// Drop the buffer so the next read re-generates from the fresh project.
+	p.content.invalidate()
 	return errno
 }
 
@@ -954,7 +925,7 @@ type NewUpdateNode struct {
 	projectID string
 
 	mu      sync.Mutex
-	content []byte
+	content contentBuffer
 	created bool
 }
 
@@ -971,9 +942,13 @@ func (n *NewUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	defer n.mu.Unlock()
 
 	now := time.Now()
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
 	out.Mode = 0200
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -991,20 +966,11 @@ func (n *NewUpdateNode) Write(ctx context.Context, f fs.FileHandle, data []byte,
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write new update: offset=%d len=%d", off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *NewUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -1012,17 +978,17 @@ func (n *NewUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.S
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
 	out.Mode = 0200
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -1030,12 +996,17 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.created || len(n.content) == 0 {
+	if n.created {
 		return 0
 	}
 
+	b, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Parse the content - could be plain text or markdown with frontmatter
-	body, health := parseUpdateContent(n.content)
+	body, health := parseUpdateContent(b)
 	if body == "" {
 		return 0
 	}

@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -15,19 +14,9 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// labelsDirIno generates a stable inode number for a labels directory
-func labelsDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("labels:" + teamID))
-	return h.Sum64()
-}
+func labelsDirIno(teamID string) uint64 { return ino("labels", teamID) }
 
-// labelIno generates a stable inode number for a label
-func labelIno(labelID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("label:" + labelID))
-	return h.Sum64()
-}
+func labelIno(labelID string) uint64 { return ino("label", labelID) }
 
 // LabelsNode represents the /teams/{KEY}/labels/ directory
 type LabelsNode struct {
@@ -125,11 +114,10 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 func (n *LabelsNode) newLabelInode(ctx context.Context, label api.Label, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	content := labelToMarkdown(&label)
 	node := &LabelFileNode{
-		BaseNode:     BaseNode{lfs: n.lfs},
-		label:        label,
-		teamID:       n.teamID,
-		content:      content,
-		contentReady: true,
+		BaseNode: BaseNode{lfs: n.lfs},
+		label:    label,
+		teamID:   n.teamID,
+		content:  contentBuffer{buf: content, loaded: true},
 	}
 	now := time.Now()
 	out.Attr.Mode = 0644 | syscall.S_IFREG
@@ -312,10 +300,8 @@ type LabelFileNode struct {
 	label  api.Label
 	teamID string
 
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	mu      sync.Mutex
+	content contentBuffer
 }
 
 var _ fs.NodeGetattrer = (*LabelFileNode)(nil)
@@ -333,7 +319,11 @@ func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	now := time.Now()
 	out.Mode = 0644
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -346,38 +336,32 @@ func (n *LabelFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, 
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if off >= int64(len(n.content)) {
+	b, err := n.content.bytes()
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	if off >= int64(len(b)) {
 		return fuse.ReadResultData(nil), 0
 	}
 
 	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
+	if end > int64(len(b)) {
+		end = int64(len(b))
 	}
 
-	return fuse.ReadResultData(n.content[off:end]), 0
+	return fuse.ReadResultData(b[off:end]), 0
 }
 
 func (n *LabelFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write label %s: offset=%d len=%d", n.label.ID, off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	n.dirty = true
-
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *LabelFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -385,21 +369,17 @@ func (n *LabelFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.S
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if n.lfs.debug {
-			log.Printf("Setattr truncate label %s: size=%d", n.label.ID, sz)
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-		n.dirty = true
 	}
 
 	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -407,7 +387,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if !n.dirty || n.content == nil {
+	if !n.content.isDirty() {
 		return 0
 	}
 
@@ -415,8 +395,13 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	content, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+
 	// Parse the markdown and get update fields
-	update, err := parseLabelMarkdown(n.content, &n.label)
+	update, err := parseLabelMarkdown(content, &n.label)
 	if err != nil {
 		log.Printf("Failed to parse label: %v", err)
 		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nParse error: "+err.Error())
@@ -427,7 +412,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		if n.lfs.debug {
 			log.Printf("Flush label %s: no changes", n.label.ID)
 		}
-		n.dirty = false
+		n.content.markClean()
 		return 0
 	}
 
@@ -464,8 +449,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		n.label = *fresh
 	}
 
-	n.dirty = false
-	n.contentReady = false // Force regenerate on next read
+	n.content.markClean()
 
 	// Invalidate kernel inode cache
 	n.lfs.InvalidateUpdated(labelIno(n.label.ID))
@@ -483,7 +467,7 @@ type NewLabelNode struct {
 	teamID string
 
 	mu      sync.Mutex
-	content []byte
+	content contentBuffer
 	created bool
 }
 
@@ -502,7 +486,11 @@ func (n *NewLabelNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.A
 	now := time.Now()
 	out.Mode = 0200
 	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	out.SetTimes(&now, &now, &now)
 	return 0
 }
@@ -520,20 +508,11 @@ func (n *NewLabelNode) Write(ctx context.Context, f fs.FileHandle, data []byte, 
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.lfs.debug {
-		log.Printf("Write new label: offset=%d len=%d", off, len(data))
+	w, err := n.content.writeAt(off, data)
+	if err != nil {
+		return 0, syscall.EIO
 	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
+	return uint32(w), 0
 }
 
 func (n *NewLabelNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -541,17 +520,17 @@ func (n *NewLabelNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.Se
 	defer n.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
+		if err := n.content.truncate(int64(sz)); err != nil {
+			return syscall.EIO
 		}
 	}
 
 	out.Mode = 0200
-	out.Size = uint64(len(n.content))
+	sz, err := n.content.size()
+	if err != nil {
+		return syscall.EIO
+	}
+	out.Size = uint64(sz)
 	return 0
 }
 
@@ -559,12 +538,20 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.created || len(n.content) == 0 {
+	if n.created {
+		return 0
+	}
+
+	b, err := n.content.bytes()
+	if err != nil {
+		return syscall.EIO
+	}
+	if len(b) == 0 {
 		return 0
 	}
 
 	// Parse the new label content
-	name, color, description, err := parseNewLabelMarkdown(n.content)
+	name, color, description, err := parseNewLabelMarkdown(b)
 	if err != nil {
 		log.Printf("Failed to parse new label: %v", err)
 		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nParse error: "+err.Error())
