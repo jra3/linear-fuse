@@ -182,18 +182,13 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
 		expectedName := fmt.Sprintf("%04d-%s.md", i+1, timestamp)
 		if expectedName == name {
-			err := n.lfs.DeleteComment(ctx, n.issueID, comment.ID)
-			if err != nil {
-				log.Printf("Failed to delete comment: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: delete comment "+name+"\nError: "+err.Error())
-				return syscall.EIO
-			}
-			// Invalidate kernel cache for the comments directory
-			n.lfs.InvalidateDeleted(commentsDirIno(n.issueID), name)
-			if n.lfs.debug {
-				log.Printf("Comment deleted successfully")
-			}
-			return 0
+			commentID := comment.ID
+			return commitMutation(ctx, n.lfs, mutationSpec{
+				errKey:     collectionErrorKey("comments", n.issueID),
+				op:         "delete comment " + name,
+				persist:    func(ctx context.Context) error { return n.lfs.store.Queries().DeleteComment(ctx, commentID) },
+				invalidate: func() { n.lfs.InvalidateDeleted(commentsDirIno(n.issueID), name) },
+			}, n.lfs.DeleteComment(ctx, n.issueID, comment.ID))
 		}
 	}
 
@@ -512,27 +507,16 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 	}
 
 	comment, err := n.lfs.CreateComment(ctx, n.issueID, body)
-	if err != nil {
-		log.Printf("Failed to create comment: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: create comment\nError: "+err.Error())
-		return syscall.EIO
+	errno := commitMutation(ctx, n.lfs, mutationSpec{
+		errKey:     collectionErrorKey("comments", n.issueID),
+		op:         "create comment",
+		persist:    func(ctx context.Context) error { return n.lfs.UpsertComment(ctx, n.issueID, *comment) },
+		invalidate: func() { n.lfs.InvalidateCreated(commentsDirIno(n.issueID), "") },
+	}, err)
+	if errno != 0 {
+		return errno
 	}
-	n.lfs.ClearWriteError(collectionErrorKey("comments", n.issueID))
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertComment(ctx, n.issueID, *comment); err != nil {
-		log.Printf("Warning: failed to upsert comment to SQLite: %v", err)
-	}
-
 	n.created = true
-
-	// Invalidate kernel cache for the comments directory
-	n.lfs.InvalidateCreated(commentsDirIno(n.issueID), "")
-
-	if n.lfs.debug {
-		log.Printf("Comment created successfully")
-	}
-
 	return 0
 }
 

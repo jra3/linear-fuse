@@ -11,7 +11,9 @@ The rich write flow for editing an existing entity's file (`issue.md`, `project.
 a comment/doc/label/milestone `.md`): parse markdown → resolve names→IDs → call the
 Linear API → **read-your-writes verify** → upsert SQLite → invalidate caches → set or
 clear `.error`. Distinct from the **create path** (`_create`/`mkdir`) and **delete
-path** (`unlink`/`rmdir`), which skip resolution and verification.
+path** (`unlink`/`rmdir`), which skip name→ID resolution and read-your-writes
+verification but share the **mutation-commit tail** (below) for the persist →
+invalidate → `.error` invariant.
 
 ### Read-your-writes verification
 After the API accepts a write, re-derive what *persisted* and compare it against what
@@ -30,6 +32,25 @@ tested with a fake sink and stub closures — no FUSE mount, SQLite, or API.
 
 The **front half** of each edit (parse, resolve, call API) stays per-entity. For
 issues the resolve step is itself a deep module — see Name→ID resolution below.
+
+### Mutation-commit tail (`commitMutation`)
+The create/delete counterpart to the WriteBack tail: the **deep module** that owns the
+invariant tail of every **create** and **delete**. After the API call it owns *both*
+arms of the `.error` symmetry — on failure it sets `.error` and returns the errno
+(default `EIO`, or a caller-supplied classification, e.g. issue creation maps a
+rate-limited request to `EAGAIN`); on success it clears `.error`, runs the caller's
+`persist`, then `invalidate`s the kernel caches (`persist` before `invalidate`, so the
+refreshed readdir hits updated SQLite). Lives in `internal/fs/mutationcommit.go`. One
+non-generic module covers both directions: the caller closes over the created/deleted
+entity inside `persist` (upsert for a create, delete-from-SQLite for a delete), so the
+tail never names the entity type. `persist` is the **single uniform home of each
+mutation's SQLite effect** — its failure is non-fatal (a cache miss must not fail a
+write Linear accepted) and it replaced the old scatter where some deletes wrote SQLite
+in a handler, some in an `lfs` helper, and labels not at all. Like the WriteBack tail it
+depends only on the **`ErrorSink`** seam plus the spec's closures, so it is unit-tested
+with a fake sink and stubs — no FUSE mount, SQLite, or API. The per-mutation **front
+half** (parse, pre-API validation → `EINVAL`/`ENOENT`, call the create/delete API,
+build any returned inode) stays per-entity.
 
 ### Name→ID resolution (`resolveIssueUpdate`)
 marshal returns an issue update whose relational fields hold *names* (a state name,

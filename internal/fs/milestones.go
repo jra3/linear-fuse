@@ -163,18 +163,13 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	// Find the milestone by filename
 	for _, m := range milestones {
 		if milestoneFilename(m) == name {
-			err := n.lfs.DeleteProjectMilestone(ctx, m.ID)
-			if err != nil {
-				log.Printf("Failed to delete milestone: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("milestones", n.projectID), "Operation: delete milestone "+name+"\nError: "+err.Error())
-				return syscall.EIO
-			}
-			// Invalidate kernel cache for the milestones directory
-			n.lfs.InvalidateDeleted(milestonesDirIno(n.projectID), name)
-			if n.lfs.debug {
-				log.Printf("Milestone deleted successfully")
-			}
-			return 0
+			// persist nil: DeleteProjectMilestone goes through the repo, which also
+			// removes the SQLite row.
+			return commitMutation(ctx, n.lfs, mutationSpec{
+				errKey:     collectionErrorKey("milestones", n.projectID),
+				op:         "delete milestone " + name,
+				invalidate: func() { n.lfs.InvalidateDeleted(milestonesDirIno(n.projectID), name) },
+			}, n.lfs.DeleteProjectMilestone(ctx, m.ID))
 		}
 	}
 
@@ -478,22 +473,16 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	}
 
 	_, err := n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
-	if err != nil {
-		log.Printf("Failed to create milestone: %v", err)
-		n.lfs.SetWriteError(milestoneErrKey, "Operation: create milestone\nError: "+err.Error())
-		return syscall.EIO
+	// persist nil: CreateProjectMilestone goes through the repo, which upserts SQLite.
+	errno := commitMutation(ctx, n.lfs, mutationSpec{
+		errKey:     milestoneErrKey,
+		op:         "create milestone",
+		invalidate: func() { n.lfs.InvalidateCreated(milestonesDirIno(n.projectID), "") },
+	}, err)
+	if errno != 0 {
+		return errno
 	}
-	n.lfs.ClearWriteError(milestoneErrKey)
-
 	n.created = true
-
-	// Invalidate kernel cache for milestones directory
-	n.lfs.InvalidateCreated(milestonesDirIno(n.projectID), "")
-
-	if n.lfs.debug {
-		log.Printf("Milestone created successfully")
-	}
-
 	return 0
 }
 

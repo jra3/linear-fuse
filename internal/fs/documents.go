@@ -179,18 +179,13 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Find the document by filename
 	for _, doc := range docs {
 		if documentFilename(doc) == name {
-			err := n.lfs.DeleteDocument(ctx, doc.ID, n.issueID, n.teamID, n.projectID)
-			if err != nil {
-				log.Printf("Failed to delete document: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: delete document "+name+"\nError: "+err.Error())
-				return syscall.EIO
-			}
-			// Invalidate kernel cache for the docs directory
-			n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), name)
-			if n.lfs.debug {
-				log.Printf("Document deleted successfully")
-			}
-			return 0
+			docID := doc.ID
+			return commitMutation(ctx, n.lfs, mutationSpec{
+				errKey:     collectionErrorKey("docs", n.parentID()),
+				op:         "delete document " + name,
+				persist:    func(ctx context.Context) error { return n.lfs.store.Queries().DeleteDocument(ctx, docID) },
+				invalidate: func() { n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), name) },
+			}, n.lfs.DeleteDocument(ctx, doc.ID, n.issueID, n.teamID, n.projectID))
 		}
 	}
 
@@ -656,28 +651,17 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	}
 
 	doc, err := n.lfs.CreateDocument(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create document: %v", err)
-		n.lfs.SetWriteError(docErrKey, "Operation: create document\nError: "+err.Error())
-		return syscall.EIO
-	}
-	n.lfs.ClearWriteError(docErrKey)
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertDocument(ctx, *doc); err != nil {
-		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
-	}
-
-	n.created = true
-
-	// Invalidate kernel cache for docs directory
 	parentID := docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)
-	n.lfs.InvalidateCreated(docsDirIno(parentID), documentFilename(*doc))
-
-	if n.lfs.debug {
-		log.Printf("Document created successfully")
+	errno := commitMutation(ctx, n.lfs, mutationSpec{
+		errKey:     docErrKey,
+		op:         "create document",
+		persist:    func(ctx context.Context) error { return n.lfs.UpsertDocument(ctx, *doc) },
+		invalidate: func() { n.lfs.InvalidateCreated(docsDirIno(parentID), documentFilename(*doc)) },
+	}, err)
+	if errno != 0 {
+		return errno
 	}
-
+	n.created = true
 	return 0
 }
 

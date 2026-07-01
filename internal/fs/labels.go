@@ -163,19 +163,15 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Find the label by filename
 	for _, label := range labels {
 		if labelFilename(label) == name {
-			err := n.lfs.DeleteLabel(ctx, label.ID, n.teamID)
-			if err != nil {
-				log.Printf("Failed to delete label: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: delete label "+name+"\nError: "+err.Error())
-				return syscall.EIO
-			}
-			if n.lfs.debug {
-				log.Printf("Label deleted successfully")
-			}
-			// Invalidate kernel cache (previously skipped the dir inode, so a
-			// deleted label lingered in the listing until the cache TTL).
-			n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), name)
-			return 0
+			labelID := label.ID
+			return commitMutation(ctx, n.lfs, mutationSpec{
+				errKey: collectionErrorKey("labels", n.teamID),
+				op:     "delete label " + name,
+				// Drop the row from SQLite too — previously omitted, so a deleted
+				// label reappeared on the next readdir until sync reconciled.
+				persist:    func(ctx context.Context) error { return n.lfs.store.Queries().DeleteLabel(ctx, labelID) },
+				invalidate: func() { n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), name) },
+			}, n.lfs.DeleteLabel(ctx, label.ID, n.teamID))
 		}
 	}
 
@@ -602,28 +598,16 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	}
 
 	label, err := n.lfs.CreateLabel(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create label: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nError: "+err.Error())
-		return syscall.EIO
+	errno := commitMutation(ctx, n.lfs, mutationSpec{
+		errKey:     collectionErrorKey("labels", n.teamID),
+		op:         "create label",
+		persist:    func(ctx context.Context) error { return n.lfs.UpsertLabel(ctx, n.teamID, *label) },
+		invalidate: func() { n.lfs.InvalidateCreated(labelsDirIno(n.teamID), labelFilename(*label)) },
+	}, err)
+	if errno != 0 {
+		return errno
 	}
-	n.lfs.ClearWriteError(collectionErrorKey("labels", n.teamID))
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertLabel(ctx, n.teamID, *label); err != nil {
-		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
-	}
-
 	n.created = true
-
-	// Invalidate kernel cache for labels directory (previously skipped the dir
-	// inode, so a newly-created label was missing from the listing).
-	n.lfs.InvalidateCreated(labelsDirIno(n.teamID), labelFilename(*label))
-
-	if n.lfs.debug {
-		log.Printf("Label created successfully")
-	}
-
 	return 0
 }
 

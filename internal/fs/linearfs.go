@@ -605,13 +605,11 @@ func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentI
 	return lfs.client.UpdateComment(ctx, commentID, body)
 }
 
+// DeleteComment removes a comment via the Linear API only. The SQLite delete is the
+// caller's responsibility, applied through the commitMutation persist closure so every
+// mutation declares its cache effect in one place.
 func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
-	// Delete from API
-	if err := lfs.client.DeleteComment(ctx, commentID); err != nil {
-		return err
-	}
-	// Delete from SQLite so it's immediately removed from listings
-	return lfs.store.Queries().DeleteComment(ctx, commentID)
+	return lfs.client.DeleteComment(ctx, commentID)
 }
 
 // Document methods
@@ -656,13 +654,10 @@ func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, inpu
 	return lfs.client.UpdateDocument(ctx, documentID, input)
 }
 
+// DeleteDocument removes a document via the Linear API only. The SQLite delete is the
+// caller's responsibility, applied through the commitMutation persist closure.
 func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
-	// Delete from API
-	if err := lfs.client.DeleteDocument(ctx, documentID); err != nil {
-		return err
-	}
-	// Delete from SQLite so it's immediately removed from listings
-	return lfs.store.Queries().DeleteDocument(ctx, documentID)
+	return lfs.client.DeleteDocument(ctx, documentID)
 }
 
 // ResolveUserID converts an email or name to a user ID
