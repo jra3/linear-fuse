@@ -16,10 +16,11 @@ func TestIssueToMarkdown(t *testing.T) {
 	estimate := 5.0
 
 	tests := []struct {
-		name        string
-		issue       *api.Issue
-		wantContain []string
-		wantErr     bool
+		name           string
+		issue          *api.Issue
+		wantContain    []string
+		wantNotContain []string
+		wantErr        bool
 	}{
 		{
 			name: "full issue with all fields",
@@ -44,19 +45,23 @@ func TestIssueToMarkdown(t *testing.T) {
 				Project:   &api.Project{ID: "proj-1", Name: "Q1 Launch"},
 			},
 			wantContain: []string{
-				"id: issue-123",
-				"identifier: ENG-456",
 				"title: Fix authentication bug",
 				"status: In Progress",
 				"priority: high",
 				"assignee: alice@example.com",
 				"due: \"2025-02-01\"",
 				"estimate: 5",
-				"team: ENG",
 				"project: Q1 Launch",
 				"- bug",
 				"- backend",
 				"Users can't log in with SSO.",
+			},
+			wantNotContain: []string{
+				"id: issue-123", // server field -> issue.meta
+				"identifier: ENG-456",
+				"url:",
+				"updated:",
+				"team:", // read-only -> issue.meta
 			},
 		},
 		{
@@ -74,13 +79,12 @@ func TestIssueToMarkdown(t *testing.T) {
 				URL:         "https://linear.app/team/issue/ENG-1",
 			},
 			wantContain: []string{
-				"id: issue-min",
-				"identifier: ENG-1",
 				"title: Simple task",
 				"status: Backlog",
 				"priority: none",
 				"# Simple task", // Auto-generated body
 			},
+			wantNotContain: []string{"id:", "identifier:", "url:"},
 		},
 		{
 			name: "issue with no assignee",
@@ -114,8 +118,9 @@ func TestIssueToMarkdown(t *testing.T) {
 				URL:        "https://linear.app/team/issue/ENG-3",
 			},
 			wantContain: []string{
-				"ENG-3",
+				"Bug #123", // title text survives into the auto-generated body
 			},
+			wantNotContain: []string{"identifier: ENG-3", "url:"},
 		},
 	}
 
@@ -139,6 +144,11 @@ func TestIssueToMarkdown(t *testing.T) {
 			for _, want := range tt.wantContain {
 				if !strings.Contains(result, want) {
 					t.Errorf("IssueToMarkdown() missing %q\nGot:\n%s", want, result)
+				}
+			}
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(result, notWant) {
+					t.Errorf("IssueToMarkdown() should not contain %q (belongs in issue.meta)\nGot:\n%s", notWant, result)
 				}
 			}
 		})
@@ -491,7 +501,9 @@ Original description`
 	}
 }
 
-func TestIssueToMarkdownWithAttachments(t *testing.T) {
+// TestIssueMetaToMarkdown covers the read-only issue.meta surface: identity
+// fields plus external-link attachments (which moved out of issue.md in #150).
+func TestIssueMetaToMarkdown(t *testing.T) {
 	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 
@@ -615,9 +627,9 @@ func TestIssueToMarkdownWithAttachments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := IssueToMarkdown(tt.issue, tt.attachments...)
+			got, err := IssueMetaToMarkdown(tt.issue, tt.attachments...)
 			if err != nil {
-				t.Fatalf("IssueToMarkdown() error: %v", err)
+				t.Fatalf("IssueMetaToMarkdown() error: %v", err)
 			}
 
 			result := string(got)
@@ -625,14 +637,14 @@ func TestIssueToMarkdownWithAttachments(t *testing.T) {
 			// Check expected content is present
 			for _, want := range tt.wantContain {
 				if !strings.Contains(result, want) {
-					t.Errorf("IssueToMarkdown() missing %q\nGot:\n%s", want, result)
+					t.Errorf("IssueMetaToMarkdown() missing %q\nGot:\n%s", want, result)
 				}
 			}
 
 			// Check unwanted content is absent
 			for _, notWant := range tt.wantMissing {
 				if strings.Contains(result, notWant) {
-					t.Errorf("IssueToMarkdown() should not contain %q\nGot:\n%s", notWant, result)
+					t.Errorf("IssueMetaToMarkdown() should not contain %q\nGot:\n%s", notWant, result)
 				}
 			}
 		})
@@ -709,5 +721,214 @@ func TestStringSlicesEqual(t *testing.T) {
 				t.Errorf("stringSlicesEqual(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMarkdownToIssueCreate(t *testing.T) {
+	t.Parallel()
+	content := []byte("---\n" +
+		"title: New Thing\n" +
+		"status: In Progress\n" +
+		"priority: high\n" +
+		"assignee: alice@example.com\n" +
+		"labels: [Bug, Backend]\n" +
+		"project: Q1 Launch\n" +
+		"parent: ENG-1\n" +
+		"estimate: 3\n" +
+		"due: \"2026-02-01\"\n" +
+		"id: should-be-ignored\n" + // read-only key ignored tolerantly
+		"---\n" +
+		"Body text.\n")
+
+	got, err := MarkdownToIssueCreate(content)
+	if err != nil {
+		t.Fatalf("MarkdownToIssueCreate error: %v", err)
+	}
+	// Relational fields carry names for the resolver; scalars are typed.
+	checks := map[string]any{
+		"title":      "New Thing",
+		"stateId":    "In Progress",
+		"priority":   2, // high
+		"assigneeId": "alice@example.com",
+		"projectId":  "Q1 Launch",
+		"parentId":   "ENG-1",
+		"dueDate":    "2026-02-01",
+	}
+	for k, want := range checks {
+		if got[k] != want {
+			t.Errorf("field %q = %v, want %v", k, got[k], want)
+		}
+	}
+	if desc, _ := got["description"].(string); strings.TrimSpace(desc) != "Body text." {
+		t.Errorf("description = %q, want %q", desc, "Body text.")
+	}
+	if labels, ok := got["labelIds"].([]string); !ok || len(labels) != 2 {
+		t.Errorf("labelIds = %v, want [Bug Backend]", got["labelIds"])
+	}
+	if _, ok := got["id"]; ok {
+		t.Error("read-only key 'id' should be ignored, not passed to create input")
+	}
+}
+
+func TestMarkdownToIssueCreateInvalidPriority(t *testing.T) {
+	t.Parallel()
+	_, err := MarkdownToIssueCreate([]byte("---\ntitle: X\npriority: critical\n---\nbody\n"))
+	if err == nil {
+		t.Fatal("expected error for invalid priority")
+	}
+	if !strings.HasPrefix(err.Error(), "priority:") {
+		t.Errorf("error should be priority-prefixed for .error normalization, got: %v", err)
+	}
+}
+
+func TestMarkdownToIssueCreateCoercesScalars(t *testing.T) {
+	t.Parallel()
+	// Unquoted due parses as time.Time; priority/estimate as numbers; title as int.
+	// None of these must be silently dropped (the #148 failure mode).
+	content := []byte("---\ntitle: 12345\ndue: 2026-02-01\npriority: 2\nestimate: 3\n---\nbody\n")
+	got, err := MarkdownToIssueCreate(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["title"] != "12345" {
+		t.Errorf("title = %v, want coerced \"12345\"", got["title"])
+	}
+	if got["dueDate"] != "2026-02-01" {
+		t.Errorf("dueDate = %v, want \"2026-02-01\" (unquoted date coerced, not dropped)", got["dueDate"])
+	}
+	if got["priority"] != 2 {
+		t.Errorf("priority = %v, want numeric 2 (not dropped)", got["priority"])
+	}
+	if got["estimate"] != 3 {
+		t.Errorf("estimate = %v (type %T), want int 3", got["estimate"], got["estimate"])
+	}
+}
+
+// TestMarkdownToIssueCreateCoercesRelationalAndLabels guards the review finding
+// that the "coerce, don't drop" fix reached only title/priority/due/estimate,
+// leaving labels and the name-bearing scalar fields to bare `.(string)` drops.
+func TestMarkdownToIssueCreateCoercesRelationalAndLabels(t *testing.T) {
+	t.Parallel()
+
+	// A bare (non-list) label and a numeric-looking label must both survive.
+	got, err := MarkdownToIssueCreate([]byte("---\ntitle: X\nlabels: Bug\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if labels, ok := got["labelIds"].([]string); !ok || len(labels) != 1 || labels[0] != "Bug" {
+		t.Errorf("bare `labels: Bug` = %v, want [Bug] (dropped instead of coerced)", got["labelIds"])
+	}
+	got, err = MarkdownToIssueCreate([]byte("---\ntitle: X\nlabels: [Bug, 2026]\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if labels, ok := got["labelIds"].([]string); !ok || len(labels) != 2 || labels[1] != "2026" {
+		t.Errorf("`labels: [Bug, 2026]` = %v, want [Bug 2026] (numeric label dropped)", got["labelIds"])
+	}
+
+	// A numeric cycle/status name must not be silently dropped.
+	got, err = MarkdownToIssueCreate([]byte("---\ntitle: X\nstatus: 7\ncycle: 42\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["stateId"] != "7" {
+		t.Errorf("numeric status = %v, want coerced \"7\" (not dropped)", got["stateId"])
+	}
+	if got["cycleId"] != "42" {
+		t.Errorf("numeric cycle = %v, want coerced \"42\" (not dropped)", got["cycleId"])
+	}
+}
+
+// TestMarkdownToIssueCreateNumericPriorityRange guards that an out-of-range
+// numeric priority is rejected with a priority-prefixed EINVAL (not passed
+// through to the API as an opaque EIO).
+func TestMarkdownToIssueCreateNumericPriorityRange(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"99", "-1", "2.5"} {
+		_, err := MarkdownToIssueCreate([]byte("---\ntitle: X\npriority: " + bad + "\n---\nbody\n"))
+		if err == nil {
+			t.Errorf("priority: %s should be rejected as out-of-range", bad)
+			continue
+		}
+		if !strings.HasPrefix(err.Error(), "priority:") {
+			t.Errorf("priority: %s error should be priority-prefixed, got: %v", bad, err)
+		}
+	}
+	// In-range integers still pass.
+	if _, err := MarkdownToIssueCreate([]byte("---\ntitle: X\npriority: 4\n---\nbody\n")); err != nil {
+		t.Errorf("priority: 4 should be valid, got: %v", err)
+	}
+}
+
+// TestMarkdownToIssueUpdateCoercesScalars guards that the edit path (not just
+// create) coerces wrong-typed scalars instead of silently ignoring the edit —
+// the #148 silent no-op on the highest-traffic surface.
+func TestMarkdownToIssueUpdateCoercesScalars(t *testing.T) {
+	t.Parallel()
+	original := &api.Issue{Title: "Old", Description: "body"}
+
+	// Unquoted due (time.Time), numeric title, and numeric priority must apply.
+	content := []byte("---\ntitle: 2026\npriority: 3\ndue: 2026-03-15\n---\nbody\n")
+	update, err := MarkdownToIssueUpdate(content, original)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if update["title"] != "2026" {
+		t.Errorf("title = %v, want coerced \"2026\" (edit silently dropped)", update["title"])
+	}
+	if update["dueDate"] != "2026-03-15" {
+		t.Errorf("dueDate = %v, want \"2026-03-15\" (unquoted date dropped on edit)", update["dueDate"])
+	}
+	if update["priority"] != 3 {
+		t.Errorf("priority = %v, want 3 (numeric priority dropped on edit)", update["priority"])
+	}
+}
+
+// TestMarkdownToIssueUpdateQuotedEstimateDoesNotZero guards the worst update-path
+// finding: a quoted `estimate: "3"` matched neither int nor float and zeroed the
+// estimate on Linear. It must now coerce (or, if unparseable, leave untouched).
+func TestMarkdownToIssueUpdateQuotedEstimateDoesNotZero(t *testing.T) {
+	t.Parallel()
+	three := float64(3)
+	original := &api.Issue{Title: "X", Estimate: &three, Description: "body"}
+
+	// Quoted numeric string coerces to the same value → no update emitted.
+	update, err := MarkdownToIssueUpdate([]byte("---\ntitle: X\nestimate: \"3\"\n---\nbody\n"), original)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := update["estimate"]; ok {
+		t.Errorf("estimate = %v, want no change (quoted \"3\" == 3, must not zero)", v)
+	}
+
+	// An unparseable estimate leaves the field untouched rather than zeroing it.
+	update, err = MarkdownToIssueUpdate([]byte("---\ntitle: X\nestimate: abc\n---\nbody\n"), original)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := update["estimate"]; ok {
+		t.Errorf("estimate = %v, want no change for unparseable value (must not zero)", v)
+	}
+}
+
+// TestMarkdownToIssueUpdateEmptyDescriptionNoop guards that a byte-identical
+// rewrite of an empty-description issue does not push the synthesized
+// `# <Title>` placeholder back as a real description (the byte-stable-write
+// contract).
+func TestMarkdownToIssueUpdateEmptyDescriptionNoop(t *testing.T) {
+	t.Parallel()
+	original := &api.Issue{Title: "Fix thing", Description: ""}
+
+	// IssueToMarkdown renders "# Fix thing\n" as the body for an empty description.
+	rendered, err := IssueToMarkdown(original)
+	if err != nil {
+		t.Fatalf("IssueToMarkdown error: %v", err)
+	}
+	update, err := MarkdownToIssueUpdate(rendered, original)
+	if err != nil {
+		t.Fatalf("MarkdownToIssueUpdate error: %v", err)
+	}
+	if v, ok := update["description"]; ok {
+		t.Errorf("no-op rewrite emitted description=%q, want no update (placeholder must not persist)", v)
 	}
 }

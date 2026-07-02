@@ -13,9 +13,9 @@ import (
 
 // Rate limiting for API operations to avoid hitting Linear's usage limits
 var (
-	rateLimitMu   sync.Mutex
-	lastAPICall   time.Time
-	apiCallDelay  = 1 * time.Second // Minimum delay between API write operations
+	rateLimitMu  sync.Mutex
+	lastAPICall  time.Time
+	apiCallDelay = 1 * time.Second // Minimum delay between API write operations
 )
 
 // skipIfNoWriteTests skips the test if write tests are not enabled
@@ -233,10 +233,10 @@ func getIssueFromSQLite(issueID string) (*api.Issue, error) {
 
 	// Convert db.Issue to api.Issue (basic fields)
 	issue := &api.Issue{
-		ID:          dbIssue.ID,
-		Identifier:  dbIssue.Identifier,
-		Title:       dbIssue.Title,
-		Priority:    int(dbIssue.Priority.Int64),
+		ID:         dbIssue.ID,
+		Identifier: dbIssue.Identifier,
+		Title:      dbIssue.Title,
+		Priority:   int(dbIssue.Priority.Int64),
 	}
 
 	if dbIssue.Description.Valid {

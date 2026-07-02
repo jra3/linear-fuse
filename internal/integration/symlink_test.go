@@ -336,13 +336,11 @@ func TestProjectInfoFile(t *testing.T) {
 		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
 
-	// Check required fields
-	requiredFields := []string{"id", "name", "url"}
-	for _, field := range requiredFields {
-		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q in project.md", field)
-		}
+	// Editable field in project.md; server fields moved to project.meta (#150).
+	if _, ok := doc.Frontmatter["name"]; !ok {
+		t.Errorf("Missing editable field %q in project.md", "name")
 	}
+	assertMetaHasFields(t, projectMetaPath(testTeamKey, proj), "id", "url")
 }
 
 func TestProjectIssueSymlinks(t *testing.T) {
@@ -366,7 +364,7 @@ func TestProjectIssueSymlinks(t *testing.T) {
 	// Check that issue entries (not project.md, .error, docs/, updates/, or milestones/) are symlinks
 	for _, entry := range projectEntries {
 		switch entry.Name() {
-		case "project.md", ".error", "docs", "updates", "milestones":
+		case "project.md", "project.meta", ".error", ".last", "docs", "updates", "milestones":
 			continue
 		}
 		info, err := entry.Info()

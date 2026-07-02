@@ -131,14 +131,22 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 
 - **internal/api**: GraphQL client for Linear. Types in `types.go` mirror Linear's schema. Queries in `queries.go`.
 - **internal/fs**: FUSE implementation using go-fuse/v2. Key node types:
-  - `LinearFS` - Main struct with caches and server reference
-  - `IssueFileNode` - Read/write issue.md files
-  - `ErrorFileNode` - Read-only .error file for validation errors
+  - `LinearFS` - Main struct with caches, server reference, and the mutation seam
+  - `IssueFileNode` - Read/write issue.md files (editable fields only)
+  - `MetaFileNode` - Read-only `<entity>.meta` sidecar (server fields); render-through, see below
+  - `ErrorFileNode` - Read-only `.error` file for the last failed write
+  - `SuccessFileNode` - Read-only `.last` sidecar: YAML list of recent creates
   - `CommentsNode`/`CommentNode` - Comment listing and CRUD
   - `DocsNode`/`DocumentFileNode` - Document CRUD
   - `LabelsNode`/`LabelFileNode` - Label CRUD
   - `ProjectsNode`/`ProjectInfoNode` - Project management
+  - `NewIssueCreateNode` - Write-only `issues/_create` full-object create trigger
+  - `RecentNode` - `teams/{KEY}/recent/` newest-first issue view
   - `ByNode`/`FilteredIssuesNode` - Server-side filtered queries
+  - `ReadmeNode` - Serves the generated `<mount>/README.md` (see "Generated README")
+  - `MutationClient` (`mutationclient.go`) - Interface over the API's mutation
+    methods; `LinearFS.mutator` defaults to the real client and is swappable in
+    tests via `InjectTestMutationClient` (see `internal/testutil/mockmutation`)
 - **internal/marshal**: Markdown ↔ Linear issue conversion with YAML frontmatter
 - **internal/db**: SQLite database layer with sqlc-generated queries
   - `schema.sql` - Table definitions (well-commented, see inline docs)
@@ -150,6 +158,30 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
   - `mock.go` - In-memory mock for testing
 - **internal/sync**: Background sync worker for Linear → SQLite
 - **internal/cache**: Generic TTL cache (legacy, no longer imported - kept for reference)
+
+### Generated README (agent-facing docs)
+
+The `README.md` at the mount root (e.g. `~/linear/README.md`) is **generated at
+runtime**, not a checked-in file. `ReadmeNode` (`internal/fs/root.go`) serves it,
+and `generateReadme(mountPoint)` builds the content — the directory-structure map,
+`<operations>`, frontmatter templates, `<permissions>`, `<_create_behavior>`,
+`<validation_errors>`, and `<claude_code_instructions>`. It is the primary usage
+doc an LLM/agent reads to learn the filesystem, so it is part of the product, not
+a comment.
+
+**This means the generated README can silently lie about behavior.** When you
+change a filesystem surface or contract — add/rename a virtual file (`.error`,
+`.last`, `issue.meta`, `_create`), change permissions or read/write semantics,
+add a view like `recent/`, or change the failure model — you MUST update
+`generateReadme` in the same change so the doc matches the code. (A real example:
+the doc claimed `_create` reads "return empty" while every `_create` node returns
+`EACCES`.)
+
+`TestGeneratedReadmeMatchesBehavior` (`internal/integration/readme_test.go`)
+guards this: it reads the mounted `README.md` and asserts it doesn't carry the
+stale claim, mentions the current surfaces (`.last`, `issue.meta`, `recent/`),
+and that documented write-only files really are unreadable. Extend it when you
+add a surface the README should describe.
 
 ### GraphQL Query Design
 

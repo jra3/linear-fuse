@@ -57,10 +57,10 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// +2 for _create and .error
-	entries := make([]fuse.DirEntry, len(labels)+2)
+	// +3 for _create, .error and .last
+	entries := make([]fuse.DirEntry, len(labels)+3)
 
-	// Always include _create for creating labels and .error for feedback
+	// Always include _create for creating labels and .error/.last for feedback
 	entries[0] = fuse.DirEntry{
 		Name: "_create",
 		Mode: syscall.S_IFREG,
@@ -69,9 +69,13 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		Name: ".error",
 		Mode: syscall.S_IFREG,
 	}
+	entries[2] = fuse.DirEntry{
+		Name: ".last",
+		Mode: syscall.S_IFREG,
+	}
 
 	for i, label := range labels {
-		entries[i+2] = fuse.DirEntry{
+		entries[i+3] = fuse.DirEntry{
 			Name: labelFilename(label),
 			Mode: syscall.S_IFREG,
 		}
@@ -103,6 +107,10 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Handle .error feedback file (last failed label write in this dir)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("labels", n.teamID), out), 0
+	}
+	// Handle .last feedback file (recent successful label creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("labels", n.teamID), out), 0
 	}
 
 	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
@@ -608,6 +616,10 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		return syscall.EIO
 	}
 	n.lfs.ClearWriteError(collectionErrorKey("labels", n.teamID))
+	n.lfs.AppendWriteSuccess(collectionSuccessKey("labels", n.teamID), WriteResult{
+		Path:  labelFilename(*label),
+		Title: label.Name,
+	})
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertLabel(ctx, n.teamID, *label); err != nil {

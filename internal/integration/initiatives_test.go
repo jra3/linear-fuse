@@ -35,13 +35,11 @@ func TestReadInitiativeFile(t *testing.T) {
 		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
 
-	// Verify required fields
-	requiredFields := []string{"id", "name", "slug", "status"}
-	for _, field := range requiredFields {
-		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field: %s", field)
-		}
+	// Editable field in initiative.md; server fields moved to initiative.meta (#150).
+	if _, ok := doc.Frontmatter["name"]; !ok {
+		t.Errorf("Missing editable field: %s", "name")
 	}
+	assertMetaHasFields(t, initiativeMetaPath(slug), "id", "slug", "status")
 
 	// Verify projects format (should be simple list of slugs)
 	if projects, ok := doc.Frontmatter["projects"]; ok {

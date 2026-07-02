@@ -5,16 +5,37 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 	"gopkg.in/yaml.v3"
 )
+
+// enableMockMutations swaps in the in-memory mutation fake (T0/#155) for the
+// duration of the test, so create/edit paths run to success offline (reaching
+// ClearWriteError/AppendWriteSuccess and upserting to the store) instead of
+// failing at the network with the fixture-mode dummy key. The real client is
+// restored on cleanup so loud-failure tests that intend mutations to fail are
+// unaffected. Tests using this must not t.Parallel() (the fake is process-global
+// on the shared mount).
+func enableMockMutations(t *testing.T) {
+	t.Helper()
+	if liveAPIMode {
+		return // live mode uses the real API; the fake would mask it
+	}
+	lfs.InjectTestMutationClient(mockmutation.New(
+		mockmutation.WithTeamKey(testTeamKey),
+		mockmutation.WithStore(lfs.GetStore()),
+	))
+	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
+}
 
 // isControlFile reports whether a directory entry is a virtual control/feedback
 // file (the _create trigger or the .error feedback file) rather than a real
 // entity file. Listing-assertion loops skip these.
 func isControlFile(name string) bool {
-	return name == "_create" || name == ".error"
+	return name == "_create" || name == ".error" || name == ".last"
 }
 
 // firstRealEntry returns the name of the first directory entry that is not a
@@ -64,8 +85,24 @@ func issueDirPath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID)
 }
 
+func recentPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "recent")
+}
+
+func issuesErrorPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", ".error")
+}
+
+func issuesLastPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", ".last")
+}
+
 func issueFilePath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "issue.md")
+}
+
+func issueMetaPath(teamKey, issueID string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "issue.meta")
 }
 
 func commentsPath(teamKey, issueID string) string {
@@ -102,6 +139,32 @@ func byStatusPath(teamKey, status string) string {
 
 func projectsPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "projects")
+}
+
+func projectMetaPath(teamKey, slug string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", slug, "project.meta")
+}
+
+func initiativeMetaPath(slug string) string {
+	return filepath.Join(mountPoint, "initiatives", slug, "initiative.meta")
+}
+
+// assertMetaHasFields reads a .meta sidecar and fails if any field is missing.
+func assertMetaHasFields(t *testing.T, metaPath string, fields ...string) {
+	t.Helper()
+	content, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", metaPath, err)
+	}
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("parse %s frontmatter: %v", metaPath, err)
+	}
+	for _, f := range fields {
+		if _, ok := doc.Frontmatter[f]; !ok {
+			t.Errorf("%s missing server field %q", filepath.Base(metaPath), f)
+		}
+	}
 }
 
 func myPath() string {

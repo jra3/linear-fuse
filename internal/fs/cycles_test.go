@@ -128,11 +128,11 @@ func TestCycleFileNode_GenerateContent(t *testing.T) {
 	node := &CycleFileNode{
 		team: api.Team{Key: "ENG"},
 		cycle: api.Cycle{
-			ID:       "cycle-123",
-			Number:   5,
-			Name:     "Sprint 5",
-			StartsAt: startsAt,
-			EndsAt:   endsAt,
+			ID:                         "cycle-123",
+			Number:                     5,
+			Name:                       "Sprint 5",
+			StartsAt:                   startsAt,
+			EndsAt:                     endsAt,
 			IssueCountHistory:          []int{10},
 			CompletedIssueCountHistory: []int{3},
 		},

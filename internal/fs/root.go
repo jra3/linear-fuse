@@ -139,12 +139,17 @@ Mount point: %s (all paths below are relative to this mount point)
 <directory_structure>
 teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
-  issues/                           [mkdir "Title" to create an issue]
+  issues/                           [mkdir "Title" for quick create]
+    _create                         [write full frontmatter+body to create one issue with all fields]
     .error                          [read-only: last failed issue creation]
+    .last                           [read-only: YAML list of recent creations {identifier,url,path,title,status}]
+  recent/                           [read-only: issue symlinks, newest-first by updatedAt (ls recent/ | head)]
   issues/{ID}/
-    issue.md                        [read/write]
+    issue.md                        [read/write: editable fields + body ONLY]
+    issue.meta                      [read-only: id, identifier, url, branch, created, updated, links, relations]
     .error                          [read-only: last failed write here]
-    comments/                       [_create=trigger, .error=feedback]
+    .last                           [read-only: sub-issues created via children/]
+    comments/                       [_create=trigger, .error=feedback, .last=created ids]
       {id}.md                       [read/write]
     docs/                           [_create=trigger, .error=feedback]
       {slug}.md                     [read/write]
@@ -163,8 +168,10 @@ teams/{KEY}/
     {name}.md                       [read/write, rm to delete]
   projects/                         [mkdir "Name" to create a project]
     .error                          [read-only: last failed project creation]
+    .last                           [read-only: recent project creations]
   projects/{slug}/
-    project.md                      [read/write]
+    project.md                      [read/write: editable fields + body ONLY]
+    project.meta                    [read-only: id, slug, url, status, lead, dates]
     .error                          [read-only: last failed write here]
     docs/                           [same as issues]
     updates/                        [_create with health: onTrack|atRisk|offTrack]
@@ -178,7 +185,8 @@ teams/{KEY}/
     {name}/                         [issue symlinks]
 
 initiatives/{slug}/
-  initiative.md                     [read/write]
+  initiative.md                     [read/write: editable fields + body ONLY]
+  initiative.meta                   [read-only: id, slug, url, status, owner, dates]
   .error                            [read-only: last failed write here]
   docs/                             [_create=trigger, .error=feedback]
     {slug}.md                       [read/write]
@@ -195,7 +203,9 @@ my/assigned|created|active/         [your issue symlinks]
 <operations>
 READ:    cat %s/teams/ENG/issues/ENG-123/issue.md
 EDIT:    vim issue.md                 (edit frontmatter, save)
-CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"
+CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"   (quick: title only)
+         printf -- '---\ntitle: Full Issue\npriority: high\nlabels: [Bug]\n---\nBody.\n' > issues/_create
+         cat issues/.last                  (read back the new identifier/url/path)
          mkdir children/"Sub-task Title"   (creates child issue)
          mkdir %s/teams/ENG/projects/"New Project"
          echo "text" > comments/_create
@@ -215,9 +225,10 @@ SORT:    ls -lt %s/my/active/           (mtime = updatedAt)
 </operations>
 
 <issue_frontmatter>
+issue.md holds only editable fields (below) + the description body. Read-only
+identity/timestamps/links live in the sibling issue.meta (identifier, url,
+branch, created, updated, …). A successful write never rewrites issue.md.
 ---
-identifier: ENG-123                 [read-only]
-branch: "john/eng-123-fix-bug"      [read-only, suggested git branch]
 title: "Fix bug"                    [editable]
 status: "In Progress"               [must match states.md]
 assignee: "user@example.com"        [email or display name]
@@ -229,29 +240,21 @@ parent: ENG-100                     [parent issue identifier]
 project: "Project Name"
 milestone: "Phase 1"                [milestone within project]
 cycle: "Sprint 42"
-links:                              [read-only, external attachments]
-  - {type: github-pr, title: "...", url: "..."}
 ---
 Description body (editable)
 </issue_frontmatter>
 
 <initiative_frontmatter>
+initiative.md holds only editable fields (below) + the description body. Read-only
+identity/status/owner/dates live in the sibling initiative.meta (id, slug, status,
+url, owner, targetDate, created, updated). A successful write never rewrites
+initiative.md.
 ---
-id: 719a9756-326e-40cf-935d-38cf899a1f50   [read-only]
 name: "Platform Modernization"              [editable]
-slug: 77d439e363bb                          [read-only]
-status: Active                              [read-only]
 projects:                                   [editable - project slugs]
   - "api-gateway"
   - "auth-service"
   - "data-pipeline"
-owner:                                      [read-only]
-  id: df7cbe14-f8c2-4096-b812-73fa9d39f19f
-  name: "John Doe"
-  email: john@example.com
-targetDate: "2026-03-31"                    [read-only]
-created: "2026-01-24T22:15:26Z"             [read-only]
-updated: "2026-01-27T16:03:38Z"             [read-only]
 ---
 Initiative description (editable - the body maps to the description)
 
@@ -260,23 +263,26 @@ Usage:
 - Edit projects: list to link/unlink projects (use project slugs)
 - Projects are resolved workspace-wide across all teams
 - Changes sync immediately to Linear API and SQLite cache
-- Other fields are read-only (Linear API doesn't support editing)
+- Read-only server fields (id, slug, status, owner, dates) live in initiative.meta
 </initiative_frontmatter>
 
 <permissions>
 -r--r--r--  Read-only     team.md, states.md, user.md
 -rw-r--r--  Editable      issue.md, project.md, initiative.md, comments/*.md, docs/*.md, milestones/*.md
---w-------  Write-only    _create (write triggers creation, always empty)
+--w-------  Write-only    _create (write triggers creation; reads are rejected)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
 </permissions>
 
 <_create_behavior>
 _create is a write-only trigger file (like /proc/sysrq-trigger):
-- Reading always returns empty (size 0)
+- Reading is rejected (EACCES) — the file is write-only
 - Writing creates a new item and consumes the content
-- Editors fail because they read-before-write (vim, vscode)
+- Editors fail because they read-before-write (vim, vscode) and the read is rejected
 - Use piped output: echo "text" > _create, cat file > _create
-- Created items appear as separate files (e.g., 001-2025-01-15.md)
+- Created items appear as separate files (e.g., 001-2025-01-15.md). Entity-minting
+  surfaces (issues, children, comments, docs, labels, projects, milestones) expose
+  a sibling .last with the new identity; read .error for a failure. attachments/
+  and relations/ instead surface the result as the created *.link / *.rel file.
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
 </_create_behavior>
 
@@ -333,7 +339,9 @@ EDITING FILES:
 
 CREATING ITEMS:
 - Use Bash(echo "text" > path/_create) — never use the Write tool on _create files
-- _create is write-only; reading it always returns empty, so Write/Edit tools fail
+- _create is write-only; reads are rejected (EACCES), so Write/Edit tools (which
+  read-before-write) fail — pipe instead, then read the sibling .error (and .last,
+  where the surface mints an entity: issues/comments/docs/labels/projects/milestones)
 - For docs with a title: Bash(echo "content" > path/docs/"Title.md")
 
 WRITING ISSUE CONTENT:

@@ -64,20 +64,32 @@ func TestFixtureIssueFileReadable(t *testing.T) {
 }
 
 func TestFixtureIssueFileContainsRequiredFields(t *testing.T) {
+	// Editable fields live in issue.md; server-managed fields moved to issue.meta (#150).
 	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read issue file: %v", err)
 	}
-
 	doc, err := parseFrontmatter(content)
 	if err != nil {
 		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
-
-	requiredFields := []string{"id", "identifier", "title", "status", "priority", "url", "created", "updated"}
-	for _, field := range requiredFields {
+	for _, field := range []string{"title", "status", "priority"} {
 		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q", field)
+			t.Errorf("issue.md missing required editable field %q", field)
+		}
+	}
+
+	metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, "TST-1"))
+	if err != nil {
+		t.Fatalf("Failed to read issue.meta: %v", err)
+	}
+	meta, err := parseFrontmatter(metaContent)
+	if err != nil {
+		t.Fatalf("Failed to parse issue.meta frontmatter: %v", err)
+	}
+	for _, field := range []string{"id", "identifier", "url", "created", "updated"} {
+		if _, ok := meta.Frontmatter[field]; !ok {
+			t.Errorf("issue.meta missing required server field %q", field)
 		}
 	}
 }
@@ -374,13 +386,11 @@ func TestFixtureProjectInfoFile(t *testing.T) {
 		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
 
-	// Check required fields
-	requiredFields := []string{"id", "name", "slug", "status"}
-	for _, field := range requiredFields {
-		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q in project.md", field)
-		}
+	// Editable field in project.md; server fields moved to project.meta (#150).
+	if _, ok := doc.Frontmatter["name"]; !ok {
+		t.Errorf("Missing editable field %q in project.md", "name")
 	}
+	assertMetaHasFields(t, projectMetaPath(testTeamKey, "test-project"), "id", "slug", "status")
 }
 
 func TestFixtureProjectIssueSymlinks(t *testing.T) {

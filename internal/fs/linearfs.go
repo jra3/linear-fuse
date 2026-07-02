@@ -27,7 +27,11 @@ import (
 // Read operations go through the Repository (SQLite + on-demand API fetch).
 // Write operations (mutations) use the API Client directly.
 type LinearFS struct {
-	client     *api.Client            // For mutations only
+	client       *api.Client    // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
+	mutatorImpl  MutationClient // Mutations only; defaults to client, swappable for tests
+	verifierImpl verifyReader   // Read-your-writes re-fetch; defaults to client, swappable for tests
+	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl (handlers read while tests swap)
+
 	repo       *repo.SQLiteRepository // For all read operations
 	server     *fuse.Server           // FUSE server for kernel cache invalidation
 	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
@@ -44,6 +48,9 @@ type LinearFS struct {
 	// Per-entity write errors (surfaced via .error virtual files)
 	writeErrors   map[string]*WriteError
 	writeErrorsMu gosync.RWMutex
+	// Per-collection create successes (surfaced via .last virtual files)
+	writeSuccesses   map[string][]*WriteResult
+	writeSuccessesMu gosync.RWMutex
 }
 
 // BaseNode provides common functionality for all LinearFS nodes.
@@ -88,13 +95,16 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	return &LinearFS{
-		uid:          uid,
-		gid:          gid,
-		client:       client,
-		debug:        debug,
-		fileCacheDir: cacheDir,
-		fileCache:    make(map[string][]byte),
-		writeErrors:  make(map[string]*WriteError),
+		uid:            uid,
+		gid:            gid,
+		client:         client,
+		mutatorImpl:    client,
+		verifierImpl:   client,
+		debug:          debug,
+		fileCacheDir:   cacheDir,
+		fileCache:      make(map[string][]byte),
+		writeErrors:    make(map[string]*WriteError),
+		writeSuccesses: make(map[string][]*WriteResult),
 	}, nil
 }
 
@@ -391,6 +401,20 @@ func (lfs *LinearFS) UpsertInitiative(ctx context.Context, initiative api.Initia
 	return lfs.store.Queries().UpsertInitiative(ctx, params)
 }
 
+// UpsertProjectMilestone inserts or updates a milestone in SQLite for immediate
+// visibility after a mutation (the write handler owns the upsert, per the
+// API/DB decoupling principle).
+func (lfs *LinearFS) UpsertProjectMilestone(ctx context.Context, projectID string, milestone api.ProjectMilestone) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIProjectMilestoneToDBMilestone(milestone, projectID)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertProjectMilestone(ctx, params)
+}
+
 // GetIssueByIdentifier returns an issue by identifier (e.g., "ENG-123")
 func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
 	issue, err := lfs.repo.GetIssueByIdentifier(context.Background(), identifier)
@@ -458,7 +482,7 @@ func (lfs *LinearFS) InvalidateMyIssues() {
 
 // ArchiveIssue archives an issue
 func (lfs *LinearFS) ArchiveIssue(ctx context.Context, issueID string, teamID string, assigneeID string) error {
-	return lfs.client.ArchiveIssue(ctx, issueID)
+	return lfs.mutator().ArchiveIssue(ctx, issueID)
 }
 
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
@@ -522,12 +546,12 @@ func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
 
 // CreateProject creates a new project
 func (lfs *LinearFS) CreateProject(ctx context.Context, input map[string]any) (*api.Project, error) {
-	return lfs.client.CreateProject(ctx, input)
+	return lfs.mutator().CreateProject(ctx, input)
 }
 
 // ArchiveProject archives a project
 func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamID string) error {
-	return lfs.client.ArchiveProject(ctx, projectID)
+	return lfs.mutator().ArchiveProject(ctx, projectID)
 }
 
 // GetProjectIssues returns issues in a project as ProjectIssue
@@ -598,16 +622,16 @@ func (lfs *LinearFS) TryGetCachedComments(issueID string) ([]api.Comment, bool) 
 }
 
 func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body string) (*api.Comment, error) {
-	return lfs.client.CreateComment(ctx, issueID, body)
+	return lfs.mutator().CreateComment(ctx, issueID, body)
 }
 
 func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentID string, body string) (*api.Comment, error) {
-	return lfs.client.UpdateComment(ctx, commentID, body)
+	return lfs.mutator().UpdateComment(ctx, commentID, body)
 }
 
 func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
 	// Delete from API
-	if err := lfs.client.DeleteComment(ctx, commentID); err != nil {
+	if err := lfs.mutator().DeleteComment(ctx, commentID); err != nil {
 		return err
 	}
 	// Delete from SQLite so it's immediately removed from listings
@@ -649,16 +673,16 @@ func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
 }
 
 func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (*api.Document, error) {
-	return lfs.client.CreateDocument(ctx, input)
+	return lfs.mutator().CreateDocument(ctx, input)
 }
 
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
-	return lfs.client.UpdateDocument(ctx, documentID, input)
+	return lfs.mutator().UpdateDocument(ctx, documentID, input)
 }
 
 func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
 	// Delete from API
-	if err := lfs.client.DeleteDocument(ctx, documentID); err != nil {
+	if err := lfs.mutator().DeleteDocument(ctx, documentID); err != nil {
 		return err
 	}
 	// Delete from SQLite so it's immediately removed from listings
@@ -848,19 +872,52 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
 }
 
-// CreateProjectMilestone creates a new milestone for a project
+// CreateProjectMilestone creates a new milestone for a project. It goes through
+// the mutation seam (so InjectTestMutationClient can intercept it offline) and
+// then upserts to SQLite for immediate visibility.
 func (lfs *LinearFS) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
-	return lfs.repo.CreateProjectMilestone(ctx, projectID, name, description)
+	milestone, err := lfs.mutator().CreateProjectMilestone(ctx, projectID, name, description)
+	if err != nil {
+		return nil, err
+	}
+	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
+		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
+	}
+	return milestone, nil
 }
 
-// UpdateProjectMilestone updates an existing milestone
+// UpdateProjectMilestone updates an existing milestone via the mutation seam,
+// then upserts to SQLite. The owning project ID is recovered from the cache so
+// the upsert keeps the association.
 func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
-	return lfs.repo.UpdateProjectMilestone(ctx, milestoneID, input)
+	milestone, err := lfs.mutator().UpdateProjectMilestone(ctx, milestoneID, input)
+	if err != nil {
+		return nil, err
+	}
+	var projectID string
+	if lfs.store != nil {
+		if existing, err := lfs.store.Queries().GetProjectMilestone(ctx, milestoneID); err == nil {
+			projectID = existing.ProjectID
+		}
+	}
+	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
+		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
+	}
+	return milestone, nil
 }
 
-// DeleteProjectMilestone deletes a milestone
+// DeleteProjectMilestone deletes a milestone via the mutation seam, then removes
+// it from SQLite.
 func (lfs *LinearFS) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
-	return lfs.repo.DeleteProjectMilestone(ctx, milestoneID)
+	if err := lfs.mutator().DeleteProjectMilestone(ctx, milestoneID); err != nil {
+		return err
+	}
+	if lfs.store != nil {
+		if err := lfs.store.Queries().DeleteProjectMilestone(ctx, milestoneID); err != nil {
+			log.Printf("[fs] delete milestone %s from DB failed: %v", milestoneID, err)
+		}
+	}
+	return nil
 }
 
 // ResolveCycleID resolves a cycle name to its ID
@@ -900,7 +957,7 @@ func (lfs *LinearFS) InvalidateProjectUpdates(projectID string) {
 
 // CreateProjectUpdate creates a new status update on a project
 func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*api.ProjectUpdate, error) {
-	return lfs.client.CreateProjectUpdate(ctx, projectID, body, health)
+	return lfs.mutator().CreateProjectUpdate(ctx, projectID, body, health)
 }
 
 // GetInitiativeUpdates fetches status updates for an initiative
@@ -915,7 +972,7 @@ func (lfs *LinearFS) InvalidateInitiativeUpdates(initiativeID string) {
 
 // CreateInitiativeUpdate creates a new status update on an initiative
 func (lfs *LinearFS) CreateInitiativeUpdate(ctx context.Context, initiativeID, body, health string) (*api.InitiativeUpdate, error) {
-	return lfs.client.CreateInitiativeUpdate(ctx, initiativeID, body, health)
+	return lfs.mutator().CreateInitiativeUpdate(ctx, initiativeID, body, health)
 }
 
 // ResolveInitiativeID converts an initiative name to its ID
@@ -950,17 +1007,17 @@ func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 
 // CreateLabel creates a new label
 func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*api.Label, error) {
-	return lfs.client.CreateLabel(ctx, input)
+	return lfs.mutator().CreateLabel(ctx, input)
 }
 
 // UpdateLabel updates a label
 func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) (*api.Label, error) {
-	return lfs.client.UpdateLabel(ctx, labelID, input)
+	return lfs.mutator().UpdateLabel(ctx, labelID, input)
 }
 
 // DeleteLabel deletes a label
 func (lfs *LinearFS) DeleteLabel(ctx context.Context, labelID string, teamID string) error {
-	return lfs.client.DeleteLabel(ctx, labelID)
+	return lfs.mutator().DeleteLabel(ctx, labelID)
 }
 
 // GetInitiatives fetches all initiatives
@@ -1053,6 +1110,49 @@ func (lfs *LinearFS) InjectTestStore(store *db.Store) error {
 // GetStore returns the SQLite store for direct database access in tests.
 func (lfs *LinearFS) GetStore() *db.Store {
 	return lfs.store
+}
+
+// InjectTestMutationClient swaps the mutation surface for a test fake, so
+// fixture-mode tests can exercise the success half of the write contract offline
+// (create/edit reach ClearWriteError/AppendWriteSuccess instead of failing at the
+// network). Reads/infrastructure continue to use the real client. Pass nil to
+// restore the default (mutations hit the real client and fail without an API key,
+// which the loud-failure tests rely on).
+// If mc also implements verifyReader (as the mockmutation fake does), the
+// read-your-writes verify fetch is routed to it too, so the edit-commit tail
+// runs against fake state offline instead of taking the "unverified" branch.
+func (lfs *LinearFS) InjectTestMutationClient(mc MutationClient) {
+	lfs.mutatorMu.Lock()
+	defer lfs.mutatorMu.Unlock()
+	if mc == nil {
+		lfs.mutatorImpl = lfs.client
+		lfs.verifierImpl = lfs.client
+		return
+	}
+	lfs.mutatorImpl = mc
+	if vr, ok := mc.(verifyReader); ok {
+		lfs.verifierImpl = vr
+	} else {
+		lfs.verifierImpl = lfs.client
+	}
+}
+
+// mutator returns the current mutation client under a read lock, so a FUSE
+// handler goroutine never races a test swapping the client via
+// InjectTestMutationClient.
+func (lfs *LinearFS) mutator() MutationClient {
+	lfs.mutatorMu.RLock()
+	defer lfs.mutatorMu.RUnlock()
+	return lfs.mutatorImpl
+}
+
+// verify returns the current read-your-writes reader under a read lock (same
+// guard as mutator). Production uses the real client; tests may swap in a
+// store-backed fake via InjectTestMutationClient.
+func (lfs *LinearFS) verify() verifyReader {
+	lfs.mutatorMu.RLock()
+	defer lfs.mutatorMu.RUnlock()
+	return lfs.verifierImpl
 }
 
 // =============================================================================

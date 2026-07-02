@@ -67,9 +67,11 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return nil, syscall.EIO
 	}
 
-	// .error reports the last failed project creation in this team.
-	entries := make([]fuse.DirEntry, 0, len(projects)+1)
+	// .error reports the last failed project creation in this team; .last reports
+	// the identities of recent successful creations (#149).
+	entries := make([]fuse.DirEntry, 0, len(projects)+2)
 	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
+	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
 	for _, project := range projects {
 		entries = append(entries, fuse.DirEntry{
 			Name: projectDirName(project),
@@ -84,6 +86,10 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	// Handle .error feedback file (last failed project creation in this team)
 	if name == ".error" {
 		return p.lfs.lookupErrorFile(ctx, p, collectionErrorKey("projects", p.team.ID), out), 0
+	}
+	// Handle .last feedback file (recent successful project creations)
+	if name == ".last" {
+		return p.lfs.lookupSuccessFile(ctx, p, collectionSuccessKey("projects", p.team.ID), out), 0
 	}
 
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
@@ -133,6 +139,12 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		return nil, syscall.EIO
 	}
 	p.lfs.ClearWriteError(errKey)
+	p.lfs.AppendWriteSuccess(collectionSuccessKey("projects", p.team.ID), WriteResult{
+		Identifier: project.Slug,
+		URL:        project.URL,
+		Path:       projectDirName(*project),
+		Title:      project.Name,
+	})
 
 	// Upsert to SQLite so it's immediately visible
 	if err := p.lfs.UpsertProject(ctx, p.team.ID, *project); err != nil {
@@ -233,30 +245,34 @@ func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// +5 for project.md, .error, docs/, updates/, and milestones/
-	entries := make([]fuse.DirEntry, len(issues)+5)
+	// +6 for project.md, project.meta, .error, docs/, updates/, and milestones/
+	entries := make([]fuse.DirEntry, len(issues)+6)
 	entries[0] = fuse.DirEntry{
 		Name: "project.md",
 		Mode: syscall.S_IFREG,
 	}
 	entries[1] = fuse.DirEntry{
-		Name: ".error",
+		Name: "project.meta",
 		Mode: syscall.S_IFREG,
 	}
 	entries[2] = fuse.DirEntry{
+		Name: ".error",
+		Mode: syscall.S_IFREG,
+	}
+	entries[3] = fuse.DirEntry{
 		Name: "docs",
 		Mode: syscall.S_IFDIR,
 	}
-	entries[3] = fuse.DirEntry{
+	entries[4] = fuse.DirEntry{
 		Name: "updates",
 		Mode: syscall.S_IFDIR,
 	}
-	entries[4] = fuse.DirEntry{
+	entries[5] = fuse.DirEntry{
 		Name: "milestones",
 		Mode: syscall.S_IFDIR,
 	}
 	for i, issue := range issues {
-		entries[i+5] = fuse.DirEntry{
+		entries[i+6] = fuse.DirEntry{
 			Name: issue.Identifier,
 			Mode: syscall.S_IFLNK, // Symlink to issue directory
 		}
@@ -279,6 +295,28 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 			Mode: syscall.S_IFREG,
 			Ino:  projectInfoIno(p.project.ID),
 		}), 0
+	}
+
+	// Handle project.meta (read-only server-managed fields), rendered read-through
+	// from the freshest project so an edit to project.md is reflected here.
+	if name == "project.meta" {
+		lfs := p.lfs
+		team := p.team
+		snapshot := p.project
+		render := func() ([]byte, time.Time, time.Time) {
+			proj := snapshot
+			if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
+				for _, pr := range projs {
+					if pr.ID == snapshot.ID {
+						proj = pr
+						break
+					}
+				}
+			}
+			node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
+			return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
+		}
+		return p.lfs.lookupMetaFile(ctx, p, p.project.ID, render, out), 0
 	}
 
 	// Handle .error feedback file (last failed write to project.md)
@@ -448,67 +486,60 @@ var _ fs.NodeFlusher = (*ProjectInfoNode)(nil)
 var _ fs.NodeFsyncer = (*ProjectInfoNode)(nil)
 var _ fs.NodeSetattrer = (*ProjectInfoNode)(nil)
 
+// generateContent renders the editable-only project.md: name, initiatives, and
+// the description body. Server-managed fields live in project.meta (#150), so a
+// successful write never rewrites the bytes the writer wrote.
 func (p *ProjectInfoNode) generateContent() []byte {
-	status := "unknown"
-	if p.project.Status != nil {
-		status = p.project.Status.Name
-	}
+	fm := map[string]any{"name": p.project.Name}
 
-	var leadYAML string
-	if p.project.Lead != nil {
-		leadYAML = fmt.Sprintf(`lead:
-  id: %s
-  name: %s
-  email: %s
-`, p.project.Lead.ID, p.project.Lead.Name, p.project.Lead.Email)
-	}
-
-	var startDate, targetDate string
-	if p.project.StartDate != nil {
-		startDate = fmt.Sprintf("startDate: %q\n", *p.project.StartDate)
-	}
-	if p.project.TargetDate != nil {
-		targetDate = fmt.Sprintf("targetDate: %q\n", *p.project.TargetDate)
-	}
-
-	// Build initiatives list (editable)
-	var initiativesYAML string
 	if p.project.Initiatives != nil && len(p.project.Initiatives.Nodes) > 0 {
 		names := make([]string, len(p.project.Initiatives.Nodes))
 		for i, init := range p.project.Initiatives.Nodes {
 			names[i] = init.Name
 		}
-		initiativesYAML = "initiatives:\n"
-		for _, name := range names {
-			initiativesYAML += fmt.Sprintf("  - %q\n", name)
-		}
+		fm["initiatives"] = names
 	}
 
-	content := fmt.Sprintf(`---
-id: %s
-name: %s
-slug: %s
-url: %s
-status: %s
-%s%s%s%screated: %q
-updated: %q
----
+	out, err := marshal.Render(&marshal.Document{Frontmatter: fm, Body: p.project.Description})
+	if err != nil {
+		return []byte{}
+	}
+	return out
+}
 
-%s`,
-		p.project.ID,
-		p.project.Name,
-		p.project.Slug,
-		p.project.URL,
-		status,
-		leadYAML,
-		startDate,
-		targetDate,
-		initiativesYAML,
-		p.project.CreatedAt.Format(time.RFC3339),
-		p.project.UpdatedAt.Format(time.RFC3339),
-		p.project.Description,
-	)
-	return []byte(content)
+// metaContent renders the read-only project.meta: server-managed identity,
+// status, lead, dates, and timestamps as a frontmatter-only block.
+func (p *ProjectInfoNode) metaContent() []byte {
+	status := "unknown"
+	if p.project.Status != nil {
+		status = p.project.Status.Name
+	}
+	fm := map[string]any{
+		"id":      p.project.ID,
+		"slug":    p.project.Slug,
+		"url":     p.project.URL,
+		"status":  status,
+		"created": p.project.CreatedAt.Format(time.RFC3339),
+		"updated": p.project.UpdatedAt.Format(time.RFC3339),
+	}
+	if p.project.Lead != nil {
+		fm["lead"] = map[string]any{
+			"id":    p.project.Lead.ID,
+			"name":  p.project.Lead.Name,
+			"email": p.project.Lead.Email,
+		}
+	}
+	if p.project.StartDate != nil {
+		fm["startDate"] = *p.project.StartDate
+	}
+	if p.project.TargetDate != nil {
+		fm["targetDate"] = *p.project.TargetDate
+	}
+	out, err := marshal.Render(&marshal.Document{Frontmatter: fm})
+	if err != nil {
+		return []byte{}
+	}
+	return out
 }
 
 func (p *ProjectInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -677,7 +708,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: "+err.Error()+". See initiatives/ for valid initiative names.")
 				return syscall.EINVAL
 			}
-			if err := p.lfs.client.AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
+			if err := p.lfs.mutator().AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
 				log.Printf("Failed to add project to initiative '%s': %v", name, err)
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to link project to initiative: "+err.Error())
 				return syscall.EIO
@@ -698,7 +729,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: cannot resolve initiative to remove: "+err.Error())
 				return syscall.EINVAL
 			}
-			if err := p.lfs.client.RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
+			if err := p.lfs.mutator().RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
 				log.Printf("Failed to remove project from initiative '%s': %v", name, err)
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to unlink project from initiative: "+err.Error())
 				return syscall.EIO
@@ -724,7 +755,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		fieldChanged = true
 	}
 	if fieldChanged {
-		if err := p.lfs.client.UpdateProject(ctx, p.project.ID, projectInput); err != nil {
+		if err := p.lfs.mutator().UpdateProject(ctx, p.project.ID, projectInput); err != nil {
 			log.Printf("Failed to update project %s: %v", p.project.Name, err)
 			p.lfs.SetWriteError(p.project.ID, "Field: name/description\nError: failed to update project: "+err.Error())
 			return syscall.EIO
@@ -739,7 +770,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// .error. The initiative-link side-work (above and below) stays in the handler.
 	fresh, errno := commitWriteBack(ctx, p.lfs, writeBackSpec[api.Project]{
 		errKey: p.project.ID,
-		fetch:  func(ctx context.Context) (*api.Project, error) { return p.lfs.client.GetProject(ctx, p.project.ID) },
+		fetch:  func(ctx context.Context) (*api.Project, error) { return p.lfs.verify().GetProject(ctx, p.project.ID) },
 		persist: func(ctx context.Context, fresh *api.Project) error {
 			return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)
 		},
@@ -789,6 +820,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateUpdated(projectInfoIno(p.project.ID))
+	p.lfs.InvalidateUpdated(metaIno(p.project.ID)) // project.meta reflects the edit
 
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read

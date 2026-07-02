@@ -47,7 +47,7 @@ func normalizeMarkdown(s string) string {
 	s = strings.ReplaceAll(s, "\r", "\n")
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {
-		line = strings.TrimRight(line, " \t")     // Linear strips trailing whitespace
+		line = strings.TrimRight(line, " \t")          // Linear strips trailing whitespace
 		line = bulletRe.ReplaceAllString(line, "$1- ") // canonicalize bullet markers
 		lines[i] = line
 	}

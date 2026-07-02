@@ -146,7 +146,7 @@ func (n *NewIssueNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 	input["teamId"] = n.teamID
 
 	// Create the issue
-	issue, err := n.lfs.client.CreateIssue(ctx, input)
+	issue, err := n.lfs.mutator().CreateIssue(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create issue: %v", err)
 		return syscall.EIO

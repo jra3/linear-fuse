@@ -253,7 +253,7 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 	}
 
 	// Delete via API
-	if err := n.lfs.client.DeleteIssueRelation(ctx, n.relation.ID); err != nil {
+	if err := n.lfs.mutator().DeleteIssueRelation(ctx, n.relation.ID); err != nil {
 		n.lfs.SetWriteError(collectionErrorKey("relations", n.issueID), "Operation: delete relation "+name+"\nError: "+err.Error())
 		return syscall.EIO
 	}
@@ -365,7 +365,7 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 	}
 
 	// Create the relation via API
-	rel, err := n.lfs.client.CreateIssueRelation(ctx, n.issueID, relatedIssue.ID, relationType)
+	rel, err := n.lfs.mutator().CreateIssueRelation(ctx, n.issueID, relatedIssue.ID, relationType)
 	if err != nil {
 		n.lfs.SetWriteError(relErrKey, "Operation: create relation\nError: "+err.Error())
 		return syscall.EIO

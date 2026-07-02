@@ -69,6 +69,7 @@ func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	for _, m := range milestones {
@@ -105,6 +106,10 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	// Handle .error feedback file (last failed milestone write in this dir)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("milestones", n.projectID), out), 0
+	}
+	// Handle .last feedback file (recent successful milestone creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("milestones", n.projectID), out), 0
 	}
 
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
@@ -334,9 +339,10 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
-	// Edit-commit tail. repo.UpdateProjectMilestone already upserted to SQLite, so
-	// persist is nil; verify read-your-writes against the API's echoed response
-	// (milestones have no single-entity getter) and surface divergence via .error.
+	// Edit-commit tail. LinearFS.UpdateProjectMilestone already upserted to SQLite
+	// (after routing through the mutation seam), so persist is nil; verify
+	// read-your-writes against the API's echoed response (milestones have no
+	// single-entity getter) and surface divergence via .error.
 	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.ProjectMilestone]{
 		errKey:  milestoneErrKey,
 		fetch:   func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
@@ -477,13 +483,19 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		log.Printf("Creating milestone: name=%s", name)
 	}
 
-	_, err := n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
+	milestone, err := n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
 	if err != nil {
 		log.Printf("Failed to create milestone: %v", err)
 		n.lfs.SetWriteError(milestoneErrKey, "Operation: create milestone\nError: "+err.Error())
 		return syscall.EIO
 	}
 	n.lfs.ClearWriteError(milestoneErrKey)
+	if milestone != nil {
+		n.lfs.AppendWriteSuccess(collectionSuccessKey("milestones", n.projectID), WriteResult{
+			Path:  milestoneFilename(*milestone),
+			Title: milestone.Name,
+		})
+	}
 
 	n.created = true
 
