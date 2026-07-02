@@ -94,6 +94,10 @@ func issueFilePath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "issue.md")
 }
 
+func issueMetaPath(teamKey, issueID string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "issue.meta")
+}
+
 func commentsPath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID, "comments")
 }

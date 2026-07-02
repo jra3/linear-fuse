@@ -16,10 +16,11 @@ func TestIssueToMarkdown(t *testing.T) {
 	estimate := 5.0
 
 	tests := []struct {
-		name        string
-		issue       *api.Issue
-		wantContain []string
-		wantErr     bool
+		name           string
+		issue          *api.Issue
+		wantContain    []string
+		wantNotContain []string
+		wantErr        bool
 	}{
 		{
 			name: "full issue with all fields",
@@ -44,8 +45,6 @@ func TestIssueToMarkdown(t *testing.T) {
 				Project:   &api.Project{ID: "proj-1", Name: "Q1 Launch"},
 			},
 			wantContain: []string{
-				"id: issue-123",
-				"identifier: ENG-456",
 				"title: Fix authentication bug",
 				"status: In Progress",
 				"priority: high",
@@ -57,6 +56,12 @@ func TestIssueToMarkdown(t *testing.T) {
 				"- bug",
 				"- backend",
 				"Users can't log in with SSO.",
+			},
+			wantNotContain: []string{
+				"id: issue-123",     // server field -> issue.meta
+				"identifier: ENG-456",
+				"url:",
+				"updated:",
 			},
 		},
 		{
@@ -74,13 +79,12 @@ func TestIssueToMarkdown(t *testing.T) {
 				URL:         "https://linear.app/team/issue/ENG-1",
 			},
 			wantContain: []string{
-				"id: issue-min",
-				"identifier: ENG-1",
 				"title: Simple task",
 				"status: Backlog",
 				"priority: none",
 				"# Simple task", // Auto-generated body
 			},
+			wantNotContain: []string{"id:", "identifier:", "url:"},
 		},
 		{
 			name: "issue with no assignee",
@@ -114,8 +118,9 @@ func TestIssueToMarkdown(t *testing.T) {
 				URL:        "https://linear.app/team/issue/ENG-3",
 			},
 			wantContain: []string{
-				"ENG-3",
+				"Bug #123", // title text survives into the auto-generated body
 			},
+			wantNotContain: []string{"identifier: ENG-3", "url:"},
 		},
 	}
 
@@ -139,6 +144,11 @@ func TestIssueToMarkdown(t *testing.T) {
 			for _, want := range tt.wantContain {
 				if !strings.Contains(result, want) {
 					t.Errorf("IssueToMarkdown() missing %q\nGot:\n%s", want, result)
+				}
+			}
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(result, notWant) {
+					t.Errorf("IssueToMarkdown() should not contain %q (belongs in issue.meta)\nGot:\n%s", notWant, result)
 				}
 			}
 		})
@@ -491,7 +501,9 @@ Original description`
 	}
 }
 
-func TestIssueToMarkdownWithAttachments(t *testing.T) {
+// TestIssueMetaToMarkdown covers the read-only issue.meta surface: identity
+// fields plus external-link attachments (which moved out of issue.md in #150).
+func TestIssueMetaToMarkdown(t *testing.T) {
 	t.Parallel()
 	baseTime := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
 
@@ -615,9 +627,9 @@ func TestIssueToMarkdownWithAttachments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := IssueToMarkdown(tt.issue, tt.attachments...)
+			got, err := IssueMetaToMarkdown(tt.issue, tt.attachments...)
 			if err != nil {
-				t.Fatalf("IssueToMarkdown() error: %v", err)
+				t.Fatalf("IssueMetaToMarkdown() error: %v", err)
 			}
 
 			result := string(got)
@@ -625,14 +637,14 @@ func TestIssueToMarkdownWithAttachments(t *testing.T) {
 			// Check expected content is present
 			for _, want := range tt.wantContain {
 				if !strings.Contains(result, want) {
-					t.Errorf("IssueToMarkdown() missing %q\nGot:\n%s", want, result)
+					t.Errorf("IssueMetaToMarkdown() missing %q\nGot:\n%s", want, result)
 				}
 			}
 
 			// Check unwanted content is absent
 			for _, notWant := range tt.wantMissing {
 				if strings.Contains(result, notWant) {
-					t.Errorf("IssueToMarkdown() should not contain %q\nGot:\n%s", notWant, result)
+					t.Errorf("IssueMetaToMarkdown() should not contain %q\nGot:\n%s", notWant, result)
 				}
 			}
 		})

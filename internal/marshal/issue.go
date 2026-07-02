@@ -33,36 +33,14 @@ func invertRelationType(relType string) string {
 	}
 }
 
-// IssueToMarkdown converts a Linear issue to markdown with YAML frontmatter
-func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, error) {
+// IssueToMarkdown converts a Linear issue to the editable-only markdown surface
+// (issue.md): the fields a writer may set, plus the description body. Server-
+// managed and write-volatile fields (id, url, updated, …) live in the read-only
+// issue.meta sibling produced by IssueMetaToMarkdown — keeping them out of this
+// file means a successful write never rewrites the bytes the writer wrote (the
+// "editable in, server-managed out" write contract, #150).
+func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 	fm := make(map[string]any)
-
-	// Read-only fields
-	fm["id"] = issue.ID
-	fm["identifier"] = issue.Identifier
-	fm["url"] = issue.URL
-	fm["created"] = issue.CreatedAt.Format(time.RFC3339)
-	fm["updated"] = issue.UpdatedAt.Format(time.RFC3339)
-	if issue.Creator != nil {
-		fm["creator"] = issue.Creator.Email
-	}
-	if issue.BranchName != "" {
-		fm["branch"] = issue.BranchName
-	}
-
-	// Workflow timestamps (read-only)
-	if issue.StartedAt != nil {
-		fm["started"] = issue.StartedAt.Format(time.RFC3339)
-	}
-	if issue.CompletedAt != nil {
-		fm["completed"] = issue.CompletedAt.Format(time.RFC3339)
-	}
-	if issue.CanceledAt != nil {
-		fm["canceled"] = issue.CanceledAt.Format(time.RFC3339)
-	}
-	if issue.ArchivedAt != nil {
-		fm["archived"] = issue.ArchivedAt.Format(time.RFC3339)
-	}
 
 	// Editable fields
 	fm["title"] = issue.Title
@@ -111,45 +89,6 @@ func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, e
 		fm["cycle"] = issue.Cycle.Name
 	}
 
-	// Add external link attachments
-	if len(attachments) > 0 {
-		links := make([]AttachmentLink, 0, len(attachments))
-		for _, a := range attachments {
-			links = append(links, AttachmentLink{
-				Type:  a.SourceType,
-				Title: a.Title,
-				URL:   a.URL,
-			})
-		}
-		fm["links"] = links
-	}
-
-	// Add issue relations (read-only)
-	var relations []IssueRelationLink
-	// Forward relations (this issue -> related issue)
-	for _, rel := range issue.Relations.Nodes {
-		if rel.RelatedIssue != nil {
-			relations = append(relations, IssueRelationLink{
-				Type:  rel.Type,
-				Issue: rel.RelatedIssue.Identifier,
-			})
-		}
-	}
-	// Inverse relations (related issue -> this issue)
-	for _, rel := range issue.InverseRelations.Nodes {
-		if rel.Issue != nil {
-			// Invert the relation type for the inverse direction
-			invertedType := invertRelationType(rel.Type)
-			relations = append(relations, IssueRelationLink{
-				Type:  invertedType,
-				Issue: rel.Issue.Identifier,
-			})
-		}
-	}
-	if len(relations) > 0 {
-		fm["relations"] = relations
-	}
-
 	// Body is just the description
 	body := issue.Description
 	if body == "" {
@@ -162,6 +101,80 @@ func IssueToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, e
 	}
 
 	return Render(doc)
+}
+
+// IssueMetaToMarkdown renders the read-only issue.meta sibling: the server-
+// managed, write-volatile fields (identity, timestamps, branch, external links,
+// and relations) as a YAML frontmatter block with no body. These are the fields
+// deliberately excluded from IssueToMarkdown so that editing issue.md never
+// races a server-written `updated:`.
+func IssueMetaToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byte, error) {
+	fm := make(map[string]any)
+
+	// Identity + timestamps (read-only)
+	fm["id"] = issue.ID
+	fm["identifier"] = issue.Identifier
+	fm["url"] = issue.URL
+	fm["created"] = issue.CreatedAt.Format(time.RFC3339)
+	fm["updated"] = issue.UpdatedAt.Format(time.RFC3339)
+	if issue.Creator != nil {
+		fm["creator"] = issue.Creator.Email
+	}
+	if issue.BranchName != "" {
+		fm["branch"] = issue.BranchName
+	}
+
+	// Workflow timestamps (read-only)
+	if issue.StartedAt != nil {
+		fm["started"] = issue.StartedAt.Format(time.RFC3339)
+	}
+	if issue.CompletedAt != nil {
+		fm["completed"] = issue.CompletedAt.Format(time.RFC3339)
+	}
+	if issue.CanceledAt != nil {
+		fm["canceled"] = issue.CanceledAt.Format(time.RFC3339)
+	}
+	if issue.ArchivedAt != nil {
+		fm["archived"] = issue.ArchivedAt.Format(time.RFC3339)
+	}
+
+	// External link attachments (read-only)
+	if len(attachments) > 0 {
+		links := make([]AttachmentLink, 0, len(attachments))
+		for _, a := range attachments {
+			links = append(links, AttachmentLink{
+				Type:  a.SourceType,
+				Title: a.Title,
+				URL:   a.URL,
+			})
+		}
+		fm["links"] = links
+	}
+
+	// Issue relations (read-only)
+	var relations []IssueRelationLink
+	for _, rel := range issue.Relations.Nodes {
+		if rel.RelatedIssue != nil {
+			relations = append(relations, IssueRelationLink{
+				Type:  rel.Type,
+				Issue: rel.RelatedIssue.Identifier,
+			})
+		}
+	}
+	for _, rel := range issue.InverseRelations.Nodes {
+		if rel.Issue != nil {
+			relations = append(relations, IssueRelationLink{
+				Type:  invertRelationType(rel.Type),
+				Issue: rel.Issue.Identifier,
+			})
+		}
+	}
+	if len(relations) > 0 {
+		fm["relations"] = relations
+	}
+
+	// Meta is a frontmatter-only document (no body).
+	return Render(&Document{Frontmatter: fm})
 }
 
 // MarkdownToIssueUpdate parses markdown and returns fields that changed

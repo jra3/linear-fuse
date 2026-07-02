@@ -321,6 +321,7 @@ func (n *IssueDirectoryNode) Getattr(ctx context.Context, f fs.FileHandle, out *
 func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "issue.md", Mode: syscall.S_IFREG},
+		{Name: "issue.meta", Mode: syscall.S_IFREG},
 		{Name: "history.md", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
 		{Name: ".last", Mode: syscall.S_IFREG},
@@ -336,9 +337,8 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
 	case "issue.md":
-		// Fetch attachments for the issue
-		attachments, _ := n.lfs.GetIssueAttachments(ctx, n.issue.ID)
-		content, err := marshal.IssueToMarkdown(&n.issue, attachments...)
+		// issue.md is editable-only; identity/links/relations live in issue.meta.
+		content, err := marshal.IssueToMarkdown(&n.issue)
 		if err != nil {
 			return nil, syscall.EIO
 		}
@@ -359,6 +359,16 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			Mode: syscall.S_IFREG,
 			Ino:  issueIno(n.issue.ID),
 		}), 0
+
+	case "issue.meta":
+		// Read-only server-managed fields (identity, timestamps, links, relations).
+		attachments, _ := n.lfs.GetIssueAttachments(ctx, n.issue.ID)
+		content, err := marshal.IssueMetaToMarkdown(&n.issue, attachments...)
+		if err != nil {
+			return nil, syscall.EIO
+		}
+		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
+		return n.lfs.lookupMetaFile(ctx, n, n.issue.ID, content, out), 0
 
 	case "history.md":
 		// Fetch history content during Lookup so we can set the actual size
@@ -592,9 +602,8 @@ func (i *IssueFileNode) ensureContent() error {
 	if i.contentReady {
 		return nil
 	}
-	// Fetch attachments for the issue
-	attachments, _ := i.lfs.GetIssueAttachments(context.Background(), i.issue.ID)
-	content, err := marshal.IssueToMarkdown(&i.issue, attachments...)
+	// issue.md is editable-only; links/attachments live in issue.meta.
+	content, err := marshal.IssueToMarkdown(&i.issue)
 	if err != nil {
 		return err
 	}

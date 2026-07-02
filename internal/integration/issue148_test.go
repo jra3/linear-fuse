@@ -108,25 +108,17 @@ func TestIssue148_LastReportsCreatedIssueIdentity(t *testing.T) {
 	}
 }
 
-// TestIssue148_EditableFileColocatesVolatileServerFields corroborates P0 #2 ("the
-// file rewrites itself the instant I write it"). The root cause is structural:
-// issue.md carries server-managed, write-volatile fields (`updated`, `url`, `id`,
-// `identifier`, and — when set — `branch`/`creator`) in the SAME frontmatter as
-// the user-editable fields, and there is no separate read-only `issue.meta`. So a
-// successful write re-marshals the node with a bumped `updated:` (plus injected
-// branch/url), which changes the file's size/content under the editor's
-// read-before-write cache → "File has been modified since read".
-//
-// When P0 #2 ships (split volatile server fields into a read-only issue.meta),
-// this test flips to failing and should be inverted: issue.md must contain only
-// editable fields, and issue.meta must exist and carry the server-managed ones.
+// TestIssue148_EditableFileColocatesVolatileServerFields is the T2/#150 receipt
+// (inverted from its characterization form). issue.md now carries only editable
+// fields — none of the write-volatile server fields (`updated`, `url`, `id`,
+// `identifier`) that used to churn the file under an editor's read-before-write
+// cache. Those live in a sibling read-only issue.meta. So a successful write no
+// longer rewrites the bytes the writer wrote.
 func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 	dir := issueDirPath(testTeamKey, "TST-1")
 
-	// There is no read-only metadata sidecar yet: server fields live in issue.md.
-	if hasEntry(t, dir, "issue.meta") {
-		t.Fatalf("found issue.meta — P0 #2 appears to have shipped; invert this test " +
-			"to assert issue.md holds only editable fields and issue.meta holds server fields")
+	if !hasEntry(t, dir, "issue.meta") {
+		t.Fatal("expected issue.meta sidecar (T2/#150 meta split)")
 	}
 
 	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-1"))
@@ -138,32 +130,37 @@ func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 		t.Fatalf("parse issue.md frontmatter: %v", err)
 	}
 
-	// The editable fields an agent means to set...
+	// Editable fields remain in issue.md...
 	for _, f := range []string{"title", "status", "priority"} {
 		if _, ok := doc.Frontmatter[f]; !ok {
 			t.Fatalf("expected editable field %q in issue.md frontmatter", f)
 		}
 	}
-
-	// ...are colocated with server-managed, write-volatile fields. `updated` is
-	// the one that bumps on every successful write and drives the staleness churn.
-	volatile := []string{"updated", "url", "id", "identifier"}
-	var found []string
-	for _, f := range volatile {
+	// ...and the write-volatile server fields are GONE from it.
+	for _, f := range []string{"updated", "url", "id", "identifier"} {
 		if _, ok := doc.Frontmatter[f]; ok {
-			found = append(found, f)
+			t.Errorf("issue.md still contains server field %q — should live in issue.meta", f)
 		}
 	}
-	if len(found) == 0 {
-		t.Fatalf("expected server-managed fields %v colocated in issue.md (the #148 "+
-			"self-mutation precondition); found none — did the meta split land?", volatile)
+
+	// issue.meta carries the server-managed fields, read-only.
+	metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, "TST-1"))
+	if err != nil {
+		t.Fatalf("read issue.meta: %v", err)
 	}
-	if _, ok := doc.Frontmatter["updated"]; !ok {
-		t.Fatalf("expected write-volatile `updated:` in issue.md (bumps on every write, "+
-			"causing 'modified since read'); colocated server fields were %v", found)
+	meta, err := parseFrontmatter(metaContent)
+	if err != nil {
+		t.Fatalf("parse issue.meta frontmatter: %v", err)
 	}
-	t.Logf("corroborated: issue.md colocates editable fields with server-managed %v "+
-		"(no issue.meta split) — self-mutation on write is structurally possible", found)
+	for _, f := range []string{"id", "identifier", "url", "updated", "created"} {
+		if _, ok := meta.Frontmatter[f]; !ok {
+			t.Errorf("issue.meta missing server field %q", f)
+		}
+	}
+	// issue.meta must be read-only.
+	if err := os.WriteFile(issueMetaPath(testTeamKey, "TST-1"), []byte("x"), 0644); err == nil {
+		t.Error("issue.meta should be read-only, but a write succeeded")
+	}
 }
 
 // TestIssue148_TypedNameNeqResultingPath is a lightweight corroboration of the

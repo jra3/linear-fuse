@@ -358,10 +358,24 @@ func TestIssueFileContainsRequiredFields(t *testing.T) {
 		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
 
-	requiredFields := []string{"id", "identifier", "title", "status", "priority", "url", "created", "updated"}
-	for _, field := range requiredFields {
+	// Editable fields in issue.md; server-managed fields in issue.meta (#150).
+	for _, field := range []string{"title", "status", "priority"} {
 		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q", field)
+			t.Errorf("issue.md missing required editable field %q", field)
+		}
+	}
+
+	metaContent, err := readFileWithRetry(issueMetaPath(testTeamKey, issue.Identifier), defaultWaitTime)
+	if err != nil {
+		t.Fatalf("Failed to read issue.meta: %v", err)
+	}
+	meta, err := parseFrontmatter(metaContent)
+	if err != nil {
+		t.Fatalf("Failed to parse issue.meta frontmatter: %v", err)
+	}
+	for _, field := range []string{"id", "identifier", "url", "created", "updated"} {
+		if _, ok := meta.Frontmatter[field]; !ok {
+			t.Errorf("issue.meta missing required server field %q", field)
 		}
 	}
 }
