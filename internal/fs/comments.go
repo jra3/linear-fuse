@@ -508,42 +508,30 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 		return 0
 	}
 
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if n.lfs.debug {
-		log.Printf("Creating comment on issue %s: %s", n.issueID, body)
-	}
-
-	comment, err := n.lfs.CreateComment(ctx, n.issueID, body)
-	if err != nil {
-		log.Printf("Failed to create comment: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: create comment\nError: "+err.Error())
-		return syscall.EIO
-	}
-	n.lfs.ClearWriteError(collectionErrorKey("comments", n.issueID))
-	// Comments are addressed by an index-derived filename (not knowable without
-	// re-listing), so .last reports the comment id + a body snippet as the handle.
-	n.lfs.AppendWriteSuccess(collectionSuccessKey("comments", n.issueID), WriteResult{
-		Identifier: comment.ID,
-		Title:      firstLine(comment.Body),
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Comment]{
+		op:  "create comment",
+		key: collectionErrorKey("comments", n.issueID),
+		mutate: func(ctx context.Context) (*api.Comment, error) {
+			return n.lfs.mutator().CreateComment(ctx, n.issueID, body)
+		},
+		// Comments are addressed by an index-derived filename (not knowable
+		// without re-listing), so .last reports the comment id + a body
+		// snippet as the handle, and entryName stays unknowable.
+		result: func(c *api.Comment) WriteResult {
+			return WriteResult{
+				Identifier: c.ID,
+				Title:      firstLine(c.Body),
+			}
+		},
+		persist: func(ctx context.Context, c *api.Comment) error {
+			return n.lfs.UpsertComment(ctx, n.issueID, *c)
+		},
+		dir: commentsDirIno(n.issueID),
 	})
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertComment(ctx, n.issueID, *comment); err != nil {
-		log.Printf("Warning: failed to upsert comment to SQLite: %v", err)
+	if errno != 0 {
+		return errno
 	}
-
 	n.created = true
-
-	// Invalidate kernel cache for the comments directory
-	n.lfs.InvalidateCreated(commentsDirIno(n.issueID), "")
-
-	if n.lfs.debug {
-		log.Printf("Comment created successfully")
-	}
-
 	return 0
 }
 
