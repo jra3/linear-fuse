@@ -58,27 +58,6 @@ const (
 	budgetDeferDetailPct = 70.0 // Defer detail batches to pending_detail_sync above this
 )
 
-// SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
-var sqliteTimeFormats = []string{
-	time.RFC3339,
-	time.RFC3339Nano,
-	"2006-01-02 15:04:05.999999999-07:00", // SQLite format with timezone
-	"2006-01-02 15:04:05.999999999Z07:00",
-	"2006-01-02 15:04:05-07:00",
-	"2006-01-02 15:04:05Z07:00",
-	"2006-01-02 15:04:05", // SQLite format without timezone
-}
-
-// parseSQLiteTime parses a time string from SQLite, trying multiple formats
-func parseSQLiteTime(s string) time.Time {
-	for _, layout := range sqliteTimeFormats {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t
-		}
-	}
-	return time.Time{}
-}
-
 // BudgetReporter provides rate limit budget information.
 type BudgetReporter interface {
 	BudgetSnapshot() (count int, pct float64)
@@ -310,16 +289,9 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 	count, _ := w.store.Queries().GetTeamIssueCount(ctx, team.ID)
 	latestUpdatedAtRaw, _ := w.store.Queries().GetLatestTeamIssueUpdatedAt(ctx, team.ID)
 
-	var lastIssueUpdatedAt time.Time
-	if latestUpdatedAtRaw != nil {
-		// MAX() returns different types depending on the driver
-		switch v := latestUpdatedAtRaw.(type) {
-		case time.Time:
-			lastIssueUpdatedAt = v
-		case string:
-			lastIssueUpdatedAt = parseSQLiteTime(v)
-		}
-	}
+	// MAX() returns different types depending on the driver; the db helper
+	// handles them all.
+	lastIssueUpdatedAt := db.ParseSQLiteTimeAny(latestUpdatedAtRaw)
 
 	if err := w.store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
 		TeamID:             team.ID,

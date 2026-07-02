@@ -1039,37 +1039,10 @@ func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID stri
 	return nil
 }
 
-// SQLite time formats - SQLite with _time_format=sqlite uses space separator, not 'T'
-var sqliteTimeFormats = []string{
-	time.RFC3339,
-	time.RFC3339Nano,
-	"2006-01-02 15:04:05.999999999-07:00", // SQLite format with timezone
-	"2006-01-02 15:04:05.999999999Z07:00",
-	"2006-01-02 15:04:05-07:00",
-	"2006-01-02 15:04:05Z07:00",
-	"2006-01-02 15:04:05", // SQLite format without timezone
-}
-
-// parseTime converts interface{} from SQLite to time.Time
-// Handles both RFC3339 (API) and SQLite's space-separated format
-// Returns zero time for nil (no rows exist)
+// parseTime converts interface{} from SQLite to time.Time (see db.ParseSQLiteTimeAny).
+// Returns zero time for nil (no rows exist).
 func parseTime(v interface{}) time.Time {
-	if v == nil {
-		return time.Time{} // Zero time for "never synced"
-	}
-	switch t := v.(type) {
-	case time.Time:
-		return t
-	case string:
-		for _, layout := range sqliteTimeFormats {
-			if parsed, err := time.Parse(layout, t); err == nil {
-				return parsed
-			}
-		}
-		return time.Time{}
-	default:
-		return time.Time{}
-	}
+	return db.ParseSQLiteTimeAny(v)
 }
 
 func (r *SQLiteRepository) GetCommentByID(ctx context.Context, id string) (*api.Comment, error) {
