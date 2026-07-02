@@ -1,0 +1,144 @@
+package fs
+
+import (
+	"context"
+	"errors"
+	"log"
+	"syscall"
+	"time"
+)
+
+// The create-commit tail.
+//
+// Every create surface (_create trigger writes and mkdir) ends the same way once
+// the handler has content in hand: call the mutation, classify a failure into an
+// errno plus a .error message, and on success clear .error, record the new
+// identity in .last, persist to SQLite, and re-coher the kernel's view of the
+// collection directory. That tail was copy-pasted across eight handlers and
+// drifted where it was hand-rolled: attachments and relations never wrote .last,
+// only projects and issues classified rate limits as EAGAIN, and creates never
+// refreshed the recent/ view.
+//
+// commitCreate is the one deep module that owns the tail, the create-path
+// counterpart to commitWriteBack (editcommit.go). Each handler keeps a per-entity
+// mutate closure (parse -> build input -> call the mutation seam) and hands the
+// tail a small spec. The module depends only on the createSink seam plus the
+// spec's closures, so it is unit-tested with a fake sink and stub closures — no
+// FUSE mount, SQLite, or API. Unlike edits, creates carry no read-your-writes
+// verification: the mutation's echoed entity is trusted.
+
+// createTimeout bounds every create so a rate-limited request fails legibly
+// (EAGAIN + a retry hint in .error) instead of hanging indefinitely (#131).
+const createTimeout = 30 * time.Second
+
+// createSink is the minimal surface the create tail needs: .error reporting,
+// .last recording, and the kernel-cache coherence policy for the collection
+// directory. *LinearFS satisfies it directly through its existing methods, so
+// production wiring needs no adapter while tests inject a fake.
+type createSink interface {
+	errorSink
+	AppendWriteSuccess(key string, r WriteResult)
+	InvalidateCreated(dirIno uint64, name string)
+}
+
+// notFoundError marks well-formed create input that references an entity that
+// does not exist (e.g. a relation's target issue). Distinct from FieldError so
+// the classifier maps it to ENOENT rather than EINVAL; the .error rendering is
+// the same Field/Value/Error format.
+type notFoundError struct{ FieldError }
+
+// createSpec describes the per-entity parts of a create. T is the entity type
+// (api.Issue, api.Label, api.Comment, …). Everything T-specific lives in these
+// closures; the tail itself is fully generic.
+type createSpec[T any] struct {
+	// op names the operation in classifier-rendered .error messages, e.g.
+	// `create label` or `create issue "Fix bug"`.
+	op string
+	// key identifies the .error and .last sidecars. The two stores intentionally
+	// share one namespace (collectionSuccessKey returns the same string as
+	// collectionErrorKey), so a single key drives both.
+	key string
+	// mutate is the per-entity front half: parse/validate the input, build the
+	// API input, and call the mutation seam. Return a *FieldError for invalid
+	// input (-> EINVAL) or a *notFoundError for a reference to a missing entity
+	// (-> ENOENT); any other error is classified transient (-> EAGAIN) or hard
+	// (-> EIO) by the tail.
+	mutate func(ctx context.Context) (*T, error)
+	// result projects the created entity into its .last entry. Required: every
+	// create surface reports its resulting identity (#149/#151).
+	result func(created *T) WriteResult
+	// persist upserts the created entity to SQLite for immediate visibility.
+	// Always explicit — no mutation wrapper hides an upsert. Failure is
+	// non-fatal: a cache miss must not fail a create Linear accepted.
+	persist func(ctx context.Context, created *T) error
+	// dir is the collection directory's inode. The tail always applies the
+	// kernel-cache coherence policy InvalidateCreated(dir, entryName(created)) —
+	// a spec cannot forget it.
+	dir uint64
+	// entryName returns the created entity's on-disk name, or "" when it is not
+	// knowable without re-listing (comments, relations). nil means "".
+	entryName func(created *T) string
+	// invalidateExtra covers per-entity internal caches and dependent views
+	// (team/my/filtered issue caches, recent/). nil when the collection has none.
+	invalidateExtra func(created *T)
+}
+
+// commitCreate runs a create: the spec's mutate closure inside the create
+// timeout, then the invariant tail. It returns the created entity (nil on
+// failure) and the errno the handler should return.
+//
+// Contract:
+//   - mutate returns *FieldError    -> .error gets Detail(), EINVAL.
+//   - mutate returns *notFoundError -> .error gets Detail(), ENOENT.
+//   - mutate fails transiently      -> .error gets a retry hint, EAGAIN.
+//   - mutate fails otherwise        -> .error gets the cause, EIO.
+//   - success                       -> clear .error, append .last, persist
+//     (non-fatal on failure), InvalidateCreated(dir, name), run extras, errno 0.
+func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T]) (*T, syscall.Errno) {
+	ctx, cancel := context.WithTimeout(ctx, createTimeout)
+	defer cancel()
+
+	created, err := spec.mutate(ctx)
+	if err != nil {
+		msg, errno := classifyCreateErr(spec.op, err)
+		log.Printf("Failed to %s: %v", spec.op, err)
+		sink.SetWriteError(spec.key, msg)
+		return nil, errno
+	}
+
+	sink.ClearWriteError(spec.key)
+	sink.AppendWriteSuccess(spec.key, spec.result(created))
+
+	if err := spec.persist(ctx, created); err != nil {
+		log.Printf("Warning: failed to upsert created entity to SQLite (%s): %v", spec.key, err)
+	}
+
+	name := ""
+	if spec.entryName != nil {
+		name = spec.entryName(created)
+	}
+	sink.InvalidateCreated(spec.dir, name)
+	if spec.invalidateExtra != nil {
+		spec.invalidateExtra(created)
+	}
+	return created, 0
+}
+
+// classifyCreateErr maps a mutate failure to its .error message and errno. This
+// is the single owner of the create-path failure model the generated README
+// documents: bad input -> EINVAL, missing reference -> ENOENT, transient ->
+// EAGAIN, backend failure -> EIO — either way the reason lands in .error.
+func classifyCreateErr(op string, err error) (string, syscall.Errno) {
+	var nferr *notFoundError
+	if errors.As(err, &nferr) {
+		return nferr.Detail(), syscall.ENOENT
+	}
+	var ferr *FieldError
+	if errors.As(err, &ferr) {
+		return ferr.Detail(), syscall.EINVAL
+	}
+	if retryableCreateErr(err) {
+		return "Operation: " + op + "\nError: the request was rate-limited or timed out before it completed, so nothing was created. Wait a few seconds and retry.", syscall.EAGAIN
+	}
+	return "Operation: " + op + "\nError: " + err.Error(), syscall.EIO
+}
