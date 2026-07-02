@@ -331,7 +331,10 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		out.Attr.Uid = p.lfs.uid
 		out.Attr.Gid = p.lfs.gid
 		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return p.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  docsDirIno(p.project.ID),
+		}), 0
 	}
 
 	// Handle updates/ directory

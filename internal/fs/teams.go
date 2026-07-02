@@ -154,7 +154,10 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Gid = t.lfs.gid
 		out.Attr.SetTimes(&now, &now, &now)
 		node := &ProjectsNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return t.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  projectsDirIno(t.team.ID),
+		}), 0
 
 	case "issues":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -162,7 +165,13 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Gid = t.lfs.gid
 		out.Attr.SetTimes(&now, &now, &now)
 		node := &IssuesNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		// The stable ino is what makes create/delete invalidations against
+		// issuesDirIno reach the kernel; without it InodeNotify targets an
+		// inode the kernel never learned.
+		return t.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  issuesDirIno(t.team.ID),
+		}), 0
 
 	case "recent":
 		out.Attr.Mode = 0555 | syscall.S_IFDIR // read-only view
@@ -170,7 +179,10 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Gid = t.lfs.gid
 		out.Attr.SetTimes(&now, &now, &now)
 		node := &RecentNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return t.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  recentDirIno(t.team.ID),
+		}), 0
 
 	case "docs":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -178,7 +190,10 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Gid = t.lfs.gid
 		out.Attr.SetTimes(&now, &now, &now)
 		node := &DocsNode{BaseNode: BaseNode{lfs: t.lfs}, teamID: t.team.ID}
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		return t.NewInode(ctx, node, fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+			Ino:  docsDirIno(t.team.ID),
+		}), 0
 
 	case "labels":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
