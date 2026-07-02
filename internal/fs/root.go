@@ -139,12 +139,17 @@ Mount point: %s (all paths below are relative to this mount point)
 <directory_structure>
 teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
-  issues/                           [mkdir "Title" to create an issue]
+  issues/                           [mkdir "Title" for quick create]
+    _create                         [write full frontmatter+body to create one issue with all fields]
     .error                          [read-only: last failed issue creation]
+    .last                           [read-only: YAML list of recent creations {identifier,url,path,title,status}]
+  recent/                           [read-only: issue symlinks, newest-first by updatedAt (ls recent/ | head)]
   issues/{ID}/
-    issue.md                        [read/write]
+    issue.md                        [read/write: editable fields + body ONLY]
+    issue.meta                      [read-only: id, identifier, url, branch, created, updated, links, relations]
     .error                          [read-only: last failed write here]
-    comments/                       [_create=trigger, .error=feedback]
+    .last                           [read-only: sub-issues created via children/]
+    comments/                       [_create=trigger, .error=feedback, .last=created ids]
       {id}.md                       [read/write]
     docs/                           [_create=trigger, .error=feedback]
       {slug}.md                     [read/write]
@@ -163,8 +168,10 @@ teams/{KEY}/
     {name}.md                       [read/write, rm to delete]
   projects/                         [mkdir "Name" to create a project]
     .error                          [read-only: last failed project creation]
+    .last                           [read-only: recent project creations]
   projects/{slug}/
-    project.md                      [read/write]
+    project.md                      [read/write: editable fields + body ONLY]
+    project.meta                    [read-only: id, slug, url, status, lead, dates]
     .error                          [read-only: last failed write here]
     docs/                           [same as issues]
     updates/                        [_create with health: onTrack|atRisk|offTrack]
@@ -178,7 +185,8 @@ teams/{KEY}/
     {name}/                         [issue symlinks]
 
 initiatives/{slug}/
-  initiative.md                     [read/write]
+  initiative.md                     [read/write: editable fields + body ONLY]
+  initiative.meta                   [read-only: id, slug, url, status, owner, dates]
   .error                            [read-only: last failed write here]
   docs/                             [_create=trigger, .error=feedback]
     {slug}.md                       [read/write]
@@ -195,7 +203,9 @@ my/assigned|created|active/         [your issue symlinks]
 <operations>
 READ:    cat %s/teams/ENG/issues/ENG-123/issue.md
 EDIT:    vim issue.md                 (edit frontmatter, save)
-CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"
+CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"   (quick: title only)
+         printf -- '---\ntitle: Full Issue\npriority: high\nlabels: [Bug]\n---\nBody.\n' > issues/_create
+         cat issues/.last                  (read back the new identifier/url/path)
          mkdir children/"Sub-task Title"   (creates child issue)
          mkdir %s/teams/ENG/projects/"New Project"
          echo "text" > comments/_create
@@ -215,9 +225,10 @@ SORT:    ls -lt %s/my/active/           (mtime = updatedAt)
 </operations>
 
 <issue_frontmatter>
+issue.md holds only editable fields (below) + the description body. Read-only
+identity/timestamps/links live in the sibling issue.meta (identifier, url,
+branch, created, updated, …). A successful write never rewrites issue.md.
 ---
-identifier: ENG-123                 [read-only]
-branch: "john/eng-123-fix-bug"      [read-only, suggested git branch]
 title: "Fix bug"                    [editable]
 status: "In Progress"               [must match states.md]
 assignee: "user@example.com"        [email or display name]
@@ -229,8 +240,6 @@ parent: ENG-100                     [parent issue identifier]
 project: "Project Name"
 milestone: "Phase 1"                [milestone within project]
 cycle: "Sprint 42"
-links:                              [read-only, external attachments]
-  - {type: github-pr, title: "...", url: "..."}
 ---
 Description body (editable)
 </issue_frontmatter>
