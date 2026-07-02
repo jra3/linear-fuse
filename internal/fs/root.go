@@ -275,17 +275,18 @@ Usage:
 <permissions>
 -r--r--r--  Read-only     team.md, states.md, user.md
 -rw-r--r--  Editable      issue.md, project.md, initiative.md, comments/*.md, docs/*.md, milestones/*.md
---w-------  Write-only    _create (write triggers creation, always empty)
+--w-------  Write-only    _create (write triggers creation; reads are rejected)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
 </permissions>
 
 <_create_behavior>
 _create is a write-only trigger file (like /proc/sysrq-trigger):
-- Reading always returns empty (size 0)
+- Reading is rejected (EACCES) — the file is write-only
 - Writing creates a new item and consumes the content
-- Editors fail because they read-before-write (vim, vscode)
+- Editors fail because they read-before-write (vim, vscode) and the read is rejected
 - Use piped output: echo "text" > _create, cat file > _create
-- Created items appear as separate files (e.g., 001-2025-01-15.md)
+- Created items appear as separate files (e.g., 001-2025-01-15.md); read the
+  sibling .last for the new identity, .error for a failure
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
 </_create_behavior>
 
@@ -342,7 +343,8 @@ EDITING FILES:
 
 CREATING ITEMS:
 - Use Bash(echo "text" > path/_create) — never use the Write tool on _create files
-- _create is write-only; reading it always returns empty, so Write/Edit tools fail
+- _create is write-only; reads are rejected (EACCES), so Write/Edit tools (which
+  read-before-write) fail — pipe instead, then read the sibling .last / .error
 - For docs with a title: Bash(echo "content" > path/docs/"Title.md")
 
 WRITING ISSUE CONTENT:
