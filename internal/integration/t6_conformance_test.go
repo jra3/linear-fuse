@@ -105,6 +105,147 @@ func TestWriteContractLastSidecarShape(t *testing.T) {
 	}
 }
 
+// TestWriteContractCreateTrioUniform: every _create-bearing collection exposes
+// the full feedback trio — _create, .error, .last — in both Lookup and the
+// directory listing, and the two surfaces the #148 design deferred (attachments,
+// relations) now report their creates to .last like every other surface.
+func TestWriteContractCreateTrioUniform(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	issueDir := issueDirPath(testTeamKey, "TST-1")
+	relationsDir := filepath.Join(issueDir, "relations")
+	surfaces := map[string]string{
+		"issues":      issuesPath(testTeamKey),
+		"comments":    commentsPath(testTeamKey, "TST-1"),
+		"docs":        docsPath(testTeamKey, "TST-1"),
+		"labels":      labelsPath(testTeamKey),
+		"milestones":  filepath.Join(projectsPath(testTeamKey), "test-project", "milestones"),
+		"attachments": attachmentsPath(testTeamKey, "TST-1"),
+		"relations":   relationsDir,
+	}
+	for name, dir := range surfaces {
+		t.Run(name, func(t *testing.T) {
+			// Lookup resolves each of the trio.
+			for _, f := range []string{"_create", ".error", ".last"} {
+				if _, err := os.Lstat(filepath.Join(dir, f)); err != nil {
+					t.Errorf("%s/%s not resolvable: %v", name, f, err)
+				}
+			}
+			// The listing shows the trio too (guards Readdir wiring).
+			d, err := os.Open(dir)
+			if err != nil {
+				t.Fatalf("open %s: %v", dir, err)
+			}
+			names, err := d.Readdirnames(-1)
+			_ = d.Close()
+			if err != nil {
+				t.Fatalf("readdirnames %s: %v", dir, err)
+			}
+			listed := map[string]bool{}
+			for _, n := range names {
+				listed[n] = true
+			}
+			for _, f := range []string{"_create", ".error", ".last"} {
+				if !listed[f] {
+					t.Errorf("%s listing missing %s", name, f)
+				}
+			}
+		})
+	}
+
+	// A relation create reports its identity to relations/.last.
+	if err := os.WriteFile(filepath.Join(relationsDir, "_create"), []byte("related TST-2"), 0200); err != nil {
+		t.Fatalf("create relation: %v", err)
+	}
+	rfound := false
+	for _, e := range parseLastSidecar(t, filepath.Join(relationsDir, ".last")) {
+		if e["path"] == "related-TST-2.rel" {
+			rfound = true
+		}
+	}
+	if !rfound {
+		t.Error("relations/.last has no entry after a relation create")
+	}
+
+	// An attachment create reports its identity to attachments/.last.
+	attURL := "https://example.com/trio-probe/1"
+	if err := os.WriteFile(filepath.Join(attachmentsPath(testTeamKey, "TST-1"), "_create"), []byte(attURL+" Trio Probe"), 0200); err != nil {
+		t.Fatalf("create attachment: %v", err)
+	}
+	afound := false
+	for _, e := range parseLastSidecar(t, filepath.Join(attachmentsPath(testTeamKey, "TST-1"), ".last")) {
+		if e["url"] == attURL {
+			afound = true
+		}
+	}
+	if !afound {
+		t.Error("attachments/.last has no entry after an attachment create")
+	}
+}
+
+// TestWriteContractDeleteTail: a deleted entry vanishes from the listing
+// immediately. This is the resurrection-bug discriminator: SQLite is the
+// listing source of truth, and label deletes never removed the row, so before
+// the delete tail a removed label reappeared on the next readdir until the
+// sync worker reconciled. Also asserts a successful delete clears .error and
+// an unknown name fails with ENOENT.
+func TestWriteContractDeleteTail(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	// Create a label to delete.
+	if err := os.WriteFile(filepath.Join(labelsPath(testTeamKey), "_create"),
+		[]byte("---\nname: delete-tail-probe\ncolor: \"#ff0000\"\n---\n"), 0200); err != nil {
+		t.Fatalf("create label: %v", err)
+	}
+	var labelFile string
+	for _, e := range parseLastSidecar(t, filepath.Join(labelsPath(testTeamKey), ".last")) {
+		if e["title"] == "delete-tail-probe" {
+			labelFile = e["path"]
+		}
+	}
+	if labelFile == "" {
+		t.Fatal("labels/.last has no entry for the probe label")
+	}
+
+	if err := os.Remove(filepath.Join(labelsPath(testTeamKey), labelFile)); err != nil {
+		t.Fatalf("rm label: %v", err)
+	}
+
+	// Gone from the listing at once — no resurrection from a stale SQLite row.
+	d, err := os.Open(labelsPath(testTeamKey))
+	if err != nil {
+		t.Fatalf("open labels/: %v", err)
+	}
+	names, err := d.Readdirnames(-1)
+	_ = d.Close()
+	if err != nil {
+		t.Fatalf("readdirnames labels/: %v", err)
+	}
+	for _, n := range names {
+		if n == labelFile {
+			t.Fatalf("deleted label %q still listed (SQLite row not forgotten?)", labelFile)
+		}
+	}
+
+	// A successful delete clears the collection .error.
+	if data, _ := os.ReadFile(filepath.Join(labelsPath(testTeamKey), ".error")); strings.TrimSpace(string(data)) != "" {
+		t.Errorf("labels/.error non-empty after a successful delete: %q", data)
+	}
+
+	// Removing an unknown name fails with ENOENT (via lookup; the tail's own
+	// not-found branch is unit-tested — a mounted rm never reaches Unlink
+	// without a resolvable entry).
+	if err := os.Remove(filepath.Join(labelsPath(testTeamKey), "no-such-label.md")); !os.IsNotExist(err) {
+		t.Errorf("rm of unknown label = %v, want ENOENT", err)
+	}
+}
+
 // TestWriteContractAgentLoop exercises the end-to-end shape an agent uses:
 // batch create via _create (recover ids from .last), no-op rewrites that stay
 // byte-stable, and a failure that leaves the success log intact.

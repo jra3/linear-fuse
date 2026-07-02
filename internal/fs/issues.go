@@ -73,38 +73,50 @@ func issueWriteResult(issue *api.Issue) WriteResult {
 
 // createIssueFromSpec resolves a create spec's relational names to IDs and calls
 // the create mutation. It is shared by IssuesNode.Mkdir (title-only spec) and the
-// issues/_create trigger (full spec). Returns the created issue, a *FieldError
-// for an unresolvable field (caller renders .error + EINVAL), or a raw API error
-// (caller classifies EAGAIN/EIO). teamId and a title fallback are applied here.
-func (lfs *LinearFS) createIssueFromSpec(ctx context.Context, team api.Team, spec map[string]any) (*api.Issue, *FieldError, error) {
+// issues/_create trigger (full spec). An unresolvable field returns a *FieldError
+// (commitCreate classifies it EINVAL); teamId and a title fallback are applied
+// here.
+func (lfs *LinearFS) createIssueFromSpec(ctx context.Context, team api.Team, spec map[string]any) (*api.Issue, error) {
 	synthetic := api.Issue{Team: &team}
 	if ferr := resolveIssueUpdate(ctx, lfs, &synthetic, spec); ferr != nil {
-		return nil, ferr, nil
+		return nil, ferr
 	}
 	spec["teamId"] = team.ID
 	if t, ok := spec["title"].(string); !ok || t == "" {
 		spec["title"] = "Untitled issue"
 	}
-	issue, err := lfs.mutator().CreateIssue(ctx, spec)
-	if err != nil {
-		return nil, nil, err
-	}
-	return issue, nil, nil
+	return lfs.mutator().CreateIssue(ctx, spec)
 }
 
-// finishIssueCreate runs the common post-create tail: upsert to SQLite,
-// invalidate caches, clear the collection .error, and record the new identity in
-// .last. Shared by IssuesNode.Mkdir and the issues/_create trigger.
-func (lfs *LinearFS) finishIssueCreate(ctx context.Context, team api.Team, issue *api.Issue) {
-	if err := lfs.UpsertIssue(ctx, *issue); err != nil {
-		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+// issueCreateSpec assembles the createSpec shared by every issue-create surface
+// (issues/ mkdir, issues/_create, children/ mkdir). key and dir vary by surface —
+// a sub-issue reports to the parent issue's sidecars and the children/ dir —
+// while the result projection, persist, and the views an issue create dirties
+// (team/my/filtered caches, the issues/ listing, recent/) are invariant.
+func (lfs *LinearFS) issueCreateSpec(teamID, op, key string, dir uint64, mutate func(context.Context) (*api.Issue, error)) createSpec[api.Issue] {
+	return createSpec[api.Issue]{
+		op:     op,
+		key:    key,
+		mutate: mutate,
+		result: func(i *api.Issue) WriteResult { return issueWriteResult(i) },
+		persist: func(ctx context.Context, i *api.Issue) error {
+			return lfs.UpsertIssue(ctx, *i)
+		},
+		dir:       dir,
+		entryName: func(i *api.Issue) string { return i.Identifier },
+		invalidateExtra: func(i *api.Issue) {
+			lfs.InvalidateTeamIssues(teamID)
+			lfs.InvalidateMyIssues()
+			lfs.InvalidateFilteredIssues(teamID)
+			// A fresh issue must appear in recent/ immediately, not after the
+			// dir cache TTL (the #148 design's known staleness bound).
+			lfs.InvalidateCreated(recentDirIno(teamID), i.Identifier)
+			// A sub-issue lands in children/ (spec.dir) and the team's issues/.
+			if dir != issuesDirIno(teamID) {
+				lfs.InvalidateCreated(issuesDirIno(teamID), i.Identifier)
+			}
+		},
 	}
-	lfs.InvalidateTeamIssues(team.ID)
-	lfs.InvalidateMyIssues()
-	lfs.InvalidateFilteredIssues(team.ID)
-	lfs.InvalidateCreated(issuesDirIno(team.ID), issue.Identifier)
-	lfs.ClearWriteError(collectionErrorKey("issues", team.ID))
-	lfs.AppendWriteSuccess(collectionSuccessKey("issues", team.ID), issueWriteResult(issue))
 }
 
 // IssuesNode represents the /teams/{KEY}/issues directory
@@ -254,29 +266,19 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		log.Printf("Mkdir: %s in team %s (creating issue)", name, n.team.Key)
 	}
 
-	// Bound the create so a rate-limited request fails legibly instead of
-	// hanging indefinitely (#131). On a transient failure we surface EAGAIN and
-	// a retry hint via .error rather than a bare EIO.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	// Quick path: title-only spec. Full-object creation goes through issues/_create.
-	errKey := collectionErrorKey("issues", n.team.ID)
-	issue, ferr, err := n.lfs.createIssueFromSpec(ctx, n.team, map[string]any{"title": name})
-	if ferr != nil {
-		n.lfs.SetWriteError(errKey, ferr.Detail())
-		return nil, syscall.EINVAL
+	issue, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
+		n.team.ID,
+		`create issue "`+name+`"`,
+		collectionErrorKey("issues", n.team.ID),
+		issuesDirIno(n.team.ID),
+		func(ctx context.Context) (*api.Issue, error) {
+			return n.lfs.createIssueFromSpec(ctx, n.team, map[string]any{"title": name})
+		},
+	))
+	if errno != 0 {
+		return nil, errno
 	}
-	if err != nil {
-		log.Printf("Failed to create issue: %v", err)
-		if retryableCreateErr(err) {
-			n.lfs.SetWriteError(errKey, "Operation: create issue \""+name+"\"\nError: the request was rate-limited or timed out before it completed, so no issue was created. Wait a few seconds and try the mkdir again.")
-			return nil, syscall.EAGAIN
-		}
-		n.lfs.SetWriteError(errKey, "Operation: create issue \""+name+"\"\nError: "+err.Error())
-		return nil, syscall.EIO
-	}
-	n.lfs.finishIssueCreate(ctx, n.team, issue)
 
 	node := &IssueDirectoryNode{
 		BaseNode: BaseNode{lfs: n.lfs},
@@ -380,42 +382,29 @@ func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	content := n.content
 	n.content = nil
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	errKey := collectionErrorKey("issues", n.team.ID)
-
-	spec, err := marshal.MarkdownToIssueCreate(content)
-	if err != nil {
-		// Normalize the marshal parse/validation error to the Field/Value/Error
-		// shape so it matches the resolver's EINVAL errors.
-		field := "frontmatter"
-		msg := err.Error()
-		if strings.HasPrefix(msg, "priority:") {
-			field = "priority"
-			msg = strings.TrimSpace(strings.TrimPrefix(msg, "priority:"))
-		}
-		n.lfs.SetWriteError(errKey, (&FieldError{Field: field, Message: msg}).Detail())
-		return syscall.EINVAL
-	}
-
-	issue, ferr, cerr := n.lfs.createIssueFromSpec(ctx, n.team, spec)
-	if ferr != nil {
-		n.lfs.SetWriteError(errKey, ferr.Detail())
-		return syscall.EINVAL
-	}
-	if cerr != nil {
-		log.Printf("Failed to create issue from spec: %v", cerr)
-		if retryableCreateErr(cerr) {
-			n.lfs.SetWriteError(errKey, "Operation: create issue from spec\nError: the request was rate-limited or timed out before it completed, so no issue was created. Wait a few seconds and try again.")
-			return syscall.EAGAIN
-		}
-		n.lfs.SetWriteError(errKey, "Operation: create issue from spec\nError: "+cerr.Error())
-		return syscall.EIO
-	}
-
-	n.lfs.finishIssueCreate(ctx, n.team, issue)
-	return 0
+	_, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
+		n.team.ID,
+		"create issue from spec",
+		collectionErrorKey("issues", n.team.ID),
+		issuesDirIno(n.team.ID),
+		func(ctx context.Context) (*api.Issue, error) {
+			spec, err := marshal.MarkdownToIssueCreate(content)
+			if err != nil {
+				// Normalize the marshal parse/validation error to the
+				// Field/Value/Error shape so it matches the resolver's
+				// EINVAL errors.
+				field := "frontmatter"
+				msg := err.Error()
+				if strings.HasPrefix(msg, "priority:") {
+					field = "priority"
+					msg = strings.TrimSpace(strings.TrimPrefix(msg, "priority:"))
+				}
+				return nil, &FieldError{Field: field, Message: msg}
+			}
+			return n.lfs.createIssueFromSpec(ctx, n.team, spec)
+		},
+	))
+	return errno
 }
 
 // Rmdir archives an issue (soft delete)
@@ -424,39 +413,43 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		log.Printf("Rmdir: %s in team %s (archiving issue)", name, n.team.Key)
 	}
 
-	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	for _, issue := range issues {
-		if issue.Identifier == name {
-			assigneeID := ""
-			if issue.Assignee != nil {
-				assigneeID = issue.Assignee.ID
-			}
-			err := n.lfs.ArchiveIssue(ctx, issue.ID, n.team.ID, assigneeID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Issue]{
+		op:  `archive issue "` + name + `"`,
+		key: collectionErrorKey("issues", n.team.ID),
+		find: func(ctx context.Context) (*api.Issue, error) {
+			issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
 			if err != nil {
-				log.Printf("Failed to archive issue %s: %v", name, err)
-				return syscall.EIO
+				return nil, err
 			}
-
-			// Additional cache invalidations
+			for _, issue := range issues {
+				if issue.Identifier == name {
+					return &issue, nil
+				}
+			}
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, i *api.Issue) error {
+			return n.lfs.mutator().ArchiveIssue(ctx, i.ID)
+		},
+		// The store forget was missing here: the archived issue's row stayed in
+		// SQLite (the listing source of truth), so it resurrected on the next
+		// readdir until the sync worker reconciled.
+		forget: func(ctx context.Context, i *api.Issue) error {
+			return n.lfs.store.Queries().DeleteIssue(ctx, i.ID)
+		},
+		dir:  issuesDirIno(n.team.ID),
+		name: name,
+		invalidateExtra: func(i *api.Issue) {
 			n.lfs.InvalidateFilteredIssues(n.team.ID)
-			n.lfs.InvalidateIssueById(issue.Identifier)
-			if issue.Project != nil {
-				n.lfs.InvalidateProjectIssues(issue.Project.ID)
+			n.lfs.InvalidateIssueById(i.Identifier)
+			if i.Project != nil {
+				n.lfs.InvalidateProjectIssues(i.Project.ID)
 			}
-			n.lfs.InvalidateDeleted(issuesDirIno(n.team.ID), name)
-
-			if n.lfs.debug {
-				log.Printf("Issue %s archived successfully", name)
-			}
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			// The archived issue must also vanish from recent/ immediately
+			// (symmetric with the create tail's recent/ coherence).
+			n.lfs.InvalidateDeleted(recentDirIno(n.team.ID), name)
+		},
+	})
 }
 
 // IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory
@@ -1080,46 +1073,26 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		return nil, syscall.EIO
 	}
 
-	// Create a new issue with the parent set
-	input := map[string]any{
-		"teamId":   teamID,
-		"title":    name,
-		"parentId": n.issue.ID,
+	// Sub-issue creation reports to the parent issue's own .error/.last
+	// (issues/{ID}/.error), the nearest writable feedback files; the spec's
+	// invalidateExtra also refreshes the team's issues/ listing since a
+	// sub-issue lands in both children/ and issues/.
+	issue, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
+		teamID,
+		`create sub-issue "`+name+`"`,
+		n.issue.ID,
+		childrenDirIno(n.issue.ID),
+		func(ctx context.Context) (*api.Issue, error) {
+			return n.lfs.mutator().CreateIssue(ctx, map[string]any{
+				"teamId":   teamID,
+				"title":    name,
+				"parentId": n.issue.ID,
+			})
+		},
+	))
+	if errno != 0 {
+		return nil, errno
 	}
-
-	// Bound the create so a rate-limited request fails legibly instead of
-	// hanging (#131). Sub-issue creation failures surface on the parent issue's
-	// own .error (issues/{ID}/.error), the nearest writable feedback file.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	issue, err := n.lfs.mutator().CreateIssue(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create sub-issue: %v", err)
-		if retryableCreateErr(err) {
-			n.lfs.SetWriteError(n.issue.ID, "Operation: create sub-issue \""+name+"\"\nError: the request was rate-limited or timed out before it completed, so no sub-issue was created. Wait a few seconds and try the mkdir again.")
-			return nil, syscall.EAGAIN
-		}
-		n.lfs.SetWriteError(n.issue.ID, "Operation: create sub-issue \""+name+"\"\nError: "+err.Error())
-		return nil, syscall.EIO
-	}
-	n.lfs.ClearWriteError(n.issue.ID)
-	// Sub-issue identity surfaces on the parent issue's .last (issues/{ID}/.last),
-	// the nearest writable feedback file (mirrors the .error placement above).
-	n.lfs.AppendWriteSuccess(n.issue.ID, issueWriteResult(issue))
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
-		log.Printf("Warning: failed to upsert sub-issue to SQLite: %v", err)
-	}
-
-	// Invalidate caches
-	n.lfs.InvalidateTeamIssues(teamID)
-	n.lfs.InvalidateMyIssues()
-	n.lfs.InvalidateFilteredIssues(teamID)
-	// A sub-issue appears in both children/ and the team's issues/ listing.
-	n.lfs.InvalidateCreated(childrenDirIno(n.issue.ID), issue.Identifier)
-	n.lfs.InvalidateCreated(issuesDirIno(teamID), issue.Identifier)
 
 	// Return the new issue as a directory node (Mkdir must return a directory)
 	node := &IssueDirectoryNode{

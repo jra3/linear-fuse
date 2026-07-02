@@ -176,30 +176,30 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EPERM
 	}
 
-	docs, err := n.getDocuments(ctx)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	// Find the document by filename
-	for _, doc := range docs {
-		if documentFilename(doc) == name {
-			err := n.lfs.DeleteDocument(ctx, doc.ID, n.issueID, n.teamID, n.projectID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Document]{
+		op:  `delete document "` + name + `"`,
+		key: collectionErrorKey("docs", n.parentID()),
+		find: func(ctx context.Context) (*api.Document, error) {
+			docs, err := n.getDocuments(ctx)
 			if err != nil {
-				log.Printf("Failed to delete document: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: delete document "+name+"\nError: "+err.Error())
-				return syscall.EIO
+				return nil, err
 			}
-			// Invalidate kernel cache for the docs directory
-			n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), name)
-			if n.lfs.debug {
-				log.Printf("Document deleted successfully")
+			for _, doc := range docs {
+				if documentFilename(doc) == name {
+					return &doc, nil
+				}
 			}
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, d *api.Document) error {
+			return n.lfs.mutator().DeleteDocument(ctx, d.ID)
+		},
+		forget: func(ctx context.Context, d *api.Document) error {
+			return n.lfs.store.Queries().DeleteDocument(ctx, d.ID)
+		},
+		dir:  docsDirIno(n.parentID()),
+		name: name,
+	})
 }
 
 func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
@@ -607,87 +607,62 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return 0
 	}
 
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	docErrKey := collectionErrorKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID))
-
-	// Parse the new document content
-	title, body, err := marshal.ParseNewDocument(n.content)
-	if err != nil {
-		log.Printf("Failed to parse new document: %v", err)
-		n.lfs.SetWriteError(docErrKey, "Operation: create document\nParse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	// If no title in content, use filename (unless it's _create)
-	if title == "" || title == "Untitled" {
-		if n.filename != "" && n.filename != "_create" {
-			// Convert filename to title: remove .md, replace dashes with spaces
-			title = strings.TrimSuffix(n.filename, ".md")
-			title = strings.ReplaceAll(title, "-", " ")
-		}
-	}
-
-	if title == "" {
-		log.Printf("New document has no title")
-		n.lfs.SetWriteError(docErrKey, "Operation: create document\nError: document has no title. Add a '# Title' heading or name the file <title>.md.")
-		return syscall.EINVAL
-	}
-
-	if n.lfs.debug {
-		log.Printf("Creating document: title=%s", title)
-	}
-
-	// Build create input
-	input := map[string]any{
-		"title":   title,
-		"content": body,
-	}
-
-	// Set parent
-	if n.issueID != "" {
-		input["issueId"] = n.issueID
-	}
-	if n.teamID != "" {
-		input["teamId"] = n.teamID
-	}
-	if n.projectID != "" {
-		input["projectId"] = n.projectID
-	}
-	if n.initiativeID != "" {
-		input["initiativeId"] = n.initiativeID
-	}
-
-	doc, err := n.lfs.CreateDocument(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create document: %v", err)
-		n.lfs.SetWriteError(docErrKey, "Operation: create document\nError: "+err.Error())
-		return syscall.EIO
-	}
-	n.lfs.ClearWriteError(docErrKey)
-	n.lfs.AppendWriteSuccess(collectionSuccessKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)), WriteResult{
-		URL:   doc.URL,
-		Path:  documentFilename(*doc),
-		Title: doc.Title,
-	})
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertDocument(ctx, *doc); err != nil {
-		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
-	}
-
-	n.created = true
-
-	// Invalidate kernel cache for docs directory
 	parentID := docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)
-	n.lfs.InvalidateCreated(docsDirIno(parentID), documentFilename(*doc))
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Document]{
+		op:  "create document",
+		key: collectionErrorKey("docs", parentID),
+		mutate: func(ctx context.Context) (*api.Document, error) {
+			title, body, err := marshal.ParseNewDocument(n.content)
+			if err != nil {
+				return nil, &FieldError{Field: "content", Message: "parse error: " + err.Error()}
+			}
+			// If no title in content, use filename (unless it's _create):
+			// remove .md, replace dashes with spaces.
+			if title == "" || title == "Untitled" {
+				if n.filename != "" && n.filename != "_create" {
+					title = strings.TrimSuffix(n.filename, ".md")
+					title = strings.ReplaceAll(title, "-", " ")
+				}
+			}
+			if title == "" {
+				return nil, &FieldError{Field: "title", Message: "document has no title. Add a '# Title' heading or name the file <title>.md."}
+			}
 
-	if n.lfs.debug {
-		log.Printf("Document created successfully")
+			input := map[string]any{
+				"title":   title,
+				"content": body,
+			}
+			if n.issueID != "" {
+				input["issueId"] = n.issueID
+			}
+			if n.teamID != "" {
+				input["teamId"] = n.teamID
+			}
+			if n.projectID != "" {
+				input["projectId"] = n.projectID
+			}
+			if n.initiativeID != "" {
+				input["initiativeId"] = n.initiativeID
+			}
+			return n.lfs.mutator().CreateDocument(ctx, input)
+		},
+		result: func(d *api.Document) WriteResult {
+			return WriteResult{
+				URL:   d.URL,
+				Path:  documentFilename(*d),
+				Title: d.Title,
+			}
+		},
+		persist: func(ctx context.Context, d *api.Document) error {
+			return n.lfs.UpsertDocument(ctx, *d)
+		},
+		dir:       docsDirIno(parentID),
+		entryName: func(d *api.Document) string { return documentFilename(*d) },
+	})
+	if errno != 0 {
+		return errno
 	}
-
+	n.created = true
 	return 0
 }
 

@@ -711,51 +711,12 @@ func (c *Client) GetMyActiveIssues(ctx context.Context) ([]Issue, error) {
 
 // UpdateIssue updates an existing issue
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[string]any) error {
-	var result struct {
-		IssueUpdate struct {
-			Success bool `json:"success"`
-		} `json:"issueUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":    issueID,
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationUpdateIssue, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.IssueUpdate.Success {
-		return fmt.Errorf("issue update failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationUpdateIssue, map[string]any{"id": issueID, "input": input}, "issueUpdate")
 }
 
 // ArchiveIssue archives an issue (soft delete)
 func (c *Client) ArchiveIssue(ctx context.Context, issueID string) error {
-	var result struct {
-		IssueArchive struct {
-			Success bool `json:"success"`
-		} `json:"issueArchive"`
-	}
-
-	vars := map[string]any{
-		"id": issueID,
-	}
-
-	err := c.query(ctx, mutationArchiveIssue, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.IssueArchive.Success {
-		return fmt.Errorf("issue archive failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationArchiveIssue, map[string]any{"id": issueID}, "issueArchive")
 }
 
 // GetTeamMetadata fetches all metadata for a team in a single query:
@@ -946,13 +907,6 @@ func (c *Client) GetProjectMilestones(ctx context.Context, projectID string) ([]
 
 // CreateProjectMilestone creates a new milestone for a project
 func (c *Client) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*ProjectMilestone, error) {
-	var result struct {
-		ProjectMilestoneCreate struct {
-			Success          bool             `json:"success"`
-			ProjectMilestone ProjectMilestone `json:"projectMilestone"`
-		} `json:"projectMilestoneCreate"`
-	}
-
 	vars := map[string]any{
 		"projectId": projectID,
 		"name":      name,
@@ -960,115 +914,27 @@ func (c *Client) CreateProjectMilestone(ctx context.Context, projectID, name, de
 	if description != "" {
 		vars["description"] = description
 	}
-
-	err := c.query(ctx, mutationCreateProjectMilestone, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.ProjectMilestoneCreate.Success {
-		return nil, fmt.Errorf("milestone creation failed")
-	}
-
-	return &result.ProjectMilestoneCreate.ProjectMilestone, nil
+	return execMutation[ProjectMilestone](ctx, c, mutationCreateProjectMilestone, vars, "projectMilestoneCreate", "projectMilestone")
 }
 
 // UpdateProjectMilestone updates an existing milestone
 func (c *Client) UpdateProjectMilestone(ctx context.Context, milestoneID string, input ProjectMilestoneUpdateInput) (*ProjectMilestone, error) {
-	var result struct {
-		ProjectMilestoneUpdate struct {
-			Success          bool             `json:"success"`
-			ProjectMilestone ProjectMilestone `json:"projectMilestone"`
-		} `json:"projectMilestoneUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":    milestoneID,
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationUpdateProjectMilestone, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.ProjectMilestoneUpdate.Success {
-		return nil, fmt.Errorf("milestone update failed")
-	}
-
-	return &result.ProjectMilestoneUpdate.ProjectMilestone, nil
+	return execMutation[ProjectMilestone](ctx, c, mutationUpdateProjectMilestone, map[string]any{"id": milestoneID, "input": input}, "projectMilestoneUpdate", "projectMilestone")
 }
 
 // UpdateProject updates a project's mutable fields (name, description).
 func (c *Client) UpdateProject(ctx context.Context, projectID string, input ProjectUpdateInput) error {
-	var result struct {
-		ProjectUpdate struct {
-			Success bool `json:"success"`
-		} `json:"projectUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":    projectID,
-		"input": input,
-	}
-
-	if err := c.query(ctx, mutationUpdateProject, vars, &result); err != nil {
-		return err
-	}
-
-	if !result.ProjectUpdate.Success {
-		return fmt.Errorf("project update failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationUpdateProject, map[string]any{"id": projectID, "input": input}, "projectUpdate")
 }
 
 // UpdateInitiative updates an initiative's mutable fields (name, description).
 func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, input InitiativeUpdateInput) error {
-	var result struct {
-		InitiativeUpdate struct {
-			Success bool `json:"success"`
-		} `json:"initiativeUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":    initiativeID,
-		"input": input,
-	}
-
-	if err := c.query(ctx, mutationUpdateInitiative, vars, &result); err != nil {
-		return err
-	}
-
-	if !result.InitiativeUpdate.Success {
-		return fmt.Errorf("initiative update failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationUpdateInitiative, map[string]any{"id": initiativeID, "input": input}, "initiativeUpdate")
 }
 
 // DeleteProjectMilestone deletes a milestone
 func (c *Client) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
-	var result struct {
-		ProjectMilestoneDelete struct {
-			Success bool `json:"success"`
-		} `json:"projectMilestoneDelete"`
-	}
-
-	vars := map[string]any{
-		"id": milestoneID,
-	}
-
-	err := c.query(ctx, mutationDeleteProjectMilestone, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.ProjectMilestoneDelete.Success {
-		return fmt.Errorf("milestone deletion failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationDeleteProjectMilestone, map[string]any{"id": milestoneID}, "projectMilestoneDelete")
 }
 
 // GetProjectUpdates fetches status updates for a project
@@ -1095,13 +961,6 @@ func (c *Client) GetProjectUpdates(ctx context.Context, projectID string) ([]Pro
 
 // CreateProjectUpdate creates a new status update on a project
 func (c *Client) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*ProjectUpdate, error) {
-	var result struct {
-		ProjectUpdateCreate struct {
-			Success       bool          `json:"success"`
-			ProjectUpdate ProjectUpdate `json:"projectUpdate"`
-		} `json:"projectUpdateCreate"`
-	}
-
 	vars := map[string]any{
 		"projectId": projectID,
 		"body":      body,
@@ -1109,17 +968,7 @@ func (c *Client) CreateProjectUpdate(ctx context.Context, projectID, body, healt
 	if health != "" {
 		vars["health"] = health
 	}
-
-	err := c.query(ctx, mutationCreateProjectUpdate, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.ProjectUpdateCreate.Success {
-		return nil, fmt.Errorf("failed to create project update")
-	}
-
-	return &result.ProjectUpdateCreate.ProjectUpdate, nil
+	return execMutation[ProjectUpdate](ctx, c, mutationCreateProjectUpdate, vars, "projectUpdateCreate", "projectUpdate")
 }
 
 // GetInitiativeUpdates fetches status updates for an initiative
@@ -1146,13 +995,6 @@ func (c *Client) GetInitiativeUpdates(ctx context.Context, initiativeID string) 
 
 // CreateInitiativeUpdate creates a new status update on an initiative
 func (c *Client) CreateInitiativeUpdate(ctx context.Context, initiativeID, body, health string) (*InitiativeUpdate, error) {
-	var result struct {
-		InitiativeUpdateCreate struct {
-			Success          bool             `json:"success"`
-			InitiativeUpdate InitiativeUpdate `json:"initiativeUpdate"`
-		} `json:"initiativeUpdateCreate"`
-	}
-
 	vars := map[string]any{
 		"initiativeId": initiativeID,
 		"body":         body,
@@ -1160,116 +1002,27 @@ func (c *Client) CreateInitiativeUpdate(ctx context.Context, initiativeID, body,
 	if health != "" {
 		vars["health"] = health
 	}
-
-	err := c.query(ctx, mutationCreateInitiativeUpdate, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.InitiativeUpdateCreate.Success {
-		return nil, fmt.Errorf("failed to create initiative update")
-	}
-
-	return &result.InitiativeUpdateCreate.InitiativeUpdate, nil
+	return execMutation[InitiativeUpdate](ctx, c, mutationCreateInitiativeUpdate, vars, "initiativeUpdateCreate", "initiativeUpdate")
 }
 
 // CreateProject creates a new project
 func (c *Client) CreateProject(ctx context.Context, input map[string]any) (*Project, error) {
-	var result struct {
-		ProjectCreate struct {
-			Success bool    `json:"success"`
-			Project Project `json:"project"`
-		} `json:"projectCreate"`
-	}
-
-	vars := map[string]any{
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationCreateProject, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.ProjectCreate.Success {
-		return nil, fmt.Errorf("project creation failed")
-	}
-
-	return &result.ProjectCreate.Project, nil
+	return execMutation[Project](ctx, c, mutationCreateProject, map[string]any{"input": input}, "projectCreate", "project")
 }
 
 // ArchiveProject archives a project (soft delete)
 func (c *Client) ArchiveProject(ctx context.Context, projectID string) error {
-	var result struct {
-		ProjectArchive struct {
-			Success bool `json:"success"`
-		} `json:"projectArchive"`
-	}
-
-	vars := map[string]any{
-		"id": projectID,
-	}
-
-	err := c.query(ctx, mutationArchiveProject, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.ProjectArchive.Success {
-		return fmt.Errorf("project archive failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationArchiveProject, map[string]any{"id": projectID}, "projectArchive")
 }
 
 // AddProjectToInitiative links a project to an initiative
 func (c *Client) AddProjectToInitiative(ctx context.Context, projectID, initiativeID string) error {
-	var result struct {
-		InitiativeToProjectCreate struct {
-			Success bool `json:"success"`
-		} `json:"initiativeToProjectCreate"`
-	}
-
-	vars := map[string]any{
-		"projectId":    projectID,
-		"initiativeId": initiativeID,
-	}
-
-	err := c.query(ctx, mutationInitiativeToProjectCreate, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.InitiativeToProjectCreate.Success {
-		return fmt.Errorf("failed to add project to initiative")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationInitiativeToProjectCreate, map[string]any{"projectId": projectID, "initiativeId": initiativeID}, "initiativeToProjectCreate")
 }
 
 // RemoveProjectFromInitiative unlinks a project from an initiative
 func (c *Client) RemoveProjectFromInitiative(ctx context.Context, projectID, initiativeID string) error {
-	var result struct {
-		InitiativeToProjectDelete struct {
-			Success bool `json:"success"`
-		} `json:"initiativeToProjectDelete"`
-	}
-
-	vars := map[string]any{
-		"projectId":    projectID,
-		"initiativeId": initiativeID,
-	}
-
-	err := c.query(ctx, mutationInitiativeToProjectDelete, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.InitiativeToProjectDelete.Success {
-		return fmt.Errorf("failed to remove project from initiative")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationInitiativeToProjectDelete, map[string]any{"projectId": projectID, "initiativeId": initiativeID}, "initiativeToProjectDelete")
 }
 
 // GetTeamCycles fetches cycles for a team
@@ -1375,77 +1128,17 @@ func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, err
 
 // CreateLabel creates a new label
 func (c *Client) CreateLabel(ctx context.Context, input map[string]any) (*Label, error) {
-	var result struct {
-		IssueLabelCreate struct {
-			Success    bool  `json:"success"`
-			IssueLabel Label `json:"issueLabel"`
-		} `json:"issueLabelCreate"`
-	}
-
-	vars := map[string]any{
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationCreateLabel, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.IssueLabelCreate.Success {
-		return nil, fmt.Errorf("label creation failed")
-	}
-
-	return &result.IssueLabelCreate.IssueLabel, nil
+	return execMutation[Label](ctx, c, mutationCreateLabel, map[string]any{"input": input}, "issueLabelCreate", "issueLabel")
 }
 
 // UpdateLabel updates an existing label
 func (c *Client) UpdateLabel(ctx context.Context, id string, input map[string]any) (*Label, error) {
-	var result struct {
-		IssueLabelUpdate struct {
-			Success    bool  `json:"success"`
-			IssueLabel Label `json:"issueLabel"`
-		} `json:"issueLabelUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":    id,
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationUpdateLabel, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.IssueLabelUpdate.Success {
-		return nil, fmt.Errorf("label update failed")
-	}
-
-	return &result.IssueLabelUpdate.IssueLabel, nil
+	return execMutation[Label](ctx, c, mutationUpdateLabel, map[string]any{"id": id, "input": input}, "issueLabelUpdate", "issueLabel")
 }
 
 // DeleteLabel deletes a label
 func (c *Client) DeleteLabel(ctx context.Context, id string) error {
-	var result struct {
-		IssueLabelDelete struct {
-			Success bool `json:"success"`
-		} `json:"issueLabelDelete"`
-	}
-
-	vars := map[string]any{
-		"id": id,
-	}
-
-	err := c.query(ctx, mutationDeleteLabel, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.IssueLabelDelete.Success {
-		return fmt.Errorf("label deletion failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationDeleteLabel, map[string]any{"id": id}, "issueLabelDelete")
 }
 
 // GetUsers fetches all users in the workspace
@@ -1540,27 +1233,7 @@ func (c *Client) GetUserIssues(ctx context.Context, userID string) ([]Issue, err
 
 // CreateIssue creates a new issue
 func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue, error) {
-	var result struct {
-		IssueCreate struct {
-			Success bool  `json:"success"`
-			Issue   Issue `json:"issue"`
-		} `json:"issueCreate"`
-	}
-
-	vars := map[string]any{
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationCreateIssue, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.IssueCreate.Success {
-		return nil, fmt.Errorf("issue creation failed")
-	}
-
-	return &result.IssueCreate.Issue, nil
+	return execMutation[Issue](ctx, c, mutationCreateIssue, map[string]any{"input": input}, "issueCreate", "issue")
 }
 
 // IssueDetails contains comments, documents, and attachments for an issue
@@ -1704,78 +1377,17 @@ func (c *Client) GetIssueComments(ctx context.Context, issueID string) ([]Commen
 
 // CreateComment creates a new comment on an issue
 func (c *Client) CreateComment(ctx context.Context, issueID string, body string) (*Comment, error) {
-	var result struct {
-		CommentCreate struct {
-			Success bool    `json:"success"`
-			Comment Comment `json:"comment"`
-		} `json:"commentCreate"`
-	}
-
-	vars := map[string]any{
-		"issueId": issueID,
-		"body":    body,
-	}
-
-	err := c.query(ctx, mutationCreateComment, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.CommentCreate.Success {
-		return nil, fmt.Errorf("comment creation failed")
-	}
-
-	return &result.CommentCreate.Comment, nil
+	return execMutation[Comment](ctx, c, mutationCreateComment, map[string]any{"issueId": issueID, "body": body}, "commentCreate", "comment")
 }
 
 // UpdateComment updates an existing comment
 func (c *Client) UpdateComment(ctx context.Context, commentID string, body string) (*Comment, error) {
-	var result struct {
-		CommentUpdate struct {
-			Success bool    `json:"success"`
-			Comment Comment `json:"comment"`
-		} `json:"commentUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":   commentID,
-		"body": body,
-	}
-
-	err := c.query(ctx, mutationUpdateComment, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.CommentUpdate.Success {
-		return nil, fmt.Errorf("comment update failed")
-	}
-
-	return &result.CommentUpdate.Comment, nil
+	return execMutation[Comment](ctx, c, mutationUpdateComment, map[string]any{"id": commentID, "body": body}, "commentUpdate", "comment")
 }
 
 // DeleteComment deletes a comment
 func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
-	var result struct {
-		CommentDelete struct {
-			Success bool `json:"success"`
-		} `json:"commentDelete"`
-	}
-
-	vars := map[string]any{
-		"id": commentID,
-	}
-
-	err := c.query(ctx, mutationDeleteComment, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.CommentDelete.Success {
-		return fmt.Errorf("comment deletion failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationDeleteComment, map[string]any{"id": commentID}, "commentDelete")
 }
 
 // GetIssueDocuments fetches documents attached to an issue
@@ -1892,77 +1504,17 @@ func (c *Client) GetInitiativeDocuments(ctx context.Context, initiativeID string
 
 // CreateDocument creates a new document
 func (c *Client) CreateDocument(ctx context.Context, input map[string]any) (*Document, error) {
-	var result struct {
-		DocumentCreate struct {
-			Success  bool     `json:"success"`
-			Document Document `json:"document"`
-		} `json:"documentCreate"`
-	}
-
-	vars := map[string]any{
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationCreateDocument, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.DocumentCreate.Success {
-		return nil, fmt.Errorf("document creation failed")
-	}
-
-	return &result.DocumentCreate.Document, nil
+	return execMutation[Document](ctx, c, mutationCreateDocument, map[string]any{"input": input}, "documentCreate", "document")
 }
 
 // UpdateDocument updates an existing document
 func (c *Client) UpdateDocument(ctx context.Context, documentID string, input map[string]any) (*Document, error) {
-	var result struct {
-		DocumentUpdate struct {
-			Success  bool     `json:"success"`
-			Document Document `json:"document"`
-		} `json:"documentUpdate"`
-	}
-
-	vars := map[string]any{
-		"id":    documentID,
-		"input": input,
-	}
-
-	err := c.query(ctx, mutationUpdateDocument, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.DocumentUpdate.Success {
-		return nil, fmt.Errorf("document update failed")
-	}
-
-	return &result.DocumentUpdate.Document, nil
+	return execMutation[Document](ctx, c, mutationUpdateDocument, map[string]any{"id": documentID, "input": input}, "documentUpdate", "document")
 }
 
 // DeleteDocument deletes a document
 func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
-	var result struct {
-		DocumentDelete struct {
-			Success bool `json:"success"`
-		} `json:"documentDelete"`
-	}
-
-	vars := map[string]any{
-		"id": documentID,
-	}
-
-	err := c.query(ctx, mutationDeleteDocument, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.DocumentDelete.Success {
-		return fmt.Errorf("document deletion failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationDeleteDocument, map[string]any{"id": documentID}, "documentDelete")
 }
 
 // GetInitiatives fetches all initiatives
@@ -2006,53 +1558,12 @@ func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*Initi
 // CreateIssueRelation creates a relation between two issues
 // relationType must be one of: blocks, duplicate, related, similar
 func (c *Client) CreateIssueRelation(ctx context.Context, issueID, relatedIssueID, relationType string) (*IssueRelation, error) {
-	var result struct {
-		IssueRelationCreate struct {
-			Success       bool          `json:"success"`
-			IssueRelation IssueRelation `json:"issueRelation"`
-		} `json:"issueRelationCreate"`
-	}
-
-	vars := map[string]any{
-		"issueId":        issueID,
-		"relatedIssueId": relatedIssueID,
-		"type":           relationType,
-	}
-
-	err := c.query(ctx, mutationCreateIssueRelation, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.IssueRelationCreate.Success {
-		return nil, fmt.Errorf("issue relation creation failed")
-	}
-
-	return &result.IssueRelationCreate.IssueRelation, nil
+	return execMutation[IssueRelation](ctx, c, mutationCreateIssueRelation, map[string]any{"issueId": issueID, "relatedIssueId": relatedIssueID, "type": relationType}, "issueRelationCreate", "issueRelation")
 }
 
 // DeleteIssueRelation deletes an issue relation
 func (c *Client) DeleteIssueRelation(ctx context.Context, relationID string) error {
-	var result struct {
-		IssueRelationDelete struct {
-			Success bool `json:"success"`
-		} `json:"issueRelationDelete"`
-	}
-
-	vars := map[string]any{
-		"id": relationID,
-	}
-
-	err := c.query(ctx, mutationDeleteIssueRelation, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.IssueRelationDelete.Success {
-		return fmt.Errorf("issue relation deletion failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationDeleteIssueRelation, map[string]any{"id": relationID}, "issueRelationDelete")
 }
 
 // =============================================================================
@@ -2061,13 +1572,6 @@ func (c *Client) DeleteIssueRelation(ctx context.Context, relationID string) err
 
 // CreateAttachment creates a generic attachment (external link) on an issue
 func (c *Client) CreateAttachment(ctx context.Context, issueID, title, url, subtitle string) (*Attachment, error) {
-	var result struct {
-		AttachmentCreate struct {
-			Success    bool       `json:"success"`
-			Attachment Attachment `json:"attachment"`
-		} `json:"attachmentCreate"`
-	}
-
 	vars := map[string]any{
 		"issueId": issueID,
 		"title":   title,
@@ -2076,28 +1580,11 @@ func (c *Client) CreateAttachment(ctx context.Context, issueID, title, url, subt
 	if subtitle != "" {
 		vars["subtitle"] = subtitle
 	}
-
-	err := c.query(ctx, mutationCreateAttachment, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.AttachmentCreate.Success {
-		return nil, fmt.Errorf("attachment creation failed")
-	}
-
-	return &result.AttachmentCreate.Attachment, nil
+	return execMutation[Attachment](ctx, c, mutationCreateAttachment, vars, "attachmentCreate", "attachment")
 }
 
 // LinkURL creates an attachment by linking a URL (Linear auto-detects type)
 func (c *Client) LinkURL(ctx context.Context, issueID, url, title string) (*Attachment, error) {
-	var result struct {
-		AttachmentLinkURL struct {
-			Success    bool       `json:"success"`
-			Attachment Attachment `json:"attachment"`
-		} `json:"attachmentLinkURL"`
-	}
-
 	vars := map[string]any{
 		"issueId": issueID,
 		"url":     url,
@@ -2105,41 +1592,12 @@ func (c *Client) LinkURL(ctx context.Context, issueID, url, title string) (*Atta
 	if title != "" {
 		vars["title"] = title
 	}
-
-	err := c.query(ctx, mutationLinkURL, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	if !result.AttachmentLinkURL.Success {
-		return nil, fmt.Errorf("URL linking failed")
-	}
-
-	return &result.AttachmentLinkURL.Attachment, nil
+	return execMutation[Attachment](ctx, c, mutationLinkURL, vars, "attachmentLinkURL", "attachment")
 }
 
 // DeleteAttachment deletes an attachment
 func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) error {
-	var result struct {
-		AttachmentDelete struct {
-			Success bool `json:"success"`
-		} `json:"attachmentDelete"`
-	}
-
-	vars := map[string]any{
-		"id": attachmentID,
-	}
-
-	err := c.query(ctx, mutationDeleteAttachment, vars, &result)
-	if err != nil {
-		return err
-	}
-
-	if !result.AttachmentDelete.Success {
-		return fmt.Errorf("attachment deletion failed")
-	}
-
-	return nil
+	return execMutationOK(ctx, c, mutationDeleteAttachment, map[string]any{"id": attachmentID}, "attachmentDelete")
 }
 
 // LowBudget reports whether the rate limiter has fewer than 5 tokens left.

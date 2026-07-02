@@ -480,11 +480,6 @@ func (lfs *LinearFS) InvalidateMyIssues() {
 	// No-op: SQLite is source of truth
 }
 
-// ArchiveIssue archives an issue
-func (lfs *LinearFS) ArchiveIssue(ctx context.Context, issueID string, teamID string, assigneeID string) error {
-	return lfs.mutator().ArchiveIssue(ctx, issueID)
-}
-
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
 	return lfs.repo.GetMyIssues(ctx)
 }
@@ -542,16 +537,6 @@ func (lfs *LinearFS) InvalidateTeamProjects(teamID string) {
 // InvalidateProjectIssues is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
 	// No-op: SQLite is source of truth
-}
-
-// CreateProject creates a new project
-func (lfs *LinearFS) CreateProject(ctx context.Context, input map[string]any) (*api.Project, error) {
-	return lfs.mutator().CreateProject(ctx, input)
-}
-
-// ArchiveProject archives a project
-func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamID string) error {
-	return lfs.mutator().ArchiveProject(ctx, projectID)
 }
 
 // GetProjectIssues returns issues in a project as ProjectIssue
@@ -621,21 +606,8 @@ func (lfs *LinearFS) TryGetCachedComments(issueID string) ([]api.Comment, bool) 
 	return comments, len(comments) > 0
 }
 
-func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body string) (*api.Comment, error) {
-	return lfs.mutator().CreateComment(ctx, issueID, body)
-}
-
 func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentID string, body string) (*api.Comment, error) {
 	return lfs.mutator().UpdateComment(ctx, commentID, body)
-}
-
-func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
-	// Delete from API
-	if err := lfs.mutator().DeleteComment(ctx, commentID); err != nil {
-		return err
-	}
-	// Delete from SQLite so it's immediately removed from listings
-	return lfs.store.Queries().DeleteComment(ctx, commentID)
 }
 
 // Document methods
@@ -672,21 +644,8 @@ func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
 	// No-op: SQLite is source of truth
 }
 
-func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (*api.Document, error) {
-	return lfs.mutator().CreateDocument(ctx, input)
-}
-
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
 	return lfs.mutator().UpdateDocument(ctx, documentID, input)
-}
-
-func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
-	// Delete from API
-	if err := lfs.mutator().DeleteDocument(ctx, documentID); err != nil {
-		return err
-	}
-	// Delete from SQLite so it's immediately removed from listings
-	return lfs.store.Queries().DeleteDocument(ctx, documentID)
 }
 
 // ResolveUserID converts an email or name to a user ID
@@ -872,20 +831,6 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
 }
 
-// CreateProjectMilestone creates a new milestone for a project. It goes through
-// the mutation seam (so InjectTestMutationClient can intercept it offline) and
-// then upserts to SQLite for immediate visibility.
-func (lfs *LinearFS) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
-	milestone, err := lfs.mutator().CreateProjectMilestone(ctx, projectID, name, description)
-	if err != nil {
-		return nil, err
-	}
-	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
-		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
-	}
-	return milestone, nil
-}
-
 // UpdateProjectMilestone updates an existing milestone via the mutation seam,
 // then upserts to SQLite. The owning project ID is recovered from the cache so
 // the upsert keeps the association.
@@ -904,20 +849,6 @@ func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID str
 		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
 	}
 	return milestone, nil
-}
-
-// DeleteProjectMilestone deletes a milestone via the mutation seam, then removes
-// it from SQLite.
-func (lfs *LinearFS) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
-	if err := lfs.mutator().DeleteProjectMilestone(ctx, milestoneID); err != nil {
-		return err
-	}
-	if lfs.store != nil {
-		if err := lfs.store.Queries().DeleteProjectMilestone(ctx, milestoneID); err != nil {
-			log.Printf("[fs] delete milestone %s from DB failed: %v", milestoneID, err)
-		}
-	}
-	return nil
 }
 
 // ResolveCycleID resolves a cycle name to its ID
@@ -1005,19 +936,9 @@ func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 	// No-op: SQLite is source of truth
 }
 
-// CreateLabel creates a new label
-func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*api.Label, error) {
-	return lfs.mutator().CreateLabel(ctx, input)
-}
-
 // UpdateLabel updates a label
 func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) (*api.Label, error) {
 	return lfs.mutator().UpdateLabel(ctx, labelID, input)
-}
-
-// DeleteLabel deletes a label
-func (lfs *LinearFS) DeleteLabel(ctx context.Context, labelID string, teamID string) error {
-	return lfs.mutator().DeleteLabel(ctx, labelID)
 }
 
 // GetInitiatives fetches all initiatives

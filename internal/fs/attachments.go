@@ -67,10 +67,11 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	// Trigger background refresh of sub-resources if stale
 	n.lfs.MaybeRefreshIssueDetails(n.issueID)
 
-	// Start with _create and .error entries
+	// Start with _create, .error, and .last entries
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	// Add embedded files (images, etc.)
@@ -125,6 +126,10 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	// Handle .error feedback file (last failed attachment write in this dir)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("attachments", n.issueID), out), 0
+	}
+	// Handle .last feedback file (recent successful attachment creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("attachments", n.issueID), out), 0
 	}
 
 	// Handle .link files (external attachments)
@@ -341,22 +346,20 @@ func (n *ExternalAttachmentNode) Read(ctx context.Context, fh fs.FileHandle, des
 }
 
 func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	// Delete via API
-	if err := n.lfs.mutator().DeleteAttachment(ctx, n.attachment.ID); err != nil {
-		n.lfs.SetWriteError(collectionErrorKey("attachments", n.issueID), "Operation: delete attachment "+name+"\nError: "+err.Error())
-		return syscall.EIO
-	}
-
-	// Delete from local DB
-	if err := n.lfs.store.Queries().DeleteAttachment(ctx, n.attachment.ID); err != nil {
-		log.Printf("[attachments] delete from DB failed: %v", err)
-	}
-
-	// Invalidate caches (previously skipped the stale entry lookup).
-	n.lfs.ClearWriteError(collectionErrorKey("attachments", n.issueID))
-	n.lfs.InvalidateDeleted(attachmentsDirIno(n.issueID), name)
-
-	return 0
+	// The file node already holds its entity, so find just hands it over.
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Attachment]{
+		op:   `delete attachment "` + name + `"`,
+		key:  collectionErrorKey("attachments", n.issueID),
+		find: func(context.Context) (*api.Attachment, error) { return &n.attachment, nil },
+		mutate: func(ctx context.Context, a *api.Attachment) error {
+			return n.lfs.mutator().DeleteAttachment(ctx, a.ID)
+		},
+		forget: func(ctx context.Context, a *api.Attachment) error {
+			return n.lfs.store.Queries().DeleteAttachment(ctx, a.ID)
+		},
+		dir:  attachmentsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 // NewAttachmentNode represents the _create file for creating new attachments
@@ -415,71 +418,77 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 		return 0
 	}
 
-	attErrKey := collectionErrorKey("attachments", n.issueID)
-
-	// Parse the content: "url [title]" or just "url"
 	content := strings.TrimSpace(string(handle.buffer))
 	handle.buffer = nil
 
-	if content == "" {
-		n.lfs.SetWriteError(attErrKey, "Operation: create attachment\nError: empty content. Write \"<url> [title]\".")
-		return syscall.EINVAL
-	}
-
-	// Parse URL and optional title
-	parts := strings.SplitN(content, " ", 2)
-	url := parts[0]
-	title := url // Default title is the URL
-	if len(parts) > 1 {
-		title = parts[1]
-	}
-
-	// Idempotency (#146): if this URL is already attached, linking it again is a
-	// no-op, not a failure. Linear rejects the duplicate with an opaque "Unable
-	// to create issue attachment", which is indistinguishable from a genuine
-	// failure (auth, bad URL, outage). This is the common case when Linear's
-	// GitHub integration has already auto-linked a branch-named PR. Mirror the
-	// LabelsNode "already exists -> success" idiom: clear .error and return 0,
-	// leaving the existing .link in place.
-	if existing, err := n.lfs.GetIssueAttachments(ctx, n.issueID); err == nil {
-		for _, att := range existing {
-			if attachmentURLsEqual(att.URL, url) {
-				n.lfs.ClearWriteError(attErrKey)
-				return 0
-			}
-		}
-	}
-
-	// Create the attachment via API (LinkURL for external links)
-	att, err := n.lfs.mutator().LinkURL(ctx, n.issueID, url, title)
-	if err != nil {
-		// The local cache may be stale relative to Linear (e.g. an auto-link that
-		// hasn't synced yet), so the pre-check above can miss a duplicate. On
-		// failure, re-check authoritatively against the API: if the URL is in
-		// fact already attached, treat it as the idempotent no-op it is rather
-		// than surfacing the raw GraphQL rejection.
-		if live, lerr := n.lfs.client.GetIssueAttachments(ctx, n.issueID); lerr == nil {
-			for _, ex := range live {
-				if attachmentURLsEqual(ex.URL, url) {
-					n.upsertAttachment(ctx, ex)
-					n.lfs.ClearWriteError(attErrKey)
-					n.lfs.InvalidateCreated(attachmentsDirIno(n.issueID), "")
+	// Idempotency (#146): if the URL is already attached, linking it again is a
+	// success, not a failure. Linear rejects the duplicate with an opaque
+	// "Unable to create issue attachment", indistinguishable from a genuine
+	// failure (auth, bad URL, outage) — the common case being Linear's GitHub
+	// integration having already auto-linked a branch-named PR. The cheap
+	// cache pre-check returns 0 without a .last entry (nothing was created);
+	// the authoritative post-failure re-check inside mutate treats a stale-cache
+	// miss as the created attachment.
+	if url := strings.SplitN(content, " ", 2)[0]; url != "" {
+		if existing, err := n.lfs.GetIssueAttachments(ctx, n.issueID); err == nil {
+			for _, att := range existing {
+				if attachmentURLsEqual(att.URL, url) {
+					n.lfs.ClearWriteError(collectionErrorKey("attachments", n.issueID))
 					return 0
 				}
 			}
 		}
-		n.lfs.SetWriteError(attErrKey, "Operation: create attachment\nValue: \""+url+"\"\nError: "+err.Error())
-		return syscall.EIO
 	}
-	n.lfs.ClearWriteError(attErrKey)
 
-	// Upsert to SQLite for immediate visibility
-	n.upsertAttachment(ctx, *att)
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Attachment]{
+		op:  "create attachment",
+		key: collectionErrorKey("attachments", n.issueID),
+		mutate: func(ctx context.Context) (*api.Attachment, error) {
+			if content == "" {
+				return nil, &FieldError{Field: "content", Message: `empty content. Write "<url> [title]".`}
+			}
+			// Parse the content: "url [title]" or just "url" (title defaults
+			// to the URL).
+			parts := strings.SplitN(content, " ", 2)
+			url := parts[0]
+			title := url
+			if len(parts) > 1 {
+				title = parts[1]
+			}
 
-	// Invalidate cache (previously skipped the dir inode and _create reset).
-	n.lfs.InvalidateCreated(attachmentsDirIno(n.issueID), "")
-
-	return 0
+			att, err := n.lfs.mutator().LinkURL(ctx, n.issueID, url, title)
+			if err == nil {
+				return att, nil
+			}
+			// The local cache may be stale relative to Linear (e.g. an auto-link
+			// that hasn't synced yet), so the pre-check above can miss a
+			// duplicate. On failure, re-check authoritatively against the API:
+			// if the URL is in fact already attached, treat it as the idempotent
+			// success it is rather than surfacing the raw GraphQL rejection.
+			if live, lerr := n.lfs.client.GetIssueAttachments(ctx, n.issueID); lerr == nil {
+				for _, ex := range live {
+					if attachmentURLsEqual(ex.URL, url) {
+						return &ex, nil
+					}
+				}
+			}
+			return nil, err
+		},
+		result: func(a *api.Attachment) WriteResult {
+			return WriteResult{
+				URL:   a.URL,
+				Path:  sanitizeFilename(a.Title) + ".link",
+				Title: a.Title,
+			}
+		},
+		persist: func(ctx context.Context, a *api.Attachment) error {
+			n.upsertAttachment(ctx, *a)
+			return nil
+		},
+		dir:       attachmentsDirIno(n.issueID),
+		entryName: func(a *api.Attachment) string { return sanitizeFilename(a.Title) + ".link" },
+	})
+	return errno
 }
 
 // upsertAttachment writes an attachment to SQLite for immediate visibility.

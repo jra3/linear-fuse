@@ -163,31 +163,33 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EPERM
 	}
 
-	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	// Find the label by filename
-	for _, label := range labels {
-		if labelFilename(label) == name {
-			err := n.lfs.DeleteLabel(ctx, label.ID, n.teamID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Label]{
+		op:  `delete label "` + name + `"`,
+		key: collectionErrorKey("labels", n.teamID),
+		find: func(ctx context.Context) (*api.Label, error) {
+			labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
 			if err != nil {
-				log.Printf("Failed to delete label: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: delete label "+name+"\nError: "+err.Error())
-				return syscall.EIO
+				return nil, err
 			}
-			if n.lfs.debug {
-				log.Printf("Label deleted successfully")
+			for _, label := range labels {
+				if labelFilename(label) == name {
+					return &label, nil
+				}
 			}
-			// Invalidate kernel cache (previously skipped the dir inode, so a
-			// deleted label lingered in the listing until the cache TTL).
-			n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), name)
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, l *api.Label) error {
+			return n.lfs.mutator().DeleteLabel(ctx, l.ID)
+		},
+		// The store forget was missing here entirely: SQLite is the listing
+		// source of truth, so a deleted label resurrected on the next readdir
+		// until the sync worker reconciled.
+		forget: func(ctx context.Context, l *api.Label) error {
+			return n.lfs.store.Queries().DeleteLabel(ctx, l.ID)
+		},
+		dir:  labelsDirIno(n.teamID),
+		name: name,
+	})
 }
 
 func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
@@ -575,67 +577,45 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		return 0
 	}
 
-	// Parse the new label content
-	name, color, description, err := parseNewLabelMarkdown(n.content)
-	if err != nil {
-		log.Printf("Failed to parse new label: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nParse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	if name == "" {
-		log.Printf("New label has no name")
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nError: label has no name. Add a 'name:' field to the frontmatter.")
-		return syscall.EINVAL
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if n.lfs.debug {
-		log.Printf("Creating label: name=%s color=%s", name, color)
-	}
-
-	// Build create input
-	input := map[string]any{
-		"teamId": n.teamID,
-		"name":   name,
-	}
-	if color != "" {
-		input["color"] = color
-	}
-	if description != "" {
-		input["description"] = description
-	}
-
-	label, err := n.lfs.CreateLabel(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create label: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: create label\nError: "+err.Error())
-		return syscall.EIO
-	}
-	n.lfs.ClearWriteError(collectionErrorKey("labels", n.teamID))
-	n.lfs.AppendWriteSuccess(collectionSuccessKey("labels", n.teamID), WriteResult{
-		Path:  labelFilename(*label),
-		Title: label.Name,
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Label]{
+		op:  "create label",
+		key: collectionErrorKey("labels", n.teamID),
+		mutate: func(ctx context.Context) (*api.Label, error) {
+			name, color, description, err := parseNewLabelMarkdown(n.content)
+			if err != nil {
+				return nil, &FieldError{Field: "content", Message: "parse error: " + err.Error()}
+			}
+			if name == "" {
+				return nil, &FieldError{Field: "name", Message: "label has no name. Add a 'name:' field to the frontmatter."}
+			}
+			input := map[string]any{
+				"teamId": n.teamID,
+				"name":   name,
+			}
+			if color != "" {
+				input["color"] = color
+			}
+			if description != "" {
+				input["description"] = description
+			}
+			return n.lfs.mutator().CreateLabel(ctx, input)
+		},
+		result: func(l *api.Label) WriteResult {
+			return WriteResult{
+				Path:  labelFilename(*l),
+				Title: l.Name,
+			}
+		},
+		persist: func(ctx context.Context, l *api.Label) error {
+			return n.lfs.UpsertLabel(ctx, n.teamID, *l)
+		},
+		dir:       labelsDirIno(n.teamID),
+		entryName: func(l *api.Label) string { return labelFilename(*l) },
 	})
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertLabel(ctx, n.teamID, *label); err != nil {
-		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
+	if errno != 0 {
+		return errno
 	}
-
 	n.created = true
-
-	// Invalidate kernel cache for labels directory (previously skipped the dir
-	// inode, so a newly-created label was missing from the listing).
-	n.lfs.InvalidateCreated(labelsDirIno(n.teamID), labelFilename(*label))
-
-	if n.lfs.debug {
-		log.Printf("Label created successfully")
-	}
-
 	return 0
 }
 

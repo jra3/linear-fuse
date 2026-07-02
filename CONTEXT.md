@@ -10,8 +10,9 @@ implementation, depth, seam, adapter, leverage, locality).
 The rich write flow for editing an existing entity's file (`issue.md`, `project.md`,
 a comment/doc/label/milestone `.md`): parse markdown → resolve names→IDs → call the
 Linear API → **read-your-writes verify** → upsert SQLite → invalidate caches → set or
-clear `.error`. Distinct from the **create path** (`_create`/`mkdir`) and **delete
-path** (`unlink`/`rmdir`), which skip resolution and verification.
+clear `.error`. Distinct from the **create path** (`_create`/`mkdir`), whose invariant
+tail is the Create tail below, and the **delete path** (`unlink`/`rmdir`). Only edits
+carry read-your-writes verification; creates trust the mutation's echoed entity.
 
 ### Read-your-writes verification
 After the API accepts a write, re-derive what *persisted* and compare it against what
@@ -30,6 +31,33 @@ tested with a fake sink and stub closures — no FUSE mount, SQLite, or API.
 
 The **front half** of each edit (parse, resolve, call API) stays per-entity. For
 issues the resolve step is itself a deep module — see Name→ID resolution below.
+
+### Create tail (`commitCreate`)
+The **deep module** that owns the invariant tail of every create (`_create` writes and
+`mkdir`), the create path's counterpart to the WriteBack tail: run the caller's
+`mutate` closure (parse → build input → call the mutation seam) → classify failure
+(**`FieldError`** → `EINVAL`, unknown reference → `ENOENT`, retryable/rate-limited →
+`EAGAIN`, other API failure → `EIO`; the reason renders to `.error`) → on success
+clear `.error`, record the new identity in `.last`, persist to SQLite (non-fatal),
+and apply the kernel-cache coherence policy. `InvalidateCreated` on the collection
+dir is guaranteed by the module — a spec cannot forget it; per-entity internal-cache
+extras are a spec closure. Generic over the entity type `T`. Every create surface
+supplies a `.last` projection (including attachments/relations), the `mutate` closure
+calls `lfs.mutator()` directly, and `persist` is always explicit — no mutation
+wrapper hides an upsert. Unit-tested through the ErrorSink/notifier fakes, no FUSE
+mount.
+
+### Delete tail (`commitDelete`)
+The **deep module** owning the invariant tail of every delete (`rm`/`rmdir`,
+including archive-flavored deletes of issues/projects), sibling of the Create
+tail: run the caller's `find` closure (locate the target by name, or hand over an
+already-held entity) → run the delete/archive mutation → classify failure through
+the shared classifier (`classifyMutationErr`) → on success clear `.error`,
+**forget the SQLite row** (required — the store is the listing source of truth,
+so a skipped forget resurrects the deleted item until sync), and apply the
+kernel-cache coherence policy (`InvalidateDeleted` is module-guaranteed). An
+unknown name notes itself in `.error` before returning `ENOENT`. Generic over
+`T`, behind the `deleteSink` seam; unit-tested with fakes, no FUSE mount.
 
 ### Name→ID resolution (`resolveIssueUpdate`)
 marshal returns an issue update whose relational fields hold *names* (a state name,

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"strings"
 	"syscall"
 	"time"
@@ -67,10 +66,11 @@ func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errn
 		return nil, syscall.EIO
 	}
 
-	// Build entries: _create + .error + relation files
+	// Build entries: _create + .error + .last + relation files
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	// Add outgoing relations (e.g., "blocks-ENG-123.rel")
@@ -116,6 +116,10 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 	// Handle .error feedback file (last failed relation write in this dir)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("relations", n.issueID), out), 0
+	}
+	// Handle .last feedback file (recent successful relation creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("relations", n.issueID), out), 0
 	}
 
 	// Parse relation filename: "type-IDENTIFIER.rel"
@@ -252,23 +256,20 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 		return syscall.EPERM
 	}
 
-	// Delete via API
-	if err := n.lfs.mutator().DeleteIssueRelation(ctx, n.relation.ID); err != nil {
-		n.lfs.SetWriteError(collectionErrorKey("relations", n.issueID), "Operation: delete relation "+name+"\nError: "+err.Error())
-		return syscall.EIO
-	}
-
-	// Delete from local DB
-	if err := n.lfs.store.Queries().DeleteIssueRelation(ctx, n.relation.ID); err != nil {
-		log.Printf("[relations] delete from DB failed: %v", err)
-	}
-
-	n.lfs.ClearWriteError(collectionErrorKey("relations", n.issueID))
-
-	// Keep the kernel's directory listing coherent. This was previously omitted,
-	// so a deleted relation lingered in the listing until the cache TTL expired.
-	n.lfs.InvalidateDeleted(relationsDirIno(n.issueID), name)
-	return 0
+	// The file node already holds its entity, so find just hands it over.
+	return commitDelete(ctx, n.lfs, deleteSpec[api.IssueRelation]{
+		op:   `delete relation "` + name + `"`,
+		key:  collectionErrorKey("relations", n.issueID),
+		find: func(context.Context) (*api.IssueRelation, error) { return &n.relation, nil },
+		mutate: func(ctx context.Context, r *api.IssueRelation) error {
+			return n.lfs.mutator().DeleteIssueRelation(ctx, r.ID)
+		},
+		forget: func(ctx context.Context, r *api.IssueRelation) error {
+			return n.lfs.store.Queries().DeleteIssueRelation(ctx, r.ID)
+		},
+		dir:  relationsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 // NewRelationNode represents the _create file for creating new relations
@@ -327,69 +328,69 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 		return 0
 	}
 
-	relErrKey := collectionErrorKey("relations", n.issueID)
-
 	// Parse the content: "type identifier" or just "identifier" (defaults to "related")
 	content := strings.TrimSpace(string(handle.buffer))
 	handle.buffer = nil
 
-	if content == "" {
-		n.lfs.SetWriteError(relErrKey, "Operation: create relation\nError: empty content. Write \"<type> <ISSUE-ID>\", e.g. \"blocks ENG-123\".")
-		return syscall.EINVAL
-	}
-
-	parts := strings.Fields(content)
+	// relatedID carries the resolved target issue's ID from mutate to persist
+	// (the API's echoed relation doesn't include it).
+	var relatedID string
 	var relationType, relatedIdentifier string
 
-	if len(parts) == 1 {
-		// Just identifier, default to "related"
-		relationType = "related"
-		relatedIdentifier = parts[0]
-	} else if len(parts) >= 2 {
-		relationType = parts[0]
-		relatedIdentifier = parts[1]
-	}
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.IssueRelation]{
+		op:  "create relation",
+		key: collectionErrorKey("relations", n.issueID),
+		mutate: func(ctx context.Context) (*api.IssueRelation, error) {
+			if content == "" {
+				return nil, &FieldError{Field: "content", Message: `empty content. Write "<type> <ISSUE-ID>", e.g. "blocks ENG-123".`}
+			}
+			parts := strings.Fields(content)
+			if len(parts) == 1 {
+				// Just identifier, default to "related"
+				relationType = "related"
+				relatedIdentifier = parts[0]
+			} else {
+				relationType = parts[0]
+				relatedIdentifier = parts[1]
+			}
 
-	// Validate relation type
-	validTypes := map[string]bool{"blocks": true, "duplicate": true, "related": true, "similar": true}
-	if !validTypes[relationType] {
-		n.lfs.SetWriteError(relErrKey, "Field: type\nValue: \""+relationType+"\"\nError: invalid relation type. Use one of: blocks, duplicate, related, similar.")
-		return syscall.EINVAL
-	}
+			validTypes := map[string]bool{"blocks": true, "duplicate": true, "related": true, "similar": true}
+			if !validTypes[relationType] {
+				return nil, &FieldError{Field: "type", Value: relationType, Message: "invalid relation type. Use one of: blocks, duplicate, related, similar."}
+			}
 
-	// Lookup the related issue
-	relatedIssue, err := n.lfs.repo.GetIssueByIdentifier(ctx, relatedIdentifier)
-	if err != nil || relatedIssue == nil {
-		n.lfs.SetWriteError(relErrKey, "Field: identifier\nValue: \""+relatedIdentifier+"\"\nError: unknown issue. Use an existing issue identifier like ENG-123.")
-		return syscall.ENOENT
-	}
+			relatedIssue, err := n.lfs.repo.GetIssueByIdentifier(ctx, relatedIdentifier)
+			if err != nil || relatedIssue == nil {
+				return nil, &notFoundError{FieldError{Field: "identifier", Value: relatedIdentifier, Message: "unknown issue. Use an existing issue identifier like ENG-123."}}
+			}
+			relatedID = relatedIssue.ID
 
-	// Create the relation via API
-	rel, err := n.lfs.mutator().CreateIssueRelation(ctx, n.issueID, relatedIssue.ID, relationType)
-	if err != nil {
-		n.lfs.SetWriteError(relErrKey, "Operation: create relation\nError: "+err.Error())
-		return syscall.EIO
-	}
-	n.lfs.ClearWriteError(relErrKey)
-
-	// Store in local DB
-	now := time.Now()
-	if err := n.lfs.store.Queries().UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
-		ID:             rel.ID,
-		IssueID:        n.issueID,
-		RelatedIssueID: relatedIssue.ID,
-		Type:           relationType,
-		CreatedAt:      sql.NullTime{Time: now, Valid: true},
-		UpdatedAt:      sql.NullTime{Time: now, Valid: true},
-		SyncedAt:       now,
-	}); err != nil {
-		log.Printf("[relations] upsert to DB failed: %v", err)
-	}
-
-	// Invalidate cache
-	n.lfs.InvalidateCreated(relationsDirIno(n.issueID), "")
-
-	return 0
+			return n.lfs.mutator().CreateIssueRelation(ctx, n.issueID, relatedIssue.ID, relationType)
+		},
+		result: func(*api.IssueRelation) WriteResult {
+			return WriteResult{
+				Path:  relationType + "-" + relatedIdentifier + ".rel",
+				Title: relationType + " " + relatedIdentifier,
+			}
+		},
+		persist: func(ctx context.Context, rel *api.IssueRelation) error {
+			now := time.Now()
+			return n.lfs.store.Queries().UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
+				ID:             rel.ID,
+				IssueID:        n.issueID,
+				RelatedIssueID: relatedID,
+				Type:           relationType,
+				CreatedAt:      sql.NullTime{Time: now, Valid: true},
+				UpdatedAt:      sql.NullTime{Time: now, Valid: true},
+				SyncedAt:       now,
+			})
+		},
+		dir: relationsDirIno(n.issueID),
+		entryName: func(*api.IssueRelation) string {
+			return relationType + "-" + relatedIdentifier + ".rel"
+		},
+	})
+	return errno
 }
 
 type relationCreateHandle struct {
