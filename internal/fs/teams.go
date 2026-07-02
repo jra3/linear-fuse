@@ -91,6 +91,7 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		{Name: "cycles", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
 		{Name: "issues", Mode: syscall.S_IFDIR},
+		{Name: "recent", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "labels", Mode: syscall.S_IFDIR},
 	}
@@ -161,6 +162,14 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		out.Attr.Gid = t.lfs.gid
 		out.Attr.SetTimes(&now, &now, &now)
 		node := &IssuesNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
+		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+
+	case "recent":
+		out.Attr.Mode = 0555 | syscall.S_IFDIR // read-only view
+		out.Attr.Uid = t.lfs.uid
+		out.Attr.Gid = t.lfs.gid
+		out.Attr.SetTimes(&now, &now, &now)
+		node := &RecentNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
 		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
 
 	case "docs":

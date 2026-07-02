@@ -82,6 +82,10 @@ func issueDirPath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID)
 }
 
+func recentPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "recent")
+}
+
 func issuesErrorPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", ".error")
 }

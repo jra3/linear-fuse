@@ -138,6 +138,20 @@ func WithState(state api.State) IssueOption {
 	}
 }
 
+// WithUpdatedAt sets the issue's updatedAt (drives recent/ ordering and mtime).
+func WithUpdatedAt(t time.Time) IssueOption {
+	return func(i *api.Issue) {
+		i.UpdatedAt = t
+	}
+}
+
+// WithCreatedAt sets the issue's createdAt (ctime).
+func WithCreatedAt(t time.Time) IssueOption {
+	return func(i *api.Issue) {
+		i.CreatedAt = t
+	}
+}
+
 // WithAssignee sets the issue assignee.
 func WithAssignee(user *api.User) IssueOption {
 	return func(i *api.Issue) {
