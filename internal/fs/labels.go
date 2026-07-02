@@ -163,31 +163,33 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EPERM
 	}
 
-	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	// Find the label by filename
-	for _, label := range labels {
-		if labelFilename(label) == name {
-			err := n.lfs.DeleteLabel(ctx, label.ID, n.teamID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Label]{
+		op:  `delete label "` + name + `"`,
+		key: collectionErrorKey("labels", n.teamID),
+		find: func(ctx context.Context) (*api.Label, error) {
+			labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
 			if err != nil {
-				log.Printf("Failed to delete label: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: delete label "+name+"\nError: "+err.Error())
-				return syscall.EIO
+				return nil, err
 			}
-			if n.lfs.debug {
-				log.Printf("Label deleted successfully")
+			for _, label := range labels {
+				if labelFilename(label) == name {
+					return &label, nil
+				}
 			}
-			// Invalidate kernel cache (previously skipped the dir inode, so a
-			// deleted label lingered in the listing until the cache TTL).
-			n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), name)
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, l *api.Label) error {
+			return n.lfs.mutator().DeleteLabel(ctx, l.ID)
+		},
+		// The store forget was missing here entirely: SQLite is the listing
+		// source of truth, so a deleted label resurrected on the next readdir
+		// until the sync worker reconciled.
+		forget: func(ctx context.Context, l *api.Label) error {
+			return n.lfs.store.Queries().DeleteLabel(ctx, l.ID)
+		},
+		dir:  labelsDirIno(n.teamID),
+		name: name,
+	})
 }
 
 func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {

@@ -176,30 +176,30 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EPERM
 	}
 
-	docs, err := n.getDocuments(ctx)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	// Find the document by filename
-	for _, doc := range docs {
-		if documentFilename(doc) == name {
-			err := n.lfs.DeleteDocument(ctx, doc.ID, n.issueID, n.teamID, n.projectID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Document]{
+		op:  `delete document "` + name + `"`,
+		key: collectionErrorKey("docs", n.parentID()),
+		find: func(ctx context.Context) (*api.Document, error) {
+			docs, err := n.getDocuments(ctx)
 			if err != nil {
-				log.Printf("Failed to delete document: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: delete document "+name+"\nError: "+err.Error())
-				return syscall.EIO
+				return nil, err
 			}
-			// Invalidate kernel cache for the docs directory
-			n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), name)
-			if n.lfs.debug {
-				log.Printf("Document deleted successfully")
+			for _, doc := range docs {
+				if documentFilename(doc) == name {
+					return &doc, nil
+				}
 			}
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, d *api.Document) error {
+			return n.lfs.mutator().DeleteDocument(ctx, d.ID)
+		},
+		forget: func(ctx context.Context, d *api.Document) error {
+			return n.lfs.store.Queries().DeleteDocument(ctx, d.ID)
+		},
+		dir:  docsDirIno(n.parentID()),
+		name: name,
+	})
 }
 
 func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {

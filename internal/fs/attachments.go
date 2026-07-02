@@ -346,22 +346,20 @@ func (n *ExternalAttachmentNode) Read(ctx context.Context, fh fs.FileHandle, des
 }
 
 func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	// Delete via API
-	if err := n.lfs.mutator().DeleteAttachment(ctx, n.attachment.ID); err != nil {
-		n.lfs.SetWriteError(collectionErrorKey("attachments", n.issueID), "Operation: delete attachment "+name+"\nError: "+err.Error())
-		return syscall.EIO
-	}
-
-	// Delete from local DB
-	if err := n.lfs.store.Queries().DeleteAttachment(ctx, n.attachment.ID); err != nil {
-		log.Printf("[attachments] delete from DB failed: %v", err)
-	}
-
-	// Invalidate caches (previously skipped the stale entry lookup).
-	n.lfs.ClearWriteError(collectionErrorKey("attachments", n.issueID))
-	n.lfs.InvalidateDeleted(attachmentsDirIno(n.issueID), name)
-
-	return 0
+	// The file node already holds its entity, so find just hands it over.
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Attachment]{
+		op:   `delete attachment "` + name + `"`,
+		key:  collectionErrorKey("attachments", n.issueID),
+		find: func(context.Context) (*api.Attachment, error) { return &n.attachment, nil },
+		mutate: func(ctx context.Context, a *api.Attachment) error {
+			return n.lfs.mutator().DeleteAttachment(ctx, a.ID)
+		},
+		forget: func(ctx context.Context, a *api.Attachment) error {
+			return n.lfs.store.Queries().DeleteAttachment(ctx, a.ID)
+		},
+		dir:  attachmentsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 // NewAttachmentNode represents the _create file for creating new attachments

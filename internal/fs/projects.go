@@ -166,29 +166,36 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		log.Printf("Rmdir: archiving project %s in team %s", name, p.team.Key)
 	}
 
-	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	for _, project := range projects {
-		if projectDirName(project) == name {
-			err := p.lfs.ArchiveProject(ctx, project.ID, p.team.ID)
+	return commitDelete(ctx, p.lfs, deleteSpec[api.Project]{
+		op:  `archive project "` + name + `"`,
+		key: collectionErrorKey("projects", p.team.ID),
+		find: func(ctx context.Context) (*api.Project, error) {
+			projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
 			if err != nil {
-				log.Printf("Failed to archive project %s: %v", name, err)
-				return syscall.EIO
+				return nil, err
 			}
-			if p.lfs.debug {
-				log.Printf("Project %s archived successfully", name)
+			for _, project := range projects {
+				if projectDirName(project) == name {
+					return &project, nil
+				}
 			}
-			// Keep the kernel's directory listing coherent (previously skipped the
-			// dir inode, so an archived project lingered in the listing).
-			p.lfs.InvalidateDeleted(projectsDirIno(p.team.ID), name)
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, pr *api.Project) error {
+			return p.lfs.mutator().ArchiveProject(ctx, pr.ID)
+		},
+		// The store forget was missing here: the archived project's row stayed
+		// in SQLite (the listing source of truth), so it resurrected on the
+		// next readdir until the sync worker reconciled.
+		forget: func(ctx context.Context, pr *api.Project) error {
+			return p.lfs.store.Queries().DeleteProject(ctx, pr.ID)
+		},
+		dir:  projectsDirIno(p.team.ID),
+		name: name,
+		invalidateExtra: func(*api.Project) {
+			p.lfs.InvalidateTeamProjects(p.team.ID)
+		},
+	})
 }
 
 // projectDirName returns a safe directory name for a project

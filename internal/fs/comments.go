@@ -172,37 +172,35 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EPERM
 	}
 
-	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	// Sort comments by creation time
-	sort.Slice(comments, func(i, j int) bool {
-		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
-	})
-
-	// Find the comment by filename
-	for i, comment := range comments {
-		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		expectedName := fmt.Sprintf("%04d-%s.md", i+1, timestamp)
-		if expectedName == name {
-			err := n.lfs.DeleteComment(ctx, n.issueID, comment.ID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Comment]{
+		op:  `delete comment "` + name + `"`,
+		key: collectionErrorKey("comments", n.issueID),
+		find: func(ctx context.Context) (*api.Comment, error) {
+			comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
 			if err != nil {
-				log.Printf("Failed to delete comment: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("comments", n.issueID), "Operation: delete comment "+name+"\nError: "+err.Error())
-				return syscall.EIO
+				return nil, err
 			}
-			// Invalidate kernel cache for the comments directory
-			n.lfs.InvalidateDeleted(commentsDirIno(n.issueID), name)
-			if n.lfs.debug {
-				log.Printf("Comment deleted successfully")
+			// Filenames are index-derived from creation order.
+			sort.Slice(comments, func(i, j int) bool {
+				return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+			})
+			for i, comment := range comments {
+				timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
+				if fmt.Sprintf("%04d-%s.md", i+1, timestamp) == name {
+					return &comment, nil
+				}
 			}
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, c *api.Comment) error {
+			return n.lfs.mutator().DeleteComment(ctx, c.ID)
+		},
+		forget: func(ctx context.Context, c *api.Comment) error {
+			return n.lfs.store.Queries().DeleteComment(ctx, c.ID)
+		},
+		dir:  commentsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

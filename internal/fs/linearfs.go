@@ -480,11 +480,6 @@ func (lfs *LinearFS) InvalidateMyIssues() {
 	// No-op: SQLite is source of truth
 }
 
-// ArchiveIssue archives an issue
-func (lfs *LinearFS) ArchiveIssue(ctx context.Context, issueID string, teamID string, assigneeID string) error {
-	return lfs.mutator().ArchiveIssue(ctx, issueID)
-}
-
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
 	return lfs.repo.GetMyIssues(ctx)
 }
@@ -542,11 +537,6 @@ func (lfs *LinearFS) InvalidateTeamProjects(teamID string) {
 // InvalidateProjectIssues is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
 	// No-op: SQLite is source of truth
-}
-
-// ArchiveProject archives a project
-func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamID string) error {
-	return lfs.mutator().ArchiveProject(ctx, projectID)
 }
 
 // GetProjectIssues returns issues in a project as ProjectIssue
@@ -620,15 +610,6 @@ func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentI
 	return lfs.mutator().UpdateComment(ctx, commentID, body)
 }
 
-func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
-	// Delete from API
-	if err := lfs.mutator().DeleteComment(ctx, commentID); err != nil {
-		return err
-	}
-	// Delete from SQLite so it's immediately removed from listings
-	return lfs.store.Queries().DeleteComment(ctx, commentID)
-}
-
 // Document methods
 
 func (lfs *LinearFS) GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error) {
@@ -665,15 +646,6 @@ func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
 
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
 	return lfs.mutator().UpdateDocument(ctx, documentID, input)
-}
-
-func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
-	// Delete from API
-	if err := lfs.mutator().DeleteDocument(ctx, documentID); err != nil {
-		return err
-	}
-	// Delete from SQLite so it's immediately removed from listings
-	return lfs.store.Queries().DeleteDocument(ctx, documentID)
 }
 
 // ResolveUserID converts an email or name to a user ID
@@ -879,20 +851,6 @@ func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID str
 	return milestone, nil
 }
 
-// DeleteProjectMilestone deletes a milestone via the mutation seam, then removes
-// it from SQLite.
-func (lfs *LinearFS) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
-	if err := lfs.mutator().DeleteProjectMilestone(ctx, milestoneID); err != nil {
-		return err
-	}
-	if lfs.store != nil {
-		if err := lfs.store.Queries().DeleteProjectMilestone(ctx, milestoneID); err != nil {
-			log.Printf("[fs] delete milestone %s from DB failed: %v", milestoneID, err)
-		}
-	}
-	return nil
-}
-
 // ResolveCycleID resolves a cycle name to its ID
 func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleName string) (string, error) {
 	cycles, err := lfs.GetTeamCycles(ctx, teamID)
@@ -981,11 +939,6 @@ func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 // UpdateLabel updates a label
 func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) (*api.Label, error) {
 	return lfs.mutator().UpdateLabel(ctx, labelID, input)
-}
-
-// DeleteLabel deletes a label
-func (lfs *LinearFS) DeleteLabel(ctx context.Context, labelID string, teamID string) error {
-	return lfs.mutator().DeleteLabel(ctx, labelID)
 }
 
 // GetInitiatives fetches all initiatives

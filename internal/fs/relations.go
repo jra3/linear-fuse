@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
-	"log"
 	"strings"
 	"syscall"
 	"time"
@@ -257,23 +256,20 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 		return syscall.EPERM
 	}
 
-	// Delete via API
-	if err := n.lfs.mutator().DeleteIssueRelation(ctx, n.relation.ID); err != nil {
-		n.lfs.SetWriteError(collectionErrorKey("relations", n.issueID), "Operation: delete relation "+name+"\nError: "+err.Error())
-		return syscall.EIO
-	}
-
-	// Delete from local DB
-	if err := n.lfs.store.Queries().DeleteIssueRelation(ctx, n.relation.ID); err != nil {
-		log.Printf("[relations] delete from DB failed: %v", err)
-	}
-
-	n.lfs.ClearWriteError(collectionErrorKey("relations", n.issueID))
-
-	// Keep the kernel's directory listing coherent. This was previously omitted,
-	// so a deleted relation lingered in the listing until the cache TTL expired.
-	n.lfs.InvalidateDeleted(relationsDirIno(n.issueID), name)
-	return 0
+	// The file node already holds its entity, so find just hands it over.
+	return commitDelete(ctx, n.lfs, deleteSpec[api.IssueRelation]{
+		op:   `delete relation "` + name + `"`,
+		key:  collectionErrorKey("relations", n.issueID),
+		find: func(context.Context) (*api.IssueRelation, error) { return &n.relation, nil },
+		mutate: func(ctx context.Context, r *api.IssueRelation) error {
+			return n.lfs.mutator().DeleteIssueRelation(ctx, r.ID)
+		},
+		forget: func(ctx context.Context, r *api.IssueRelation) error {
+			return n.lfs.store.Queries().DeleteIssueRelation(ctx, r.ID)
+		},
+		dir:  relationsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 // NewRelationNode represents the _create file for creating new relations

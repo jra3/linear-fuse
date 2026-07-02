@@ -413,39 +413,43 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		log.Printf("Rmdir: %s in team %s (archiving issue)", name, n.team.Key)
 	}
 
-	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	for _, issue := range issues {
-		if issue.Identifier == name {
-			assigneeID := ""
-			if issue.Assignee != nil {
-				assigneeID = issue.Assignee.ID
-			}
-			err := n.lfs.ArchiveIssue(ctx, issue.ID, n.team.ID, assigneeID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Issue]{
+		op:  `archive issue "` + name + `"`,
+		key: collectionErrorKey("issues", n.team.ID),
+		find: func(ctx context.Context) (*api.Issue, error) {
+			issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
 			if err != nil {
-				log.Printf("Failed to archive issue %s: %v", name, err)
-				return syscall.EIO
+				return nil, err
 			}
-
-			// Additional cache invalidations
+			for _, issue := range issues {
+				if issue.Identifier == name {
+					return &issue, nil
+				}
+			}
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, i *api.Issue) error {
+			return n.lfs.mutator().ArchiveIssue(ctx, i.ID)
+		},
+		// The store forget was missing here: the archived issue's row stayed in
+		// SQLite (the listing source of truth), so it resurrected on the next
+		// readdir until the sync worker reconciled.
+		forget: func(ctx context.Context, i *api.Issue) error {
+			return n.lfs.store.Queries().DeleteIssue(ctx, i.ID)
+		},
+		dir:  issuesDirIno(n.team.ID),
+		name: name,
+		invalidateExtra: func(i *api.Issue) {
 			n.lfs.InvalidateFilteredIssues(n.team.ID)
-			n.lfs.InvalidateIssueById(issue.Identifier)
-			if issue.Project != nil {
-				n.lfs.InvalidateProjectIssues(issue.Project.ID)
+			n.lfs.InvalidateIssueById(i.Identifier)
+			if i.Project != nil {
+				n.lfs.InvalidateProjectIssues(i.Project.ID)
 			}
-			n.lfs.InvalidateDeleted(issuesDirIno(n.team.ID), name)
-
-			if n.lfs.debug {
-				log.Printf("Issue %s archived successfully", name)
-			}
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			// The archived issue must also vanish from recent/ immediately
+			// (symmetric with the create tail's recent/ coherence).
+			n.lfs.InvalidateDeleted(recentDirIno(n.team.ID), name)
+		},
+	})
 }
 
 // IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory

@@ -160,30 +160,30 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 		return syscall.EPERM
 	}
 
-	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	// Find the milestone by filename
-	for _, m := range milestones {
-		if milestoneFilename(m) == name {
-			err := n.lfs.DeleteProjectMilestone(ctx, m.ID)
+	return commitDelete(ctx, n.lfs, deleteSpec[api.ProjectMilestone]{
+		op:  `delete milestone "` + name + `"`,
+		key: collectionErrorKey("milestones", n.projectID),
+		find: func(ctx context.Context) (*api.ProjectMilestone, error) {
+			milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
 			if err != nil {
-				log.Printf("Failed to delete milestone: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("milestones", n.projectID), "Operation: delete milestone "+name+"\nError: "+err.Error())
-				return syscall.EIO
+				return nil, err
 			}
-			// Invalidate kernel cache for the milestones directory
-			n.lfs.InvalidateDeleted(milestonesDirIno(n.projectID), name)
-			if n.lfs.debug {
-				log.Printf("Milestone deleted successfully")
+			for _, m := range milestones {
+				if milestoneFilename(m) == name {
+					return &m, nil
+				}
 			}
-			return 0
-		}
-	}
-
-	return syscall.ENOENT
+			return nil, nil
+		},
+		mutate: func(ctx context.Context, m *api.ProjectMilestone) error {
+			return n.lfs.mutator().DeleteProjectMilestone(ctx, m.ID)
+		},
+		forget: func(ctx context.Context, m *api.ProjectMilestone) error {
+			return n.lfs.store.Queries().DeleteProjectMilestone(ctx, m.ID)
+		},
+		dir:  milestonesDirIno(n.projectID),
+		name: name,
+	})
 }
 
 // milestoneFilename returns the filename for a milestone
