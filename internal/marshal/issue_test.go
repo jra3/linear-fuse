@@ -51,7 +51,6 @@ func TestIssueToMarkdown(t *testing.T) {
 				"assignee: alice@example.com",
 				"due: \"2025-02-01\"",
 				"estimate: 5",
-				"team: ENG",
 				"project: Q1 Launch",
 				"- bug",
 				"- backend",
@@ -62,6 +61,7 @@ func TestIssueToMarkdown(t *testing.T) {
 				"identifier: ENG-456",
 				"url:",
 				"updated:",
+				"team:", // read-only -> issue.meta
 			},
 		},
 		{

@@ -69,9 +69,8 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 		fm["estimate"] = *issue.Estimate
 	}
 
-	if issue.Team != nil {
-		fm["team"] = issue.Team.Key
-	}
+	// team is read-only (an issue's team is fixed) — it lives in issue.meta, not
+	// here, so issue.md contains no editable-looking-but-ignored fields (#148).
 
 	if issue.Project != nil {
 		fm["project"] = issue.Project.Name
@@ -115,6 +114,9 @@ func IssueMetaToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byt
 	fm["id"] = issue.ID
 	fm["identifier"] = issue.Identifier
 	fm["url"] = issue.URL
+	if issue.Team != nil {
+		fm["team"] = issue.Team.Key
+	}
 	fm["created"] = issue.CreatedAt.Format(time.RFC3339)
 	fm["updated"] = issue.UpdatedAt.Format(time.RFC3339)
 	if issue.Creator != nil {

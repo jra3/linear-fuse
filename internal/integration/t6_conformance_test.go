@@ -74,7 +74,8 @@ func TestWriteContractMetaSplitGeneralizes(t *testing.T) {
 }
 
 // TestWriteContractLastSidecarShape: .last on a collection is read-only (0444)
-// and parses as a YAML list ({identifier,url,path,title,status}); empty is OK.
+// and parses as a YAML list of {identifier,url,path,title,status}. Creates one
+// issue first (via the mock) so the key assertions aren't vacuous on an empty log.
 func TestWriteContractLastSidecarShape(t *testing.T) {
 	info, err := os.Stat(issuesLastPath(testTeamKey))
 	if err != nil {
@@ -83,8 +84,19 @@ func TestWriteContractLastSidecarShape(t *testing.T) {
 	if info.Mode().Perm()&0o222 != 0 {
 		t.Errorf(".last should be read-only; mode=%v", info.Mode())
 	}
-	// Parses as a list (any accumulated entries must have the expected keys).
-	for _, e := range parseLastSidecar(t, issuesLastPath(testTeamKey)) {
+
+	if !liveAPIMode {
+		enableMockMutations(t)
+		if err := os.Mkdir(issueDirPath(testTeamKey, "Last Shape Probe"), 0755); err != nil {
+			t.Fatalf("seed create: %v", err)
+		}
+	}
+
+	entries := parseLastSidecar(t, issuesLastPath(testTeamKey))
+	if !liveAPIMode && len(entries) == 0 {
+		t.Fatal("expected at least one .last entry after a create")
+	}
+	for _, e := range entries {
 		for _, k := range []string{"identifier", "url", "path", "title", "status"} {
 			if _, ok := e[k]; !ok {
 				t.Errorf(".last entry missing key %q: %v", k, e)
@@ -124,6 +136,24 @@ func TestWriteContractAgentLoop(t *testing.T) {
 		t.Fatalf("expected >=2 %q entries in .last, found %d", marker, found)
 	}
 
+	// (a2) A non-issue create surface also reports to its .last: create a comment
+	// on TST-1 and confirm comments/.last gains an entry (guards the other five
+	// AppendWriteSuccess producers beyond team-issue creates).
+	commentBody := "agentloop comment marker"
+	if err := os.WriteFile(newCommentPath(testTeamKey, "TST-1"), []byte(commentBody), 0200); err != nil {
+		t.Fatalf("create comment: %v", err)
+	}
+	commentsLast := filepath.Join(commentsPath(testTeamKey, "TST-1"), ".last")
+	cfound := false
+	for _, e := range parseLastSidecar(t, commentsLast) {
+		if strings.Contains(e["title"], "agentloop comment marker") {
+			cfound = true
+		}
+	}
+	if !cfound {
+		t.Errorf("comments/.last has no entry after a comment create")
+	}
+
 	// (b) No-op rewrite of an editable file is byte-stable and clears .error.
 	noopByteStable(t, issueFilePath(testTeamKey, "TST-1"), issueDirPath(testTeamKey, "TST-1"))
 
@@ -154,6 +184,9 @@ func noopByteStable(t *testing.T, filePath, dirPath string) {
 	orig, err := os.ReadFile(filePath)
 	if err != nil {
 		t.Fatalf("read %s: %v", filePath, err)
+	}
+	if frontmatterOf(string(orig)) == "" {
+		t.Fatalf("%s has no frontmatter block — byte-stability check would be vacuous", filepath.Base(filePath))
 	}
 	claudeToolWrite(t, filePath, orig) // fails the test if close/commit errors
 

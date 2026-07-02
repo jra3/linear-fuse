@@ -1,8 +1,9 @@
 // Package mockmutation provides an in-memory fake of the Linear mutation surface
 // (the fs.MutationClient interface) for offline tests. It lets fixture-mode
-// integration tests exercise the *success* half of the write contract — create
-// reaches ClearWriteError/AppendWriteSuccess, edits verify read-your-writes —
-// without a network or API key.
+// integration tests exercise the *create* success path of the write contract —
+// mkdir / _create reach ClearWriteError/AppendWriteSuccess and upsert to the
+// store — without a network or API key. (Edit read-your-writes still runs
+// against the real client's re-fetch, so that half is covered only in live mode.)
 //
 // Each mutation echoes its input into a well-formed entity with a generated,
 // unique identity (id/identifier/url) and current timestamps. The fs write
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/db"
 )
 
 // globalSeq is a process-wide counter so identities are unique across every fake
@@ -30,6 +32,7 @@ var globalSeq int64 = 1000
 type Client struct {
 	teamKey string    // identifier prefix for created issues (default "TST")
 	now     time.Time // fixed clock for deterministic timestamps
+	store   *db.Store // optional: reverse-resolve IDs -> names for faithful read-back
 }
 
 // Option configures a Client.
@@ -38,6 +41,13 @@ type Option func(*Client)
 // WithTeamKey sets the identifier prefix used for created issues (e.g. "TST").
 func WithTeamKey(key string) Option {
 	return func(c *Client) { c.teamKey = key }
+}
+
+// WithStore lets the fake reverse-resolve resolved IDs (stateId, labelIds,
+// projectId) back to names so a created issue reads back with real status/labels/
+// project — matching what the live API returns. Without it those render blank.
+func WithStore(store *db.Store) Option {
+	return func(c *Client) { c.store = store }
 }
 
 // New returns a fake mutation client. Created issues get identifiers like
@@ -101,19 +111,19 @@ func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*api.Is
 		Team:        &api.Team{ID: str(input, "teamId"), Key: c.teamKey},
 	}
 	if sid := str(input, "stateId"); sid != "" {
-		issue.State = api.State{ID: sid}
+		issue.State = api.State{ID: sid, Name: c.stateName(ctx, sid)}
 	}
 	if aid := str(input, "assigneeId"); aid != "" {
 		issue.Assignee = &api.User{ID: aid}
 	}
 	if pid := str(input, "projectId"); pid != "" {
-		issue.Project = &api.Project{ID: pid}
+		issue.Project = &api.Project{ID: pid, Name: c.projectName(ctx, pid)}
 	}
 	if v, ok := input["labelIds"]; ok {
 		if ids, ok := v.([]string); ok {
 			nodes := make([]api.Label, len(ids))
 			for i, lid := range ids {
-				nodes[i] = api.Label{ID: lid}
+				nodes[i] = api.Label{ID: lid, Name: c.labelName(ctx, lid)}
 			}
 			issue.Labels = api.Labels{Nodes: nodes}
 		}
@@ -121,7 +131,63 @@ func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*api.Is
 	if pid := str(input, "parentId"); pid != "" {
 		issue.Parent = &api.ParentIssue{ID: pid}
 	}
+	if due := str(input, "dueDate"); due != "" {
+		issue.DueDate = &due
+	}
+	if v, ok := input["estimate"]; ok {
+		var est float64
+		switch e := v.(type) {
+		case int:
+			est = float64(e)
+		case int64:
+			est = float64(e)
+		case float64:
+			est = e
+		}
+		if est != 0 {
+			issue.Estimate = &est
+		}
+	}
+	if cid := str(input, "cycleId"); cid != "" {
+		issue.Cycle = &api.IssueCycle{ID: cid}
+	}
+	if mid := str(input, "projectMilestoneId"); mid != "" {
+		issue.ProjectMilestone = &api.ProjectMilestone{ID: mid}
+	}
 	return &issue, nil
+}
+
+// stateName/labelName/projectName reverse-resolve an ID to its name via the
+// injected store (empty if no store or not found), so a created issue reads back
+// with real status/labels/project like the live API returns.
+func (c *Client) stateName(ctx context.Context, id string) string {
+	if c.store == nil {
+		return ""
+	}
+	if s, err := c.store.Queries().GetState(ctx, id); err == nil {
+		return s.Name
+	}
+	return ""
+}
+
+func (c *Client) labelName(ctx context.Context, id string) string {
+	if c.store == nil {
+		return ""
+	}
+	if l, err := c.store.Queries().GetLabel(ctx, id); err == nil {
+		return l.Name
+	}
+	return ""
+}
+
+func (c *Client) projectName(ctx context.Context, id string) string {
+	if c.store == nil {
+		return ""
+	}
+	if p, err := c.store.Queries().GetProject(ctx, id); err == nil {
+		return p.Name
+	}
+	return ""
 }
 
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[string]any) error {

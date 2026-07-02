@@ -24,7 +24,10 @@ func enableMockMutations(t *testing.T) {
 	if liveAPIMode {
 		return // live mode uses the real API; the fake would mask it
 	}
-	lfs.InjectTestMutationClient(mockmutation.New(mockmutation.WithTeamKey(testTeamKey)))
+	lfs.InjectTestMutationClient(mockmutation.New(
+		mockmutation.WithTeamKey(testTeamKey),
+		mockmutation.WithStore(lfs.GetStore()),
+	))
 	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
 }
 

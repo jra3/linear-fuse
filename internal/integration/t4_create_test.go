@@ -96,6 +96,7 @@ func TestT4_ValidSpecSucceedsWithAssociations(t *testing.T) {
 		"priority: high\n" +
 		"status: In Progress\n" +
 		"labels: [Bug]\n" +
+		"due: \"2026-09-01\"\n" +
 		"---\n" +
 		"A body written at birth.\n"
 	if err := writeCreateSpec(t, spec); err != nil {
@@ -142,5 +143,23 @@ func TestT4_ValidSpecSucceedsWithAssociations(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "A body written at birth.") {
 		t.Errorf("description body not set at birth:\n%s", content)
+	}
+	// The associations full-object create exists for: status, labels, due — all
+	// resolved and set at birth, read back with real names (mock is store-backed).
+	if got, _ := doc.Frontmatter["status"].(string); got != "In Progress" {
+		t.Errorf("status not set at birth: %q (want In Progress)", got)
+	}
+	if got, _ := doc.Frontmatter["due"].(string); got != "2026-09-01" {
+		t.Errorf("due not set at birth: %q", got)
+	}
+	labels, _ := doc.Frontmatter["labels"].([]any)
+	hasBug := false
+	for _, l := range labels {
+		if s, _ := l.(string); s == "Bug" {
+			hasBug = true
+		}
+	}
+	if !hasBug {
+		t.Errorf("labels not set at birth: %v (want [Bug])", doc.Frontmatter["labels"])
 	}
 }
