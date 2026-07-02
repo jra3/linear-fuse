@@ -85,7 +85,7 @@ func (lfs *LinearFS) createIssueFromSpec(ctx context.Context, team api.Team, spe
 	if t, ok := spec["title"].(string); !ok || t == "" {
 		spec["title"] = "Untitled issue"
 	}
-	issue, err := lfs.mutator.CreateIssue(ctx, spec)
+	issue, err := lfs.mutator().CreateIssue(ctx, spec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -913,7 +913,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	}
 
 	// Call Linear API to update
-	if err := i.lfs.mutator.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
+	if err := i.lfs.mutator().UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
 		i.lfs.SetIssueError(i.issue.ID, "API error: "+err.Error())
 		return syscall.EIO
@@ -1078,7 +1078,7 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	issue, err := n.lfs.mutator.CreateIssue(ctx, input)
+	issue, err := n.lfs.mutator().CreateIssue(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create sub-issue: %v", err)
 		if retryableCreateErr(err) {

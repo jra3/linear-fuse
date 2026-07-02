@@ -694,7 +694,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: "+err.Error()+". See initiatives/ for valid initiative names.")
 				return syscall.EINVAL
 			}
-			if err := p.lfs.mutator.AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
+			if err := p.lfs.mutator().AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
 				log.Printf("Failed to add project to initiative '%s': %v", name, err)
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to link project to initiative: "+err.Error())
 				return syscall.EIO
@@ -715,7 +715,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: cannot resolve initiative to remove: "+err.Error())
 				return syscall.EINVAL
 			}
-			if err := p.lfs.mutator.RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
+			if err := p.lfs.mutator().RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
 				log.Printf("Failed to remove project from initiative '%s': %v", name, err)
 				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to unlink project from initiative: "+err.Error())
 				return syscall.EIO
@@ -741,7 +741,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		fieldChanged = true
 	}
 	if fieldChanged {
-		if err := p.lfs.mutator.UpdateProject(ctx, p.project.ID, projectInput); err != nil {
+		if err := p.lfs.mutator().UpdateProject(ctx, p.project.ID, projectInput); err != nil {
 			log.Printf("Failed to update project %s: %v", p.project.Name, err)
 			p.lfs.SetWriteError(p.project.ID, "Field: name/description\nError: failed to update project: "+err.Error())
 			return syscall.EIO

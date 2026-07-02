@@ -497,7 +497,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: "+err.Error()+". Use a project slug from teams/<KEY>/projects/.")
 				return syscall.EINVAL
 			}
-			if err := i.lfs.mutator.AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
+			if err := i.lfs.mutator().AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
 				log.Printf("Failed to add project to initiative '%s': %v", slug, err)
 				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: failed to link project to initiative: "+err.Error())
 				return syscall.EIO
@@ -518,7 +518,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: cannot resolve project to remove: "+err.Error())
 				return syscall.EINVAL
 			}
-			if err := i.lfs.mutator.RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
+			if err := i.lfs.mutator().RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
 				log.Printf("Failed to remove project from initiative '%s': %v", slug, err)
 				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: failed to unlink project from initiative: "+err.Error())
 				return syscall.EIO
@@ -544,7 +544,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		fieldChanged = true
 	}
 	if fieldChanged {
-		if err := i.lfs.mutator.UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
+		if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
 			log.Printf("Failed to update initiative %s: %v", i.initiative.Name, err)
 			i.lfs.SetWriteError(i.initiativeID, "Field: name/description\nError: failed to update initiative: "+err.Error())
 			return syscall.EIO
