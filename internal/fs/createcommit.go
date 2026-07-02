@@ -100,7 +100,7 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 
 	created, err := spec.mutate(ctx)
 	if err != nil {
-		msg, errno := classifyCreateErr(spec.op, err)
+		msg, errno := classifyMutationErr(spec.op, err)
 		log.Printf("Failed to %s: %v", spec.op, err)
 		sink.SetWriteError(spec.key, msg)
 		return nil, errno
@@ -124,11 +124,12 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 	return created, 0
 }
 
-// classifyCreateErr maps a mutate failure to its .error message and errno. This
-// is the single owner of the create-path failure model the generated README
-// documents: bad input -> EINVAL, missing reference -> ENOENT, transient ->
-// EAGAIN, backend failure -> EIO — either way the reason lands in .error.
-func classifyCreateErr(op string, err error) (string, syscall.Errno) {
+// classifyMutationErr maps a mutation failure to its .error message and errno.
+// This is the single owner of the write failure model the generated README
+// documents — shared by the create and delete tails: bad input -> EINVAL,
+// missing reference -> ENOENT, transient -> EAGAIN, backend failure -> EIO —
+// either way the reason lands in .error.
+func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {
 		return nferr.Detail(), syscall.ENOENT
@@ -138,7 +139,7 @@ func classifyCreateErr(op string, err error) (string, syscall.Errno) {
 		return ferr.Detail(), syscall.EINVAL
 	}
 	if retryableCreateErr(err) {
-		return "Operation: " + op + "\nError: the request was rate-limited or timed out before it completed, so nothing was created. Wait a few seconds and retry.", syscall.EAGAIN
+		return "Operation: " + op + "\nError: the request was rate-limited or timed out before it completed, so the operation did not take effect. Wait a few seconds and retry.", syscall.EAGAIN
 	}
 	return "Operation: " + op + "\nError: " + err.Error(), syscall.EIO
 }
