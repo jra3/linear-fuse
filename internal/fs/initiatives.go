@@ -132,6 +132,7 @@ func (i *InitiativeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "initiative.md", Mode: syscall.S_IFREG},
+		{Name: "initiative.meta", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
@@ -154,6 +155,12 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			Mode: syscall.S_IFREG,
 			Ino:  initiativeInfoIno(i.initiative.ID),
 		}), 0
+
+	case "initiative.meta":
+		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
+		content := node.metaContent()
+		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
+		return i.lfs.lookupMetaFile(ctx, i, i.initiative.ID, content, out), 0
 
 	case ".error":
 		return i.lfs.lookupErrorFile(ctx, i, i.initiative.ID, out), 0
@@ -271,59 +278,59 @@ var _ fs.NodeFlusher = (*InitiativeInfoNode)(nil)
 var _ fs.NodeFsyncer = (*InitiativeInfoNode)(nil)
 var _ fs.NodeSetattrer = (*InitiativeInfoNode)(nil)
 
+// generateContent renders the editable-only initiative.md: name, linked project
+// slugs, and the description body. Server-managed fields live in initiative.meta
+// (#150) so a successful write never rewrites the bytes the writer wrote.
 func (i *InitiativeInfoNode) generateContent() []byte {
-	var ownerYAML string
-	if i.initiative.Owner != nil {
-		ownerYAML = fmt.Sprintf(`owner:
-  id: %s
-  name: %q
-  email: %s
-`, i.initiative.Owner.ID, i.initiative.Owner.Name, i.initiative.Owner.Email)
-	}
+	fm := map[string]any{"name": i.initiative.Name}
 
-	var targetDate string
-	if i.initiative.TargetDate != nil {
-		targetDate = fmt.Sprintf("targetDate: %q\n", *i.initiative.TargetDate)
-	}
-
-	// Build project list (editable - use slugs like how projects use initiative names)
-	var projectsYAML string
 	if len(i.initiative.Projects.Nodes) > 0 {
-		projectsYAML = "projects:\n"
-		for _, p := range i.initiative.Projects.Nodes {
-			projectsYAML += fmt.Sprintf("  - %q\n", p.Slug)
+		slugs := make([]string, len(i.initiative.Projects.Nodes))
+		for j, p := range i.initiative.Projects.Nodes {
+			slugs[j] = p.Slug
+		}
+		fm["projects"] = slugs
+	}
+
+	out, err := marshal.Render(&marshal.Document{Frontmatter: fm, Body: i.initiative.Description})
+	if err != nil {
+		return []byte{}
+	}
+	return out
+}
+
+// metaContent renders the read-only initiative.meta: server-managed identity,
+// status, owner, appearance, and timestamps as a frontmatter-only block.
+func (i *InitiativeInfoNode) metaContent() []byte {
+	fm := map[string]any{
+		"id":      i.initiative.ID,
+		"slug":    i.initiative.Slug,
+		"url":     i.initiative.URL,
+		"status":  i.initiative.Status,
+		"created": i.initiative.CreatedAt.Format(time.RFC3339),
+		"updated": i.initiative.UpdatedAt.Format(time.RFC3339),
+	}
+	if i.initiative.Color != "" {
+		fm["color"] = i.initiative.Color
+	}
+	if i.initiative.Icon != "" {
+		fm["icon"] = i.initiative.Icon
+	}
+	if i.initiative.Owner != nil {
+		fm["owner"] = map[string]any{
+			"id":    i.initiative.Owner.ID,
+			"name":  i.initiative.Owner.Name,
+			"email": i.initiative.Owner.Email,
 		}
 	}
-
-	content := fmt.Sprintf(`---
-id: %s
-name: %q
-slug: %s
-url: %s
-status: %s
-color: %q
-icon: %q
-%s%s%screated: %q
-updated: %q
----
-
-%s
-`,
-		i.initiative.ID,
-		i.initiative.Name,
-		i.initiative.Slug,
-		i.initiative.URL,
-		i.initiative.Status,
-		i.initiative.Color,
-		i.initiative.Icon,
-		ownerYAML,
-		targetDate,
-		projectsYAML,
-		i.initiative.CreatedAt.Format(time.RFC3339),
-		i.initiative.UpdatedAt.Format(time.RFC3339),
-		i.initiative.Description,
-	)
-	return []byte(content)
+	if i.initiative.TargetDate != nil {
+		fm["targetDate"] = *i.initiative.TargetDate
+	}
+	out, err := marshal.Render(&marshal.Document{Frontmatter: fm})
+	if err != nil {
+		return []byte{}
+	}
+	return out
 }
 
 func (i *InitiativeInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {

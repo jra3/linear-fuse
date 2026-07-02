@@ -134,6 +134,32 @@ func projectsPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "projects")
 }
 
+func projectMetaPath(teamKey, slug string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", slug, "project.meta")
+}
+
+func initiativeMetaPath(slug string) string {
+	return filepath.Join(mountPoint, "initiatives", slug, "initiative.meta")
+}
+
+// assertMetaHasFields reads a .meta sidecar and fails if any field is missing.
+func assertMetaHasFields(t *testing.T, metaPath string, fields ...string) {
+	t.Helper()
+	content, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", metaPath, err)
+	}
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("parse %s frontmatter: %v", metaPath, err)
+	}
+	for _, f := range fields {
+		if _, ok := doc.Frontmatter[f]; !ok {
+			t.Errorf("%s missing server field %q", filepath.Base(metaPath), f)
+		}
+	}
+}
+
 func myPath() string {
 	return filepath.Join(mountPoint, "my")
 }

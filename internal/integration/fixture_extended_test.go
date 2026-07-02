@@ -150,13 +150,11 @@ func TestFixtureInitiativeInfoFile(t *testing.T) {
 		t.Fatalf("Failed to parse frontmatter: %v", err)
 	}
 
-	// Check required fields
-	requiredFields := []string{"id", "name", "slug", "status"}
-	for _, field := range requiredFields {
-		if _, ok := doc.Frontmatter[field]; !ok {
-			t.Errorf("Missing required field %q in initiative.md", field)
-		}
+	// Editable field in initiative.md; server fields moved to initiative.meta (#150).
+	if _, ok := doc.Frontmatter["name"]; !ok {
+		t.Errorf("Missing editable field %q in initiative.md", "name")
 	}
+	assertMetaHasFields(t, initiativeMetaPath(entries[0].Name()), "id", "slug", "status")
 }
 
 // =============================================================================

@@ -163,6 +163,58 @@ func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 	}
 }
 
+// TestIssue148_ProjectInitiativeMetaSplit is the T3/#156 receipt: the "editable
+// in, server-managed out" rule is general — project.md and initiative.md are now
+// editable-only, with server fields in read-only project.meta/initiative.meta.
+func TestIssue148_ProjectInitiativeMetaSplit(t *testing.T) {
+	// --- project ---
+	projMD := filepath.Join(projectsPath(testTeamKey), "test-project", "project.md")
+	content, err := os.ReadFile(projMD)
+	if err != nil {
+		t.Fatalf("read project.md: %v", err)
+	}
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		t.Fatalf("parse project.md: %v", err)
+	}
+	if _, ok := doc.Frontmatter["name"]; !ok {
+		t.Error("project.md missing editable field 'name'")
+	}
+	for _, f := range []string{"id", "slug", "url", "updated", "status"} {
+		if _, ok := doc.Frontmatter[f]; ok {
+			t.Errorf("project.md still contains server field %q — should live in project.meta", f)
+		}
+	}
+	assertMetaHasFields(t, projectMetaPath(testTeamKey, "test-project"), "id", "slug", "url", "status", "updated")
+	if err := os.WriteFile(projectMetaPath(testTeamKey, "test-project"), []byte("x"), 0644); err == nil {
+		t.Error("project.meta should be read-only, but a write succeeded")
+	}
+
+	// --- initiative (skip if none) ---
+	inits, err := os.ReadDir(initiativesPath())
+	if err != nil || firstRealEntry(inits) == "" {
+		return
+	}
+	slug := firstRealEntry(inits)
+	initContent, err := os.ReadFile(filepath.Join(initiativesPath(), slug, "initiative.md"))
+	if err != nil {
+		t.Fatalf("read initiative.md: %v", err)
+	}
+	idoc, err := parseFrontmatter(initContent)
+	if err != nil {
+		t.Fatalf("parse initiative.md: %v", err)
+	}
+	if _, ok := idoc.Frontmatter["name"]; !ok {
+		t.Error("initiative.md missing editable field 'name'")
+	}
+	for _, f := range []string{"id", "slug", "url", "updated", "status"} {
+		if _, ok := idoc.Frontmatter[f]; ok {
+			t.Errorf("initiative.md still contains server field %q — should live in initiative.meta", f)
+		}
+	}
+	assertMetaHasFields(t, initiativeMetaPath(slug), "id", "slug", "url", "status", "updated")
+}
+
 // TestIssue148_TypedNameNeqResultingPath is a lightweight corroboration of the
 // "typed name ≠ resulting path" friction (bump #4): a project's on-disk directory
 // is its slug, not the human title. An agent that `mkdir`s a titled project must
