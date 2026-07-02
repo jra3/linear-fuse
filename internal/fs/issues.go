@@ -150,7 +150,10 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create trigger (full-object issue creation)
+	// Handle _create trigger (full-object issue creation). Zero timeouts so each
+	// open re-looks-up a fresh node — sequential creates through the same path
+	// (a batch of `echo spec > _create`) each get a clean buffer, instead of the
+	// kernel reusing a spent node that would no-op the second create.
 	if name == "_create" {
 		now := time.Now()
 		node := &NewIssueCreateNode{BaseNode: BaseNode{lfs: n.lfs}, team: n.team}
@@ -159,8 +162,8 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
+		out.SetAttrTimeout(0)
+		out.SetEntryTimeout(0)
 		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 	}
 	// Handle .error feedback file (last failed issue creation in this team)
@@ -300,7 +303,6 @@ type NewIssueCreateNode struct {
 
 	mu      sync.Mutex
 	content []byte
-	created bool
 }
 
 var _ fs.NodeGetattrer = (*NewIssueCreateNode)(nil)
@@ -368,7 +370,7 @@ func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.created || len(n.content) == 0 {
+	if len(n.content) == 0 {
 		return 0
 	}
 
@@ -407,7 +409,9 @@ func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	}
 
 	n.lfs.finishIssueCreate(ctx, n.team, issue)
-	n.created = true
+	// Consume the buffer so the node can be reused for another spec (the kernel
+	// may hand the same node to a subsequent `echo spec > _create`).
+	n.content = nil
 	return 0
 }
 
