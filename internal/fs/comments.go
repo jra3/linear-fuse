@@ -71,6 +71,7 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	// Sort comments by creation time
@@ -114,6 +115,10 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	// Handle .error feedback file (last failed comment write in this dir)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("comments", n.issueID), out), 0
+	}
+	// Handle .last feedback file (recent successful comment creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("comments", n.issueID), out), 0
 	}
 
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
@@ -518,6 +523,12 @@ func (n *NewCommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Err
 		return syscall.EIO
 	}
 	n.lfs.ClearWriteError(collectionErrorKey("comments", n.issueID))
+	// Comments are addressed by an index-derived filename (not knowable without
+	// re-listing), so .last reports the comment id + a body snippet as the handle.
+	n.lfs.AppendWriteSuccess(collectionSuccessKey("comments", n.issueID), WriteResult{
+		Identifier: comment.ID,
+		Title:      firstLine(comment.Body),
+	})
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertComment(ctx, n.issueID, *comment); err != nil {

@@ -106,6 +106,7 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	for _, doc := range docs {
@@ -144,6 +145,10 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	// Handle .error feedback file (last failed doc write in this dir)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("docs", n.parentID()), out), 0
+	}
+	// Handle .last feedback file (recent successful doc creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("docs", n.parentID()), out), 0
 	}
 
 	docs, err := n.getDocuments(ctx)
@@ -662,6 +667,11 @@ func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return syscall.EIO
 	}
 	n.lfs.ClearWriteError(docErrKey)
+	n.lfs.AppendWriteSuccess(collectionSuccessKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)), WriteResult{
+		URL:   doc.URL,
+		Path:  documentFilename(*doc),
+		Title: doc.Title,
+	})
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertDocument(ctx, *doc); err != nil {

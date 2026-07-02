@@ -2,8 +2,11 @@ package integration
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // =============================================================================
@@ -32,14 +35,12 @@ func hasEntry(t *testing.T, dir, name string) bool {
 	return false
 }
 
-// TestIssue148_CreateHandsBackNoIdentifier corroborates P0 #1 ("mkdir returns no
-// handle"). Every writable-collection surface exposes a `.error` failure sidecar
-// but NO success sidecar (`.last` or `.created`). So after a create there is no
-// deterministic channel that reports the new identifier/url/path — the agent must
-// scavenge (`my/created/`, re-list, grep each issue.md) to recover it.
-//
-// When P0 #1 ships (a `.last`/`.created` sidecar symmetric with `.error`), this
-// test flips to failing and should be inverted to assert the sidecar exists.
+// TestIssue148_CreateHandsBackNoIdentifier is the T1/#149 receipt (inverted from
+// its original characterization form). Every writable-collection surface now
+// exposes BOTH a `.error` failure sidecar and a `.last` success sidecar, present
+// and readable even before any create. With the mock mutator (T0), a create
+// appends the new entity's identity to `.last`, so the agent recovers it in one
+// deterministic read instead of scavenging.
 func TestIssue148_CreateHandsBackNoIdentifier(t *testing.T) {
 	surfaces := []struct {
 		name string
@@ -53,19 +54,57 @@ func TestIssue148_CreateHandsBackNoIdentifier(t *testing.T) {
 
 	for _, s := range surfaces {
 		t.Run(s.name, func(t *testing.T) {
-			// Failure sidecar is present (the existing #140 contract)...
-			if !hasEntry(t, s.dir, ".error") {
-				t.Fatalf("%s: expected a .error failure sidecar", s.name)
-			}
-			// ...but no success sidecar hands the created identity back.
-			for _, success := range []string{".last", ".created"} {
-				if hasEntry(t, s.dir, success) {
-					t.Fatalf("%s: found success sidecar %q — P0 #1 appears to have shipped; "+
-						"invert this test to assert %q reports the new identifier/url/path",
-						s.name, success, success)
+			// Both sidecars are present and readable (symmetric feedback contract).
+			for _, sidecar := range []string{".error", ".last"} {
+				if !hasEntry(t, s.dir, sidecar) {
+					t.Fatalf("%s: expected a %q sidecar", s.name, sidecar)
+				}
+				if _, err := os.ReadFile(filepath.Join(s.dir, sidecar)); err != nil {
+					t.Fatalf("%s: %q not readable: %v", s.name, sidecar, err)
 				}
 			}
 		})
+	}
+}
+
+// TestIssue148_LastReportsCreatedIssueIdentity is the behavioral half of T1/#149:
+// with the mock mutator, creating an issue appends its identifier/url/path to
+// issues/.last as a YAML list, so a batch create is recoverable in one read.
+func TestIssue148_LastReportsCreatedIssueIdentity(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode behavioral check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	title := "Last Sidecar Identity Probe"
+	if err := os.Mkdir(issueDirPath(testTeamKey, title), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	data, err := os.ReadFile(issuesLastPath(testTeamKey))
+	if err != nil {
+		t.Fatalf("read issues/.last: %v", err)
+	}
+	var entries []map[string]string
+	if err := yaml.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("issues/.last is not a YAML list: %v\n%s", err, data)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("issues/.last empty after a create; got: %q", data)
+	}
+	last := entries[len(entries)-1]
+	if last["identifier"] == "" {
+		t.Errorf("last entry missing identifier: %v", last)
+	}
+	if last["path"] == "" {
+		t.Errorf("last entry missing path (addressable name): %v", last)
+	}
+	if last["url"] == "" {
+		t.Errorf("last entry missing url: %v", last)
+	}
+	// The reported path must resolve to a readable issue.
+	if _, err := os.ReadFile(issueFilePath(testTeamKey, last["path"])); err != nil {
+		t.Errorf("path %q from .last does not resolve to a readable issue: %v", last["path"], err)
 	}
 }
 
@@ -86,7 +125,7 @@ func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 
 	// There is no read-only metadata sidecar yet: server fields live in issue.md.
 	if hasEntry(t, dir, "issue.meta") {
-		t.Fatalf("found issue.meta — P0 #2 appears to have shipped; invert this test "+
+		t.Fatalf("found issue.meta — P0 #2 appears to have shipped; invert this test " +
 			"to assert issue.md holds only editable fields and issue.meta holds server fields")
 	}
 

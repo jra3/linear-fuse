@@ -68,7 +68,7 @@ func TestWriteBackDivergence_Truncation(t *testing.T) {
 	// Persisted value is substantially shorter than what we wrote, and matches
 	// neither the written nor the previous value → real truncation, fatal.
 	want := strings.Repeat("content line\n", 20) // ~260 chars
-	got := "content line\n"                       // almost everything dropped
+	got := "content line\n"                      // almost everything dropped
 	r := writeBackDivergence("description (body)", want, got, "totally different previous")
 	if r.message == "" {
 		t.Fatal("expected a divergence for a truncated persist, got none")

@@ -45,6 +45,9 @@ type LinearFS struct {
 	// Per-entity write errors (surfaced via .error virtual files)
 	writeErrors   map[string]*WriteError
 	writeErrorsMu gosync.RWMutex
+	// Per-collection create successes (surfaced via .last virtual files)
+	writeSuccesses   map[string][]*WriteResult
+	writeSuccessesMu gosync.RWMutex
 }
 
 // BaseNode provides common functionality for all LinearFS nodes.
@@ -89,14 +92,15 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	return &LinearFS{
-		uid:          uid,
-		gid:          gid,
-		client:       client,
-		mutator:      client,
-		debug:        debug,
-		fileCacheDir: cacheDir,
-		fileCache:    make(map[string][]byte),
-		writeErrors:  make(map[string]*WriteError),
+		uid:            uid,
+		gid:            gid,
+		client:         client,
+		mutator:        client,
+		debug:          debug,
+		fileCacheDir:   cacheDir,
+		fileCache:      make(map[string][]byte),
+		writeErrors:    make(map[string]*WriteError),
+		writeSuccesses: make(map[string][]*WriteResult),
 	}, nil
 }
 

@@ -67,9 +67,11 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return nil, syscall.EIO
 	}
 
-	// .error reports the last failed project creation in this team.
-	entries := make([]fuse.DirEntry, 0, len(projects)+1)
+	// .error reports the last failed project creation in this team; .last reports
+	// the identities of recent successful creations (#149).
+	entries := make([]fuse.DirEntry, 0, len(projects)+2)
 	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
+	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
 	for _, project := range projects {
 		entries = append(entries, fuse.DirEntry{
 			Name: projectDirName(project),
@@ -84,6 +86,10 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	// Handle .error feedback file (last failed project creation in this team)
 	if name == ".error" {
 		return p.lfs.lookupErrorFile(ctx, p, collectionErrorKey("projects", p.team.ID), out), 0
+	}
+	// Handle .last feedback file (recent successful project creations)
+	if name == ".last" {
+		return p.lfs.lookupSuccessFile(ctx, p, collectionSuccessKey("projects", p.team.ID), out), 0
 	}
 
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
@@ -133,6 +139,12 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		return nil, syscall.EIO
 	}
 	p.lfs.ClearWriteError(errKey)
+	p.lfs.AppendWriteSuccess(collectionSuccessKey("projects", p.team.ID), WriteResult{
+		Identifier: project.Slug,
+		URL:        project.URL,
+		Path:       projectDirName(*project),
+		Title:      project.Name,
+	})
 
 	// Upsert to SQLite so it's immediately visible
 	if err := p.lfs.UpsertProject(ctx, p.team.ID, *project); err != nil {

@@ -32,7 +32,7 @@ func enableMockMutations(t *testing.T) {
 // file (the _create trigger or the .error feedback file) rather than a real
 // entity file. Listing-assertion loops skip these.
 func isControlFile(name string) bool {
-	return name == "_create" || name == ".error"
+	return name == "_create" || name == ".error" || name == ".last"
 }
 
 // firstRealEntry returns the name of the first directory entry that is not a

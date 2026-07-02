@@ -59,6 +59,18 @@ func errorIno(issueID string) uint64 {
 	return h.Sum64()
 }
 
+// issueWriteResult projects a freshly-created issue into a .last success entry.
+// Path is the issue's identifier — the addressable on-disk directory name.
+func issueWriteResult(issue *api.Issue) WriteResult {
+	return WriteResult{
+		Identifier: issue.Identifier,
+		URL:        issue.URL,
+		Path:       issue.Identifier,
+		Title:      issue.Title,
+		Status:     issue.State.Name,
+	}
+}
+
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
 	BaseNode
@@ -85,9 +97,11 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// _create-style feedback: .error reports the last failed issue creation.
-	entries := make([]fuse.DirEntry, 0, len(issues)+1)
+	// _create-style feedback: .error reports the last failed issue creation,
+	// .last reports the identities of recent successful creations (#149).
+	entries := make([]fuse.DirEntry, 0, len(issues)+2)
 	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
+	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
 	for _, issue := range issues {
 		entries = append(entries, fuse.DirEntry{
 			Name: issue.Identifier,
@@ -102,6 +116,10 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Handle .error feedback file (last failed issue creation in this team)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("issues", n.team.ID), out), 0
+	}
+	// Handle .last feedback file (identities of recent successful creations)
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("issues", n.team.ID), out), 0
 	}
 
 	// Check if name looks like a valid issue identifier (e.g., "ENG-123")
@@ -207,6 +225,7 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		return nil, syscall.EIO
 	}
 	n.lfs.ClearWriteError(errKey)
+	n.lfs.AppendWriteSuccess(collectionSuccessKey("issues", n.team.ID), issueWriteResult(issue))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
@@ -304,6 +323,7 @@ func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 		{Name: "issue.md", Mode: syscall.S_IFREG},
 		{Name: "history.md", Mode: syscall.S_IFREG},
 		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 		{Name: "comments", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "children", Mode: syscall.S_IFDIR},
@@ -371,6 +391,10 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 
 	case ".error":
 		return n.lfs.lookupErrorFile(ctx, n, n.issue.ID, out), 0
+
+	case ".last":
+		// Successes of sub-issues created under this issue (via children/).
+		return n.lfs.lookupSuccessFile(ctx, n, n.issue.ID, out), 0
 
 	case "comments":
 		teamID := ""
@@ -898,6 +922,9 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		return nil, syscall.EIO
 	}
 	n.lfs.ClearWriteError(n.issue.ID)
+	// Sub-issue identity surfaces on the parent issue's .last (issues/{ID}/.last),
+	// the nearest writable feedback file (mirrors the .error placement above).
+	n.lfs.AppendWriteSuccess(n.issue.ID, issueWriteResult(issue))
 
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
