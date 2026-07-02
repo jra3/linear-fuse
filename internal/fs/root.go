@@ -151,20 +151,22 @@ teams/{KEY}/
     .last                           [read-only: sub-issues created via children/]
     comments/                       [_create=trigger, .error=feedback, .last=created ids]
       {id}.md                       [read/write]
-    docs/                           [_create=trigger, .error=feedback]
+    docs/                           [_create=trigger, .error=feedback, .last=created docs]
       {slug}.md                     [read/write]
     attachments/                    [embedded files + external links]
       _create                       [write "URL [title]" to link]
       .error                        [read-only: last failed write here]
+      .last                         [read-only: recent successful links]
       *.png, *.pdf                  [read-only: embedded images/files]
       *.link                        [read-only: external link info]
     relations/                      [issue dependencies/links]
       _create                       [write "type ID" to create]
       .error                        [read-only: last failed write here]
+      .last                         [read-only: recent created relations]
       {type}-{ID}.rel               [read-only info, rm to delete]
     children/                       [symlinks to sub-issues, mkdir to create]
   by/status|label|assignee/{value}/ [issue symlinks]
-  labels/                           [_create=trigger, .error=feedback]
+  labels/                           [_create=trigger, .error=feedback, .last=created labels]
     {name}.md                       [read/write, rm to delete]
   projects/                         [mkdir "Name" to create a project]
     .error                          [read-only: last failed project creation]
@@ -178,6 +180,7 @@ teams/{KEY}/
     milestones/                     [project milestones]
       _create                       [write "name\ndescription" to create]
       .error                        [read-only: last failed write here]
+      .last                         [read-only: recent created milestones]
       {name}.md                     [read/write, rm to delete]
     {ISSUE-ID} symlinks
   cycles/
@@ -279,10 +282,10 @@ _create is a write-only trigger file (like /proc/sysrq-trigger):
 - Writing creates a new item and consumes the content
 - Editors fail because they read-before-write (vim, vscode) and the read is rejected
 - Use piped output: echo "text" > _create, cat file > _create
-- Created items appear as separate files (e.g., 001-2025-01-15.md). Entity-minting
-  surfaces (issues, children, comments, docs, labels, projects, milestones) expose
-  a sibling .last with the new identity; read .error for a failure. attachments/
-  and relations/ instead surface the result as the created *.link / *.rel file.
+- Created items appear as separate files (e.g., 001-2025-01-15.md). Every create
+  surface (issues, children, comments, docs, labels, projects, milestones,
+  attachments, relations) exposes a sibling .last with the new identity; read
+  .error for a failure.
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
 </_create_behavior>
 
@@ -298,8 +301,10 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
 
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
+- Reference to something that doesn't exist (e.g. relation target) -> ENOENT
+- Rate-limited or timed out (nothing was created; retry shortly) -> EAGAIN
 - Backend/API failure -> EIO
-- Either way the reason lands in .error; success clears it.
+- Whatever the errno, the reason lands in .error; success clears it.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
 Validated issue fields: status, assignee, labels, priority, project, milestone, cycle, parent

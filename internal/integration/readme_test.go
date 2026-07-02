@@ -47,4 +47,16 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	if _, err := os.ReadFile(issuesPath(testTeamKey) + "/_create"); err == nil {
 		t.Error("issues/_create is readable, but README documents it as write-only")
 	}
+
+	// The create tail unified the failure model and closed the .last gap: the
+	// README must document EAGAIN/ENOENT alongside EINVAL/EIO, and must not
+	// resurrect the "attachments and relations don't report to .last" carve-out.
+	for _, want := range []string{"EAGAIN", "ENOENT"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README failure model does not mention %q", want)
+		}
+	}
+	if strings.Contains(readme, "instead surface the result") {
+		t.Error("README carves attachments/relations out of .last, but every create surface reports to .last now")
+	}
 }
