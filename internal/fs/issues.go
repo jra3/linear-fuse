@@ -979,7 +979,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// before i.issue is overwritten below.
 	fresh, errno := commitWriteBack(ctx, i.lfs, writeBackSpec[api.Issue]{
 		errKey:  i.issue.ID,
-		fetch:   func(ctx context.Context) (*api.Issue, error) { return i.lfs.client.GetIssue(ctx, i.issue.ID) },
+		fetch:   func(ctx context.Context) (*api.Issue, error) { return i.lfs.verify().GetIssue(ctx, i.issue.ID) },
 		persist: func(ctx context.Context, fresh *api.Issue) error { return i.lfs.UpsertIssue(ctx, *fresh) },
 		compare: func(fresh *api.Issue) []writeBackResult {
 			var results []writeBackResult

@@ -2,20 +2,26 @@
 // (the fs.MutationClient interface) for offline tests. It lets fixture-mode
 // integration tests exercise the *create* success path of the write contract —
 // mkdir / _create reach ClearWriteError/AppendWriteSuccess and upsert to the
-// store — without a network or API key. (Edit read-your-writes still runs
-// against the real client's re-fetch, so that half is covered only in live mode.)
+// store — without a network or API key.
 //
-// Each mutation echoes its input into a well-formed entity with a generated,
+// It also implements fs's read-your-writes verify seam (GetIssue/GetProject/
+// GetInitiative), so the *edit* success path is provable offline too: an issue/
+// project/initiative Update records the edited free-text fields, and the matching
+// getter serves them back (falling back to the store for unedited entities). That
+// makes the edit-commit tail (fetch → persist → compare) run against fake state
+// in fixture mode instead of taking commitWriteBack's "unverified" early return.
+//
+// Each create echoes its input into a well-formed entity with a generated,
 // unique identity (id/identifier/url) and current timestamps. The fs write
-// handlers are responsible for upserting the returned entity into the injected
-// SQLite store, so subsequent reads observe it; the fake itself is stateless
-// except for a monotonic sequence counter.
+// handlers upsert the returned entity into the injected SQLite store, so
+// subsequent reads observe it.
 package mockmutation
 
 import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +39,14 @@ type Client struct {
 	teamKey string    // identifier prefix for created issues (default "TST")
 	now     time.Time // fixed clock for deterministic timestamps
 	store   *db.Store // optional: reverse-resolve IDs -> names for faithful read-back
+
+	// edits records the post-Update free-text state of entities so the verify
+	// getters return read-your-writes-faithful values offline. Seeded from the
+	// store on first edit; getters fall back to the store when nothing is recorded.
+	mu        sync.Mutex
+	issueEdit map[string]api.Issue
+	projEdit  map[string]api.Project
+	initEdit  map[string]api.Initiative
 }
 
 // Option configures a Client.
@@ -54,7 +68,13 @@ func WithStore(store *db.Store) Option {
 // "TST-1001" (prefix configurable via WithTeamKey), starting above the usual
 // fixture range so they never collide with seeded fixtures.
 func New(opts ...Option) *Client {
-	c := &Client{teamKey: "TST", now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	c := &Client{
+		teamKey:   "TST",
+		now:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		issueEdit: make(map[string]api.Issue),
+		projEdit:  make(map[string]api.Project),
+		initEdit:  make(map[string]api.Initiative),
+	}
 	for _, o := range opts {
 		o(c)
 	}
@@ -191,6 +211,16 @@ func (c *Client) projectName(ctx context.Context, id string) string {
 }
 
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[string]any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	iss := c.currentIssueLocked(ctx, issueID)
+	if v, ok := input["title"].(string); ok {
+		iss.Title = v
+	}
+	if v, ok := input["description"].(string); ok {
+		iss.Description = v
+	}
+	c.issueEdit[issueID] = iss
 	return nil
 }
 
@@ -267,6 +297,16 @@ func (c *Client) CreateProject(ctx context.Context, input map[string]any) (*api.
 }
 
 func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.ProjectUpdateInput) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	proj := c.currentProjectLocked(ctx, projectID)
+	if input.Name != nil {
+		proj.Name = *input.Name
+	}
+	if input.Description != nil {
+		proj.Description = *input.Description
+	}
+	c.projEdit[projectID] = proj
 	return nil
 }
 
@@ -307,6 +347,16 @@ func (c *Client) CreateInitiativeUpdate(ctx context.Context, initiativeID, body,
 // ---- Initiatives ----
 
 func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, input api.InitiativeUpdateInput) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	init := c.currentInitiativeLocked(ctx, initiativeID)
+	if input.Name != nil {
+		init.Name = *input.Name
+	}
+	if input.Description != nil {
+		init.Description = *input.Description
+	}
+	c.initEdit[initiativeID] = init
 	return nil
 }
 
@@ -339,3 +389,75 @@ func (c *Client) LinkURL(ctx context.Context, issueID, url, title string) (*api.
 }
 
 func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) error { return nil }
+
+// ---- Read-your-writes verify seam (fs.verifyReader) ----
+//
+// These serve the edit-commit tail's re-fetch: the recorded post-Update state if
+// the entity was edited, else the current stored entity. Returning stored state
+// keeps a no-op rewrite byte-stable; returning the edit keeps an actual edit's
+// read-your-writes verification faithful — both offline.
+
+func (c *Client) GetIssue(ctx context.Context, issueID string) (*api.Issue, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	iss := c.currentIssueLocked(ctx, issueID)
+	return &iss, nil
+}
+
+func (c *Client) GetProject(ctx context.Context, projectID string) (*api.Project, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	proj := c.currentProjectLocked(ctx, projectID)
+	return &proj, nil
+}
+
+func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*api.Initiative, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	init := c.currentInitiativeLocked(ctx, initiativeID)
+	return &init, nil
+}
+
+// currentIssueLocked returns the recorded post-edit issue, else the stored issue,
+// else a bare {ID}. The caller must hold c.mu.
+func (c *Client) currentIssueLocked(ctx context.Context, id string) api.Issue {
+	if e, ok := c.issueEdit[id]; ok {
+		return e
+	}
+	if c.store != nil {
+		if row, err := c.store.Queries().GetIssueByID(ctx, id); err == nil {
+			if iss, err := db.DBIssueToAPIIssue(row); err == nil {
+				return iss
+			}
+		}
+	}
+	return api.Issue{ID: id}
+}
+
+func (c *Client) currentProjectLocked(ctx context.Context, id string) api.Project {
+	if e, ok := c.projEdit[id]; ok {
+		return e
+	}
+	if c.store != nil {
+		if row, err := c.store.Queries().GetProject(ctx, id); err == nil {
+			if proj, err := db.DBProjectToAPIProject(row); err == nil {
+				return proj
+			}
+		}
+	}
+	return api.Project{ID: id}
+}
+
+func (c *Client) currentInitiativeLocked(ctx context.Context, id string) api.Initiative {
+	if e, ok := c.initEdit[id]; ok {
+		return e
+	}
+	if c.store != nil {
+		if row, err := c.store.Queries().GetInitiative(ctx, id); err == nil {
+			if init, err := db.DBInitiativeToAPIInitiative(row); err == nil {
+				return init
+			}
+		}
+	}
+	return api.Initiative{ID: id}
+}

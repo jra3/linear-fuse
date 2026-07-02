@@ -67,3 +67,23 @@ type MutationClient interface {
 
 // compile-time assertion that the concrete client satisfies the seam.
 var _ MutationClient = (*api.Client)(nil)
+
+// verifyReader is the read-your-writes surface the edit-commit tail uses to
+// re-fetch an entity after a mutation and verify what actually persisted. It is
+// split from MutationClient (mutations-only) so a test can serve the verify
+// fetch from an in-memory fake. With a fixture API key the real client's
+// re-fetch 401s, so commitWriteBack takes its "unverified success" early return
+// and the edit tail (fetch → persist → compare) never runs offline — making the
+// no-op byte-stability conformance checks vacuous. Injecting a store-backed
+// reader lets that tail actually execute in fixture mode.
+//
+// The concrete *api.Client satisfies this directly, so production wiring is
+// unchanged (LinearFS.verifier is the same client used for every other read).
+type verifyReader interface {
+	GetIssue(ctx context.Context, issueID string) (*api.Issue, error)
+	GetProject(ctx context.Context, projectID string) (*api.Project, error)
+	GetInitiative(ctx context.Context, initiativeID string) (*api.Initiative, error)
+}
+
+// compile-time assertion that the concrete client satisfies the verify seam.
+var _ verifyReader = (*api.Client)(nil)

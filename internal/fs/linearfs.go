@@ -27,9 +27,10 @@ import (
 // Read operations go through the Repository (SQLite + on-demand API fetch).
 // Write operations (mutations) use the API Client directly.
 type LinearFS struct {
-	client      *api.Client    // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
-	mutatorImpl MutationClient // Mutations only; defaults to client, swappable for tests
-	mutatorMu   gosync.RWMutex // guards mutatorImpl (FUSE handlers read it while tests swap it)
+	client       *api.Client    // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
+	mutatorImpl  MutationClient // Mutations only; defaults to client, swappable for tests
+	verifierImpl verifyReader   // Read-your-writes re-fetch; defaults to client, swappable for tests
+	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl (handlers read while tests swap)
 
 	repo       *repo.SQLiteRepository // For all read operations
 	server     *fuse.Server           // FUSE server for kernel cache invalidation
@@ -98,6 +99,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		gid:            gid,
 		client:         client,
 		mutatorImpl:    client,
+		verifierImpl:   client,
 		debug:          debug,
 		fileCacheDir:   cacheDir,
 		fileCache:      make(map[string][]byte),
@@ -1116,14 +1118,23 @@ func (lfs *LinearFS) GetStore() *db.Store {
 // network). Reads/infrastructure continue to use the real client. Pass nil to
 // restore the default (mutations hit the real client and fail without an API key,
 // which the loud-failure tests rely on).
+// If mc also implements verifyReader (as the mockmutation fake does), the
+// read-your-writes verify fetch is routed to it too, so the edit-commit tail
+// runs against fake state offline instead of taking the "unverified" branch.
 func (lfs *LinearFS) InjectTestMutationClient(mc MutationClient) {
 	lfs.mutatorMu.Lock()
 	defer lfs.mutatorMu.Unlock()
 	if mc == nil {
 		lfs.mutatorImpl = lfs.client
+		lfs.verifierImpl = lfs.client
 		return
 	}
 	lfs.mutatorImpl = mc
+	if vr, ok := mc.(verifyReader); ok {
+		lfs.verifierImpl = vr
+	} else {
+		lfs.verifierImpl = lfs.client
+	}
 }
 
 // mutator returns the current mutation client under a read lock, so a FUSE
@@ -1133,6 +1144,15 @@ func (lfs *LinearFS) mutator() MutationClient {
 	lfs.mutatorMu.RLock()
 	defer lfs.mutatorMu.RUnlock()
 	return lfs.mutatorImpl
+}
+
+// verify returns the current read-your-writes reader under a read lock (same
+// guard as mutator). Production uses the real client; tests may swap in a
+// store-backed fake via InjectTestMutationClient.
+func (lfs *LinearFS) verify() verifyReader {
+	lfs.mutatorMu.RLock()
+	defer lfs.mutatorMu.RUnlock()
+	return lfs.verifierImpl
 }
 
 // =============================================================================

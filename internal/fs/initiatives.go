@@ -568,8 +568,9 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		}
 	}
 
-	// Fetch fresh initiative from API and upsert to SQLite for immediate visibility
-	freshInitiative, err := i.lfs.client.GetInitiative(ctx, i.initiativeID)
+	// Fetch fresh initiative (read-your-writes) and upsert to SQLite for immediate
+	// visibility. Goes through the verify seam so a fake can serve it offline.
+	freshInitiative, err := i.lfs.verify().GetInitiative(ctx, i.initiativeID)
 	var divergence string
 	var fatal bool
 	if err != nil {

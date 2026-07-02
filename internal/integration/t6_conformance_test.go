@@ -157,16 +157,13 @@ func TestWriteContractAgentLoop(t *testing.T) {
 	// (b) No-op rewrite of an editable file is byte-stable and clears .error.
 	noopByteStable(t, issueFilePath(testTeamKey, "TST-1"), issueDirPath(testTeamKey, "TST-1"))
 
-	// (c) Same byte-stability for project.md and initiative.md.
-	//
-	// NOTE: offline this is a weaker check than (b). The mock mutator has no
-	// single-entity reader, so commitWriteBack's read-your-writes fetch (which
-	// still uses the real API client) fails and the handler keeps its unchanged
-	// local state — the re-read is byte-identical largely by construction. The
-	// invariant that actually prevents self-mutation now — the editable file
-	// carrying no server-managed fields at all — is guarded structurally by
-	// TestWriteContractMetaSplitGeneralizes. This step remains a useful guard
-	// that a no-op write returns success (no errno) and leaves .error clean.
+	// (c) Same byte-stability for project.md and initiative.md. Unlike (b) —
+	// which short-circuits at len(updates)==0 before the tail — a project/
+	// initiative no-op still runs the full edit-commit tail. The mock implements
+	// fs's verify seam (read-your-writes served from the store), so offline the
+	// tail genuinely executes fetch → persist → compare rather than taking the
+	// "unverified" early return. TestWriteContractEditVerifiesOffline below
+	// exercises the actual-edit direction.
 	projDir := filepath.Join(projectsPath(testTeamKey), "test-project")
 	noopByteStable(t, filepath.Join(projDir, "project.md"), projDir)
 	inits, err := os.ReadDir(initiativesPath())
@@ -183,6 +180,46 @@ func TestWriteContractAgentLoop(t *testing.T) {
 	after := parseLastSidecar(t, issuesLastPath(testTeamKey))
 	if len(after) < before {
 		t.Errorf(".last shrank after a failed create: %d -> %d (append log should survive)", before, len(after))
+	}
+}
+
+// TestWriteContractEditVerifiesOffline proves the edit-commit tail runs against
+// fake state in fixture mode (the F9 fix): an actual project.md edit goes through
+// the mock's read-your-writes verify seam, so the change persists and survives a
+// re-read with a clean .error. In the pre-seam behavior the verify fetch 401'd,
+// commitWriteBack took its "unverified" early return, persist was skipped, and
+// the edit was lost offline — so the marker's survival is a genuine discriminator.
+func TestWriteContractEditVerifiesOffline(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode; exercises the mock verify seam")
+	}
+	enableMockMutations(t)
+
+	projDir := filepath.Join(projectsPath(testTeamKey), "test-project")
+	projMD := filepath.Join(projDir, "project.md")
+	orig, err := os.ReadFile(projMD)
+	if err != nil {
+		t.Fatalf("read project.md: %v", err)
+	}
+
+	// Append a marker to the body (the project description) and save.
+	marker := "verify-seam-marker-847"
+	edited := append(append([]byte{}, orig...), []byte("\n"+marker+"\n")...)
+	claudeToolWrite(t, projMD, edited)
+
+	// The read-your-writes verify ran against the mock's recorded edit and found
+	// no divergence, so .error is clean.
+	if data, _ := os.ReadFile(filepath.Join(projDir, ".error")); strings.TrimSpace(string(data)) != "" {
+		t.Fatalf("project .error non-empty after a verified edit: %q", data)
+	}
+
+	// The edit persisted (the tail ran fetch → persist), so it survives a re-read.
+	after, err := readFileWithRetry(projMD, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("re-read project.md: %v", err)
+	}
+	if !strings.Contains(string(after), marker) {
+		t.Errorf("edited description marker %q lost after re-read (verify tail did not persist offline):\n%s", marker, after)
 	}
 }
 
