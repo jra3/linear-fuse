@@ -117,47 +117,35 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		log.Printf("Mkdir: creating project %s in team %s", name, p.team.Key)
 	}
 
-	input := map[string]any{
-		"name":    name,
-		"teamIds": []string{p.team.ID},
-	}
-
-	// Bound the create so a rate-limited request fails legibly instead of
-	// hanging (#131); surface EAGAIN + a retry hint via projects/.error.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	errKey := collectionErrorKey("projects", p.team.ID)
-	project, err := p.lfs.CreateProject(ctx, input)
-	if err != nil {
-		log.Printf("Failed to create project: %v", err)
-		if retryableCreateErr(err) {
-			p.lfs.SetWriteError(errKey, "Operation: create project \""+name+"\"\nError: the request was rate-limited or timed out before it completed, so no project was created. Wait a few seconds and try the mkdir again.")
-			return nil, syscall.EAGAIN
-		}
-		p.lfs.SetWriteError(errKey, "Operation: create project \""+name+"\"\nError: "+err.Error())
-		return nil, syscall.EIO
-	}
-	p.lfs.ClearWriteError(errKey)
-	p.lfs.AppendWriteSuccess(collectionSuccessKey("projects", p.team.ID), WriteResult{
-		Identifier: project.Slug,
-		URL:        project.URL,
-		Path:       projectDirName(*project),
-		Title:      project.Name,
+	project, errno := commitCreate(ctx, p.lfs, createSpec[api.Project]{
+		op:  `create project "` + name + `"`,
+		key: collectionErrorKey("projects", p.team.ID),
+		mutate: func(ctx context.Context) (*api.Project, error) {
+			return p.lfs.mutator().CreateProject(ctx, map[string]any{
+				"name":    name,
+				"teamIds": []string{p.team.ID},
+			})
+		},
+		result: func(pr *api.Project) WriteResult {
+			return WriteResult{
+				Identifier: pr.Slug,
+				URL:        pr.URL,
+				Path:       projectDirName(*pr),
+				Title:      pr.Name,
+			}
+		},
+		persist: func(ctx context.Context, pr *api.Project) error {
+			return p.lfs.UpsertProject(ctx, p.team.ID, *pr)
+		},
+		dir:       projectsDirIno(p.team.ID),
+		entryName: func(pr *api.Project) string { return projectDirName(*pr) },
+		invalidateExtra: func(*api.Project) {
+			p.lfs.InvalidateTeamProjects(p.team.ID)
+		},
 	})
-
-	// Upsert to SQLite so it's immediately visible
-	if err := p.lfs.UpsertProject(ctx, p.team.ID, *project); err != nil {
-		log.Printf("Warning: failed to upsert project to SQLite: %v", err)
-		// Don't fail - the project was created in Linear, sync will eventually pick it up
+	if errno != 0 {
+		return nil, errno
 	}
-
-	// Invalidate cache
-	p.lfs.InvalidateTeamProjects(p.team.ID)
-
-	// Keep the kernel's directory listing coherent (previously skipped the dir
-	// inode, so a newly-created project was missing from the listing).
-	p.lfs.InvalidateCreated(projectsDirIno(p.team.ID), name)
 
 	node := &ProjectNode{
 		BaseNode: BaseNode{lfs: p.lfs},

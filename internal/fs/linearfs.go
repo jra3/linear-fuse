@@ -544,11 +544,6 @@ func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
 	// No-op: SQLite is source of truth
 }
 
-// CreateProject creates a new project
-func (lfs *LinearFS) CreateProject(ctx context.Context, input map[string]any) (*api.Project, error) {
-	return lfs.mutator().CreateProject(ctx, input)
-}
-
 // ArchiveProject archives a project
 func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamID string) error {
 	return lfs.mutator().ArchiveProject(ctx, projectID)
