@@ -464,48 +464,32 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		return 0
 	}
 
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	milestoneErrKey := collectionErrorKey("milestones", n.projectID)
-
-	// Parse the new milestone content
-	name, description := marshal.ParseNewMilestone(n.content)
-
-	if name == "" {
-		log.Printf("New milestone has no name")
-		n.lfs.SetWriteError(milestoneErrKey, "Operation: create milestone\nError: milestone has no name. Add a 'name:' field to the frontmatter.")
-		return syscall.EINVAL
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.ProjectMilestone]{
+		op:  "create milestone",
+		key: collectionErrorKey("milestones", n.projectID),
+		mutate: func(ctx context.Context) (*api.ProjectMilestone, error) {
+			name, description := marshal.ParseNewMilestone(n.content)
+			if name == "" {
+				return nil, &FieldError{Field: "name", Message: "milestone has no name. Add a 'name:' field to the frontmatter."}
+			}
+			return n.lfs.mutator().CreateProjectMilestone(ctx, n.projectID, name, description)
+		},
+		result: func(m *api.ProjectMilestone) WriteResult {
+			return WriteResult{
+				Path:  milestoneFilename(*m),
+				Title: m.Name,
+			}
+		},
+		persist: func(ctx context.Context, m *api.ProjectMilestone) error {
+			return n.lfs.UpsertProjectMilestone(ctx, n.projectID, *m)
+		},
+		dir:       milestonesDirIno(n.projectID),
+		entryName: func(m *api.ProjectMilestone) string { return milestoneFilename(*m) },
+	})
+	if errno != 0 {
+		return errno
 	}
-
-	if n.lfs.debug {
-		log.Printf("Creating milestone: name=%s", name)
-	}
-
-	milestone, err := n.lfs.CreateProjectMilestone(ctx, n.projectID, name, description)
-	if err != nil {
-		log.Printf("Failed to create milestone: %v", err)
-		n.lfs.SetWriteError(milestoneErrKey, "Operation: create milestone\nError: "+err.Error())
-		return syscall.EIO
-	}
-	n.lfs.ClearWriteError(milestoneErrKey)
-	if milestone != nil {
-		n.lfs.AppendWriteSuccess(collectionSuccessKey("milestones", n.projectID), WriteResult{
-			Path:  milestoneFilename(*milestone),
-			Title: milestone.Name,
-		})
-	}
-
 	n.created = true
-
-	// Invalidate kernel cache for milestones directory
-	n.lfs.InvalidateCreated(milestonesDirIno(n.projectID), "")
-
-	if n.lfs.debug {
-		log.Printf("Milestone created successfully")
-	}
-
 	return 0
 }
 

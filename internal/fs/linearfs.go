@@ -621,10 +621,6 @@ func (lfs *LinearFS) TryGetCachedComments(issueID string) ([]api.Comment, bool) 
 	return comments, len(comments) > 0
 }
 
-func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body string) (*api.Comment, error) {
-	return lfs.mutator().CreateComment(ctx, issueID, body)
-}
-
 func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentID string, body string) (*api.Comment, error) {
 	return lfs.mutator().UpdateComment(ctx, commentID, body)
 }
@@ -670,10 +666,6 @@ func (lfs *LinearFS) InvalidateTeamDocuments(teamID string) {
 // InvalidateProjectDocuments is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
 	// No-op: SQLite is source of truth
-}
-
-func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (*api.Document, error) {
-	return lfs.mutator().CreateDocument(ctx, input)
 }
 
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
@@ -872,20 +864,6 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
 }
 
-// CreateProjectMilestone creates a new milestone for a project. It goes through
-// the mutation seam (so InjectTestMutationClient can intercept it offline) and
-// then upserts to SQLite for immediate visibility.
-func (lfs *LinearFS) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
-	milestone, err := lfs.mutator().CreateProjectMilestone(ctx, projectID, name, description)
-	if err != nil {
-		return nil, err
-	}
-	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
-		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
-	}
-	return milestone, nil
-}
-
 // UpdateProjectMilestone updates an existing milestone via the mutation seam,
 // then upserts to SQLite. The owning project ID is recovered from the cache so
 // the upsert keeps the association.
@@ -1003,11 +981,6 @@ func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName str
 // InvalidateTeamLabels is a no-op; SQLite is the source of truth
 func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 	// No-op: SQLite is source of truth
-}
-
-// CreateLabel creates a new label
-func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*api.Label, error) {
-	return lfs.mutator().CreateLabel(ctx, input)
 }
 
 // UpdateLabel updates a label
