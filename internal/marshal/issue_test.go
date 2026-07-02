@@ -780,3 +780,26 @@ func TestMarkdownToIssueCreateInvalidPriority(t *testing.T) {
 		t.Errorf("error should be priority-prefixed for .error normalization, got: %v", err)
 	}
 }
+
+func TestMarkdownToIssueCreateCoercesScalars(t *testing.T) {
+	t.Parallel()
+	// Unquoted due parses as time.Time; priority/estimate as numbers; title as int.
+	// None of these must be silently dropped (the #148 failure mode).
+	content := []byte("---\ntitle: 12345\ndue: 2026-02-01\npriority: 2\nestimate: 3\n---\nbody\n")
+	got, err := MarkdownToIssueCreate(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["title"] != "12345" {
+		t.Errorf("title = %v, want coerced \"12345\"", got["title"])
+	}
+	if got["dueDate"] != "2026-02-01" {
+		t.Errorf("dueDate = %v, want \"2026-02-01\" (unquoted date coerced, not dropped)", got["dueDate"])
+	}
+	if got["priority"] != 2 {
+		t.Errorf("priority = %v, want numeric 2 (not dropped)", got["priority"])
+	}
+	if got["estimate"] != 3 {
+		t.Errorf("estimate = %v (type %T), want int 3", got["estimate"], got["estimate"])
+	}
+}

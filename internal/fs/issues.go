@@ -150,10 +150,10 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create trigger (full-object issue creation). Zero timeouts so each
-	// open re-looks-up a fresh node — sequential creates through the same path
-	// (a batch of `echo spec > _create`) each get a clean buffer, instead of the
-	// kernel reusing a spent node that would no-op the second create.
+	// Handle _create trigger (full-object issue creation). The kernel may reuse
+	// this node across opens, so correctness does not depend on node identity:
+	// Flush consumes the buffer (success or failure), so each `echo spec >
+	// _create` starts clean and a spent/failed spec never bleeds into the next.
 	if name == "_create" {
 		now := time.Now()
 		node := &NewIssueCreateNode{BaseNode: BaseNode{lfs: n.lfs}, team: n.team}
@@ -374,12 +374,18 @@ func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		return 0
 	}
 
+	// Consume the buffer up front so this spec can never bleed into a later write
+	// (go-fuse may hand the same node to a subsequent `echo spec > _create`, and a
+	// failed create must not leave leftovers that prepend to the next one).
+	content := n.content
+	n.content = nil
+
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	errKey := collectionErrorKey("issues", n.team.ID)
 
-	spec, err := marshal.MarkdownToIssueCreate(n.content)
+	spec, err := marshal.MarkdownToIssueCreate(content)
 	if err != nil {
 		// Normalize the marshal parse/validation error to the Field/Value/Error
 		// shape so it matches the resolver's EINVAL errors.
@@ -409,9 +415,6 @@ func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	}
 
 	n.lfs.finishIssueCreate(ctx, n.team, issue)
-	// Consume the buffer so the node can be reused for another spec (the kernel
-	// may hand the same node to a subsequent `echo spec > _create`).
-	n.content = nil
 	return 0
 }
 
@@ -519,14 +522,25 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		}), 0
 
 	case "issue.meta":
-		// Read-only server-managed fields (identity, timestamps, links, relations).
-		attachments, _ := n.lfs.GetIssueAttachments(ctx, n.issue.ID)
-		content, err := marshal.IssueMetaToMarkdown(&n.issue, attachments...)
-		if err != nil {
-			return nil, syscall.EIO
+		// Read-only server-managed fields (identity, timestamps, links, relations),
+		// rendered read-through from the freshest issue in the repo so an edit to
+		// issue.md is reflected here (go-fuse reuses this node across lookups).
+		lfs := n.lfs
+		ident := n.issue.Identifier
+		snapshot := n.issue
+		render := func() []byte {
+			iss := &snapshot
+			if fresh, err := lfs.FetchIssueByIdentifier(context.Background(), ident); err == nil && fresh != nil {
+				iss = fresh
+			}
+			att, _ := lfs.GetIssueAttachments(context.Background(), iss.ID)
+			b, err := marshal.IssueMetaToMarkdown(iss, att...)
+			if err != nil {
+				return nil
+			}
+			return b
 		}
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		return n.lfs.lookupMetaFile(ctx, n, n.issue.ID, content, out), 0
+		return n.lfs.lookupMetaFile(ctx, n, n.issue.ID, render, n.issue.UpdatedAt, n.issue.CreatedAt, out), 0
 
 	case "history.md":
 		// Fetch history content during Lookup so we can set the actual size
@@ -956,6 +970,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	// Invalidate kernel cache for this file
 	i.lfs.InvalidateUpdated(issueIno(i.issue.ID))
+	i.lfs.InvalidateUpdated(metaIno(i.issue.ID)) // issue.meta reflects the edit
 
 	// Edit-commit tail: re-fetch from the API (an independent read catches #136,
 	// where a large body silently reverts), verify read-your-writes against the

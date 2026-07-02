@@ -45,7 +45,13 @@ func (n *RecentNode) recentIssues(ctx context.Context) ([]api.Issue, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(issues, func(i, j int) bool {
+	// Stable sort with an Identifier tiebreaker: equal updatedAt (common under
+	// batch syncs / the test's fixed clock) must not reorder nondeterministically
+	// at the recentLimit cutoff, or `ls` and the cap would disagree run-to-run.
+	sort.SliceStable(issues, func(i, j int) bool {
+		if issues[i].UpdatedAt.Equal(issues[j].UpdatedAt) {
+			return issues[i].Identifier > issues[j].Identifier
+		}
 		return issues[i].UpdatedAt.After(issues[j].UpdatedAt)
 	})
 	if len(issues) > recentLimit {
@@ -67,7 +73,10 @@ func (n *RecentNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *RecentNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	issues, err := n.recentIssues(ctx)
+	// Resolve against ALL team issues, not just the capped window: lookup must be
+	// a superset of readdir so a name that appeared in `ls recent/` never fails
+	// its per-entry stat (the safe direction; the cap lives only in Readdir).
+	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

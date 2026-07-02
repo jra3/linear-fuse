@@ -297,12 +297,26 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		}), 0
 	}
 
-	// Handle project.meta (read-only server-managed fields)
+	// Handle project.meta (read-only server-managed fields), rendered read-through
+	// from the freshest project so an edit to project.md is reflected here.
 	if name == "project.meta" {
-		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: p.project}
-		content := node.metaContent()
-		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.lfs.lookupMetaFile(ctx, p, p.project.ID, content, out), 0
+		lfs := p.lfs
+		team := p.team
+		snapshot := p.project
+		render := func() []byte {
+			proj := snapshot
+			if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
+				for _, pr := range projs {
+					if pr.ID == snapshot.ID {
+						proj = pr
+						break
+					}
+				}
+			}
+			node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
+			return node.metaContent()
+		}
+		return p.lfs.lookupMetaFile(ctx, p, p.project.ID, render, p.project.UpdatedAt, p.project.CreatedAt, out), 0
 	}
 
 	// Handle .error feedback file (last failed write to project.md)
@@ -806,6 +820,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateUpdated(projectInfoIno(p.project.ID))
+	p.lfs.InvalidateUpdated(metaIno(p.project.ID)) // project.meta reflects the edit
 
 	p.dirty = false
 	p.contentReady = false // Force re-generate on next read

@@ -157,10 +157,24 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		}), 0
 
 	case "initiative.meta":
-		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
-		content := node.metaContent()
-		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-		return i.lfs.lookupMetaFile(ctx, i, i.initiative.ID, content, out), 0
+		// Read-through from the freshest initiative so an edit to initiative.md is
+		// reflected here (go-fuse reuses this node across lookups).
+		lfs := i.lfs
+		snapshot := i.initiative
+		render := func() []byte {
+			init := snapshot
+			if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
+				for _, it := range inits {
+					if it.ID == snapshot.ID {
+						init = it
+						break
+					}
+				}
+			}
+			node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
+			return node.metaContent()
+		}
+		return i.lfs.lookupMetaFile(ctx, i, i.initiative.ID, render, i.initiative.UpdatedAt, i.initiative.CreatedAt, out), 0
 
 	case ".error":
 		return i.lfs.lookupErrorFile(ctx, i, i.initiative.ID, out), 0
@@ -607,6 +621,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 
 	// Invalidate kernel inode cache (initiative.md and the projects/ listing)
 	i.lfs.InvalidateUpdated(initiativeInfoIno(i.initiativeID))
+	i.lfs.InvalidateUpdated(metaIno(i.initiativeID)) // initiative.meta reflects the edit
 	i.lfs.InvalidateUpdated(initiativeProjectsIno(i.initiativeID))
 
 	i.dirty = false

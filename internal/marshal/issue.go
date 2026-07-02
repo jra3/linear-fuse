@@ -367,18 +367,34 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	fm := doc.Frontmatter
 	create := make(map[string]any)
 
-	if title, ok := fm["title"].(string); ok && title != "" {
-		create["title"] = title
+	// Coerce scalars rather than silently dropping wrong-typed values — a bare
+	// `due: 2026-02-01` parses as time.Time, `priority: 2` as int, etc. Silent
+	// field-drops are exactly the #148 failure mode this surface exists to kill.
+	if v, ok := fm["title"]; ok {
+		if s := scalarToString(v); s != "" {
+			create["title"] = s
+		}
 	}
 	if status, ok := fm["status"].(string); ok && status != "" {
 		create["stateId"] = status // resolved to state ID
 	}
-	if priority, ok := fm["priority"].(string); ok && priority != "" {
-		p, err := api.ValidatePriority(priority)
-		if err != nil {
-			return nil, fmt.Errorf("priority: %w", err)
+	if v, ok := fm["priority"]; ok {
+		switch p := v.(type) {
+		case string:
+			if p != "" {
+				n, err := api.ValidatePriority(p)
+				if err != nil {
+					return nil, fmt.Errorf("priority: %w", err)
+				}
+				create["priority"] = n
+			}
+		case int:
+			create["priority"] = p // numeric Linear priority (0-4)
+		case float64:
+			create["priority"] = int(p)
+		default:
+			return nil, fmt.Errorf("priority: must be a name (none|low|medium|high|urgent) or 0-4")
 		}
-		create["priority"] = p
 	}
 	if assignee, ok := fm["assignee"].(string); ok && assignee != "" {
 		create["assigneeId"] = assignee // resolved to user ID
@@ -386,15 +402,17 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	if labels := stringSliceFromYAML(fm["labels"]); len(labels) > 0 {
 		create["labelIds"] = labels // resolved to label IDs
 	}
-	if due, ok := fm["due"].(string); ok && due != "" {
-		create["dueDate"] = due
+	if v, ok := fm["due"]; ok {
+		if s := dueToString(v); s != "" {
+			create["dueDate"] = s
+		}
 	}
 	if estimate, ok := fm["estimate"]; ok {
 		switch v := estimate.(type) {
 		case int:
-			create["estimate"] = float64(v)
-		case float64:
 			create["estimate"] = v
+		case float64:
+			create["estimate"] = int(v) // Linear estimate is an integer
 		}
 	}
 	if project, ok := fm["project"].(string); ok && project != "" {
@@ -414,6 +432,30 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	}
 
 	return create, nil
+}
+
+// scalarToString coerces a YAML scalar (string, number, bool) to its string
+// form so a wrong-typed-but-meaningful value isn't silently dropped.
+func scalarToString(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case nil:
+		return ""
+	case time.Time:
+		return s.Format("2006-01-02")
+	default:
+		return fmt.Sprint(s)
+	}
+}
+
+// dueToString coerces a due-date value to YYYY-MM-DD. Unquoted YAML dates parse
+// as time.Time; quoted ones as string.
+func dueToString(v any) string {
+	if t, ok := v.(time.Time); ok {
+		return t.Format("2006-01-02")
+	}
+	return scalarToString(v)
 }
 
 // stringSliceFromYAML coerces a YAML value (parsed as []any or []string) into a

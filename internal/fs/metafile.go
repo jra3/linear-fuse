@@ -19,11 +19,15 @@ import (
 // successful write to the editable file never rewrites the bytes the writer
 // wrote — the staleness/"modified since read" churn goes away.
 //
-// MetaFileNode holds pre-rendered content and serves it read-only with
-// FOPEN_DIRECT_IO + zero attr/entry timeouts. Because the content is regenerated
-// from the freshly-fetched entity on every Lookup (and DIRECT_IO forces a real
-// READ), freshness after a Flush is automatic — no per-Flush meta-inode
-// invalidation is needed.
+// MetaFileNode is READ-THROUGH: it holds a render closure (not baked bytes) and
+// renders current content inside Read/Getattr, exactly like ErrorFileNode and
+// SuccessFileNode. This is load-bearing: go-fuse dedups inodes by StableAttr.Ino,
+// so a second Lookup for the same entity returns the *original* node and discards
+// any freshly-constructed one — baking bytes at Lookup would serve stale content
+// for the life of the mount. Rendering on demand from a live source (the repo)
+// means the served node always reflects current state. Editors of the sibling
+// editable file call InvalidateUpdated(metaIno(id)) so the kernel drops its
+// cached size/attrs and re-reads.
 
 // metaIno derives the stable inode for an `<entity>.meta` file from a key
 // (typically the entity's Linear ID). The "meta:" prefix keeps it from colliding
@@ -34,20 +38,22 @@ func metaIno(key string) uint64 {
 	return h.Sum64()
 }
 
-// lookupMetaFile mounts a read-only `.meta` virtual file with the given
-// pre-rendered content as a child of parent. key drives the stable inode.
-func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, key string, content []byte, out *fuse.EntryOut) *fs.Inode {
-	node := &MetaFileNode{BaseNode: BaseNode{lfs: lfs}, content: content}
+// lookupMetaFile mounts a read-only `.meta` virtual file backed by a render
+// closure as a child of parent. render is called on demand (Lookup/Read/Getattr)
+// and must return the current meta bytes from a live source. mtime/ctime are the
+// entity's updated/created times (best-effort; refreshed on the next Lookup).
+func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, key string, render func() []byte, mtime, ctime time.Time, out *fuse.EntryOut) *fs.Inode {
+	node := &MetaFileNode{BaseNode: BaseNode{lfs: lfs}, render: render, mtime: mtime, ctime: ctime}
 
-	now := time.Now()
 	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
 	out.Attr.Uid = lfs.uid
 	out.Attr.Gid = lfs.gid
-	out.Attr.Size = uint64(len(content))
-	// Zero timeouts + DIRECT_IO: always reflect the latest server state.
+	out.Attr.Size = uint64(len(render()))
+	// Feedback-file caching model: don't trust a cached size. Editors of the
+	// sibling editable file InvalidateUpdated(metaIno) to force a refresh.
 	out.SetAttrTimeout(0)
 	out.SetEntryTimeout(0)
-	out.Attr.SetTimes(&now, &now, &now)
+	out.Attr.SetTimes(&mtime, &mtime, &ctime)
 
 	return parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{
 		Mode: syscall.S_IFREG,
@@ -55,10 +61,14 @@ func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder
 	})
 }
 
-// MetaFileNode is a read-only virtual file serving pre-rendered `.meta` content.
+// MetaFileNode is a read-only virtual file that renders `.meta` content on demand
+// from a live source (never baked bytes — see the package comment on go-fuse
+// inode dedup).
 type MetaFileNode struct {
 	BaseNode
-	content []byte
+	render func() []byte
+	mtime  time.Time
+	ctime  time.Time
 }
 
 var _ fs.NodeGetattrer = (*MetaFileNode)(nil)
@@ -68,7 +78,8 @@ var _ fs.NodeReader = (*MetaFileNode)(nil)
 func (m *MetaFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = 0444 // Read-only
 	m.SetOwner(out)
-	out.Size = uint64(len(m.content))
+	out.Size = uint64(len(m.render()))
+	out.SetTimes(&m.mtime, &m.mtime, &m.ctime)
 	return 0
 }
 
@@ -77,16 +88,19 @@ func (m *MetaFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, u
 	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
 		return nil, 0, syscall.EACCES
 	}
+	// DIRECT_IO: content is volatile; force a real READ (through render) on each
+	// open instead of trusting a cached page.
 	return nil, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func (m *MetaFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	if off >= int64(len(m.content)) {
+	content := m.render()
+	if off >= int64(len(content)) {
 		return fuse.ReadResultData(nil), 0
 	}
 	end := off + int64(len(dest))
-	if end > int64(len(m.content)) {
-		end = int64(len(m.content))
+	if end > int64(len(content)) {
+		end = int64(len(content))
 	}
-	return fuse.ReadResultData(m.content[off:end]), 0
+	return fuse.ReadResultData(content[off:end]), 0
 }

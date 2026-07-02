@@ -101,11 +101,19 @@ func (lfs *LinearFS) AppendWriteSuccess(key string, r WriteResult) {
 	lfs.InvalidateUpdated(successIno(key))
 }
 
-// GetWriteSuccess returns the recorded successes for a collection key (nil if none).
+// GetWriteSuccess returns a copy of the recorded successes for a collection key
+// (nil if none). A copy — not the internal slice — so a caller can't race a
+// concurrent AppendWriteSuccess that re-slices/appends under the write lock.
 func (lfs *LinearFS) GetWriteSuccess(key string) []*WriteResult {
 	lfs.writeSuccessesMu.RLock()
 	defer lfs.writeSuccessesMu.RUnlock()
-	return lfs.writeSuccesses[key]
+	src := lfs.writeSuccesses[key]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]*WriteResult, len(src))
+	copy(out, src)
+	return out
 }
 
 // ClearWriteSuccess drops the recorded successes for a collection key (used by tests).
