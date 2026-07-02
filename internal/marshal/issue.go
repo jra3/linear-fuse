@@ -2,6 +2,9 @@ package marshal
 
 import (
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -187,168 +190,171 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	}
 
 	update := make(map[string]any)
+	fm := doc.Frontmatter
 
-	// Check each editable field for changes
-	if title, ok := doc.Frontmatter["title"].(string); ok && title != original.Title {
-		update["title"] = title
+	// Every editable field is coerced to its scalar form (scalarToString) before
+	// comparison so a wrong-typed-but-meaningful value — an unquoted `due:` that
+	// parsed as time.Time, a numeric `title:`/`cycle:`, a quoted `estimate: "3"` —
+	// is applied rather than silently ignored (the #148 no-op-write failure mode,
+	// which the create path already avoids). "Present but empty" is treated as
+	// "not set"; explicit removal is keyed on the field being absent entirely.
+
+	if v, present := fm["title"]; present {
+		if title := scalarToString(v); title != "" && title != original.Title {
+			update["title"] = title
+		}
 	}
 
-	if status, ok := doc.Frontmatter["status"].(string); ok {
-		origStatus := ""
-		if original.State.ID != "" {
-			origStatus = original.State.Name
-		}
-		if status != origStatus {
-			update["stateId"] = status // Will need to resolve to actual state ID
+	if v, present := fm["status"]; present {
+		if status := scalarToString(v); status != "" {
+			origStatus := ""
+			if original.State.ID != "" {
+				origStatus = original.State.Name
+			}
+			if status != origStatus {
+				update["stateId"] = status // Will need to resolve to actual state ID
+			}
 		}
 	}
 
-	if priority, ok := doc.Frontmatter["priority"].(string); ok {
-		newPriority, err := api.ValidatePriority(priority)
+	if v, present := fm["priority"]; present {
+		newPriority, set, err := coercePriority(v)
 		if err != nil {
 			return nil, fmt.Errorf("priority: %w", err)
 		}
-		if newPriority != original.Priority {
+		if set && newPriority != original.Priority {
 			update["priority"] = newPriority
 		}
 	}
 
-	// Check assignee
-	if assignee, ok := doc.Frontmatter["assignee"].(string); ok {
-		origAssignee := ""
-		if original.Assignee != nil {
-			origAssignee = original.Assignee.Email
-		}
-		if assignee != origAssignee {
-			update["assigneeId"] = assignee // Will need to resolve to actual user ID
-		}
-	} else if _, exists := doc.Frontmatter["assignee"]; !exists && original.Assignee != nil {
-		// Assignee was removed - set to null
-		update["assigneeId"] = nil
-	}
-
-	// Check due date
-	if due, ok := doc.Frontmatter["due"].(string); ok {
-		origDue := ""
-		if original.DueDate != nil {
-			origDue = *original.DueDate
-		}
-		if due != origDue {
-			update["dueDate"] = due
-		}
-	} else if _, exists := doc.Frontmatter["due"]; !exists && original.DueDate != nil {
-		// Due date was removed - set to null
-		update["dueDate"] = nil
-	}
-
-	// Check estimate - YAML may parse as int or float64
-	if estimate, ok := doc.Frontmatter["estimate"]; ok {
-		var newEstimate float64
-		switch v := estimate.(type) {
-		case int:
-			newEstimate = float64(v)
-		case float64:
-			newEstimate = v
-		}
-		origEstimate := float64(0)
-		if original.Estimate != nil {
-			origEstimate = *original.Estimate
-		}
-		if newEstimate != origEstimate {
-			update["estimate"] = int(newEstimate)
-		}
-	} else if _, exists := doc.Frontmatter["estimate"]; !exists && original.Estimate != nil {
-		// Estimate was removed - set to null
-		update["estimate"] = nil
-	}
-
-	// Check labels
-	if labelsRaw, ok := doc.Frontmatter["labels"]; ok {
-		var newLabels []string
-		switch v := labelsRaw.(type) {
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					newLabels = append(newLabels, s)
-				}
+	// Assignee
+	if v, present := fm["assignee"]; present {
+		if assignee := scalarToString(v); assignee != "" {
+			origAssignee := ""
+			if original.Assignee != nil {
+				origAssignee = original.Assignee.Email
 			}
-		case []string:
-			newLabels = v
+			if assignee != origAssignee {
+				update["assigneeId"] = assignee // Will need to resolve to actual user ID
+			}
 		}
+	} else if original.Assignee != nil {
+		update["assigneeId"] = nil // removed
+	}
 
-		// Get original label names
+	// Due date
+	if v, present := fm["due"]; present {
+		if due := scalarToString(v); due != "" {
+			origDue := ""
+			if original.DueDate != nil {
+				origDue = *original.DueDate
+			}
+			if due != origDue {
+				update["dueDate"] = due
+			}
+		}
+	} else if original.DueDate != nil {
+		update["dueDate"] = nil // removed
+	}
+
+	// Estimate — accepts int, float (truncated), or numeric string. An
+	// unrecognized type leaves the field untouched (never coerces to 0).
+	if v, present := fm["estimate"]; present {
+		if newEstimate, valid := coerceEstimate(v); valid {
+			origEstimate := 0
+			if original.Estimate != nil {
+				origEstimate = int(*original.Estimate)
+			}
+			if newEstimate != origEstimate {
+				update["estimate"] = newEstimate
+			}
+		}
+	} else if original.Estimate != nil {
+		update["estimate"] = nil // removed
+	}
+
+	// Labels
+	if labelsRaw, present := fm["labels"]; present {
+		newLabels := stringSliceFromYAML(labelsRaw)
+
 		origLabels := make([]string, len(original.Labels.Nodes))
 		for i, l := range original.Labels.Nodes {
 			origLabels[i] = l.Name
 		}
 
-		// Check if labels changed (order-independent comparison)
+		// Order-independent comparison
 		if !stringSlicesEqual(newLabels, origLabels) {
 			update["labelIds"] = newLabels // Will need to resolve to actual label IDs
 		}
-	} else if _, exists := doc.Frontmatter["labels"]; !exists && len(original.Labels.Nodes) > 0 {
-		// Labels were removed - set to empty
-		update["labelIds"] = []string{}
+	} else if len(original.Labels.Nodes) > 0 {
+		update["labelIds"] = []string{} // removed
 	}
 
-	// Check parent
-	if parent, ok := doc.Frontmatter["parent"].(string); ok {
-		origParent := ""
-		if original.Parent != nil {
-			origParent = original.Parent.Identifier
+	// Parent
+	if v, present := fm["parent"]; present {
+		if parent := scalarToString(v); parent != "" {
+			origParent := ""
+			if original.Parent != nil {
+				origParent = original.Parent.Identifier
+			}
+			if parent != origParent {
+				update["parentId"] = parent // Will need to resolve to actual issue ID
+			}
 		}
-		if parent != origParent {
-			update["parentId"] = parent // Will need to resolve to actual issue ID
-		}
-	} else if _, exists := doc.Frontmatter["parent"]; !exists && original.Parent != nil {
-		// Parent was removed - set to null
-		update["parentId"] = nil
+	} else if original.Parent != nil {
+		update["parentId"] = nil // removed
 	}
 
-	// Check project
-	if project, ok := doc.Frontmatter["project"].(string); ok {
-		origProject := ""
-		if original.Project != nil {
-			origProject = original.Project.Name
+	// Project
+	if v, present := fm["project"]; present {
+		if project := scalarToString(v); project != "" {
+			origProject := ""
+			if original.Project != nil {
+				origProject = original.Project.Name
+			}
+			if project != origProject {
+				update["projectId"] = project // Will need to resolve to actual project ID
+			}
 		}
-		if project != origProject {
-			update["projectId"] = project // Will need to resolve to actual project ID
-		}
-	} else if _, exists := doc.Frontmatter["project"]; !exists && original.Project != nil {
-		// Project was removed - set to null
-		update["projectId"] = nil
+	} else if original.Project != nil {
+		update["projectId"] = nil // removed
 	}
 
-	// Check milestone
-	if milestone, ok := doc.Frontmatter["milestone"].(string); ok {
-		origMilestone := ""
-		if original.ProjectMilestone != nil {
-			origMilestone = original.ProjectMilestone.Name
+	// Milestone
+	if v, present := fm["milestone"]; present {
+		if milestone := scalarToString(v); milestone != "" {
+			origMilestone := ""
+			if original.ProjectMilestone != nil {
+				origMilestone = original.ProjectMilestone.Name
+			}
+			if milestone != origMilestone {
+				update["projectMilestoneId"] = milestone // Will need to resolve to actual milestone ID
+			}
 		}
-		if milestone != origMilestone {
-			update["projectMilestoneId"] = milestone // Will need to resolve to actual milestone ID
-		}
-	} else if _, exists := doc.Frontmatter["milestone"]; !exists && original.ProjectMilestone != nil {
-		// Milestone was removed - set to null
-		update["projectMilestoneId"] = nil
+	} else if original.ProjectMilestone != nil {
+		update["projectMilestoneId"] = nil // removed
 	}
 
-	// Check cycle
-	if cycle, ok := doc.Frontmatter["cycle"].(string); ok {
-		origCycle := ""
-		if original.Cycle != nil {
-			origCycle = original.Cycle.Name
+	// Cycle
+	if v, present := fm["cycle"]; present {
+		if cycle := scalarToString(v); cycle != "" {
+			origCycle := ""
+			if original.Cycle != nil {
+				origCycle = original.Cycle.Name
+			}
+			if cycle != origCycle {
+				update["cycleId"] = cycle // Will need to resolve to actual cycle ID
+			}
 		}
-		if cycle != origCycle {
-			update["cycleId"] = cycle // Will need to resolve to actual cycle ID
-		}
-	} else if _, exists := doc.Frontmatter["cycle"]; !exists && original.Cycle != nil {
-		// Cycle was removed - set to null
-		update["cycleId"] = nil
+	} else if original.Cycle != nil {
+		update["cycleId"] = nil // removed
 	}
 
-	// Check description (body)
-	if doc.Body != original.Description {
+	// Description (body). IssueToMarkdown renders a `# <Title>` placeholder for an
+	// empty description; a no-op rewrite of such an issue must not push that
+	// placeholder back as a real description (the byte-stable-write contract).
+	if doc.Body != original.Description &&
+		!(original.Description == "" && doc.Body == fmt.Sprintf("# %s\n", original.Title)) {
 		update["description"] = doc.Body
 	}
 
@@ -377,29 +383,23 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 			create["title"] = s
 		}
 	}
-	if status, ok := fm["status"].(string); ok && status != "" {
-		create["stateId"] = status // resolved to state ID
+	// Relational fields are coerced to their string name (via scalarToString)
+	// rather than bare `.(string)` — a numeric name (`cycle: 42`) or other
+	// non-string scalar must not be silently dropped (#148).
+	if s := scalarToString(fm["status"]); s != "" {
+		create["stateId"] = s // resolved to state ID
 	}
 	if v, ok := fm["priority"]; ok {
-		switch p := v.(type) {
-		case string:
-			if p != "" {
-				n, err := api.ValidatePriority(p)
-				if err != nil {
-					return nil, fmt.Errorf("priority: %w", err)
-				}
-				create["priority"] = n
-			}
-		case int:
-			create["priority"] = p // numeric Linear priority (0-4)
-		case float64:
-			create["priority"] = int(p)
-		default:
-			return nil, fmt.Errorf("priority: must be a name (none|low|medium|high|urgent) or 0-4")
+		n, set, err := coercePriority(v)
+		if err != nil {
+			return nil, fmt.Errorf("priority: %w", err)
+		}
+		if set {
+			create["priority"] = n
 		}
 	}
-	if assignee, ok := fm["assignee"].(string); ok && assignee != "" {
-		create["assigneeId"] = assignee // resolved to user ID
+	if s := scalarToString(fm["assignee"]); s != "" {
+		create["assigneeId"] = s // resolved to user ID
 	}
 	if labels := stringSliceFromYAML(fm["labels"]); len(labels) > 0 {
 		create["labelIds"] = labels // resolved to label IDs
@@ -409,25 +409,22 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 			create["dueDate"] = s
 		}
 	}
-	if estimate, ok := fm["estimate"]; ok {
-		switch v := estimate.(type) {
-		case int:
-			create["estimate"] = v
-		case float64:
-			create["estimate"] = int(v) // Linear estimate is an integer
+	if v, ok := fm["estimate"]; ok {
+		if n, valid := coerceEstimate(v); valid {
+			create["estimate"] = n // Linear estimate is an integer
 		}
 	}
-	if project, ok := fm["project"].(string); ok && project != "" {
-		create["projectId"] = project // resolved to project ID
+	if s := scalarToString(fm["project"]); s != "" {
+		create["projectId"] = s // resolved to project ID
 	}
-	if milestone, ok := fm["milestone"].(string); ok && milestone != "" {
-		create["projectMilestoneId"] = milestone // resolved to milestone ID
+	if s := scalarToString(fm["milestone"]); s != "" {
+		create["projectMilestoneId"] = s // resolved to milestone ID
 	}
-	if cycle, ok := fm["cycle"].(string); ok && cycle != "" {
-		create["cycleId"] = cycle // resolved to cycle ID
+	if s := scalarToString(fm["cycle"]); s != "" {
+		create["cycleId"] = s // resolved to cycle ID
 	}
-	if parent, ok := fm["parent"].(string); ok && parent != "" {
-		create["parentId"] = parent // resolved to issue ID
+	if s := scalarToString(fm["parent"]); s != "" {
+		create["parentId"] = s // resolved to issue ID
 	}
 	if body := doc.Body; body != "" {
 		create["description"] = body
@@ -460,22 +457,79 @@ func dueToString(v any) string {
 	return scalarToString(v)
 }
 
-// stringSliceFromYAML coerces a YAML value (parsed as []any or []string) into a
-// []string, dropping non-string elements.
+// stringSliceFromYAML coerces a YAML value into a []string. It accepts a list
+// (`labels: [Bug, Backend]`) or a bare scalar (`labels: Bug`), and coerces each
+// element via scalarToString so a numeric-looking name (`2026`) isn't silently
+// dropped — silent element-drops are the #148 failure mode this surface kills.
 func stringSliceFromYAML(v any) []string {
 	switch s := v.(type) {
+	case nil:
+		return nil
 	case []string:
 		return s
 	case []any:
 		out := make([]string, 0, len(s))
 		for _, item := range s {
-			if str, ok := item.(string); ok {
+			if str := scalarToString(item); str != "" {
 				out = append(out, str)
 			}
 		}
 		return out
+	default:
+		// A bare scalar (`labels: Bug`, or a number) — a single-element list.
+		if str := scalarToString(v); str != "" {
+			return []string{str}
+		}
+		return nil
 	}
-	return nil
+}
+
+// coercePriority normalizes a priority frontmatter value to Linear's 0-4 scale.
+// It accepts a name (none|low|medium|high|urgent) or a number, range-checking
+// numeric input so out-of-range values fail loudly (EINVAL via .error) instead
+// of reaching the API. ok is false when there is nothing to set (empty string).
+func coercePriority(v any) (n int, ok bool, err error) {
+	switch p := v.(type) {
+	case string:
+		if p == "" {
+			return 0, false, nil
+		}
+		n, err := api.ValidatePriority(p)
+		if err != nil {
+			return 0, false, err
+		}
+		return n, true, nil
+	case int:
+		if p < 0 || p > 4 {
+			return 0, false, fmt.Errorf("invalid priority %d: must be 0-4 or a name (none|low|medium|high|urgent)", p)
+		}
+		return p, true, nil
+	case float64:
+		if p != math.Trunc(p) || p < 0 || p > 4 {
+			return 0, false, fmt.Errorf("invalid priority %v: must be an integer 0-4 or a name (none|low|medium|high|urgent)", p)
+		}
+		return int(p), true, nil
+	default:
+		return 0, false, fmt.Errorf("must be a name (none|low|medium|high|urgent) or a number 0-4")
+	}
+}
+
+// coerceEstimate normalizes an estimate frontmatter value to an int. It accepts
+// int, float (truncated), or a numeric string (`estimate: "3"`). ok is false for
+// an unrecognized type — callers must leave the field untouched rather than
+// coercing to 0, which would zero the estimate on Linear.
+func coerceEstimate(v any) (int, bool) {
+	switch e := v.(type) {
+	case int:
+		return e, true
+	case float64:
+		return int(e), true
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(e)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 // stringSlicesEqual checks if two string slices contain the same elements (order-independent)

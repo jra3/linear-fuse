@@ -303,7 +303,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		lfs := p.lfs
 		team := p.team
 		snapshot := p.project
-		render := func() []byte {
+		render := func() ([]byte, time.Time, time.Time) {
 			proj := snapshot
 			if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
 				for _, pr := range projs {
@@ -314,9 +314,9 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 				}
 			}
 			node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
-			return node.metaContent()
+			return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
 		}
-		return p.lfs.lookupMetaFile(ctx, p, p.project.ID, render, p.project.UpdatedAt, p.project.CreatedAt, out), 0
+		return p.lfs.lookupMetaFile(ctx, p, p.project.ID, render, out), 0
 	}
 
 	// Handle .error feedback file (last failed write to project.md)

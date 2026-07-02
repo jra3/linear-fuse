@@ -25,9 +25,20 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	}
 
 	// It should document the surfaces this branch added so agents learn about them.
-	for _, want := range []string{".last", "issue.meta", "recent/"} {
+	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not mention %q", want)
+		}
+	}
+
+	// The meta split moved server fields out of the editable files. The README's
+	// frontmatter templates must not document them as editable-file fields, or an
+	// agent will look for/edit fields that no longer live there (the exact "the
+	// generated README silently lies" failure this test exists to prevent). The
+	// initiative template used to show slug:/targetDate:/owner: inside initiative.md.
+	for _, leak := range []string{"slug: 77d439e363bb", "targetDate:"} {
+		if strings.Contains(readme, leak) {
+			t.Errorf("README documents %q as an editable-file field, but it moved to .meta", leak)
 		}
 	}
 

@@ -528,7 +528,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		lfs := n.lfs
 		ident := n.issue.Identifier
 		snapshot := n.issue
-		render := func() []byte {
+		render := func() ([]byte, time.Time, time.Time) {
 			iss := &snapshot
 			if fresh, err := lfs.FetchIssueByIdentifier(context.Background(), ident); err == nil && fresh != nil {
 				iss = fresh
@@ -536,11 +536,11 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			att, _ := lfs.GetIssueAttachments(context.Background(), iss.ID)
 			b, err := marshal.IssueMetaToMarkdown(iss, att...)
 			if err != nil {
-				return nil
+				return nil, iss.UpdatedAt, iss.CreatedAt
 			}
-			return b
+			return b, iss.UpdatedAt, iss.CreatedAt
 		}
-		return n.lfs.lookupMetaFile(ctx, n, n.issue.ID, render, n.issue.UpdatedAt, n.issue.CreatedAt, out), 0
+		return n.lfs.lookupMetaFile(ctx, n, n.issue.ID, render, out), 0
 
 	case "history.md":
 		// Fetch history content during Lookup so we can set the actual size

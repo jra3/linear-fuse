@@ -339,9 +339,10 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nError: "+err.Error())
 		return syscall.EIO
 	}
-	// Edit-commit tail. repo.UpdateProjectMilestone already upserted to SQLite, so
-	// persist is nil; verify read-your-writes against the API's echoed response
-	// (milestones have no single-entity getter) and surface divergence via .error.
+	// Edit-commit tail. LinearFS.UpdateProjectMilestone already upserted to SQLite
+	// (after routing through the mutation seam), so persist is nil; verify
+	// read-your-writes against the API's echoed response (milestones have no
+	// single-entity getter) and surface divergence via .error.
 	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.ProjectMilestone]{
 		errKey:  milestoneErrKey,
 		fetch:   func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },

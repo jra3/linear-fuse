@@ -399,6 +399,20 @@ func (lfs *LinearFS) UpsertInitiative(ctx context.Context, initiative api.Initia
 	return lfs.store.Queries().UpsertInitiative(ctx, params)
 }
 
+// UpsertProjectMilestone inserts or updates a milestone in SQLite for immediate
+// visibility after a mutation (the write handler owns the upsert, per the
+// API/DB decoupling principle).
+func (lfs *LinearFS) UpsertProjectMilestone(ctx context.Context, projectID string, milestone api.ProjectMilestone) error {
+	if lfs.store == nil {
+		return nil // SQLite not enabled, skip silently
+	}
+	params, err := db.APIProjectMilestoneToDBMilestone(milestone, projectID)
+	if err != nil {
+		return err
+	}
+	return lfs.store.Queries().UpsertProjectMilestone(ctx, params)
+}
+
 // GetIssueByIdentifier returns an issue by identifier (e.g., "ENG-123")
 func (lfs *LinearFS) GetIssueByIdentifier(identifier string) *api.Issue {
 	issue, err := lfs.repo.GetIssueByIdentifier(context.Background(), identifier)
@@ -856,19 +870,52 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
 }
 
-// CreateProjectMilestone creates a new milestone for a project
+// CreateProjectMilestone creates a new milestone for a project. It goes through
+// the mutation seam (so InjectTestMutationClient can intercept it offline) and
+// then upserts to SQLite for immediate visibility.
 func (lfs *LinearFS) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
-	return lfs.repo.CreateProjectMilestone(ctx, projectID, name, description)
+	milestone, err := lfs.mutator().CreateProjectMilestone(ctx, projectID, name, description)
+	if err != nil {
+		return nil, err
+	}
+	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
+		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
+	}
+	return milestone, nil
 }
 
-// UpdateProjectMilestone updates an existing milestone
+// UpdateProjectMilestone updates an existing milestone via the mutation seam,
+// then upserts to SQLite. The owning project ID is recovered from the cache so
+// the upsert keeps the association.
 func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
-	return lfs.repo.UpdateProjectMilestone(ctx, milestoneID, input)
+	milestone, err := lfs.mutator().UpdateProjectMilestone(ctx, milestoneID, input)
+	if err != nil {
+		return nil, err
+	}
+	var projectID string
+	if lfs.store != nil {
+		if existing, err := lfs.store.Queries().GetProjectMilestone(ctx, milestoneID); err == nil {
+			projectID = existing.ProjectID
+		}
+	}
+	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
+		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
+	}
+	return milestone, nil
 }
 
-// DeleteProjectMilestone deletes a milestone
+// DeleteProjectMilestone deletes a milestone via the mutation seam, then removes
+// it from SQLite.
 func (lfs *LinearFS) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
-	return lfs.repo.DeleteProjectMilestone(ctx, milestoneID)
+	if err := lfs.mutator().DeleteProjectMilestone(ctx, milestoneID); err != nil {
+		return err
+	}
+	if lfs.store != nil {
+		if err := lfs.store.Queries().DeleteProjectMilestone(ctx, milestoneID); err != nil {
+			log.Printf("[fs] delete milestone %s from DB failed: %v", milestoneID, err)
+		}
+	}
+	return nil
 }
 
 // ResolveCycleID resolves a cycle name to its ID

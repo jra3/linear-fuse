@@ -161,7 +161,7 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		// reflected here (go-fuse reuses this node across lookups).
 		lfs := i.lfs
 		snapshot := i.initiative
-		render := func() []byte {
+		render := func() ([]byte, time.Time, time.Time) {
 			init := snapshot
 			if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
 				for _, it := range inits {
@@ -172,9 +172,9 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 				}
 			}
 			node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
-			return node.metaContent()
+			return node.metaContent(), init.UpdatedAt, init.CreatedAt
 		}
-		return i.lfs.lookupMetaFile(ctx, i, i.initiative.ID, render, i.initiative.UpdatedAt, i.initiative.CreatedAt, out), 0
+		return i.lfs.lookupMetaFile(ctx, i, i.initiative.ID, render, out), 0
 
 	case ".error":
 		return i.lfs.lookupErrorFile(ctx, i, i.initiative.ID, out), 0

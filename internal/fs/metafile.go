@@ -38,17 +38,24 @@ func metaIno(key string) uint64 {
 	return h.Sum64()
 }
 
+// metaRender returns the current `.meta` bytes plus the entity's updated/created
+// times, all from a live source. Times are rendered through (not baked at Lookup)
+// for the same reason the bytes are: go-fuse reuses the first node for a given
+// ino, so a baked mtime would freeze at first-Lookup forever — breaking the
+// `mtime=updatedAt` contract for the very file that exposes `updated:`.
+type metaRender func() (content []byte, mtime, ctime time.Time)
+
 // lookupMetaFile mounts a read-only `.meta` virtual file backed by a render
 // closure as a child of parent. render is called on demand (Lookup/Read/Getattr)
-// and must return the current meta bytes from a live source. mtime/ctime are the
-// entity's updated/created times (best-effort; refreshed on the next Lookup).
-func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, key string, render func() []byte, mtime, ctime time.Time, out *fuse.EntryOut) *fs.Inode {
-	node := &MetaFileNode{BaseNode: BaseNode{lfs: lfs}, render: render, mtime: mtime, ctime: ctime}
+// and must return the current meta bytes and times from a live source.
+func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, key string, render metaRender, out *fuse.EntryOut) *fs.Inode {
+	node := &MetaFileNode{BaseNode: BaseNode{lfs: lfs}, render: render}
 
+	content, mtime, ctime := render()
 	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
 	out.Attr.Uid = lfs.uid
 	out.Attr.Gid = lfs.gid
-	out.Attr.Size = uint64(len(render()))
+	out.Attr.Size = uint64(len(content))
 	// Feedback-file caching model: don't trust a cached size. Editors of the
 	// sibling editable file InvalidateUpdated(metaIno) to force a refresh.
 	out.SetAttrTimeout(0)
@@ -61,14 +68,12 @@ func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder
 	})
 }
 
-// MetaFileNode is a read-only virtual file that renders `.meta` content on demand
-// from a live source (never baked bytes — see the package comment on go-fuse
+// MetaFileNode is a read-only virtual file that renders `.meta` content and times
+// on demand from a live source (never baked — see the package comment on go-fuse
 // inode dedup).
 type MetaFileNode struct {
 	BaseNode
-	render func() []byte
-	mtime  time.Time
-	ctime  time.Time
+	render metaRender
 }
 
 var _ fs.NodeGetattrer = (*MetaFileNode)(nil)
@@ -76,10 +81,11 @@ var _ fs.NodeOpener = (*MetaFileNode)(nil)
 var _ fs.NodeReader = (*MetaFileNode)(nil)
 
 func (m *MetaFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	content, mtime, ctime := m.render()
 	out.Mode = 0444 // Read-only
 	m.SetOwner(out)
-	out.Size = uint64(len(m.render()))
-	out.SetTimes(&m.mtime, &m.mtime, &m.ctime)
+	out.Size = uint64(len(content))
+	out.SetTimes(&mtime, &mtime, &ctime)
 	return 0
 }
 
@@ -94,7 +100,7 @@ func (m *MetaFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, u
 }
 
 func (m *MetaFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := m.render()
+	content, _, _ := m.render()
 	if off >= int64(len(content)) {
 		return fuse.ReadResultData(nil), 0
 	}

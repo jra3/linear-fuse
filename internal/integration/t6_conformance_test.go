@@ -158,6 +158,15 @@ func TestWriteContractAgentLoop(t *testing.T) {
 	noopByteStable(t, issueFilePath(testTeamKey, "TST-1"), issueDirPath(testTeamKey, "TST-1"))
 
 	// (c) Same byte-stability for project.md and initiative.md.
+	//
+	// NOTE: offline this is a weaker check than (b). The mock mutator has no
+	// single-entity reader, so commitWriteBack's read-your-writes fetch (which
+	// still uses the real API client) fails and the handler keeps its unchanged
+	// local state — the re-read is byte-identical largely by construction. The
+	// invariant that actually prevents self-mutation now — the editable file
+	// carrying no server-managed fields at all — is guarded structurally by
+	// TestWriteContractMetaSplitGeneralizes. This step remains a useful guard
+	// that a no-op write returns success (no errno) and leaves .error clean.
 	projDir := filepath.Join(projectsPath(testTeamKey), "test-project")
 	noopByteStable(t, filepath.Join(projDir, "project.md"), projDir)
 	inits, err := os.ReadDir(initiativesPath())
