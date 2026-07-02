@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
@@ -86,6 +88,55 @@ func TestT5_RecentViewOrdered(t *testing.T) {
 	if _, err := os.ReadFile(filepath.Join(recentPath(testTeamKey), "TST-9001", "issue.md")); err != nil {
 		t.Errorf("recent/TST-9001/issue.md not readable: %v", err)
 	}
+}
+
+// TestT5_FreshCreateAppearsInRecent: a just-created issue is visible in recent/
+// immediately — the create tail re-cohers the view rather than leaving it stale
+// until the dir cache TTL (the #148 design's known staleness bound, now closed).
+func TestT5_FreshCreateAppearsInRecent(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode behavioral check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	// Prime the kernel's view of recent/ so a stale cached listing would be caught.
+	if _, err := os.ReadDir(recentPath(testTeamKey)); err != nil {
+		t.Fatalf("prime recent/: %v", err)
+	}
+
+	if err := os.Mkdir(filepath.Join(issuesPath(testTeamKey), "Recent Visibility Probe"), 0755); err != nil {
+		t.Fatalf("mkdir create: %v", err)
+	}
+
+	// Recover the created identifier from issues/.last (typed name != identifier).
+	data, err := os.ReadFile(issuesLastPath(testTeamKey))
+	if err != nil {
+		t.Fatalf("read issues/.last: %v", err)
+	}
+	var entries []map[string]string
+	if err := yaml.Unmarshal(data, &entries); err != nil {
+		t.Fatalf("issues/.last not a YAML list: %v\n%s", err, data)
+	}
+	ident := ""
+	for _, e := range entries {
+		if e["title"] == "Recent Visibility Probe" {
+			ident = e["path"]
+		}
+	}
+	if ident == "" {
+		t.Fatalf("issues/.last has no entry for our create; got: %s", data)
+	}
+
+	names, err := os.ReadDir(recentPath(testTeamKey))
+	if err != nil {
+		t.Fatalf("re-read recent/: %v", err)
+	}
+	for _, n := range names {
+		if n.Name() == ident {
+			return
+		}
+	}
+	t.Fatalf("fresh create %s missing from recent/ (stale listing?)", ident)
 }
 
 // TestT5_RecentIsReadOnly: the recent/ view rejects mutation.
