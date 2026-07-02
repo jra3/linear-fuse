@@ -58,7 +58,7 @@ func TestIssueToMarkdown(t *testing.T) {
 				"Users can't log in with SSO.",
 			},
 			wantNotContain: []string{
-				"id: issue-123",     // server field -> issue.meta
+				"id: issue-123", // server field -> issue.meta
 				"identifier: ENG-456",
 				"url:",
 				"updated:",
@@ -721,5 +721,62 @@ func TestStringSlicesEqual(t *testing.T) {
 				t.Errorf("stringSlicesEqual(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMarkdownToIssueCreate(t *testing.T) {
+	t.Parallel()
+	content := []byte("---\n" +
+		"title: New Thing\n" +
+		"status: In Progress\n" +
+		"priority: high\n" +
+		"assignee: alice@example.com\n" +
+		"labels: [Bug, Backend]\n" +
+		"project: Q1 Launch\n" +
+		"parent: ENG-1\n" +
+		"estimate: 3\n" +
+		"due: \"2026-02-01\"\n" +
+		"id: should-be-ignored\n" + // read-only key ignored tolerantly
+		"---\n" +
+		"Body text.\n")
+
+	got, err := MarkdownToIssueCreate(content)
+	if err != nil {
+		t.Fatalf("MarkdownToIssueCreate error: %v", err)
+	}
+	// Relational fields carry names for the resolver; scalars are typed.
+	checks := map[string]any{
+		"title":      "New Thing",
+		"stateId":    "In Progress",
+		"priority":   2, // high
+		"assigneeId": "alice@example.com",
+		"projectId":  "Q1 Launch",
+		"parentId":   "ENG-1",
+		"dueDate":    "2026-02-01",
+	}
+	for k, want := range checks {
+		if got[k] != want {
+			t.Errorf("field %q = %v, want %v", k, got[k], want)
+		}
+	}
+	if desc, _ := got["description"].(string); strings.TrimSpace(desc) != "Body text." {
+		t.Errorf("description = %q, want %q", desc, "Body text.")
+	}
+	if labels, ok := got["labelIds"].([]string); !ok || len(labels) != 2 {
+		t.Errorf("labelIds = %v, want [Bug Backend]", got["labelIds"])
+	}
+	if _, ok := got["id"]; ok {
+		t.Error("read-only key 'id' should be ignored, not passed to create input")
+	}
+}
+
+func TestMarkdownToIssueCreateInvalidPriority(t *testing.T) {
+	t.Parallel()
+	_, err := MarkdownToIssueCreate([]byte("---\ntitle: X\npriority: critical\n---\nbody\n"))
+	if err == nil {
+		t.Fatal("expected error for invalid priority")
+	}
+	if !strings.HasPrefix(err.Error(), "priority:") {
+		t.Errorf("error should be priority-prefixed for .error normalization, got: %v", err)
 	}
 }

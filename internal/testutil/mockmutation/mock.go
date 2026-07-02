@@ -15,16 +15,19 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
+// globalSeq is a process-wide counter so identities are unique across every fake
+// instance in a test run — independent New() clients share one shared mount/store,
+// so a per-instance counter would collide (two issues minted as TST-1001).
+var globalSeq int64 = 1000
+
 // Client is an in-memory fake implementing fs.MutationClient. Construct with New.
 type Client struct {
-	mu      sync.Mutex
-	seq     int
 	teamKey string    // identifier prefix for created issues (default "TST")
 	now     time.Time // fixed clock for deterministic timestamps
 }
@@ -41,19 +44,16 @@ func WithTeamKey(key string) Option {
 // "TST-1001" (prefix configurable via WithTeamKey), starting above the usual
 // fixture range so they never collide with seeded fixtures.
 func New(opts ...Option) *Client {
-	c := &Client{seq: 1000, teamKey: "TST", now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	c := &Client{teamKey: "TST", now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	for _, o := range opts {
 		o(c)
 	}
 	return c
 }
 
-// next returns a fresh monotonic integer for id generation.
+// next returns a fresh process-unique integer for id generation.
 func (c *Client) next() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.seq++
-	return c.seq
+	return int(atomic.AddInt64(&globalSeq, 1))
 }
 
 func str(m map[string]any, k string) string {

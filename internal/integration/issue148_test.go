@@ -89,10 +89,16 @@ func TestIssue148_LastReportsCreatedIssueIdentity(t *testing.T) {
 	if err := yaml.Unmarshal(data, &entries); err != nil {
 		t.Fatalf("issues/.last is not a YAML list: %v\n%s", err, data)
 	}
-	if len(entries) == 0 {
-		t.Fatalf("issues/.last empty after a create; got: %q", data)
+	// Match by title, not position: the mount is shared across tests.
+	var last map[string]string
+	for _, e := range entries {
+		if e["title"] == title {
+			last = e
+		}
 	}
-	last := entries[len(entries)-1]
+	if last == nil {
+		t.Fatalf("issues/.last has no entry for our create; got: %q", data)
+	}
 	if last["identifier"] == "" {
 		t.Errorf("last entry missing identifier: %v", last)
 	}

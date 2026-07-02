@@ -353,6 +353,87 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	return update, nil
 }
 
+// MarkdownToIssueCreate parses a full issue spec (frontmatter + body) into a
+// create-input map for a brand-new issue. Unlike MarkdownToIssueUpdate it emits
+// every present editable field (there is no "original" to diff against), with
+// relational fields as human names for resolveIssueUpdate to turn into IDs. The
+// body becomes the description. Unknown / read-only keys are ignored tolerantly.
+// teamId is added by the caller. Returns an error only for an invalid priority.
+func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
+	doc, err := Parse(content)
+	if err != nil {
+		return nil, err
+	}
+	fm := doc.Frontmatter
+	create := make(map[string]any)
+
+	if title, ok := fm["title"].(string); ok && title != "" {
+		create["title"] = title
+	}
+	if status, ok := fm["status"].(string); ok && status != "" {
+		create["stateId"] = status // resolved to state ID
+	}
+	if priority, ok := fm["priority"].(string); ok && priority != "" {
+		p, err := api.ValidatePriority(priority)
+		if err != nil {
+			return nil, fmt.Errorf("priority: %w", err)
+		}
+		create["priority"] = p
+	}
+	if assignee, ok := fm["assignee"].(string); ok && assignee != "" {
+		create["assigneeId"] = assignee // resolved to user ID
+	}
+	if labels := stringSliceFromYAML(fm["labels"]); len(labels) > 0 {
+		create["labelIds"] = labels // resolved to label IDs
+	}
+	if due, ok := fm["due"].(string); ok && due != "" {
+		create["dueDate"] = due
+	}
+	if estimate, ok := fm["estimate"]; ok {
+		switch v := estimate.(type) {
+		case int:
+			create["estimate"] = float64(v)
+		case float64:
+			create["estimate"] = v
+		}
+	}
+	if project, ok := fm["project"].(string); ok && project != "" {
+		create["projectId"] = project // resolved to project ID
+	}
+	if milestone, ok := fm["milestone"].(string); ok && milestone != "" {
+		create["projectMilestoneId"] = milestone // resolved to milestone ID
+	}
+	if cycle, ok := fm["cycle"].(string); ok && cycle != "" {
+		create["cycleId"] = cycle // resolved to cycle ID
+	}
+	if parent, ok := fm["parent"].(string); ok && parent != "" {
+		create["parentId"] = parent // resolved to issue ID
+	}
+	if body := doc.Body; body != "" {
+		create["description"] = body
+	}
+
+	return create, nil
+}
+
+// stringSliceFromYAML coerces a YAML value (parsed as []any or []string) into a
+// []string, dropping non-string elements.
+func stringSliceFromYAML(v any) []string {
+	switch s := v.(type) {
+	case []string:
+		return s
+	case []any:
+		out := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				out = append(out, str)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // stringSlicesEqual checks if two string slices contain the same elements (order-independent)
 func stringSlicesEqual(a, b []string) bool {
 	if len(a) != len(b) {

@@ -71,6 +71,42 @@ func issueWriteResult(issue *api.Issue) WriteResult {
 	}
 }
 
+// createIssueFromSpec resolves a create spec's relational names to IDs and calls
+// the create mutation. It is shared by IssuesNode.Mkdir (title-only spec) and the
+// issues/_create trigger (full spec). Returns the created issue, a *FieldError
+// for an unresolvable field (caller renders .error + EINVAL), or a raw API error
+// (caller classifies EAGAIN/EIO). teamId and a title fallback are applied here.
+func (lfs *LinearFS) createIssueFromSpec(ctx context.Context, team api.Team, spec map[string]any) (*api.Issue, *FieldError, error) {
+	synthetic := api.Issue{Team: &team}
+	if ferr := resolveIssueUpdate(ctx, lfs, &synthetic, spec); ferr != nil {
+		return nil, ferr, nil
+	}
+	spec["teamId"] = team.ID
+	if t, ok := spec["title"].(string); !ok || t == "" {
+		spec["title"] = "Untitled issue"
+	}
+	issue, err := lfs.mutator.CreateIssue(ctx, spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	return issue, nil, nil
+}
+
+// finishIssueCreate runs the common post-create tail: upsert to SQLite,
+// invalidate caches, clear the collection .error, and record the new identity in
+// .last. Shared by IssuesNode.Mkdir and the issues/_create trigger.
+func (lfs *LinearFS) finishIssueCreate(ctx context.Context, team api.Team, issue *api.Issue) {
+	if err := lfs.UpsertIssue(ctx, *issue); err != nil {
+		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
+	}
+	lfs.InvalidateTeamIssues(team.ID)
+	lfs.InvalidateMyIssues()
+	lfs.InvalidateFilteredIssues(team.ID)
+	lfs.InvalidateCreated(issuesDirIno(team.ID), issue.Identifier)
+	lfs.ClearWriteError(collectionErrorKey("issues", team.ID))
+	lfs.AppendWriteSuccess(collectionSuccessKey("issues", team.ID), issueWriteResult(issue))
+}
+
 // IssuesNode represents the /teams/{KEY}/issues directory
 type IssuesNode struct {
 	BaseNode
@@ -97,9 +133,10 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// _create-style feedback: .error reports the last failed issue creation,
-	// .last reports the identities of recent successful creations (#149).
-	entries := make([]fuse.DirEntry, 0, len(issues)+2)
+	// _create accepts a full issue spec; .error reports the last failed issue
+	// creation, .last the identities of recent successful creations (#149/#151).
+	entries := make([]fuse.DirEntry, 0, len(issues)+3)
+	entries = append(entries, fuse.DirEntry{Name: "_create", Mode: syscall.S_IFREG})
 	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
 	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
 	for _, issue := range issues {
@@ -113,6 +150,19 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// Handle _create trigger (full-object issue creation)
+	if name == "_create" {
+		now := time.Now()
+		node := &NewIssueCreateNode{BaseNode: BaseNode{lfs: n.lfs}, team: n.team}
+		out.Attr.Mode = 0200 | syscall.S_IFREG
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+		out.Attr.Size = 0
+		out.Attr.SetTimes(&now, &now, &now)
+		out.SetAttrTimeout(1 * time.Second)
+		out.SetEntryTimeout(1 * time.Second)
+		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
 	// Handle .error feedback file (last failed issue creation in this team)
 	if name == ".error" {
 		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("issues", n.team.ID), out), 0
@@ -201,20 +251,19 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		log.Printf("Mkdir: %s in team %s (creating issue)", name, n.team.Key)
 	}
 
-	// Create a new issue with the directory name as title
-	input := map[string]any{
-		"teamId": n.team.ID,
-		"title":  name,
-	}
-
 	// Bound the create so a rate-limited request fails legibly instead of
 	// hanging indefinitely (#131). On a transient failure we surface EAGAIN and
 	// a retry hint via .error rather than a bare EIO.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	// Quick path: title-only spec. Full-object creation goes through issues/_create.
 	errKey := collectionErrorKey("issues", n.team.ID)
-	issue, err := n.lfs.mutator.CreateIssue(ctx, input)
+	issue, ferr, err := n.lfs.createIssueFromSpec(ctx, n.team, map[string]any{"title": name})
+	if ferr != nil {
+		n.lfs.SetWriteError(errKey, ferr.Detail())
+		return nil, syscall.EINVAL
+	}
 	if err != nil {
 		log.Printf("Failed to create issue: %v", err)
 		if retryableCreateErr(err) {
@@ -224,22 +273,7 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		n.lfs.SetWriteError(errKey, "Operation: create issue \""+name+"\"\nError: "+err.Error())
 		return nil, syscall.EIO
 	}
-	n.lfs.ClearWriteError(errKey)
-	n.lfs.AppendWriteSuccess(collectionSuccessKey("issues", n.team.ID), issueWriteResult(issue))
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertIssue(ctx, *issue); err != nil {
-		log.Printf("Warning: failed to upsert issue to SQLite: %v", err)
-		// Don't fail - the issue was created in Linear, sync will eventually pick it up
-	}
-
-	// Invalidate caches
-	n.lfs.InvalidateTeamIssues(n.team.ID)
-	n.lfs.InvalidateMyIssues()
-	n.lfs.InvalidateFilteredIssues(n.team.ID)
-	// Keep the kernel's directory listing coherent (previously skipped the dir
-	// inode, so a newly-created issue was missing from the listing).
-	n.lfs.InvalidateCreated(issuesDirIno(n.team.ID), issue.Identifier)
+	n.lfs.finishIssueCreate(ctx, n.team, issue)
 
 	node := &IssueDirectoryNode{
 		BaseNode: BaseNode{lfs: n.lfs},
@@ -255,6 +289,126 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		Mode: syscall.S_IFDIR,
 		Ino:  issueDirIno(issue.ID),
 	}), 0
+}
+
+// NewIssueCreateNode is the write-only issues/_create trigger: writing a full
+// issue spec (frontmatter + body) creates one issue with all fields set at birth,
+// resolving names to IDs and reporting the new identity to issues/.last (#151).
+type NewIssueCreateNode struct {
+	BaseNode
+	team api.Team
+
+	mu      sync.Mutex
+	content []byte
+	created bool
+}
+
+var _ fs.NodeGetattrer = (*NewIssueCreateNode)(nil)
+var _ fs.NodeOpener = (*NewIssueCreateNode)(nil)
+var _ fs.NodeReader = (*NewIssueCreateNode)(nil)
+var _ fs.NodeWriter = (*NewIssueCreateNode)(nil)
+var _ fs.NodeFlusher = (*NewIssueCreateNode)(nil)
+var _ fs.NodeFsyncer = (*NewIssueCreateNode)(nil)
+var _ fs.NodeSetattrer = (*NewIssueCreateNode)(nil)
+
+func (n *NewIssueCreateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := time.Now()
+	out.Mode = 0200
+	n.SetOwner(out)
+	out.Size = uint64(len(n.content))
+	out.SetTimes(&now, &now, &now)
+	return 0
+}
+
+func (n *NewIssueCreateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	return nil, fuse.FOPEN_DIRECT_IO, 0
+}
+
+func (n *NewIssueCreateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	return nil, syscall.EACCES // write-only
+}
+
+func (n *NewIssueCreateNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	newLen := int(off) + len(data)
+	if newLen > len(n.content) {
+		grown := make([]byte, newLen)
+		copy(grown, n.content)
+		n.content = grown
+	}
+	copy(n.content[off:], data)
+	return uint32(len(data)), 0
+}
+
+func (n *NewIssueCreateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if sz, ok := in.GetSize(); ok {
+		if int(sz) < len(n.content) {
+			n.content = n.content[:sz]
+		} else if int(sz) > len(n.content) {
+			grown := make([]byte, sz)
+			copy(grown, n.content)
+			n.content = grown
+		}
+	}
+	out.Mode = 0200
+	out.Size = uint64(len(n.content))
+	return 0
+}
+
+func (n *NewIssueCreateNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	return 0
+}
+
+func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if n.created || len(n.content) == 0 {
+		return 0
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	errKey := collectionErrorKey("issues", n.team.ID)
+
+	spec, err := marshal.MarkdownToIssueCreate(n.content)
+	if err != nil {
+		// Normalize the marshal parse/validation error to the Field/Value/Error
+		// shape so it matches the resolver's EINVAL errors.
+		field := "frontmatter"
+		msg := err.Error()
+		if strings.HasPrefix(msg, "priority:") {
+			field = "priority"
+			msg = strings.TrimSpace(strings.TrimPrefix(msg, "priority:"))
+		}
+		n.lfs.SetWriteError(errKey, (&FieldError{Field: field, Message: msg}).Detail())
+		return syscall.EINVAL
+	}
+
+	issue, ferr, cerr := n.lfs.createIssueFromSpec(ctx, n.team, spec)
+	if ferr != nil {
+		n.lfs.SetWriteError(errKey, ferr.Detail())
+		return syscall.EINVAL
+	}
+	if cerr != nil {
+		log.Printf("Failed to create issue from spec: %v", cerr)
+		if retryableCreateErr(cerr) {
+			n.lfs.SetWriteError(errKey, "Operation: create issue from spec\nError: the request was rate-limited or timed out before it completed, so no issue was created. Wait a few seconds and try again.")
+			return syscall.EAGAIN
+		}
+		n.lfs.SetWriteError(errKey, "Operation: create issue from spec\nError: "+cerr.Error())
+		return syscall.EIO
+	}
+
+	n.lfs.finishIssueCreate(ctx, n.team, issue)
+	n.created = true
+	return 0
 }
 
 // Rmdir archives an issue (soft delete)
