@@ -47,6 +47,18 @@ calls `lfs.mutator()` directly, and `persist` is always explicit — no mutation
 wrapper hides an upsert. Unit-tested through the ErrorSink/notifier fakes, no FUSE
 mount.
 
+### Delete tail (`commitDelete`)
+The **deep module** owning the invariant tail of every delete (`rm`/`rmdir`,
+including archive-flavored deletes of issues/projects), sibling of the Create
+tail: run the caller's `find` closure (locate the target by name, or hand over an
+already-held entity) → run the delete/archive mutation → classify failure through
+the shared classifier (`classifyMutationErr`) → on success clear `.error`,
+**forget the SQLite row** (required — the store is the listing source of truth,
+so a skipped forget resurrects the deleted item until sync), and apply the
+kernel-cache coherence policy (`InvalidateDeleted` is module-guaranteed). An
+unknown name notes itself in `.error` before returning `ENOENT`. Generic over
+`T`, behind the `deleteSink` seam; unit-tested with fakes, no FUSE mount.
+
 ### Name→ID resolution (`resolveIssueUpdate`)
 marshal returns an issue update whose relational fields hold *names* (a state name,
 assignee email, label names, parent identifier, project/milestone/cycle names);

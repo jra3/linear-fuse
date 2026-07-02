@@ -186,6 +186,66 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 	}
 }
 
+// TestWriteContractDeleteTail: a deleted entry vanishes from the listing
+// immediately. This is the resurrection-bug discriminator: SQLite is the
+// listing source of truth, and label deletes never removed the row, so before
+// the delete tail a removed label reappeared on the next readdir until the
+// sync worker reconciled. Also asserts a successful delete clears .error and
+// an unknown name fails with ENOENT.
+func TestWriteContractDeleteTail(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	// Create a label to delete.
+	if err := os.WriteFile(filepath.Join(labelsPath(testTeamKey), "_create"),
+		[]byte("---\nname: delete-tail-probe\ncolor: \"#ff0000\"\n---\n"), 0200); err != nil {
+		t.Fatalf("create label: %v", err)
+	}
+	var labelFile string
+	for _, e := range parseLastSidecar(t, filepath.Join(labelsPath(testTeamKey), ".last")) {
+		if e["title"] == "delete-tail-probe" {
+			labelFile = e["path"]
+		}
+	}
+	if labelFile == "" {
+		t.Fatal("labels/.last has no entry for the probe label")
+	}
+
+	if err := os.Remove(filepath.Join(labelsPath(testTeamKey), labelFile)); err != nil {
+		t.Fatalf("rm label: %v", err)
+	}
+
+	// Gone from the listing at once — no resurrection from a stale SQLite row.
+	d, err := os.Open(labelsPath(testTeamKey))
+	if err != nil {
+		t.Fatalf("open labels/: %v", err)
+	}
+	names, err := d.Readdirnames(-1)
+	_ = d.Close()
+	if err != nil {
+		t.Fatalf("readdirnames labels/: %v", err)
+	}
+	for _, n := range names {
+		if n == labelFile {
+			t.Fatalf("deleted label %q still listed (SQLite row not forgotten?)", labelFile)
+		}
+	}
+
+	// A successful delete clears the collection .error.
+	if data, _ := os.ReadFile(filepath.Join(labelsPath(testTeamKey), ".error")); strings.TrimSpace(string(data)) != "" {
+		t.Errorf("labels/.error non-empty after a successful delete: %q", data)
+	}
+
+	// Removing an unknown name fails with ENOENT (via lookup; the tail's own
+	// not-found branch is unit-tested — a mounted rm never reaches Unlink
+	// without a resolvable entry).
+	if err := os.Remove(filepath.Join(labelsPath(testTeamKey), "no-such-label.md")); !os.IsNotExist(err) {
+		t.Errorf("rm of unknown label = %v, want ENOENT", err)
+	}
+}
+
 // TestWriteContractAgentLoop exercises the end-to-end shape an agent uses:
 // batch create via _create (recover ids from .last), no-op rewrites that stay
 // byte-stable, and a failure that leaves the success log intact.

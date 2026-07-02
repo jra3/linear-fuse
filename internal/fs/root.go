@@ -301,7 +301,7 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
 
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
-- Reference to something that doesn't exist (e.g. relation target) -> ENOENT
+- Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - Rate-limited or timed out (nothing was created; retry shortly) -> EAGAIN
 - Backend/API failure -> EIO
 - Whatever the errno, the reason lands in .error; success clears it.
