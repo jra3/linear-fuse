@@ -196,7 +196,7 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	defer cancel()
 
 	errKey := collectionErrorKey("issues", n.team.ID)
-	issue, err := n.lfs.client.CreateIssue(ctx, input)
+	issue, err := n.lfs.mutator.CreateIssue(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create issue: %v", err)
 		if retryableCreateErr(err) {
@@ -722,7 +722,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	}
 
 	// Call Linear API to update
-	if err := i.lfs.client.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
+	if err := i.lfs.mutator.UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
 		i.lfs.SetIssueError(i.issue.ID, "API error: "+err.Error())
 		return syscall.EIO
@@ -887,7 +887,7 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	issue, err := n.lfs.client.CreateIssue(ctx, input)
+	issue, err := n.lfs.mutator.CreateIssue(ctx, input)
 	if err != nil {
 		log.Printf("Failed to create sub-issue: %v", err)
 		if retryableCreateErr(err) {

@@ -342,7 +342,7 @@ func (n *ExternalAttachmentNode) Read(ctx context.Context, fh fs.FileHandle, des
 
 func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Delete via API
-	if err := n.lfs.client.DeleteAttachment(ctx, n.attachment.ID); err != nil {
+	if err := n.lfs.mutator.DeleteAttachment(ctx, n.attachment.ID); err != nil {
 		n.lfs.SetWriteError(collectionErrorKey("attachments", n.issueID), "Operation: delete attachment "+name+"\nError: "+err.Error())
 		return syscall.EIO
 	}
@@ -451,7 +451,7 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 	}
 
 	// Create the attachment via API (LinkURL for external links)
-	att, err := n.lfs.client.LinkURL(ctx, n.issueID, url, title)
+	att, err := n.lfs.mutator.LinkURL(ctx, n.issueID, url, title)
 	if err != nil {
 		// The local cache may be stale relative to Linear (e.g. an auto-link that
 		// hasn't synced yet), so the pre-check above can miss a duplicate. On

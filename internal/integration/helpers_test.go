@@ -5,10 +5,28 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 	"gopkg.in/yaml.v3"
 )
+
+// enableMockMutations swaps in the in-memory mutation fake (T0/#155) for the
+// duration of the test, so create/edit paths run to success offline (reaching
+// ClearWriteError/AppendWriteSuccess and upserting to the store) instead of
+// failing at the network with the fixture-mode dummy key. The real client is
+// restored on cleanup so loud-failure tests that intend mutations to fail are
+// unaffected. Tests using this must not t.Parallel() (the fake is process-global
+// on the shared mount).
+func enableMockMutations(t *testing.T) {
+	t.Helper()
+	if liveAPIMode {
+		return // live mode uses the real API; the fake would mask it
+	}
+	lfs.InjectTestMutationClient(mockmutation.New(mockmutation.WithTeamKey(testTeamKey)))
+	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
+}
 
 // isControlFile reports whether a directory entry is a virtual control/feedback
 // file (the _create trigger or the .error feedback file) rather than a real
@@ -62,6 +80,14 @@ func issuesPath(teamKey string) string {
 
 func issueDirPath(teamKey, issueID string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "issues", issueID)
+}
+
+func issuesErrorPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", ".error")
+}
+
+func issuesLastPath(teamKey string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "issues", ".last")
 }
 
 func issueFilePath(teamKey, issueID string) string {

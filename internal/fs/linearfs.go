@@ -27,7 +27,8 @@ import (
 // Read operations go through the Repository (SQLite + on-demand API fetch).
 // Write operations (mutations) use the API Client directly.
 type LinearFS struct {
-	client     *api.Client            // For mutations only
+	client     *api.Client            // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
+	mutator    MutationClient         // Mutations only; defaults to client, swappable for tests
 	repo       *repo.SQLiteRepository // For all read operations
 	server     *fuse.Server           // FUSE server for kernel cache invalidation
 	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
@@ -91,6 +92,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		uid:          uid,
 		gid:          gid,
 		client:       client,
+		mutator:      client,
 		debug:        debug,
 		fileCacheDir: cacheDir,
 		fileCache:    make(map[string][]byte),
@@ -458,7 +460,7 @@ func (lfs *LinearFS) InvalidateMyIssues() {
 
 // ArchiveIssue archives an issue
 func (lfs *LinearFS) ArchiveIssue(ctx context.Context, issueID string, teamID string, assigneeID string) error {
-	return lfs.client.ArchiveIssue(ctx, issueID)
+	return lfs.mutator.ArchiveIssue(ctx, issueID)
 }
 
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
@@ -522,12 +524,12 @@ func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
 
 // CreateProject creates a new project
 func (lfs *LinearFS) CreateProject(ctx context.Context, input map[string]any) (*api.Project, error) {
-	return lfs.client.CreateProject(ctx, input)
+	return lfs.mutator.CreateProject(ctx, input)
 }
 
 // ArchiveProject archives a project
 func (lfs *LinearFS) ArchiveProject(ctx context.Context, projectID string, teamID string) error {
-	return lfs.client.ArchiveProject(ctx, projectID)
+	return lfs.mutator.ArchiveProject(ctx, projectID)
 }
 
 // GetProjectIssues returns issues in a project as ProjectIssue
@@ -598,16 +600,16 @@ func (lfs *LinearFS) TryGetCachedComments(issueID string) ([]api.Comment, bool) 
 }
 
 func (lfs *LinearFS) CreateComment(ctx context.Context, issueID string, body string) (*api.Comment, error) {
-	return lfs.client.CreateComment(ctx, issueID, body)
+	return lfs.mutator.CreateComment(ctx, issueID, body)
 }
 
 func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentID string, body string) (*api.Comment, error) {
-	return lfs.client.UpdateComment(ctx, commentID, body)
+	return lfs.mutator.UpdateComment(ctx, commentID, body)
 }
 
 func (lfs *LinearFS) DeleteComment(ctx context.Context, issueID string, commentID string) error {
 	// Delete from API
-	if err := lfs.client.DeleteComment(ctx, commentID); err != nil {
+	if err := lfs.mutator.DeleteComment(ctx, commentID); err != nil {
 		return err
 	}
 	// Delete from SQLite so it's immediately removed from listings
@@ -649,16 +651,16 @@ func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
 }
 
 func (lfs *LinearFS) CreateDocument(ctx context.Context, input map[string]any) (*api.Document, error) {
-	return lfs.client.CreateDocument(ctx, input)
+	return lfs.mutator.CreateDocument(ctx, input)
 }
 
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
-	return lfs.client.UpdateDocument(ctx, documentID, input)
+	return lfs.mutator.UpdateDocument(ctx, documentID, input)
 }
 
 func (lfs *LinearFS) DeleteDocument(ctx context.Context, documentID string, issueID, teamID, projectID string) error {
 	// Delete from API
-	if err := lfs.client.DeleteDocument(ctx, documentID); err != nil {
+	if err := lfs.mutator.DeleteDocument(ctx, documentID); err != nil {
 		return err
 	}
 	// Delete from SQLite so it's immediately removed from listings
@@ -900,7 +902,7 @@ func (lfs *LinearFS) InvalidateProjectUpdates(projectID string) {
 
 // CreateProjectUpdate creates a new status update on a project
 func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*api.ProjectUpdate, error) {
-	return lfs.client.CreateProjectUpdate(ctx, projectID, body, health)
+	return lfs.mutator.CreateProjectUpdate(ctx, projectID, body, health)
 }
 
 // GetInitiativeUpdates fetches status updates for an initiative
@@ -915,7 +917,7 @@ func (lfs *LinearFS) InvalidateInitiativeUpdates(initiativeID string) {
 
 // CreateInitiativeUpdate creates a new status update on an initiative
 func (lfs *LinearFS) CreateInitiativeUpdate(ctx context.Context, initiativeID, body, health string) (*api.InitiativeUpdate, error) {
-	return lfs.client.CreateInitiativeUpdate(ctx, initiativeID, body, health)
+	return lfs.mutator.CreateInitiativeUpdate(ctx, initiativeID, body, health)
 }
 
 // ResolveInitiativeID converts an initiative name to its ID
@@ -950,17 +952,17 @@ func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
 
 // CreateLabel creates a new label
 func (lfs *LinearFS) CreateLabel(ctx context.Context, input map[string]any) (*api.Label, error) {
-	return lfs.client.CreateLabel(ctx, input)
+	return lfs.mutator.CreateLabel(ctx, input)
 }
 
 // UpdateLabel updates a label
 func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) (*api.Label, error) {
-	return lfs.client.UpdateLabel(ctx, labelID, input)
+	return lfs.mutator.UpdateLabel(ctx, labelID, input)
 }
 
 // DeleteLabel deletes a label
 func (lfs *LinearFS) DeleteLabel(ctx context.Context, labelID string, teamID string) error {
-	return lfs.client.DeleteLabel(ctx, labelID)
+	return lfs.mutator.DeleteLabel(ctx, labelID)
 }
 
 // GetInitiatives fetches all initiatives
@@ -1053,6 +1055,20 @@ func (lfs *LinearFS) InjectTestStore(store *db.Store) error {
 // GetStore returns the SQLite store for direct database access in tests.
 func (lfs *LinearFS) GetStore() *db.Store {
 	return lfs.store
+}
+
+// InjectTestMutationClient swaps the mutation surface for a test fake, so
+// fixture-mode tests can exercise the success half of the write contract offline
+// (create/edit reach ClearWriteError/AppendWriteSuccess instead of failing at the
+// network). Reads/infrastructure continue to use the real client. Pass nil to
+// restore the default (mutations hit the real client and fail without an API key,
+// which the loud-failure tests rely on).
+func (lfs *LinearFS) InjectTestMutationClient(mc MutationClient) {
+	if mc == nil {
+		lfs.mutator = lfs.client
+		return
+	}
+	lfs.mutator = mc
 }
 
 // =============================================================================
