@@ -503,6 +503,13 @@ DELETE FROM comments WHERE id = ?;
 -- name: DeleteIssueComments :exec
 DELETE FROM comments WHERE issue_id = ?;
 
+-- Prune*: delete rows the details sync no longer sees for an issue. Scoped by
+-- issue and a synced_at cutoff taken before the sync's upserts, so only rows
+-- the fresh fetch did NOT touch are removed (e.g. a comment deleted in Linear,
+-- or a phantom left by a delete whose SQLite forget failed).
+-- name: PruneIssueComments :exec
+DELETE FROM comments WHERE issue_id = ? AND synced_at < ?;
+
 -- name: GetIssueCommentsSyncedAt :one
 SELECT MAX(synced_at) FROM comments WHERE issue_id = ?;
 
@@ -544,6 +551,9 @@ ON CONFLICT(id) DO UPDATE SET
 
 -- name: DeleteDocument :exec
 DELETE FROM documents WHERE id = ?;
+
+-- name: PruneIssueDocuments :exec
+DELETE FROM documents WHERE issue_id = ? AND synced_at < ?;
 
 -- name: DeleteIssueDocuments :exec
 DELETE FROM documents WHERE issue_id = ?;
@@ -734,6 +744,9 @@ ON CONFLICT(id) DO UPDATE SET
 
 -- name: DeleteAttachment :exec
 DELETE FROM attachments WHERE id = ?;
+
+-- name: PruneIssueAttachments :exec
+DELETE FROM attachments WHERE issue_id = ? AND synced_at < ?;
 
 -- name: DeleteIssueAttachments :exec
 DELETE FROM attachments WHERE issue_id = ?;

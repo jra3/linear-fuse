@@ -25,20 +25,21 @@ func (m *mockBudgetReporter) BudgetSnapshot() (int, float64) {
 
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
-	teams              []api.Team
-	issuesByTeam       map[string][]api.Issue   // teamID -> all issues (will be paginated)
-	statesByTeam       map[string][]api.State   // teamID -> states
-	labelsByTeam       map[string][]api.Label   // teamID -> labels
-	cyclesByTeam       map[string][]api.Cycle   // teamID -> cycles
-	projectsByTeam     map[string][]api.Project // teamID -> projects
-	membersByTeam      map[string][]api.User    // teamID -> members
-	users              []api.User
-	initiatives        []api.Initiative
-	pageSize           int
-	getTeamsCalls      int32
-	getIssuesCalls     int32
-	simulateError      error
-	rateLimitResetAt   time.Time // M-3: configurable reset time for adaptive backoff tests
+	teams            []api.Team
+	issuesByTeam     map[string][]api.Issue   // teamID -> all issues (will be paginated)
+	statesByTeam     map[string][]api.State   // teamID -> states
+	labelsByTeam     map[string][]api.Label   // teamID -> labels
+	cyclesByTeam     map[string][]api.Cycle   // teamID -> cycles
+	projectsByTeam   map[string][]api.Project // teamID -> projects
+	membersByTeam    map[string][]api.User    // teamID -> members
+	users            []api.User
+	initiatives      []api.Initiative
+	pageSize         int
+	getTeamsCalls    int32
+	getIssuesCalls   int32
+	simulateError    error
+	rateLimitResetAt time.Time                    // M-3: configurable reset time for adaptive backoff tests
+	detailsByIssue   map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
 }
 
 func newMockAPIClient() *mockAPIClient {
@@ -51,6 +52,7 @@ func newMockAPIClient() *mockAPIClient {
 		projectsByTeam: make(map[string][]api.Project),
 		membersByTeam:  make(map[string][]api.User),
 		pageSize:       100,
+		detailsByIssue: make(map[string]*api.IssueDetails),
 	}
 }
 
@@ -150,6 +152,10 @@ func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []str
 	}
 	result := make(map[string]*api.IssueDetails, len(issueIDs))
 	for _, id := range issueIDs {
+		if d, ok := m.detailsByIssue[id]; ok {
+			result[id] = d
+			continue
+		}
 		result[id] = &api.IssueDetails{
 			Comments:  []api.Comment{},
 			Documents: []api.Document{},
@@ -817,6 +823,94 @@ func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Errorf("expected 0 pending issues after drain, got %d", len(pending))
+	}
+}
+
+// TestDetailsSyncPrunesStaleRows: the details sync must delete rows Linear no
+// longer returns — a comment deleted in Linear, or a phantom left by a delete
+// whose SQLite forget failed (the store is the listing source of truth, so an
+// unpruned phantom resurrects the file forever). Rows the fetch DID return are
+// re-stamped and must survive.
+func TestDetailsSyncPrunesStaleRows(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	live := api.Comment{ID: "comment-live", Body: "still on Linear", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	phantom := api.Comment{ID: "comment-phantom", Body: "deleted on Linear, forget failed", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	for _, c := range []api.Comment{live, phantom} {
+		params, err := db.APICommentToDBComment(c, "issue-1")
+		if err != nil {
+			t.Fatalf("convert comment: %v", err)
+		}
+		// Backdate synced_at so both predate the sync's prune cutoff.
+		params.SyncedAt = time.Now().Add(-time.Minute)
+		if err := store.Queries().UpsertComment(ctx, params); err != nil {
+			t.Fatalf("seed comment: %v", err)
+		}
+	}
+
+	mock := newMockAPIClient()
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{Comments: []api.Comment{live}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.syncIssueDetailsBatch(ctx, []struct {
+		ID         string
+		Identifier string
+	}{{ID: "issue-1", Identifier: "TST-1"}})
+
+	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("list comments: %v", err)
+	}
+	if len(comments) != 1 || comments[0].ID != "comment-live" {
+		ids := []string{}
+		for _, c := range comments {
+			ids = append(ids, c.ID)
+		}
+		t.Errorf("after details sync comments = %v, want [comment-live] (phantom pruned, live retained)", ids)
+	}
+}
+
+// TestDetailsSyncFullPageSkipsPrune: a full page (IssueDetailsPageSize rows)
+// may be truncated by the API's page cap, so pruning against it could delete
+// real rows — the guard must skip pruning entirely.
+func TestDetailsSyncFullPageSkipsPrune(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// A row beyond the page cap: real on Linear, just not in the fetched page.
+	beyond, err := db.APICommentToDBComment(api.Comment{ID: "comment-beyond-page", Body: "real, past the cap", CreatedAt: time.Now(), UpdatedAt: time.Now()}, "issue-1")
+	if err != nil {
+		t.Fatalf("convert comment: %v", err)
+	}
+	beyond.SyncedAt = time.Now().Add(-time.Minute)
+	if err := store.Queries().UpsertComment(ctx, beyond); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+
+	full := make([]api.Comment, api.IssueDetailsPageSize)
+	for i := range full {
+		full[i] = api.Comment{ID: fmt.Sprintf("comment-%03d", i), Body: "page filler", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	}
+	mock := newMockAPIClient()
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{Comments: full}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.syncIssueDetailsBatch(ctx, []struct {
+		ID         string
+		Identifier string
+	}{{ID: "issue-1", Identifier: "TST-1"}})
+
+	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("list comments: %v", err)
+	}
+	if len(comments) != api.IssueDetailsPageSize+1 {
+		t.Errorf("comments = %d, want %d — a full (possibly truncated) page must not prune", len(comments), api.IssueDetailsPageSize+1)
 	}
 }
 

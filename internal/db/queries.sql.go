@@ -3901,6 +3901,52 @@ func (q *Queries) ListWorkspaceLabels(ctx context.Context) ([]Label, error) {
 	return items, nil
 }
 
+const pruneIssueAttachments = `-- name: PruneIssueAttachments :exec
+DELETE FROM attachments WHERE issue_id = ? AND synced_at < ?
+`
+
+type PruneIssueAttachmentsParams struct {
+	IssueID  string    `json:"issue_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+func (q *Queries) PruneIssueAttachments(ctx context.Context, arg PruneIssueAttachmentsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneIssueAttachments, arg.IssueID, arg.SyncedAt)
+	return err
+}
+
+const pruneIssueComments = `-- name: PruneIssueComments :exec
+DELETE FROM comments WHERE issue_id = ? AND synced_at < ?
+`
+
+type PruneIssueCommentsParams struct {
+	IssueID  string    `json:"issue_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+// Prune*: delete rows the details sync no longer sees for an issue. Scoped by
+// issue and a synced_at cutoff taken before the sync's upserts, so only rows
+// the fresh fetch did NOT touch are removed (e.g. a comment deleted in Linear,
+// or a phantom left by a delete whose SQLite forget failed).
+func (q *Queries) PruneIssueComments(ctx context.Context, arg PruneIssueCommentsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneIssueComments, arg.IssueID, arg.SyncedAt)
+	return err
+}
+
+const pruneIssueDocuments = `-- name: PruneIssueDocuments :exec
+DELETE FROM documents WHERE issue_id = ? AND synced_at < ?
+`
+
+type PruneIssueDocumentsParams struct {
+	IssueID  sql.NullString `json:"issue_id"`
+	SyncedAt time.Time      `json:"synced_at"`
+}
+
+func (q *Queries) PruneIssueDocuments(ctx context.Context, arg PruneIssueDocumentsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneIssueDocuments, arg.IssueID, arg.SyncedAt)
+	return err
+}
+
 const setIssueParent = `-- name: SetIssueParent :exec
 UPDATE issues SET parent_id = ? WHERE id = ?
 `

@@ -3,7 +3,9 @@ package fs
 import (
 	"context"
 	"log"
+	"strings"
 	"syscall"
+	"time"
 )
 
 // The delete-commit tail.
@@ -47,8 +49,11 @@ type deleteSpec[T any] struct {
 	// creates: transient -> EAGAIN, else -> EIO, reason in .error.
 	mutate func(ctx context.Context, target *T) error
 	// forget removes the row from SQLite. Required: the store is the source of
-	// truth for listings, so skipping it resurrects the deleted item until the
-	// next sync. Failure is non-fatal (sync will reconcile).
+	// truth for listings, so a skipped forget resurrects the deleted item — and
+	// the details sync is not guaranteed to prune it. The tail retries a failed
+	// forget (SQLITE_BUSY races the sync worker) before giving up; an ultimate
+	// failure is non-fatal for the caller but leaves a phantom until a details
+	// sync prunes it or a repeat rm hits the already-gone self-heal path.
 	forget func(ctx context.Context, target *T) error
 	// dir + name drive the kernel-cache coherence policy: the module always
 	// runs InvalidateDeleted(dir, name).
@@ -84,16 +89,24 @@ func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T
 	}
 
 	if err := spec.mutate(ctx, target); err != nil {
-		msg, errno := classifyMutationErr(spec.op, err)
-		log.Printf("Failed to %s: %v", spec.op, err)
-		sink.SetWriteError(spec.key, msg)
-		return errno
+		if !remoteAlreadyGone(err) {
+			msg, errno := classifyMutationErr(spec.op, err)
+			log.Printf("Failed to %s: %v", spec.op, err)
+			sink.SetWriteError(spec.key, msg)
+			return errno
+		}
+		// The entity no longer exists on Linear, so the delete's outcome is
+		// already true — proceed to the success tail so the local row is
+		// forgotten. This is also the self-heal path for a phantom row left
+		// by an earlier delete whose forget failed: rm the file again and
+		// the listing comes back consistent.
+		log.Printf("%s: entity already deleted on Linear; forgetting the local row", spec.op)
 	}
 
 	sink.ClearWriteError(spec.key)
 
-	if err := spec.forget(ctx, target); err != nil {
-		log.Printf("Warning: failed to delete entity from SQLite (%s): %v", spec.key, err)
+	if err := forgetWithRetry(ctx, spec.forget, target); err != nil {
+		log.Printf("ERROR: failed to delete entity from SQLite after retries (%s): %v — the deleted item will linger until a details sync prunes it or it is rm'd again", spec.key, err)
 	}
 
 	sink.InvalidateDeleted(spec.dir, spec.name)
@@ -101,4 +114,35 @@ func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T
 		spec.invalidateExtra(target)
 	}
 	return 0
+}
+
+// forgetWithRetry runs the spec's forget, retrying twice with backoff. The
+// forget must not be lost to a transient failure: the API delete has already
+// succeeded, so a dropped forget leaves a phantom row the details sync cannot
+// always prune. SQLITE_BUSY from racing the sync worker is the observed
+// transient (now largely prevented by the connection-level busy_timeout).
+func forgetWithRetry[T any](ctx context.Context, forget func(ctx context.Context, target *T) error, target *T) error {
+	var err error
+	for attempt, delay := range []time.Duration{0, 200 * time.Millisecond, time.Second} {
+		if delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return err
+			}
+		}
+		if err = forget(ctx, target); err == nil {
+			return nil
+		}
+		log.Printf("forget attempt %d failed: %v", attempt+1, err)
+	}
+	return err
+}
+
+// remoteAlreadyGone reports whether a delete mutation failed because Linear no
+// longer has the entity ("Entity not found" is Linear's standard phrasing —
+// the same detection the repo layer uses for reads). For a delete that is
+// success, not failure.
+func remoteAlreadyGone(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Entity not found")
 }
