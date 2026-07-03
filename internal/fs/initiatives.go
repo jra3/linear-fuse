@@ -712,9 +712,11 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 		return nil, syscall.EIO
 	}
 
-	// Always include _create for creating updates
+	// Always include the create feedback trio
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	// Sort updates by creation time
@@ -751,6 +753,13 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 		out.SetAttrTimeout(1 * time.Second)
 		out.SetEntryTimeout(1 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
+
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("updates", n.initiativeID), out), 0
+	}
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("updates", n.initiativeID), out), 0
 	}
 
 	updates, err := n.lfs.GetInitiativeUpdates(ctx, n.initiativeID)
@@ -930,86 +939,47 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 		return 0
 	}
 
-	// Parse the content - could be plain text or markdown with frontmatter
-	body, health := parseInitiativeUpdateContent(n.content)
-	if body == "" {
+	// Parse the content - could be plain text or markdown with frontmatter.
+	// A parse error still goes through the create tail so it lands in .error;
+	// only whitespace-with-no-frontmatter is flush noise and no-ops.
+	body, health, perr := parseUpdateContent(n.content)
+	if perr == nil && body == "" {
 		return 0
 	}
 
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if n.lfs.debug {
-		log.Printf("Creating initiative update: health=%s body=%s", health, body[:min(50, len(body))])
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.InitiativeUpdate]{
+		op:  "create initiative update",
+		key: collectionErrorKey("updates", n.initiativeID),
+		mutate: func(ctx context.Context) (*api.InitiativeUpdate, error) {
+			if perr != nil {
+				return nil, perr
+			}
+			return n.lfs.mutator().CreateInitiativeUpdate(ctx, n.initiativeID, body, health)
+		},
+		// Updates are addressed by an index-derived filename (not knowable
+		// without re-listing), so .last reports the update id + health and
+		// entryName stays unknowable.
+		result: func(u *api.InitiativeUpdate) WriteResult {
+			return WriteResult{
+				Identifier: u.ID,
+				Title:      firstLine(u.Body),
+				Status:     u.Health,
+			}
+		},
+		persist: func(ctx context.Context, u *api.InitiativeUpdate) error {
+			return n.lfs.UpsertInitiativeUpdate(ctx, n.initiativeID, *u)
+		},
+		dir: initiativeUpdatesDirIno(n.initiativeID),
+	})
+	if errno != 0 {
+		return errno
 	}
-
-	update, err := n.lfs.CreateInitiativeUpdate(ctx, n.initiativeID, body, health)
-	if err != nil {
-		log.Printf("Failed to create initiative update: %v", err)
-		return syscall.EIO
-	}
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertInitiativeUpdate(ctx, n.initiativeID, *update); err != nil {
-		log.Printf("Warning: failed to upsert initiative update to SQLite: %v", err)
-	}
-
 	n.created = true
-
-	// Invalidate kernel cache for the updates directory (previously skipped the
-	// dir inode, so a newly-created update was missing from the listing).
-	n.lfs.InvalidateCreated(initiativeUpdatesDirIno(n.initiativeID), "")
-
-	if n.lfs.debug {
-		log.Printf("Initiative update created successfully")
-	}
-
 	return 0
 }
 
 func (n *NewInitiativeUpdateNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
 	return 0
-}
-
-// parseInitiativeUpdateContent extracts body and health from update content
-func parseInitiativeUpdateContent(content []byte) (body string, health string) {
-	s := string(content)
-	health = "onTrack" // Default health
-
-	// Check for frontmatter
-	if !strings.HasPrefix(s, "---\n") {
-		return strings.TrimSpace(s), health
-	}
-
-	// Find end of frontmatter
-	end := strings.Index(s[4:], "\n---")
-	if end == -1 {
-		return strings.TrimSpace(s), health
-	}
-
-	// Parse frontmatter for health field
-	frontmatter := s[4 : 4+end]
-	for _, line := range strings.Split(frontmatter, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "health:") {
-			h := strings.TrimSpace(strings.TrimPrefix(line, "health:"))
-			h = strings.Trim(h, `"'`)
-			// Normalize health value
-			switch strings.ToLower(h) {
-			case "ontrack", "on track", "on-track":
-				health = "onTrack"
-			case "atrisk", "at risk", "at-risk":
-				health = "atRisk"
-			case "offtrack", "off track", "off-track":
-				health = "offTrack"
-			}
-		}
-	}
-
-	// Return body after frontmatter
-	body = strings.TrimSpace(s[4+end+4:])
-	return body, health
 }
 
 // initiativeUpdateToMarkdown converts an initiative update to markdown with YAML frontmatter

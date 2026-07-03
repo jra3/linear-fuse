@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -143,6 +144,7 @@ func TestParseUpdateContent(t *testing.T) {
 		content    string
 		wantBody   string
 		wantHealth string
+		wantField  string // non-empty: expect a *FieldError on this field
 	}{
 		{
 			name:       "plain text",
@@ -235,11 +237,40 @@ Line 3`,
 			wantBody:   "Line 1\nLine 2\nLine 3",
 			wantHealth: "onTrack",
 		},
+		{
+			name: "unknown health rejected, not coerced to onTrack",
+			content: `---
+health: critical
+---
+Everything is on fire`,
+			wantField: "health",
+		},
+		{
+			name: "frontmatter with empty body rejected",
+			content: `---
+health: atRisk
+---
+`,
+			wantField: "body",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotBody, gotHealth := parseUpdateContent([]byte(tt.content))
+			gotBody, gotHealth, err := parseUpdateContent([]byte(tt.content))
+			if tt.wantField != "" {
+				var ferr *FieldError
+				if !errors.As(err, &ferr) {
+					t.Fatalf("parseUpdateContent() err = %v, want *FieldError on %q", err, tt.wantField)
+				}
+				if ferr.Field != tt.wantField {
+					t.Errorf("parseUpdateContent() FieldError.Field = %q, want %q", ferr.Field, tt.wantField)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseUpdateContent() unexpected error: %v", err)
+			}
 			if gotBody != tt.wantBody {
 				t.Errorf("parseUpdateContent() body = %q, want %q", gotBody, tt.wantBody)
 			}

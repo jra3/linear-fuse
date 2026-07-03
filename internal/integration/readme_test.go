@@ -25,7 +25,10 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	}
 
 	// It should document the surfaces this branch added so agents learn about them.
-	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/"} {
+	// "recent created updates" guards the updates trio: updates/ directories were
+	// the last create surface without .error/.last, which made the README's global
+	// "every writable directory has a .error" claim false there.
+	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not mention %q", want)
 		}

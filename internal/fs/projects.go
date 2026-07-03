@@ -791,9 +791,11 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// Always include _create for creating updates
+	// Always include the create feedback trio
 	entries := []fuse.DirEntry{
 		{Name: "_create", Mode: syscall.S_IFREG},
+		{Name: ".error", Mode: syscall.S_IFREG},
+		{Name: ".last", Mode: syscall.S_IFREG},
 	}
 
 	// Sort updates by creation time
@@ -830,6 +832,13 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		out.SetAttrTimeout(1 * time.Second)
 		out.SetEntryTimeout(1 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	}
+
+	if name == ".error" {
+		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("updates", n.projectID), out), 0
+	}
+	if name == ".last" {
+		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("updates", n.projectID), out), 0
 	}
 
 	updates, err := n.lfs.GetProjectUpdates(ctx, n.projectID)
@@ -1005,41 +1014,42 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		return 0
 	}
 
-	// Parse the content - could be plain text or markdown with frontmatter
-	body, health := parseUpdateContent(n.content)
-	if body == "" {
+	// Parse the content - could be plain text or markdown with frontmatter.
+	// A parse error still goes through the create tail so it lands in .error;
+	// only whitespace-with-no-frontmatter is flush noise and no-ops.
+	body, health, perr := parseUpdateContent(n.content)
+	if perr == nil && body == "" {
 		return 0
 	}
 
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if n.lfs.debug {
-		log.Printf("Creating project update: health=%s body=%s", health, body[:min(50, len(body))])
+	_, errno := commitCreate(ctx, n.lfs, createSpec[api.ProjectUpdate]{
+		op:  "create project update",
+		key: collectionErrorKey("updates", n.projectID),
+		mutate: func(ctx context.Context) (*api.ProjectUpdate, error) {
+			if perr != nil {
+				return nil, perr
+			}
+			return n.lfs.mutator().CreateProjectUpdate(ctx, n.projectID, body, health)
+		},
+		// Updates are addressed by an index-derived filename (not knowable
+		// without re-listing), so .last reports the update id + health and
+		// entryName stays unknowable.
+		result: func(u *api.ProjectUpdate) WriteResult {
+			return WriteResult{
+				Identifier: u.ID,
+				Title:      firstLine(u.Body),
+				Status:     u.Health,
+			}
+		},
+		persist: func(ctx context.Context, u *api.ProjectUpdate) error {
+			return n.lfs.UpsertProjectUpdate(ctx, n.projectID, *u)
+		},
+		dir: updatesDirIno(n.projectID),
+	})
+	if errno != 0 {
+		return errno
 	}
-
-	update, err := n.lfs.CreateProjectUpdate(ctx, n.projectID, body, health)
-	if err != nil {
-		log.Printf("Failed to create project update: %v", err)
-		return syscall.EIO
-	}
-
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertProjectUpdate(ctx, n.projectID, *update); err != nil {
-		log.Printf("Warning: failed to upsert project update to SQLite: %v", err)
-	}
-
 	n.created = true
-
-	// Invalidate kernel cache for updates directory (previously skipped the dir
-	// inode, so a newly-created update was missing from the listing).
-	n.lfs.InvalidateCreated(updatesDirIno(n.projectID), "")
-
-	if n.lfs.debug {
-		log.Printf("Project update created successfully")
-	}
-
 	return 0
 }
 
@@ -1047,21 +1057,27 @@ func (n *NewUpdateNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32
 	return 0
 }
 
-// parseUpdateContent extracts body and health from update content
-// Supports plain text or markdown with YAML frontmatter containing health field
-func parseUpdateContent(content []byte) (body string, health string) {
+// parseUpdateContent extracts body and health from update content (shared by
+// project and initiative updates). Supports plain text or markdown with YAML
+// frontmatter containing a health field; plain text defaults health to onTrack.
+// An explicitly written but unrecognized health value is a *FieldError
+// (-> EINVAL), as is frontmatter whose body is empty — the writer expressed
+// intent, so silently creating an onTrack update (or nothing) would swallow it.
+// Only content with no frontmatter may parse to an empty body; the caller
+// treats that as flush noise and no-ops.
+func parseUpdateContent(content []byte) (body string, health string, err error) {
 	s := string(content)
 	health = "onTrack" // Default health
 
 	// Check for frontmatter
 	if !strings.HasPrefix(s, "---\n") {
-		return strings.TrimSpace(s), health
+		return strings.TrimSpace(s), health, nil
 	}
 
 	// Find end of frontmatter
 	end := strings.Index(s[4:], "\n---")
 	if end == -1 {
-		return strings.TrimSpace(s), health
+		return strings.TrimSpace(s), health, nil
 	}
 
 	// Parse frontmatter for health field
@@ -1079,13 +1095,20 @@ func parseUpdateContent(content []byte) (body string, health string) {
 				health = "atRisk"
 			case "offtrack", "off track", "off-track":
 				health = "offTrack"
+			default:
+				return "", "", &FieldError{Field: "health", Value: h,
+					Message: "invalid health: must be onTrack, atRisk, or offTrack"}
 			}
 		}
 	}
 
 	// Return body after frontmatter
 	body = strings.TrimSpace(s[4+end+4:])
-	return body, health
+	if body == "" {
+		return "", "", &FieldError{Field: "body",
+			Message: "update body is required: write the update text after the frontmatter"}
+	}
+	return body, health, nil
 }
 
 // updateToMarkdown converts a project update to markdown with YAML frontmatter
