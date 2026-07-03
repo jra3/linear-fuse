@@ -16,7 +16,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
-	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
@@ -488,60 +487,33 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		currentProjectSlugs = append(currentProjectSlugs, proj.Slug)
 	}
 
-	// Build sets for comparison
-	currentSet := make(map[string]bool)
-	for _, slug := range currentProjectSlugs {
-		currentSet[slug] = true
-	}
-	newSet := make(map[string]bool)
-	for _, slug := range newProjectSlugs {
-		newSet[slug] = true
-	}
-
-	// Track resolved project IDs for SQLite sync
-	addedProjectIDs := make(map[string]string)   // slug -> ID
-	removedProjectIDs := make(map[string]string) // slug -> ID
-
-	// Find projects to add (in new but not in current)
-	for _, slug := range newProjectSlugs {
-		if !currentSet[slug] {
-			projectID, err := i.lfs.ResolveProjectSlugToID(ctx, slug)
-			if err != nil {
-				log.Printf("Failed to resolve project slug '%s': %v", slug, err)
-				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: "+err.Error()+". Use a project slug from teams/<KEY>/projects/.")
-				return syscall.EINVAL
-			}
+	// Reconcile the initiative's project links (front half of the edit). The
+	// link/unlink closures own the API mutation and the immediate junction-row
+	// write; reconcileLinks owns the diff and the resolve-error classification.
+	if err := reconcileLinks(ctx, linkReconcileSpec{
+		current: currentProjectSlugs,
+		desired: newProjectSlugs,
+		resolve: i.lfs.ResolveProjectSlugToID,
+		link: func(ctx context.Context, projectID string) error {
 			if err := i.lfs.mutator().AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
-				log.Printf("Failed to add project to initiative '%s': %v", slug, err)
-				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: failed to link project to initiative: "+err.Error())
-				return syscall.EIO
+				return err
 			}
-			addedProjectIDs[slug] = projectID
-			if i.lfs.debug {
-				log.Printf("Added project %s to initiative %s", slug, i.initiative.Name)
-			}
-		}
-	}
-
-	// Find projects to remove (in current but not in new)
-	for _, slug := range currentProjectSlugs {
-		if !newSet[slug] {
-			projectID, err := i.lfs.ResolveProjectSlugToID(ctx, slug)
-			if err != nil {
-				log.Printf("Failed to resolve project slug '%s' for removal: %v", slug, err)
-				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: cannot resolve project to remove: "+err.Error())
-				return syscall.EINVAL
-			}
+			i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, true)
+			return nil
+		},
+		unlink: func(ctx context.Context, projectID string) error {
 			if err := i.lfs.mutator().RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
-				log.Printf("Failed to remove project from initiative '%s': %v", slug, err)
-				i.lfs.SetWriteError(i.initiativeID, "Field: projects\nValue: \""+slug+"\"\nError: failed to unlink project from initiative: "+err.Error())
-				return syscall.EIO
+				return err
 			}
-			removedProjectIDs[slug] = projectID
-			if i.lfs.debug {
-				log.Printf("Removed project %s from initiative %s", slug, i.initiative.Name)
-			}
-		}
+			i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, false)
+			return nil
+		},
+		field: "projects",
+		hint:  ". Use a project slug from teams/<KEY>/projects/.",
+	}); err != nil {
+		msg, errno := classifyMutationErr("update initiative projects", err)
+		i.lfs.SetWriteError(i.initiativeID, msg)
+		return errno
 	}
 
 	// Persist editable scalar fields (name in frontmatter, description in body).
@@ -568,77 +540,44 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		}
 	}
 
-	// Fetch fresh initiative (read-your-writes) and upsert to SQLite for immediate
-	// visibility. Goes through the verify seam so a fake can serve it offline.
-	freshInitiative, err := i.lfs.verify().GetInitiative(ctx, i.initiativeID)
-	var divergence string
-	var fatal bool
-	if err != nil {
-		log.Printf("Warning: failed to fetch fresh initiative after update: %v", err)
-	} else {
-		// Read-your-writes verification on the free-text fields we sent, using
-		// the pre-write values (i.initiative) to classify the divergence.
-		var results []writeBackResult
-		if initiativeInput.Name != nil {
-			results = append(results, writeBackDivergence("name", *initiativeInput.Name, freshInitiative.Name, i.initiative.Name))
-		}
-		if initiativeInput.Description != nil {
-			results = append(results, writeBackDivergence("description (body)", *initiativeInput.Description, freshInitiative.Description, i.initiative.Description))
-		}
-		divergence, fatal = writeBackError(results...)
-		i.initiative = *freshInitiative
-		if err := i.lfs.UpsertInitiative(ctx, *freshInitiative); err != nil {
-			log.Printf("Warning: failed to upsert initiative to SQLite: %v", err)
-		}
-	}
-
-	// Sync initiative-project associations to SQLite
-	if i.lfs.store != nil {
-		for _, projID := range addedProjectIDs {
-			if err := i.lfs.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
-				InitiativeID: i.initiativeID,
-				ProjectID:    projID,
-				SyncedAt:     db.Now(),
-			}); err != nil {
-				log.Printf("Warning: failed to upsert initiative-project to SQLite: %v", err)
+	// Edit-commit tail: re-fetch the initiative, verify read-your-writes against
+	// the pre-write values still on i.initiative, upsert, and surface divergence
+	// via .error. The project-link side-work (above) stays in the handler.
+	fresh, errno := commitWriteBack(ctx, i.lfs, writeBackSpec[api.Initiative]{
+		errKey: i.initiativeID,
+		fetch: func(ctx context.Context) (*api.Initiative, error) {
+			return i.lfs.verify().GetInitiative(ctx, i.initiativeID)
+		},
+		persist: func(ctx context.Context, fresh *api.Initiative) error {
+			return i.lfs.UpsertInitiative(ctx, *fresh)
+		},
+		compare: func(fresh *api.Initiative) []writeBackResult {
+			var results []writeBackResult
+			if initiativeInput.Name != nil {
+				results = append(results, writeBackDivergence("name", *initiativeInput.Name, fresh.Name, i.initiative.Name))
 			}
-		}
-		for _, projID := range removedProjectIDs {
-			if err := i.lfs.store.Queries().DeleteInitiativeProject(ctx, db.DeleteInitiativeProjectParams{
-				InitiativeID: i.initiativeID,
-				ProjectID:    projID,
-			}); err != nil {
-				log.Printf("Warning: failed to delete initiative-project from SQLite: %v", err)
+			if initiativeInput.Description != nil {
+				results = append(results, writeBackDivergence("description (body)", *initiativeInput.Description, fresh.Description, i.initiative.Description))
 			}
-		}
+			return results
+		},
+	})
+	if fresh != nil {
+		i.initiative = *fresh
 	}
 
 	if i.lfs.debug {
 		log.Printf("Flush: initiative %s updated successfully", i.initiative.Name)
 	}
 
-	// Invalidate caches
-	i.lfs.InvalidateInitiatives()
-
-	// Invalidate kernel inode cache (initiative.md and the projects/ listing)
+	// Invalidate kernel inode cache (initiative.md, its meta, and projects/ listing)
 	i.lfs.InvalidateUpdated(initiativeInfoIno(i.initiativeID))
 	i.lfs.InvalidateUpdated(metaIno(i.initiativeID)) // initiative.meta reflects the edit
 	i.lfs.InvalidateUpdated(initiativeProjectsIno(i.initiativeID))
 
 	i.dirty = false
 	i.contentReady = false // Force re-generate on next read
-
-	if divergence != "" {
-		log.Printf("Read-your-writes %s on initiative %s:\n%s", writeBackKind(fatal), i.initiative.Name, divergence)
-		i.lfs.SetWriteError(i.initiativeID, divergence)
-		if fatal {
-			return syscall.EIO
-		}
-		return 0
-	}
-
-	i.lfs.ClearWriteError(i.initiativeID)
-	return 0
+	return errno
 }
 
 // InitiativeProjectsNode represents the projects/ directory within an initiative

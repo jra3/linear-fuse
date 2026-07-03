@@ -229,10 +229,6 @@ func (lfs *LinearFS) GetIssueHistory(ctx context.Context, issueID string) ([]api
 	return lfs.repo.GetIssueHistory(ctx, issueID)
 }
 
-func (lfs *LinearFS) InvalidateTeamIssues(teamID string) {
-	// No-op: SQLite is source of truth, sync worker will refresh
-}
-
 // SetServer sets the FUSE server reference for kernel cache invalidation
 func (lfs *LinearFS) SetServer(server *fuse.Server) {
 	lfs.server = server
@@ -281,18 +277,6 @@ func (lfs *LinearFS) InvalidateUpdated(fileIno uint64) {
 // directory. See invalidateRenamed for the policy. fileIno may be 0.
 func (lfs *LinearFS) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
 	invalidateRenamed(lfs, dirIno, oldName, newName, fileIno)
-}
-
-// InvalidateFilteredIssues clears all filtered issue cache entries for a team
-// No-op: SQLite is source of truth
-func (lfs *LinearFS) InvalidateFilteredIssues(teamID string) {
-	// No-op: SQLite is source of truth, sync worker will refresh
-}
-
-// InvalidateIssueById clears a specific issue from the identifier cache
-// No-op: SQLite is source of truth
-func (lfs *LinearFS) InvalidateIssueById(identifier string) {
-	// No-op: SQLite is source of truth
 }
 
 // UpsertIssue inserts or updates an issue in SQLite.
@@ -475,11 +459,6 @@ func (lfs *LinearFS) GetFilteredIssuesUnassigned(ctx context.Context, teamID str
 	return lfs.repo.GetUnassignedIssues(ctx, teamID)
 }
 
-// InvalidateMyIssues is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateMyIssues() {
-	// No-op: SQLite is source of truth
-}
-
 func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
 	return lfs.repo.GetMyIssues(ctx)
 }
@@ -529,16 +508,6 @@ func (lfs *LinearFS) GetTeamProjects(ctx context.Context, teamID string) ([]api.
 	return lfs.repo.GetTeamProjects(ctx, teamID)
 }
 
-// InvalidateTeamProjects is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateTeamProjects(teamID string) {
-	// No-op: SQLite is source of truth
-}
-
-// InvalidateProjectIssues is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateProjectIssues(projectID string) {
-	// No-op: SQLite is source of truth
-}
-
 // GetProjectIssues returns issues in a project as ProjectIssue
 // Uses repository and converts to ProjectIssue for symlink display
 func (lfs *LinearFS) GetProjectIssues(ctx context.Context, projectID string) ([]api.ProjectIssue, error) {
@@ -579,22 +548,12 @@ func (lfs *LinearFS) GetIssueChildren(ctx context.Context, parentID string) ([]a
 	return lfs.repo.GetIssueChildren(ctx, parentID)
 }
 
-// InvalidateUserIssues is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateUserIssues(userID string) {
-	// No-op: SQLite is source of truth
-}
-
 func (lfs *LinearFS) MaybeRefreshIssueDetails(issueID string) {
 	lfs.repo.MaybeRefreshIssueDetails(issueID)
 }
 
 func (lfs *LinearFS) GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error) {
 	return lfs.repo.GetIssueComments(ctx, issueID)
-}
-
-// InvalidateIssueComments is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateIssueComments(issueID string) {
-	// No-op: SQLite is source of truth
 }
 
 // TryGetCachedComments returns comments from SQLite
@@ -627,21 +586,6 @@ func (lfs *LinearFS) GetProjectDocuments(ctx context.Context, projectID string) 
 
 func (lfs *LinearFS) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]api.Document, error) {
 	return lfs.repo.GetInitiativeDocuments(ctx, initiativeID)
-}
-
-// InvalidateIssueDocuments is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateIssueDocuments(issueID string) {
-	// No-op: SQLite is source of truth
-}
-
-// InvalidateTeamDocuments is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateTeamDocuments(teamID string) {
-	// No-op: SQLite is source of truth
-}
-
-// InvalidateProjectDocuments is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateProjectDocuments(projectID string) {
-	// No-op: SQLite is source of truth
 }
 
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
@@ -881,11 +825,6 @@ func (lfs *LinearFS) GetProjectUpdates(ctx context.Context, projectID string) ([
 	return lfs.repo.GetProjectUpdates(ctx, projectID)
 }
 
-// InvalidateProjectUpdates is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateProjectUpdates(projectID string) {
-	// No-op: SQLite is source of truth
-}
-
 // CreateProjectUpdate creates a new status update on a project
 func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*api.ProjectUpdate, error) {
 	return lfs.mutator().CreateProjectUpdate(ctx, projectID, body, health)
@@ -894,11 +833,6 @@ func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, h
 // GetInitiativeUpdates fetches status updates for an initiative
 func (lfs *LinearFS) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]api.InitiativeUpdate, error) {
 	return lfs.repo.GetInitiativeUpdates(ctx, initiativeID)
-}
-
-// InvalidateInitiativeUpdates is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateInitiativeUpdates(initiativeID string) {
-	// No-op: SQLite is source of truth
 }
 
 // CreateInitiativeUpdate creates a new status update on an initiative
@@ -931,11 +865,6 @@ func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName str
 	return "", fmt.Errorf("unknown initiative: %s", initiativeName)
 }
 
-// InvalidateTeamLabels is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateTeamLabels(teamID string) {
-	// No-op: SQLite is source of truth
-}
-
 // UpdateLabel updates a label
 func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[string]any, teamID string) (*api.Label, error) {
 	return lfs.mutator().UpdateLabel(ctx, labelID, input)
@@ -944,11 +873,6 @@ func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[
 // GetInitiatives fetches all initiatives
 func (lfs *LinearFS) GetInitiatives(ctx context.Context) ([]api.Initiative, error) {
 	return lfs.repo.GetInitiatives(ctx)
-}
-
-// InvalidateInitiatives is a no-op; SQLite is the source of truth
-func (lfs *LinearFS) InvalidateInitiatives() {
-	// No-op: SQLite is source of truth
 }
 
 func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *LinearFS, error) {

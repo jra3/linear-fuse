@@ -105,9 +105,6 @@ func (lfs *LinearFS) issueCreateSpec(teamID, op, key string, dir uint64, mutate 
 		dir:       dir,
 		entryName: func(i *api.Issue) string { return i.Identifier },
 		invalidateExtra: func(i *api.Issue) {
-			lfs.InvalidateTeamIssues(teamID)
-			lfs.InvalidateMyIssues()
-			lfs.InvalidateFilteredIssues(teamID)
 			// A fresh issue must appear in recent/ immediately, not after the
 			// dir cache TTL (the #148 design's known staleness bound).
 			lfs.InvalidateCreated(recentDirIno(teamID), i.Identifier)
@@ -440,11 +437,6 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		dir:  issuesDirIno(n.team.ID),
 		name: name,
 		invalidateExtra: func(i *api.Issue) {
-			n.lfs.InvalidateFilteredIssues(n.team.ID)
-			n.lfs.InvalidateIssueById(i.Identifier)
-			if i.Project != nil {
-				n.lfs.InvalidateProjectIssues(i.Project.ID)
-			}
 			// The archived issue must also vanish from recent/ immediately
 			// (symmetric with the create tail's recent/ coherence).
 			n.lfs.InvalidateDeleted(recentDirIno(n.team.ID), name)
@@ -928,37 +920,6 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	if i.lfs.debug {
 		log.Printf("Flush: %s updated successfully", i.issue.Identifier)
-	}
-
-	// Invalidate caches so next read gets fresh data
-	if i.issue.Team != nil {
-		i.lfs.InvalidateTeamIssues(i.issue.Team.ID)
-		i.lfs.InvalidateFilteredIssues(i.issue.Team.ID)
-	}
-	i.lfs.InvalidateMyIssues()
-	i.lfs.InvalidateIssueById(i.issue.Identifier)
-
-	// Invalidate user caches for old and new assignee
-	if i.issue.Assignee != nil {
-		i.lfs.InvalidateUserIssues(i.issue.Assignee.ID)
-	}
-	if newAssigneeID, ok := updates["assigneeId"].(string); ok {
-		// Also invalidate new assignee's cache if different from old
-		if i.issue.Assignee == nil || newAssigneeID != i.issue.Assignee.ID {
-			i.lfs.InvalidateUserIssues(newAssigneeID)
-		}
-	}
-
-	// Invalidate project caches if project changed
-	if _, hasProjectUpdate := updates["projectId"]; hasProjectUpdate {
-		// Invalidate old project (if issue was in one)
-		if i.issue.Project != nil {
-			i.lfs.InvalidateProjectIssues(i.issue.Project.ID)
-		}
-		// Invalidate new project (if being assigned to one)
-		if newProjectID, ok := updates["projectId"].(string); ok {
-			i.lfs.InvalidateProjectIssues(newProjectID)
-		}
 	}
 
 	// Invalidate kernel cache for this file

@@ -16,7 +16,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
-	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
@@ -139,9 +138,6 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		},
 		dir:       projectsDirIno(p.team.ID),
 		entryName: func(pr *api.Project) string { return projectDirName(*pr) },
-		invalidateExtra: func(*api.Project) {
-			p.lfs.InvalidateTeamProjects(p.team.ID)
-		},
 	})
 	if errno != 0 {
 		return nil, errno
@@ -192,9 +188,6 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		},
 		dir:  projectsDirIno(p.team.ID),
 		name: name,
-		invalidateExtra: func(*api.Project) {
-			p.lfs.InvalidateTeamProjects(p.team.ID)
-		},
 	})
 }
 
@@ -683,60 +676,33 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		}
 	}
 
-	// Build sets for comparison
-	currentSet := make(map[string]bool)
-	for _, name := range currentInitiatives {
-		currentSet[name] = true
-	}
-	newSet := make(map[string]bool)
-	for _, name := range newInitiatives {
-		newSet[name] = true
-	}
-
-	// Track resolved initiative IDs for SQLite sync
-	addedInitiativeIDs := make(map[string]string)   // name -> ID
-	removedInitiativeIDs := make(map[string]string) // name -> ID
-
-	// Find initiatives to add (in new but not in current)
-	for _, name := range newInitiatives {
-		if !currentSet[name] {
-			initiativeID, err := p.lfs.ResolveInitiativeID(ctx, name)
-			if err != nil {
-				log.Printf("Failed to resolve initiative '%s': %v", name, err)
-				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: "+err.Error()+". See initiatives/ for valid initiative names.")
-				return syscall.EINVAL
-			}
+	// Reconcile the project's initiative links (front half of the edit). The
+	// link/unlink closures own the API mutation and the immediate junction-row
+	// write; reconcileLinks owns the diff and the resolve-error classification.
+	if err := reconcileLinks(ctx, linkReconcileSpec{
+		current: currentInitiatives,
+		desired: newInitiatives,
+		resolve: p.lfs.ResolveInitiativeID,
+		link: func(ctx context.Context, initiativeID string) error {
 			if err := p.lfs.mutator().AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
-				log.Printf("Failed to add project to initiative '%s': %v", name, err)
-				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to link project to initiative: "+err.Error())
-				return syscall.EIO
+				return err
 			}
-			addedInitiativeIDs[name] = initiativeID
-			if p.lfs.debug {
-				log.Printf("Added project %s to initiative %s", p.project.Name, name)
-			}
-		}
-	}
-
-	// Find initiatives to remove (in current but not in new)
-	for _, name := range currentInitiatives {
-		if !newSet[name] {
-			initiativeID, err := p.lfs.ResolveInitiativeID(ctx, name)
-			if err != nil {
-				log.Printf("Failed to resolve initiative '%s' for removal: %v", name, err)
-				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: cannot resolve initiative to remove: "+err.Error())
-				return syscall.EINVAL
-			}
+			p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, true)
+			return nil
+		},
+		unlink: func(ctx context.Context, initiativeID string) error {
 			if err := p.lfs.mutator().RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
-				log.Printf("Failed to remove project from initiative '%s': %v", name, err)
-				p.lfs.SetWriteError(p.project.ID, "Field: initiatives\nValue: \""+name+"\"\nError: failed to unlink project from initiative: "+err.Error())
-				return syscall.EIO
+				return err
 			}
-			removedInitiativeIDs[name] = initiativeID
-			if p.lfs.debug {
-				log.Printf("Removed project %s from initiative %s", p.project.Name, name)
-			}
-		}
+			p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, false)
+			return nil
+		},
+		field: "initiatives",
+		hint:  ". See initiatives/ for valid initiative names.",
+	}); err != nil {
+		msg, errno := classifyMutationErr("update project initiatives", err)
+		p.lfs.SetWriteError(p.project.ID, msg)
+		return errno
 	}
 
 	// Persist editable scalar fields (name in frontmatter, description in body).
@@ -787,34 +753,9 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		p.project = *fresh
 	}
 
-	// Sync initiative-project associations to SQLite
-	if p.lfs.store != nil {
-		for _, initID := range addedInitiativeIDs {
-			if err := p.lfs.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
-				InitiativeID: initID,
-				ProjectID:    p.project.ID,
-				SyncedAt:     db.Now(),
-			}); err != nil {
-				log.Printf("Warning: failed to upsert initiative-project to SQLite: %v", err)
-			}
-		}
-		for _, initID := range removedInitiativeIDs {
-			if err := p.lfs.store.Queries().DeleteInitiativeProject(ctx, db.DeleteInitiativeProjectParams{
-				InitiativeID: initID,
-				ProjectID:    p.project.ID,
-			}); err != nil {
-				log.Printf("Warning: failed to delete initiative-project from SQLite: %v", err)
-			}
-		}
-	}
-
 	if p.lfs.debug {
 		log.Printf("Flush: project %s updated successfully", p.project.Name)
 	}
-
-	// Invalidate caches
-	p.lfs.InvalidateTeamProjects(p.team.ID)
-	p.lfs.InvalidateInitiatives()
 
 	// Invalidate kernel inode cache
 	p.lfs.InvalidateUpdated(projectInfoIno(p.project.ID))

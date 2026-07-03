@@ -74,6 +74,25 @@ the handler maps it to `EINVAL`. This collapsed the issue-`Flush` front half fro
 fake resolver — no repo, SQLite, or API. The individual `Resolve*` methods remain as
 shared primitives (also used singly by initiatives and projects).
 
+### Link reconciliation (`reconcileLinks`)
+The **deep module** owning the *relational* front half of an edit — the counterpart
+to Name→ID resolution for many-to-many links. Editing project.md's `initiatives:`
+list and initiative.md's `projects:` list are mirror images of one algorithm: diff
+the desired member names against the current ones, resolve each delta to an ID, and
+link/unlink it. That algorithm was hand-copied in both `ProjectInfoNode.Flush` and
+`InitiativeInfoNode.Flush`, differing only in which name resolves, the argument order
+to the shared `Add/RemoveProjectToInitiative` mutation, and the `.error` field label.
+`reconcileLinks` (`internal/fs/reconcile.go`) owns the diff and the resolve-error
+classification; each caller passes a `linkReconcileSpec` whose `link`/`unlink`
+closures own the per-side effect (the API mutation plus an immediate best-effort
+junction-row write via `persistInitiativeProjectLink`). Like Name→ID resolution it is
+pure of the **ErrorSink** and of any entity type — it works only on ID strings and
+name lists — so it returns a **`FieldError`** (bad name → `EINVAL` via
+`classifyMutationErr`) or the wrapped mutation error (→ `EIO`/`EAGAIN`), and is
+unit-tested with recording closures (no FUSE mount, SQLite, or API). Persisting each
+junction row inline (rather than the old deferred batch a mid-loop failure skipped)
+keeps SQLite consistent with whatever the API actually accepted on a partial failure.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`
