@@ -28,6 +28,42 @@ func TestOpenAndClose(t *testing.T) {
 	}
 }
 
+// TestConnectionPragmas asserts the DSN-level pragmas reach every pooled
+// connection. busy_timeout in particular is per-connection: configured via a
+// one-off Exec it covered only one pooled conn, and a delete's SQLite forget
+// racing the sync worker failed instantly with SQLITE_BUSY, leaving a phantom
+// row that resurrected the deleted file.
+func TestConnectionPragmas(t *testing.T) {
+	t.Parallel()
+	store, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer store.Close()
+
+	var busy int
+	if err := store.DB().QueryRow("PRAGMA busy_timeout").Scan(&busy); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if busy < 1000 {
+		t.Errorf("busy_timeout = %d, want >= 1000ms so writes wait out the sync worker instead of failing SQLITE_BUSY", busy)
+	}
+	var fk int
+	if err := store.DB().QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatalf("query foreign_keys: %v", err)
+	}
+	if fk != 1 {
+		t.Errorf("foreign_keys = %d, want 1", fk)
+	}
+	var mode string
+	if err := store.DB().QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("query journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want wal", mode)
+	}
+}
+
 func TestUpsertAndGetIssue(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

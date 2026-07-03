@@ -1291,10 +1291,10 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 		alias := fmt.Sprintf("i%d", i)
 		varName := fmt.Sprintf("id%d", i)
 		queryParts = append(queryParts, fmt.Sprintf(`%s: issue(id: $%s) {
-			comments(first: 100) { nodes { ...CommentFields } }
-			documents(first: 100) { nodes { ...DocumentFields } }
-			attachments(first: 100) { nodes { ...AttachmentFields } }
-		}`, alias, varName))
+			comments(first: %d) { nodes { ...CommentFields } }
+			documents(first: %d) { nodes { ...DocumentFields } }
+			attachments(first: %d) { nodes { ...AttachmentFields } }
+		}`, alias, varName, IssueDetailsPageSize, IssueDetailsPageSize, IssueDetailsPageSize))
 		vars[varName] = id
 	}
 

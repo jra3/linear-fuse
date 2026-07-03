@@ -61,10 +61,19 @@ tail: run the caller's `find` closure (locate the target by name, or hand over a
 already-held entity) → run the delete/archive mutation → classify failure through
 the shared classifier (`classifyMutationErr`) → on success clear `.error`,
 **forget the SQLite row** (required — the store is the listing source of truth,
-so a skipped forget resurrects the deleted item until sync), and apply the
-kernel-cache coherence policy (`InvalidateDeleted` is module-guaranteed). An
-unknown name notes itself in `.error` before returning `ENOENT`. Generic over
-`T`, behind the `deleteSink` seam; unit-tested with fakes, no FUSE mount.
+so a skipped forget resurrects the deleted item), and apply the kernel-cache
+coherence policy (`InvalidateDeleted` is module-guaranteed). An unknown name
+notes itself in `.error` before returning `ENOENT`. Generic over `T`, behind the
+`deleteSink` seam; unit-tested with fakes, no FUSE mount.
+
+Durability of the forget (a stress test caught a delete whose forget lost a
+`SQLITE_BUSY` race to the sync worker, leaving a phantom file that resurrected
+forever): the connection-level `busy_timeout` DSN pragma makes the race rare,
+the tail retries a failed forget before giving up, a delete of an entity Linear
+already lacks ("Entity not found") is **idempotent success** — the row is still
+forgotten, so re-`rm`ing a phantom heals it — and the details sync **prunes**
+rows a (provably complete, sub-page-cap) fetch no longer returns, scoped by
+issue and a pre-fetch `synced_at` cutoff so rows created mid-fetch survive.
 
 ### Name→ID resolution (`resolveIssueUpdate`)
 marshal returns an issue update whose relational fields hold *names* (a state name,

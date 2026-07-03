@@ -58,22 +58,20 @@ func openDB(dbPath string) (*Store, error) {
 	// Use file: URI format to properly handle paths with spaces and query params
 	// Escape spaces in path for URI format
 	escapedPath := strings.ReplaceAll(dbPath, " ", "%20")
-	connStr := "file:" + escapedPath + "?_time_format=sqlite"
+	// The pragmas ride the DSN because database/sql pools connections: a
+	// `db.Exec("PRAGMA …")` runs on one pooled connection and leaves the rest
+	// unconfigured. busy_timeout in particular must cover every connection —
+	// without it a write that races the sync worker fails instantly with
+	// SQLITE_BUSY (a delete's forget losing that race left a phantom row that
+	// resurrected the deleted file). journal_mode=WAL is persistent per
+	// database but is harmless to re-apply per connection.
+	connStr := "file:" + escapedPath + "?_time_format=sqlite" +
+		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=foreign_keys(1)" +
+		"&_pragma=journal_mode(WAL)"
 	db, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
-	}
-
-	// Enable WAL mode for better concurrent access
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable WAL mode: %w", err)
-	}
-
-	// Enable foreign keys
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	// Initialize schema

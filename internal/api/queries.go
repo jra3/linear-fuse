@@ -1,5 +1,7 @@
 package api
 
+import "fmt"
+
 const queryTeams = `
 query Teams {
   teams {
@@ -814,22 +816,30 @@ mutation ArchiveIssue($id: String!) {
 }
 `
 
+// IssueDetailsPageSize is the `first:` page cap on the issue-details queries
+// (single and batch). Exported because the sync worker's stale-row pruning may
+// only treat a fetched set as complete when its length is below this cap — a
+// full page may be truncated, and pruning against a truncated set would delete
+// real rows.
+const IssueDetailsPageSize = 100
+
 // queryIssueDetails fetches comments, documents, and attachments for an issue in one query
-var queryIssueDetails = `
+var queryIssueDetails = fmt.Sprintf(`
 query IssueDetails($issueId: String!) {
   issue(id: $issueId) {
-    comments(first: 100) {
+    comments(first: %d) {
       nodes { ...CommentFields }
     }
-    documents(first: 100) {
+    documents(first: %d) {
       nodes { ...DocumentFields }
     }
-    attachments(first: 100) {
+    attachments(first: %d) {
       nodes { ...AttachmentFields }
     }
   }
 }
-` + CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment
+`, IssueDetailsPageSize, IssueDetailsPageSize, IssueDetailsPageSize) +
+	CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment
 
 // queryIssueAttachments fetches only attachments for an issue
 var queryIssueAttachments = `

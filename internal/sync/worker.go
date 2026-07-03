@@ -710,6 +710,12 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		idToIdentifier[issue.ID] = issue.Identifier
 	}
 
+	// The prune cutoff is taken BEFORE the fetch: any row upserted after this
+	// instant (a comment created through FUSE while the fetch was in flight)
+	// carries a newer synced_at and survives pruning even though the fetch
+	// response predates it.
+	pruneCutoff := db.Now()
+
 	// Fetch all details in one API call
 	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
 	if err != nil {
@@ -769,6 +775,36 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 			}
 			if err := w.store.Queries().UpsertAttachment(ctx, params); err != nil {
 				log.Printf("[sync] upsert attachment %s failed: %v", attachment.ID, err)
+			}
+		}
+
+		// Prune rows the fetch no longer returned — a comment/doc/attachment
+		// deleted in Linear, or a phantom left by a delete whose SQLite forget
+		// failed. The upserts above re-stamped every fetched row's synced_at,
+		// so anything still older than the pre-fetch cutoff is stale. Only a
+		// provably complete set may prune: a full page (IssueDetailsPageSize)
+		// may be truncated, and pruning against it would delete real rows.
+		// This must run before the Touch* pass below, which re-stamps ALL of
+		// an issue's rows and would exempt phantoms from the cutoff.
+		//
+		// SAFETY: pruning against an empty-but-wrong set relies on the API
+		// client's all-or-nothing batch semantics — c.query fails the WHOLE
+		// batch on any GraphQL error, so a partially-failed response can never
+		// reach this loop as an empty details struct. If that ever relaxes to
+		// "return the data we got", this prune becomes silent data loss.
+		if len(details.Comments) < api.IssueDetailsPageSize {
+			if err := w.store.Queries().PruneIssueComments(ctx, db.PruneIssueCommentsParams{IssueID: issueID, SyncedAt: pruneCutoff}); err != nil {
+				log.Printf("[sync] prune comments %s: %v", issueID, err)
+			}
+		}
+		if len(details.Documents) < api.IssueDetailsPageSize {
+			if err := w.store.Queries().PruneIssueDocuments(ctx, db.PruneIssueDocumentsParams{IssueID: sql.NullString{String: issueID, Valid: true}, SyncedAt: pruneCutoff}); err != nil {
+				log.Printf("[sync] prune documents %s: %v", issueID, err)
+			}
+		}
+		if len(details.Attachments) < api.IssueDetailsPageSize {
+			if err := w.store.Queries().PruneIssueAttachments(ctx, db.PruneIssueAttachmentsParams{IssueID: issueID, SyncedAt: pruneCutoff}); err != nil {
+				log.Printf("[sync] prune attachments %s: %v", issueID, err)
 			}
 		}
 	}

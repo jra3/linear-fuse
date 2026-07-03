@@ -143,18 +143,71 @@ func TestCommitDelete_Classification(t *testing.T) {
 }
 
 // TestCommitDelete_ForgetFailureNonFatal: a SQLite delete failure must not fail
-// a delete Linear already accepted — and the coherence policy still runs.
+// a delete Linear already accepted — and the coherence policy still runs. The
+// forget is retried before giving up (the stress-tested failure was a
+// transient SQLITE_BUSY racing the sync worker).
 func TestCommitDelete_ForgetFailureNonFatal(t *testing.T) {
 	sink := &fakeDeleteSink{}
 	mutations, forgets, extras := 0, 0, 0
 	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
-	spec.forget = func(context.Context, *ent) error { return errors.New("db down") }
+	spec.forget = func(context.Context, *ent) error { forgets++; return errors.New("db down") }
 
 	if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
 		t.Fatalf("errno = %v, want 0 (forget failure must be non-fatal)", errno)
 	}
+	if forgets != 3 {
+		t.Errorf("forget attempts = %d, want 3 (retried before giving up)", forgets)
+	}
 	if sink.clears != 1 || sink.invalidates != 1 || extras != 1 {
 		t.Errorf("tail after forget failure: clears=%d invalidates=%d extras=%d, want 1 each",
 			sink.clears, sink.invalidates, extras)
+	}
+}
+
+// TestCommitDelete_ForgetRetrySucceeds: a transient forget failure (SQLITE_BUSY)
+// recovers on retry — no phantom row, no error surfaced.
+func TestCommitDelete_ForgetRetrySucceeds(t *testing.T) {
+	sink := &fakeDeleteSink{}
+	mutations, forgets, extras := 0, 0, 0
+	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
+	attempts := 0
+	spec.forget = func(context.Context, *ent) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("database is locked (5) (SQLITE_BUSY)")
+		}
+		return nil
+	}
+
+	if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	if attempts != 2 {
+		t.Errorf("forget attempts = %d, want 2 (fail once, succeed on retry)", attempts)
+	}
+}
+
+// TestCommitDelete_RemoteAlreadyGone: deleting an entity Linear no longer has
+// is a success, not EIO — the local row is forgotten and the listing re-cohered.
+// This is the self-heal path for a phantom row left by an earlier failed forget.
+func TestCommitDelete_RemoteAlreadyGone(t *testing.T) {
+	sink := &fakeDeleteSink{}
+	mutations, forgets, extras := 0, 0, 0
+	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
+	spec.mutate = func(context.Context, *ent) error {
+		return errors.New(`API error (status 400): {"errors":[{"message":"Entity not found: Comment - Could not find referenced Comment."}]}`)
+	}
+
+	if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
+		t.Fatalf("errno = %v, want 0 (already-gone delete is idempotent success)", errno)
+	}
+	if forgets != 1 {
+		t.Errorf("forgets = %d, want 1 (the phantom row must be forgotten)", forgets)
+	}
+	if sink.clears != 1 || sink.setCalls != 0 {
+		t.Errorf(".error handling: clears=%d sets=%d, want cleared and never set", sink.clears, sink.setCalls)
+	}
+	if sink.invalidates != 1 {
+		t.Errorf("InvalidateDeleted calls = %d, want 1", sink.invalidates)
 	}
 }
