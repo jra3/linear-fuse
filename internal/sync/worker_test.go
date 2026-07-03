@@ -40,6 +40,7 @@ type mockAPIClient struct {
 	simulateError    error
 	rateLimitResetAt time.Time                    // M-3: configurable reset time for adaptive backoff tests
 	detailsByIssue   map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
+	onDetailsBatch   func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
 }
 
 func newMockAPIClient() *mockAPIClient {
@@ -149,6 +150,9 @@ func (m *mockAPIClient) GetIssueDetails(ctx context.Context, issueID string) (*a
 func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error) {
 	if m.simulateError != nil {
 		return nil, m.simulateError
+	}
+	if m.onDetailsBatch != nil {
+		m.onDetailsBatch()
 	}
 	result := make(map[string]*api.IssueDetails, len(issueIDs))
 	for _, id := range issueIDs {
@@ -870,6 +874,47 @@ func TestDetailsSyncPrunesStaleRows(t *testing.T) {
 			ids = append(ids, c.ID)
 		}
 		t.Errorf("after details sync comments = %v, want [comment-live] (phantom pruned, live retained)", ids)
+	}
+}
+
+// TestDetailsSyncPruneSparesMidFetchCreates: a comment created through FUSE
+// while the details fetch is in flight is absent from the fetch response but
+// must survive pruning — its synced_at postdates the pre-fetch cutoff. This is
+// the guarantee the cutoff exists for; a naive "delete everything not in the
+// response" would eat the freshly-created comment.
+func TestDetailsSyncPruneSparesMidFetchCreates(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	// The fetch returns no comments for issue-1…
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{Comments: []api.Comment{}}
+	// …but while it is "in flight", a comment lands through the FUSE write path.
+	mock.onDetailsBatch = func() {
+		params, err := db.APICommentToDBComment(api.Comment{ID: "comment-raced", Body: "created mid-fetch", CreatedAt: time.Now(), UpdatedAt: time.Now()}, "issue-1")
+		if err != nil {
+			t.Errorf("convert raced comment: %v", err)
+			return
+		}
+		if err := store.Queries().UpsertComment(ctx, params); err != nil {
+			t.Errorf("upsert raced comment: %v", err)
+		}
+	}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.syncIssueDetailsBatch(ctx, []struct {
+		ID         string
+		Identifier string
+	}{{ID: "issue-1", Identifier: "TST-1"}})
+
+	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("list comments: %v", err)
+	}
+	if len(comments) != 1 || comments[0].ID != "comment-raced" {
+		t.Errorf("comments = %v, want the mid-fetch create to survive pruning", comments)
 	}
 }
 

@@ -786,6 +786,12 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		// may be truncated, and pruning against it would delete real rows.
 		// This must run before the Touch* pass below, which re-stamps ALL of
 		// an issue's rows and would exempt phantoms from the cutoff.
+		//
+		// SAFETY: pruning against an empty-but-wrong set relies on the API
+		// client's all-or-nothing batch semantics — c.query fails the WHOLE
+		// batch on any GraphQL error, so a partially-failed response can never
+		// reach this loop as an empty details struct. If that ever relaxes to
+		// "return the data we got", this prune becomes silent data loss.
 		if len(details.Comments) < api.IssueDetailsPageSize {
 			if err := w.store.Queries().PruneIssueComments(ctx, db.PruneIssueCommentsParams{IssueID: issueID, SyncedAt: pruneCutoff}); err != nil {
 				log.Printf("[sync] prune comments %s: %v", issueID, err)
