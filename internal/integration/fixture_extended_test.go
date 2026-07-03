@@ -376,9 +376,19 @@ func TestFixtureChildSymlinkTarget(t *testing.T) {
 		t.Fatalf("Failed to read symlink: %v", err)
 	}
 
-	// Should point to ../TST-2
-	if target != "../TST-2" {
-		t.Errorf("Child symlink should point to ../TST-2, got %s", target)
+	// The sibling issue dir is two levels up from children/ (the old
+	// one-level target pointed inside the parent issue dir and dangled).
+	if target != "../../TST-2" {
+		t.Errorf("Child symlink should point to ../../TST-2, got %s", target)
+	}
+
+	// The target must actually resolve to the sibling issue directory.
+	resolved, err := filepath.EvalSymlinks(childLink)
+	if err != nil {
+		t.Fatalf("Child symlink does not resolve: %v", err)
+	}
+	if want, _ := filepath.Abs(issueDirPath(testTeamKey, "TST-2")); resolved != want {
+		t.Errorf("Child symlink resolves to %s, want %s", resolved, want)
 	}
 }
 

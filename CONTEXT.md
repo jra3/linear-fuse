@@ -134,6 +134,27 @@ because each dir restated the trio by hand). mkdir-created collections
 (projects) set `onFlush` nil and serve just the two sidecars. Lives in
 `internal/fs/collection.go`.
 
+### Symlink views (`symlinkNode`)
+The **deep module** owning every symlink the filesystem serves: the issue
+symlinks under `by/`, `cycles/`, `recent/`, `projects/`, `users/`, `my/`, and
+`children/`, the project symlinks under `initiatives/`, and the
+`cycles/current` alias. Its
+whole interface is construction: a view's Lookup computes the relative target
+where it already holds the entity, and hands `newSymlinkInode` the target plus
+the entity's real created/updated times (cycle views pass a distinct atime —
+the cycle end date — through the same construction). The helper fills the
+Lookup answer's attributes from the same code path that answers a later
+`stat`, so a Lookup answer and a Getattr can never disagree — the drift that had the `current`
+alias reporting `now()` while its Lookup reported cycle times, and the
+initiative project symlink fabricating size/timestamps while re-scanning every
+team's projects on each `readlink`, and the `children/` symlink shipping a
+dangling one-level target with root ownership. Eight hand-copied node types
+collapsed into this one; an unresolvable target (a project whose team
+association hasn't synced yet, an issue whose team hasn't) is a reference to
+something that doesn't exist -> `ENOENT` at Lookup, never a dangling
+placeholder. Lives in `internal/fs/symlink.go`;
+unit-tested directly, no FUSE mount.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`

@@ -81,7 +81,9 @@ func TestReadInitiativeProjectsDir(t *testing.T) {
 			t.Errorf("Expected %s to be a symlink", entry.Name())
 		}
 
-		// Verify symlink points to valid team project
+		// Verify symlink points to valid team project. HasPrefix (not
+		// Contains) because the old broken 2-level target was a substring
+		// of the correct 3-level one.
 		symlinkPath := filepath.Join(projectsDir, entry.Name())
 		target, err := os.Readlink(symlinkPath)
 		if err != nil {
@@ -89,8 +91,13 @@ func TestReadInitiativeProjectsDir(t *testing.T) {
 			continue
 		}
 
-		if !strings.Contains(target, "../../teams/") {
-			t.Errorf("Expected symlink to point to teams/, got: %s", target)
+		if !strings.HasPrefix(target, "../../../teams/") {
+			t.Errorf("Expected symlink target under ../../../teams/, got: %s", target)
+		}
+
+		// And it must resolve: the target dir really exists under teams/.
+		if _, err := os.Stat(symlinkPath); err != nil {
+			t.Errorf("Symlink %s does not resolve: %v", entry.Name(), err)
 		}
 	}
 }

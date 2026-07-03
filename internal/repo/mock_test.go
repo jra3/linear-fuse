@@ -511,5 +511,31 @@ func TestMockRepository_IssuesByLabel(t *testing.T) {
 	}
 }
 
+// TestMockRepository_GetProjectPrimaryTeamKey pins the canonical-team
+// contract (first key in sort order) that the SQLite query enforces with
+// ORDER BY t.key LIMIT 1 — the mock must agree or mock-backed tests
+// diverge from production symlink targets.
+func TestMockRepository_GetProjectPrimaryTeamKey(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMockRepository()
+	repo.Teams = []api.Team{
+		{ID: "team-z", Key: "ZZZ"},
+		{ID: "team-a", Key: "AAA"},
+	}
+	shared := api.Project{ID: "project-shared", Name: "Shared"}
+	repo.Projects["team-z"] = []api.Project{shared}
+	repo.Projects["team-a"] = []api.Project{shared}
+
+	key, err := repo.GetProjectPrimaryTeamKey(ctx, "project-shared")
+	if err != nil || key != "AAA" {
+		t.Errorf("GetProjectPrimaryTeamKey = %q, %v; want first-by-key %q", key, err, "AAA")
+	}
+
+	key, err = repo.GetProjectPrimaryTeamKey(ctx, "project-absent")
+	if err != nil || key != "" {
+		t.Errorf("absent project: got %q, %v; want empty key", key, err)
+	}
+}
+
 // Test interface compliance at compile time
 var _ Repository = (*MockRepository)(nil)

@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -347,6 +348,21 @@ func (m *MockRepository) GetCycleByName(ctx context.Context, teamID, name string
 
 func (m *MockRepository) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {
 	return m.Projects[teamID], nil
+}
+
+func (m *MockRepository) GetProjectPrimaryTeamKey(ctx context.Context, projectID string) (string, error) {
+	primary := ""
+	for teamID, projects := range m.Projects {
+		if !slices.ContainsFunc(projects, func(p api.Project) bool { return p.ID == projectID }) {
+			continue
+		}
+		for _, team := range m.Teams {
+			if team.ID == teamID && (primary == "" || team.Key < primary) {
+				primary = team.Key
+			}
+		}
+	}
+	return primary, nil
 }
 
 func (m *MockRepository) GetProjectBySlug(ctx context.Context, slug string) (*api.Project, error) {

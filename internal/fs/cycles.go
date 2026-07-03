@@ -79,14 +79,8 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	if name == "current" {
 		for _, cycle := range cycles {
 			if isCurrent(cycle) {
-				target := cycleDirName(cycle)
-				node := &CurrentCycleSymlink{BaseNode: BaseNode{lfs: c.lfs}, target: target}
-				out.Attr.Mode = 0777 | syscall.S_IFLNK
-				out.Attr.Uid = c.lfs.uid
-				out.Attr.Gid = c.lfs.gid
-				out.Attr.Size = uint64(len(target))
-				out.Attr.SetTimes(&cycle.EndsAt, &cycle.StartsAt, &cycle.StartsAt)
-				return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+				// atime=EndsAt matches the target CycleDirNode's convention.
+				return c.newSymlinkInodeAtime(ctx, out, cycleDirName(cycle), cycle.StartsAt, cycle.StartsAt, cycle.EndsAt), 0
 			}
 		}
 		return nil, syscall.ENOENT
@@ -105,28 +99,6 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	return nil, syscall.ENOENT
-}
-
-// CurrentCycleSymlink represents the /teams/{KEY}/cycles/current symlink
-type CurrentCycleSymlink struct {
-	BaseNode
-	target string
-}
-
-var _ fs.NodeReadlinker = (*CurrentCycleSymlink)(nil)
-var _ fs.NodeGetattrer = (*CurrentCycleSymlink)(nil)
-
-func (s *CurrentCycleSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	return []byte(s.target), 0
-}
-
-func (s *CurrentCycleSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	out.Size = uint64(len(s.target))
-	out.SetTimes(&now, &now, &now)
-	return 0
 }
 
 // CycleDirNode represents a cycle directory (e.g., /teams/ENG/cycles/71/)
@@ -191,47 +163,13 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			node := &CycleIssueSymlink{
-				BaseNode:   BaseNode{lfs: c.lfs},
-				identifier: issue.Identifier,
-				createdAt:  issue.CreatedAt,
-				updatedAt:  issue.UpdatedAt,
-			}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.Uid = c.lfs.uid
-			out.Attr.Gid = c.lfs.gid
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			// Path from /teams/ENG/cycles/Cycle-22/ENG-123 to /teams/ENG/issues/ENG-123/
+			target := fmt.Sprintf("../../issues/%s", issue.Identifier)
+			return c.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}
 
 	return nil, syscall.ENOENT
-}
-
-// CycleIssueSymlink represents a symlink from cycle to issue directory
-type CycleIssueSymlink struct {
-	BaseNode
-	identifier string
-	createdAt  time.Time
-	updatedAt  time.Time
-}
-
-var _ fs.NodeReadlinker = (*CycleIssueSymlink)(nil)
-var _ fs.NodeGetattrer = (*CycleIssueSymlink)(nil)
-
-func (s *CycleIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// Path from /teams/ENG/cycles/Cycle-22/ENG-123 to /teams/ENG/issues/ENG-123/
-	target := fmt.Sprintf("../../issues/%s", s.identifier)
-	return []byte(target), 0
-}
-
-func (s *CycleIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	target := fmt.Sprintf("../../issues/%s", s.identifier)
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	out.Size = uint64(len(target))
-	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
-	return 0
 }
 
 // CycleFileNode represents the cycle.md file inside a cycle directory

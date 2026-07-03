@@ -932,3 +932,70 @@ func TestMarkdownToIssueUpdateEmptyDescriptionNoop(t *testing.T) {
 		t.Errorf("no-op rewrite emitted description=%q, want no update (placeholder must not persist)", v)
 	}
 }
+
+// TestIssueRoundtrip pins parse(render(issue)) as a fixpoint across every
+// editable field at once: rendering issue.md and diffing it back against the
+// same issue must report zero changes. A field rendered and parsed
+// asymmetrically surfaces here as a phantom update — the failure that
+// read-your-writes verification would otherwise misreport as a server-side
+// divergence (or that would silently rewrite the field on every no-op save).
+func TestIssueRoundtrip(t *testing.T) {
+	t.Parallel()
+	dueDate := "2025-02-01"
+	estimate := 5.0
+
+	tests := []struct {
+		name  string
+		issue *api.Issue
+	}{
+		{
+			name: "fully populated",
+			issue: &api.Issue{
+				ID:          "issue-123",
+				Identifier:  "ENG-456",
+				Title:       "Fix authentication bug",
+				Description: "Users can't log in with SSO.\n\n## Repro\n\n1. Open the login page.",
+				State:       api.State{ID: "state-1", Name: "In Progress", Type: "started"},
+				Assignee:    &api.User{ID: "user-1", Name: "Alice", Email: "alice@example.com"},
+				Priority:    2, // high
+				Labels: api.Labels{Nodes: []api.Label{
+					{ID: "label-1", Name: "bug", Color: "#FF0000"},
+					{ID: "label-2", Name: "backend", Color: "#00FF00"},
+				}},
+				DueDate:          &dueDate,
+				Estimate:         &estimate,
+				Project:          &api.Project{ID: "proj-1", Name: "Q1 Launch"},
+				ProjectMilestone: &api.ProjectMilestone{ID: "milestone-1", Name: "Phase 1"},
+				Parent:           &api.ParentIssue{ID: "issue-100", Identifier: "ENG-100"},
+				Cycle:            &api.IssueCycle{ID: "cycle-1", Name: "Sprint 42", Number: 42},
+			},
+		},
+		{
+			name: "minimal (empty description placeholder)",
+			issue: &api.Issue{
+				ID:         "issue-min",
+				Identifier: "ENG-1",
+				Title:      "Simple task",
+				State:      api.State{ID: "state-1", Name: "Backlog"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			md, err := IssueToMarkdown(tt.issue)
+			if err != nil {
+				t.Fatalf("IssueToMarkdown() error: %v", err)
+			}
+
+			update, err := MarkdownToIssueUpdate(md, tt.issue)
+			if err != nil {
+				t.Fatalf("MarkdownToIssueUpdate() error: %v", err)
+			}
+
+			if len(update) != 0 {
+				t.Errorf("Roundtrip produced unexpected changes: %v (rendered:\n%s)", update, md)
+			}
+		})
+	}
+}

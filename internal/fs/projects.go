@@ -190,14 +190,16 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	})
 }
 
+// dirNameUnsafe matches the characters stripped from name-derived directory
+// names (projects, initiatives, initiative projects).
+var dirNameUnsafe = regexp.MustCompile(`[^a-z0-9-]`)
+
 // projectDirName returns a safe directory name for a project
 func projectDirName(project api.Project) string {
 	// Sanitize name: lowercase, replace spaces with hyphens, remove special chars
 	name := strings.ToLower(project.Name)
 	name = strings.ReplaceAll(name, " ", "-")
-	// Remove any characters that aren't alphanumeric or hyphen
-	reg := regexp.MustCompile(`[^a-z0-9-]`)
-	name = reg.ReplaceAllString(name, "")
+	name = dirNameUnsafe.ReplaceAllString(name, "")
 	if name != "" {
 		return name
 	}
@@ -354,17 +356,8 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			node := &ProjectIssueSymlink{
-				BaseNode:   BaseNode{lfs: p.lfs},
-				identifier: issue.Identifier,
-				createdAt:  issue.CreatedAt,
-				updatedAt:  issue.UpdatedAt,
-			}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.Uid = p.lfs.uid
-			out.Attr.Gid = p.lfs.gid
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			target := fmt.Sprintf("../../issues/%s", issue.Identifier)
+			return p.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}
 
@@ -430,31 +423,6 @@ func (p *ProjectNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return 0
 	}
 	return syscall.EPERM
-}
-
-// ProjectIssueSymlink is a symlink pointing to an issue directory
-type ProjectIssueSymlink struct {
-	BaseNode
-	identifier string
-	createdAt  time.Time
-	updatedAt  time.Time
-}
-
-var _ fs.NodeReadlinker = (*ProjectIssueSymlink)(nil)
-var _ fs.NodeGetattrer = (*ProjectIssueSymlink)(nil)
-
-func (s *ProjectIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	target := fmt.Sprintf("../../issues/%s", s.identifier)
-	return []byte(target), 0
-}
-
-func (s *ProjectIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	target := fmt.Sprintf("../../issues/%s", s.identifier)
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	out.Size = uint64(len(target))
-	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
-	return 0
 }
 
 // ProjectInfoNode is a virtual file containing project metadata

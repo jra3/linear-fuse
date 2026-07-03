@@ -64,9 +64,14 @@ type BaseNode struct {
 // SetOwner sets the UID and GID on the given AttrOut.
 // Call this in every Getattr implementation.
 func (b *BaseNode) SetOwner(out *fuse.AttrOut) {
+	b.setOwnerAttr(&out.Attr)
+}
+
+// setOwnerAttr is SetOwner for a bare fuse.Attr (Lookup EntryOut fills).
+func (b *BaseNode) setOwnerAttr(attr *fuse.Attr) {
 	if b.lfs != nil {
-		out.Uid = b.lfs.uid
-		out.Gid = b.lfs.gid
+		attr.Uid = b.lfs.uid
+		attr.Gid = b.lfs.gid
 	}
 }
 
