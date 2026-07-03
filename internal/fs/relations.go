@@ -95,10 +95,7 @@ func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errn
 
 func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if name == "_create" {
-		node := &NewRelationNode{
-			BaseNode: BaseNode{lfs: n.lfs},
-			issueID:  n.issueID,
-		}
+		node := newCreateFile(n.lfs, n.createRelation)
 		now := time.Now()
 		out.Attr.Mode = 0200 | syscall.S_IFREG // Write-only
 		out.Attr.Uid = n.lfs.uid
@@ -272,65 +269,11 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 	})
 }
 
-// NewRelationNode represents the _create file for creating new relations
-type NewRelationNode struct {
-	BaseNode
-	issueID string
-}
-
-var _ fs.NodeGetattrer = (*NewRelationNode)(nil)
-var _ fs.NodeSetattrer = (*NewRelationNode)(nil)
-var _ fs.NodeOpener = (*NewRelationNode)(nil)
-var _ fs.NodeWriter = (*NewRelationNode)(nil)
-var _ fs.NodeFlusher = (*NewRelationNode)(nil)
-var _ fs.NodeFsyncer = (*NewRelationNode)(nil)
-
-func (n *NewRelationNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0200 // Write-only
-	n.SetOwner(out)
-	out.Size = 0
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewRelationNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	// Allow truncation (for > redirect) - just return success
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = 0
-	return 0
-}
-
-func (n *NewRelationNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return &relationCreateHandle{}, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewRelationNode) Write(ctx context.Context, fh fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	handle, ok := fh.(*relationCreateHandle)
-	if !ok {
-		return 0, syscall.EIO
-	}
-	handle.buffer = append(handle.buffer, data...)
-	return uint32(len(data)), 0
-}
-
-// Fsync is a no-op; actual persistence happens in Flush. It must be
-// implemented (not return ENOTSUP) so editors that write-then-fsync
-// (e.g. Claude Code's Edit tool, vim, VS Code) can save the _create file.
-func (n *NewRelationNode) Fsync(ctx context.Context, fh fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
-}
-
-func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {
-	handle, ok := fh.(*relationCreateHandle)
-	if !ok || len(handle.buffer) == 0 {
-		return 0
-	}
-
-	// Parse the content: "type identifier" or just "identifier" (defaults to "related")
-	content := strings.TrimSpace(string(handle.buffer))
-	handle.buffer = nil
+// createRelation is the relations create surface's onFlush: parse
+// "type identifier" (or just "identifier", defaulting to "related") and run
+// the create tail.
+func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.Errno {
+	content := strings.TrimSpace(string(raw))
 
 	// relatedID carries the resolved target issue's ID from mutate to persist
 	// (the API's echoed relation doesn't include it).
@@ -391,8 +334,4 @@ func (n *NewRelationNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.E
 		},
 	})
 	return errno
-}
-
-type relationCreateHandle struct {
-	buffer []byte
 }

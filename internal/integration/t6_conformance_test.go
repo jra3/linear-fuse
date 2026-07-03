@@ -191,8 +191,6 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 	// Updates were the last surface hand-rolling the create tail with no
 	// .error/.last at all. An unrecognized health value is rejected (EINVAL),
 	// not silently coerced to onTrack, and the reason lands in updates/.error.
-	// (The failing probe runs first: the kernel caches the _create node, and a
-	// successful create latches its double-flush guard.)
 	if err := os.WriteFile(filepath.Join(projectUpdatesDir, "_create"), []byte("---\nhealth: critical\n---\nOn fire"), 0200); err == nil {
 		t.Error("invalid health accepted; want EINVAL")
 	}
@@ -221,6 +219,24 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 		t.Fatalf("read updates/.error after success: %v", err)
 	} else if len(errContent) != 0 {
 		t.Errorf("updates/.error not cleared by a successful create: %s", errContent)
+	}
+
+	// Consecutive creates through the same _create path both land: the write
+	// buffer lives on the per-open handle, so the kernel reusing the cached
+	// node for a second open-write-close cycle must not swallow the create
+	// (the old per-node buffers latched after the first success and silently
+	// no-op'd every create after it).
+	if err := os.WriteFile(filepath.Join(projectUpdatesDir, "_create"), []byte("Back-to-back probe"), 0200); err != nil {
+		t.Fatalf("second consecutive update create: %v", err)
+	}
+	bfound := false
+	for _, e := range parseLastSidecar(t, filepath.Join(projectUpdatesDir, ".last")) {
+		if e["title"] == "Back-to-back probe" {
+			bfound = true
+		}
+	}
+	if !bfound {
+		t.Error("second consecutive create through the same _create node was swallowed (no .last entry)")
 	}
 }
 

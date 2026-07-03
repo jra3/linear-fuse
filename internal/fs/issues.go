@@ -159,20 +159,19 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create trigger (full-object issue creation). The kernel may reuse
-	// this node across opens, so correctness does not depend on node identity:
-	// Flush consumes the buffer (success or failure), so each `echo spec >
-	// _create` starts clean and a spent/failed spec never bleeds into the next.
+	// Handle _create trigger (full-object issue creation). The buffer lives on
+	// the per-open handle, so kernel node reuse is harmless and the lookup can
+	// use the standard cache timeouts.
 	if name == "_create" {
 		now := time.Now()
-		node := &NewIssueCreateNode{BaseNode: BaseNode{lfs: n.lfs}, team: n.team}
+		node := newCreateFile(n.lfs, n.createIssue)
 		out.Attr.Mode = 0200 | syscall.S_IFREG
 		out.Attr.Uid = n.lfs.uid
 		out.Attr.Gid = n.lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(0)
-		out.SetEntryTimeout(0)
+		out.SetAttrTimeout(1 * time.Second)
+		out.SetEntryTimeout(1 * time.Second)
 		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 	}
 	// Handle .error feedback file (last failed issue creation in this team)
@@ -293,92 +292,10 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	}), 0
 }
 
-// NewIssueCreateNode is the write-only issues/_create trigger: writing a full
-// issue spec (frontmatter + body) creates one issue with all fields set at birth,
+// createIssue is the issues/_create surface's onFlush: writing a full issue
+// spec (frontmatter + body) creates one issue with all fields set at birth,
 // resolving names to IDs and reporting the new identity to issues/.last (#151).
-type NewIssueCreateNode struct {
-	BaseNode
-	team api.Team
-
-	mu      sync.Mutex
-	content []byte
-}
-
-var _ fs.NodeGetattrer = (*NewIssueCreateNode)(nil)
-var _ fs.NodeOpener = (*NewIssueCreateNode)(nil)
-var _ fs.NodeReader = (*NewIssueCreateNode)(nil)
-var _ fs.NodeWriter = (*NewIssueCreateNode)(nil)
-var _ fs.NodeFlusher = (*NewIssueCreateNode)(nil)
-var _ fs.NodeFsyncer = (*NewIssueCreateNode)(nil)
-var _ fs.NodeSetattrer = (*NewIssueCreateNode)(nil)
-
-func (n *NewIssueCreateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	now := time.Now()
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewIssueCreateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewIssueCreateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	return nil, syscall.EACCES // write-only
-}
-
-func (n *NewIssueCreateNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		grown := make([]byte, newLen)
-		copy(grown, n.content)
-		n.content = grown
-	}
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
-}
-
-func (n *NewIssueCreateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			grown := make([]byte, sz)
-			copy(grown, n.content)
-			n.content = grown
-		}
-	}
-	out.Mode = 0200
-	out.Size = uint64(len(n.content))
-	return 0
-}
-
-func (n *NewIssueCreateNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
-}
-
-func (n *NewIssueCreateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if len(n.content) == 0 {
-		return 0
-	}
-
-	// Consume the buffer up front so this spec can never bleed into a later write
-	// (go-fuse may hand the same node to a subsequent `echo spec > _create`, and a
-	// failed create must not leave leftovers that prepend to the next one).
-	content := n.content
-	n.content = nil
-
+func (n *IssuesNode) createIssue(ctx context.Context, content []byte) syscall.Errno {
 	_, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
 		n.team.ID,
 		"create issue from spec",
