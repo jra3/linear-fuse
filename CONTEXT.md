@@ -42,10 +42,17 @@ clear `.error`, record the new identity in `.last`, persist to SQLite (non-fatal
 and apply the kernel-cache coherence policy. `InvalidateCreated` on the collection
 dir is guaranteed by the module — a spec cannot forget it; per-entity internal-cache
 extras are a spec closure. Generic over the entity type `T`. Every create surface
-supplies a `.last` projection (including attachments/relations), the `mutate` closure
-calls `lfs.mutator()` directly, and `persist` is always explicit — no mutation
-wrapper hides an upsert. Unit-tested through the ErrorSink/notifier fakes, no FUSE
-mount.
+supplies a `.last` projection (including attachments/relations and project/initiative
+status updates — updates were the last holdout, hand-rolling the tail with no
+`.error`/`.last` until they joined), the `mutate` closure calls `lfs.mutator()`
+directly, and `persist` is always explicit — no mutation wrapper hides an upsert.
+Unit-tested through the ErrorSink/notifier fakes, no FUSE mount.
+
+For status updates the front half is the shared `parseUpdateContent` (one parser for
+both project and initiative updates): an explicitly-written unknown `health:` is a
+`FieldError` (→ `EINVAL`), never silently coerced to `onTrack`, and frontmatter with
+an empty body is likewise rejected; only plain whitespace content (no frontmatter)
+is treated as flush noise and no-ops before the tail.
 
 ### Delete tail (`commitDelete`)
 The **deep module** owning the invariant tail of every delete (`rm`/`rmdir`,

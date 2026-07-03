@@ -825,19 +825,9 @@ func (lfs *LinearFS) GetProjectUpdates(ctx context.Context, projectID string) ([
 	return lfs.repo.GetProjectUpdates(ctx, projectID)
 }
 
-// CreateProjectUpdate creates a new status update on a project
-func (lfs *LinearFS) CreateProjectUpdate(ctx context.Context, projectID, body, health string) (*api.ProjectUpdate, error) {
-	return lfs.mutator().CreateProjectUpdate(ctx, projectID, body, health)
-}
-
 // GetInitiativeUpdates fetches status updates for an initiative
 func (lfs *LinearFS) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]api.InitiativeUpdate, error) {
 	return lfs.repo.GetInitiativeUpdates(ctx, initiativeID)
-}
-
-// CreateInitiativeUpdate creates a new status update on an initiative
-func (lfs *LinearFS) CreateInitiativeUpdate(ctx context.Context, initiativeID, body, health string) (*api.InitiativeUpdate, error) {
-	return lfs.mutator().CreateInitiativeUpdate(ctx, initiativeID, body, health)
 }
 
 // ResolveInitiativeID converts an initiative name to its ID

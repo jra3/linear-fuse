@@ -117,14 +117,17 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 
 	issueDir := issueDirPath(testTeamKey, "TST-1")
 	relationsDir := filepath.Join(issueDir, "relations")
+	projectUpdatesDir := filepath.Join(projectsPath(testTeamKey), "test-project", "updates")
 	surfaces := map[string]string{
-		"issues":      issuesPath(testTeamKey),
-		"comments":    commentsPath(testTeamKey, "TST-1"),
-		"docs":        docsPath(testTeamKey, "TST-1"),
-		"labels":      labelsPath(testTeamKey),
-		"milestones":  filepath.Join(projectsPath(testTeamKey), "test-project", "milestones"),
-		"attachments": attachmentsPath(testTeamKey, "TST-1"),
-		"relations":   relationsDir,
+		"issues":             issuesPath(testTeamKey),
+		"comments":           commentsPath(testTeamKey, "TST-1"),
+		"docs":               docsPath(testTeamKey, "TST-1"),
+		"labels":             labelsPath(testTeamKey),
+		"milestones":         filepath.Join(projectsPath(testTeamKey), "test-project", "milestones"),
+		"attachments":        attachmentsPath(testTeamKey, "TST-1"),
+		"relations":          relationsDir,
+		"project-updates":    projectUpdatesDir,
+		"initiative-updates": filepath.Join(initiativePath("test-initiative"), "updates"),
 	}
 	for name, dir := range surfaces {
 		t.Run(name, func(t *testing.T) {
@@ -183,6 +186,41 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 	}
 	if !afound {
 		t.Error("attachments/.last has no entry after an attachment create")
+	}
+
+	// Updates were the last surface hand-rolling the create tail with no
+	// .error/.last at all. An unrecognized health value is rejected (EINVAL),
+	// not silently coerced to onTrack, and the reason lands in updates/.error.
+	// (The failing probe runs first: the kernel caches the _create node, and a
+	// successful create latches its double-flush guard.)
+	if err := os.WriteFile(filepath.Join(projectUpdatesDir, "_create"), []byte("---\nhealth: critical\n---\nOn fire"), 0200); err == nil {
+		t.Error("invalid health accepted; want EINVAL")
+	}
+	errContent, err := os.ReadFile(filepath.Join(projectUpdatesDir, ".error"))
+	if err != nil {
+		t.Fatalf("read updates/.error: %v", err)
+	}
+	if !strings.Contains(string(errContent), "Field: health") {
+		t.Errorf("updates/.error missing health rejection, got: %s", errContent)
+	}
+
+	// A successful update create clears .error and reports to updates/.last.
+	if err := os.WriteFile(filepath.Join(projectUpdatesDir, "_create"), []byte("---\nhealth: atRisk\n---\nTrio probe update"), 0200); err != nil {
+		t.Fatalf("create project update: %v", err)
+	}
+	ufound := false
+	for _, e := range parseLastSidecar(t, filepath.Join(projectUpdatesDir, ".last")) {
+		if e["status"] == "atRisk" && e["title"] == "Trio probe update" {
+			ufound = true
+		}
+	}
+	if !ufound {
+		t.Error("updates/.last has no entry after an update create")
+	}
+	if errContent, err := os.ReadFile(filepath.Join(projectUpdatesDir, ".error")); err != nil {
+		t.Fatalf("read updates/.error after success: %v", err)
+	} else if len(errContent) != 0 {
+		t.Errorf("updates/.error not cleared by a successful create: %s", errContent)
 	}
 }
 
