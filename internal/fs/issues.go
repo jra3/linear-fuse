@@ -142,12 +142,8 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// _create accepts a full issue spec; .error reports the last failed issue
-	// creation, .last the identities of recent successful creations (#149/#151).
-	entries := make([]fuse.DirEntry, 0, len(issues)+3)
-	entries = append(entries, fuse.DirEntry{Name: "_create", Mode: syscall.S_IFREG})
-	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
-	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
+	// _create accepts a full issue spec (#149/#151).
+	entries := n.trio().entries()
 	for _, issue := range issues {
 		entries = append(entries, fuse.DirEntry{
 			Name: issue.Identifier,
@@ -158,29 +154,15 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	return fs.NewListDirStream(entries), 0
 }
 
+// trio declares the issues collection's writable surfaces: _create takes a
+// full issue spec (frontmatter + body).
+func (n *IssuesNode) trio() collectionTrio {
+	return collectionTrio{kind: "issues", parentID: n.team.ID, onFlush: n.createIssue}
+}
+
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create trigger (full-object issue creation). The buffer lives on
-	// the per-open handle, so kernel node reuse is harmless and the lookup can
-	// use the standard cache timeouts.
-	if name == "_create" {
-		now := time.Now()
-		node := newCreateFile(n.lfs, n.createIssue)
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
-	// Handle .error feedback file (last failed issue creation in this team)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("issues", n.team.ID), out), 0
-	}
-	// Handle .last feedback file (identities of recent successful creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("issues", n.team.ID), out), 0
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	// Check if name looks like a valid issue identifier (e.g., "ENG-123")

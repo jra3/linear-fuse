@@ -29,13 +29,6 @@ func relationIno(relationID string) uint64 {
 	return h.Sum64()
 }
 
-// relationsCreateIno generates a stable inode for the _create trigger file
-func relationsCreateIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("relations-create:" + issueID))
-	return h.Sum64()
-}
-
 // RelationsNode represents the /teams/{KEY}/issues/{ID}/relations directory
 type RelationsNode struct {
 	BaseNode
@@ -66,12 +59,7 @@ func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errn
 		return nil, syscall.EIO
 	}
 
-	// Build entries: _create + .error + .last + relation files
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Add outgoing relations (e.g., "blocks-ENG-123.rel")
 	for _, rel := range relations {
@@ -93,30 +81,14 @@ func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errn
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if name == "_create" {
-		node := newCreateFile(n.lfs, n.createRelation)
-		now := time.Now()
-		out.Attr.Mode = 0200 | syscall.S_IFREG // Write-only
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		out.Attr.SetTimes(&now, &now, &now)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  relationsCreateIno(n.issueID),
-		}), 0
-	}
+// trio declares the relations collection's writable surfaces.
+func (n *RelationsNode) trio() collectionTrio {
+	return collectionTrio{kind: "relations", parentID: n.issueID, onFlush: n.createRelation}
+}
 
-	// Handle .error feedback file (last failed relation write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("relations", n.issueID), out), 0
-	}
-	// Handle .last feedback file (recent successful relation creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("relations", n.issueID), out), 0
+func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	// Parse relation filename: "type-IDENTIFIER.rel"

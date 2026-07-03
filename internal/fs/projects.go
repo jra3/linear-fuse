@@ -66,11 +66,9 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return nil, syscall.EIO
 	}
 
-	// .error reports the last failed project creation in this team; .last reports
-	// the identities of recent successful creations (#149).
-	entries := make([]fuse.DirEntry, 0, len(projects)+2)
-	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
-	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
+	// Projects are created by mkdir, so the collection has no _create; the
+	// trio degrades to .error/.last (#149).
+	entries := p.trio().entries()
 	for _, project := range projects {
 		entries = append(entries, fuse.DirEntry{
 			Name: projectDirName(project),
@@ -81,14 +79,15 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	return fs.NewListDirStream(entries), 0
 }
 
+// trio declares the projects collection's feedback surfaces. Projects are
+// created by mkdir rather than a _create trigger, so onFlush stays nil.
+func (p *ProjectsNode) trio() collectionTrio {
+	return collectionTrio{kind: "projects", parentID: p.team.ID}
+}
+
 func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle .error feedback file (last failed project creation in this team)
-	if name == ".error" {
-		return p.lfs.lookupErrorFile(ctx, p, collectionErrorKey("projects", p.team.ID), out), 0
-	}
-	// Handle .last feedback file (recent successful project creations)
-	if name == ".last" {
-		return p.lfs.lookupSuccessFile(ctx, p, collectionSuccessKey("projects", p.team.ID), out), 0
+	if inode, ok := p.lfs.lookupCollectionTrio(ctx, p, p.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
@@ -791,12 +790,7 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// Always include the create feedback trio
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Sort updates by creation time
 	sort.Slice(updates, func(i, j int) bool {
@@ -816,26 +810,14 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating updates
-	if name == "_create" {
-		now := time.Now()
-		node := newCreateFile(n.lfs, n.createUpdate)
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
+// trio declares the project-updates collection's writable surfaces.
+func (n *UpdatesNode) trio() collectionTrio {
+	return collectionTrio{kind: "updates", parentID: n.projectID, onFlush: n.createUpdate}
+}
 
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("updates", n.projectID), out), 0
-	}
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("updates", n.projectID), out), 0
+func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	updates, err := n.lfs.GetProjectUpdates(ctx, n.projectID)

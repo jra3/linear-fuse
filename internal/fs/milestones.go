@@ -29,13 +29,6 @@ func milestoneIno(milestoneID string) uint64 {
 	return h.Sum64()
 }
 
-// milestonesCreateIno generates a stable inode for the _create trigger file
-func milestonesCreateIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestones-create:" + projectID))
-	return h.Sum64()
-}
-
 // MilestonesNode represents a milestones/ directory within a project
 type MilestonesNode struct {
 	BaseNode
@@ -58,20 +51,11 @@ func (n *MilestonesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
 	if err != nil {
-		// On error, return just _create and .error
-		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "_create", Mode: syscall.S_IFREG},
-			{Name: ".error", Mode: syscall.S_IFREG},
-		}), 0
+		// On error, still serve the trio
+		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	// Always include _create for creating milestones and .error for feedback
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
-
+	entries := n.trio().entries()
 	for _, m := range milestones {
 		entries = append(entries, fuse.DirEntry{
 			Name: milestoneFilename(m),
@@ -82,31 +66,14 @@ func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating milestones
-	if name == "_create" {
-		now := time.Now()
-		node := newCreateFile(n.lfs, n.createMilestone)
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  milestonesCreateIno(n.projectID),
-		}), 0
-	}
+// trio declares the milestones collection's writable surfaces.
+func (n *MilestonesNode) trio() collectionTrio {
+	return collectionTrio{kind: "milestones", parentID: n.projectID, onFlush: n.createMilestone}
+}
 
-	// Handle .error feedback file (last failed milestone write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("milestones", n.projectID), out), 0
-	}
-	// Handle .last feedback file (recent successful milestone creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("milestones", n.projectID), out), 0
+func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)

@@ -60,19 +60,11 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	// Fetch comments (uses cache if available)
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
 	if err != nil {
-		// On error, return just _create and .error
-		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "_create", Mode: syscall.S_IFREG},
-			{Name: ".error", Mode: syscall.S_IFREG},
-		}), 0
+		// On error, still serve the trio
+		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	// Always include _create for creating comments and .error for feedback
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Sort comments by creation time
 	sort.Slice(comments, func(i, j int) bool {
@@ -91,30 +83,14 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating comments
-	if name == "_create" {
-		now := time.Now()
-		node := newCreateFile(n.lfs, n.createComment)
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-		}), 0
-	}
+// trio declares the comments collection's writable surfaces.
+func (n *CommentsNode) trio() collectionTrio {
+	return collectionTrio{kind: "comments", parentID: n.issueID, onFlush: n.createComment}
+}
 
-	// Handle .error feedback file (last failed comment write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("comments", n.issueID), out), 0
-	}
-	// Handle .last feedback file (recent successful comment creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("comments", n.issueID), out), 0
+func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)

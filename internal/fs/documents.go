@@ -95,19 +95,11 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Fetch documents (uses cache if available)
 	docs, err := n.getDocuments(ctx)
 	if err != nil {
-		// On error, return just _create and .error
-		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "_create", Mode: syscall.S_IFREG},
-			{Name: ".error", Mode: syscall.S_IFREG},
-		}), 0
+		// On error, still serve the trio
+		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	// Always include _create for creating documents and .error for feedback
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	for _, doc := range docs {
 		entries = append(entries, fuse.DirEntry{
@@ -119,30 +111,15 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating documents
-	if name == "_create" {
-		now := time.Now()
-		node := newCreateFile(n.lfs, n.createDocument(""))
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-		}), 0
-	}
+// trio declares the docs collection's writable surfaces. The _create trigger
+// has no user-chosen filename, so the title must come from the content.
+func (n *DocsNode) trio() collectionTrio {
+	return collectionTrio{kind: "docs", parentID: n.parentID(), onFlush: n.createDocument("")}
+}
 
-	// Handle .error feedback file (last failed doc write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("docs", n.parentID()), out), 0
-	}
-	// Handle .last feedback file (recent successful doc creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("docs", n.parentID()), out), 0
+func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	docs, err := n.getDocuments(ctx)

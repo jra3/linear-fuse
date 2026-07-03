@@ -57,57 +57,25 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// +3 for _create, .error and .last
-	entries := make([]fuse.DirEntry, len(labels)+3)
-
-	// Always include _create for creating labels and .error/.last for feedback
-	entries[0] = fuse.DirEntry{
-		Name: "_create",
-		Mode: syscall.S_IFREG,
-	}
-	entries[1] = fuse.DirEntry{
-		Name: ".error",
-		Mode: syscall.S_IFREG,
-	}
-	entries[2] = fuse.DirEntry{
-		Name: ".last",
-		Mode: syscall.S_IFREG,
-	}
-
-	for i, label := range labels {
-		entries[i+3] = fuse.DirEntry{
+	entries := n.trio().entries()
+	for _, label := range labels {
+		entries = append(entries, fuse.DirEntry{
 			Name: labelFilename(label),
 			Mode: syscall.S_IFREG,
-		}
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating labels
-	if name == "_create" {
-		now := time.Now()
-		node := newCreateFile(n.lfs, n.createLabel)
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-		}), 0
-	}
+// trio declares the labels collection's writable surfaces.
+func (n *LabelsNode) trio() collectionTrio {
+	return collectionTrio{kind: "labels", parentID: n.teamID, onFlush: n.createLabel}
+}
 
-	// Handle .error feedback file (last failed label write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("labels", n.teamID), out), 0
-	}
-	// Handle .last feedback file (recent successful label creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("labels", n.teamID), out), 0
+func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)

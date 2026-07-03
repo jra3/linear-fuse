@@ -38,13 +38,6 @@ func externalAttachmentIno(attachmentID string) uint64 {
 	return h.Sum64()
 }
 
-// attachmentsCreateIno generates a stable inode for the _create trigger file
-func attachmentsCreateIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("attachments-create:" + issueID))
-	return h.Sum64()
-}
-
 // AttachmentsNode represents the /teams/{KEY}/issues/{ID}/attachments directory
 type AttachmentsNode struct {
 	BaseNode
@@ -67,12 +60,7 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	// Trigger background refresh of sub-resources if stale
 	n.lfs.MaybeRefreshIssueDetails(n.issueID)
 
-	// Start with _create, .error, and .last entries
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Add embedded files (images, etc.)
 	files, err := n.lfs.GetIssueEmbeddedFiles(ctx, n.issueID)
@@ -102,31 +90,14 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create trigger file
-	if name == "_create" {
-		node := newCreateFile(n.lfs, n.createAttachment)
-		now := time.Now()
-		out.Attr.Mode = 0200 | syscall.S_IFREG // Write-only
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		out.Attr.SetTimes(&now, &now, &now)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  attachmentsCreateIno(n.issueID),
-		}), 0
-	}
+// trio declares the attachments collection's writable surfaces.
+func (n *AttachmentsNode) trio() collectionTrio {
+	return collectionTrio{kind: "attachments", parentID: n.issueID, onFlush: n.createAttachment}
+}
 
-	// Handle .error feedback file (last failed attachment write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("attachments", n.issueID), out), 0
-	}
-	// Handle .last feedback file (recent successful attachment creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("attachments", n.issueID), out), 0
+func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	// Handle .link files (external attachments)
