@@ -100,6 +100,31 @@ unit-tested with recording closures (no FUSE mount, SQLite, or API). Persisting 
 junction row inline (rather than the old deferred batch a mid-loop failure skipped)
 keeps SQLite consistent with whatever the API actually accepted on a partial failure.
 
+### Create trigger (`createFileNode`)
+The **deep module** owning the write-only `_create` file (and the named-file
+`Create` paths that share its mechanics): buffer written bytes, and on close hand
+the complete content to a per-surface **`onFlush`** closure — the module's whole
+interface — which parses and calls the Create tail. The buffer lives on the
+**per-open FileHandle**, so its lifetime is one open-write-close cycle: a dup'd
+descriptor's second flush sees a consumed buffer and no-ops, while a genuinely
+new open through the same kernel-cached inode gets a fresh buffer and really
+creates. This replaced nine hand-copied `New*Node` types, two of which (the old
+per-node buffers') `created` latch silently swallowed the second create — and
+issues/_create's zero-lookup-timeout hack existed only to dodge that bug. Lives
+in `internal/fs/createfile.go`; buffer edge cases unit-tested once with a
+recording closure, no FUSE mount.
+
+### Writable-collection trio (`collectionTrio`)
+The **deep module** owning which virtual files a writable collection directory
+serves: `_create`, `.error`, `.last`. A directory declares a spec (`kind`,
+`parentID`, `onFlush`) and delegates its Readdir header to `entries()` and the
+three special names in Lookup to `lookupCollectionTrio` — so the trio is
+module-guaranteed the way `InvalidateCreated` is, and a new collection cannot
+drift (the updates directories shipped without `.error`/`.last` for months
+because each dir restated the trio by hand). mkdir-created collections
+(projects) set `onFlush` nil and serve just the two sidecars. Lives in
+`internal/fs/collection.go`.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`

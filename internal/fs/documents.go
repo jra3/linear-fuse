@@ -95,19 +95,11 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Fetch documents (uses cache if available)
 	docs, err := n.getDocuments(ctx)
 	if err != nil {
-		// On error, return just _create and .error
-		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "_create", Mode: syscall.S_IFREG},
-			{Name: ".error", Mode: syscall.S_IFREG},
-		}), 0
+		// On error, still serve the trio
+		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	// Always include _create for creating documents and .error for feedback
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	for _, doc := range docs {
 		entries = append(entries, fuse.DirEntry{
@@ -119,36 +111,15 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating documents
-	if name == "_create" {
-		now := time.Now()
-		node := &NewDocumentNode{
-			BaseNode:     BaseNode{lfs: n.lfs},
-			issueID:      n.issueID,
-			teamID:       n.teamID,
-			projectID:    n.projectID,
-			initiativeID: n.initiativeID,
-		}
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-		}), 0
-	}
+// trio declares the docs collection's writable surfaces. The _create trigger
+// has no user-chosen filename, so the title must come from the content.
+func (n *DocsNode) trio() collectionTrio {
+	return collectionTrio{kind: "docs", parentID: n.parentID(), onFlush: n.createDocument("")}
+}
 
-	// Handle .error feedback file (last failed doc write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("docs", n.parentID()), out), 0
-	}
-	// Handle .last feedback file (recent successful doc creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("docs", n.parentID()), out), 0
+func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	docs, err := n.getDocuments(ctx)
@@ -316,18 +287,11 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 		}
 	}
 
-	node := &NewDocumentNode{
-		BaseNode:     BaseNode{lfs: n.lfs},
-		issueID:      n.issueID,
-		teamID:       n.teamID,
-		projectID:    n.projectID,
-		initiativeID: n.initiativeID,
-		filename:     name, // Store filename for use as title
-	}
-
+	// The user-chosen filename feeds the title fallback.
+	node := newCreateFile(n.lfs, n.createDocument(name))
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
 
-	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
+	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // documentFilename returns the filename for a document
@@ -517,156 +481,64 @@ func (n *DocumentFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uin
 	return 0
 }
 
-// NewDocumentNode handles creating new documents
-type NewDocumentNode struct {
-	BaseNode
-	issueID      string
-	teamID       string
-	projectID    string
-	initiativeID string
-	filename     string // Original filename (used as title if none in content)
-
-	mu      sync.Mutex
-	content []byte
-	created bool
-}
-
-var _ fs.NodeGetattrer = (*NewDocumentNode)(nil)
-var _ fs.NodeOpener = (*NewDocumentNode)(nil)
-var _ fs.NodeReader = (*NewDocumentNode)(nil)
-var _ fs.NodeWriter = (*NewDocumentNode)(nil)
-var _ fs.NodeFlusher = (*NewDocumentNode)(nil)
-var _ fs.NodeFsyncer = (*NewDocumentNode)(nil)
-var _ fs.NodeSetattrer = (*NewDocumentNode)(nil)
-
-func (n *NewDocumentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	now := time.Now()
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewDocumentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewDocumentNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// _create is write-only - return permission denied
-	return nil, syscall.EACCES
-}
-
-func (n *NewDocumentNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write new document: offset=%d len=%d", off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
-}
-
-func (n *NewDocumentNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-	}
-
-	out.Mode = 0200
-	out.Size = uint64(len(n.content))
-	return 0
-}
-
-func (n *NewDocumentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.created || len(n.content) == 0 {
-		return 0
-	}
-
-	parentID := docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID)
-	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Document]{
-		op:  "create document",
-		key: collectionErrorKey("docs", parentID),
-		mutate: func(ctx context.Context) (*api.Document, error) {
-			title, body, err := marshal.ParseNewDocument(n.content)
-			if err != nil {
-				return nil, &FieldError{Field: "content", Message: "parse error: " + err.Error()}
-			}
-			// If no title in content, use filename (unless it's _create):
-			// remove .md, replace dashes with spaces.
-			if title == "" || title == "Untitled" {
-				if n.filename != "" && n.filename != "_create" {
-					title = strings.TrimSuffix(n.filename, ".md")
-					title = strings.ReplaceAll(title, "-", " ")
+// createDocument returns the docs create surface's onFlush for one write
+// cycle. filename is the user-chosen name from a named Create ("" for the
+// _create trigger); it becomes the title fallback when the content carries no
+// '# Title' heading.
+func (n *DocsNode) createDocument(filename string) func(ctx context.Context, content []byte) syscall.Errno {
+	return func(ctx context.Context, content []byte) syscall.Errno {
+		parentID := n.parentID()
+		_, errno := commitCreate(ctx, n.lfs, createSpec[api.Document]{
+			op:  "create document",
+			key: collectionErrorKey("docs", parentID),
+			mutate: func(ctx context.Context) (*api.Document, error) {
+				title, body, err := marshal.ParseNewDocument(content)
+				if err != nil {
+					return nil, &FieldError{Field: "content", Message: "parse error: " + err.Error()}
 				}
-			}
-			if title == "" {
-				return nil, &FieldError{Field: "title", Message: "document has no title. Add a '# Title' heading or name the file <title>.md."}
-			}
+				// If no title in content, use filename: remove .md, replace
+				// dashes with spaces.
+				if title == "" || title == "Untitled" {
+					if filename != "" {
+						title = strings.TrimSuffix(filename, ".md")
+						title = strings.ReplaceAll(title, "-", " ")
+					}
+				}
+				if title == "" {
+					return nil, &FieldError{Field: "title", Message: "document has no title. Add a '# Title' heading or name the file <title>.md."}
+				}
 
-			input := map[string]any{
-				"title":   title,
-				"content": body,
-			}
-			if n.issueID != "" {
-				input["issueId"] = n.issueID
-			}
-			if n.teamID != "" {
-				input["teamId"] = n.teamID
-			}
-			if n.projectID != "" {
-				input["projectId"] = n.projectID
-			}
-			if n.initiativeID != "" {
-				input["initiativeId"] = n.initiativeID
-			}
-			return n.lfs.mutator().CreateDocument(ctx, input)
-		},
-		result: func(d *api.Document) WriteResult {
-			return WriteResult{
-				URL:   d.URL,
-				Path:  documentFilename(*d),
-				Title: d.Title,
-			}
-		},
-		persist: func(ctx context.Context, d *api.Document) error {
-			return n.lfs.UpsertDocument(ctx, *d)
-		},
-		dir:       docsDirIno(parentID),
-		entryName: func(d *api.Document) string { return documentFilename(*d) },
-	})
-	if errno != 0 {
+				input := map[string]any{
+					"title":   title,
+					"content": body,
+				}
+				if n.issueID != "" {
+					input["issueId"] = n.issueID
+				}
+				if n.teamID != "" {
+					input["teamId"] = n.teamID
+				}
+				if n.projectID != "" {
+					input["projectId"] = n.projectID
+				}
+				if n.initiativeID != "" {
+					input["initiativeId"] = n.initiativeID
+				}
+				return n.lfs.mutator().CreateDocument(ctx, input)
+			},
+			result: func(d *api.Document) WriteResult {
+				return WriteResult{
+					URL:   d.URL,
+					Path:  documentFilename(*d),
+					Title: d.Title,
+				}
+			},
+			persist: func(ctx context.Context, d *api.Document) error {
+				return n.lfs.UpsertDocument(ctx, *d)
+			},
+			dir:       docsDirIno(parentID),
+			entryName: func(d *api.Document) string { return documentFilename(*d) },
+		})
 		return errno
 	}
-	n.created = true
-	return 0
-}
-
-func (n *NewDocumentNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	// Fsync is a no-op; actual persistence happens in Flush
-	return 0
 }

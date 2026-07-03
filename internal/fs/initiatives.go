@@ -712,12 +712,7 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 		return nil, syscall.EIO
 	}
 
-	// Always include the create feedback trio
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Sort updates by creation time
 	sort.Slice(updates, func(i, j int) bool {
@@ -737,29 +732,14 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating updates
-	if name == "_create" {
-		now := time.Now()
-		node := &NewInitiativeUpdateNode{
-			BaseNode:     BaseNode{lfs: n.lfs},
-			initiativeID: n.initiativeID,
-		}
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
+// trio declares the initiative-updates collection's writable surfaces.
+func (n *InitiativeUpdatesNode) trio() collectionTrio {
+	return collectionTrio{kind: "updates", parentID: n.initiativeID, onFlush: n.createUpdate}
+}
 
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("updates", n.initiativeID), out), 0
-	}
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("updates", n.initiativeID), out), 0
+func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	updates, err := n.lfs.GetInitiativeUpdates(ctx, n.initiativeID)
@@ -808,13 +788,9 @@ func (n *InitiativeUpdatesNode) Create(ctx context.Context, name string, flags u
 		return nil, nil, 0, syscall.EINVAL
 	}
 
-	node := &NewInitiativeUpdateNode{
-		BaseNode:     BaseNode{lfs: n.lfs},
-		initiativeID: n.initiativeID,
-	}
-
+	node := newCreateFile(n.lfs, n.createUpdate)
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
-	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
+	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // InitiativeUpdateNode represents a single initiative update file (read-only)
@@ -853,96 +829,12 @@ func (n *InitiativeUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest [
 	return fuse.ReadResultData(n.content[off:end]), 0
 }
 
-// NewInitiativeUpdateNode handles creating new initiative updates
-type NewInitiativeUpdateNode struct {
-	BaseNode
-	initiativeID string
-
-	mu      sync.Mutex
-	content []byte
-	created bool
-}
-
-var _ fs.NodeGetattrer = (*NewInitiativeUpdateNode)(nil)
-var _ fs.NodeOpener = (*NewInitiativeUpdateNode)(nil)
-var _ fs.NodeReader = (*NewInitiativeUpdateNode)(nil)
-var _ fs.NodeWriter = (*NewInitiativeUpdateNode)(nil)
-var _ fs.NodeFlusher = (*NewInitiativeUpdateNode)(nil)
-var _ fs.NodeFsyncer = (*NewInitiativeUpdateNode)(nil)
-var _ fs.NodeSetattrer = (*NewInitiativeUpdateNode)(nil)
-
-func (n *NewInitiativeUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	now := time.Now()
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewInitiativeUpdateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewInitiativeUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// _create is write-only - return permission denied
-	return nil, syscall.EACCES
-}
-
-func (n *NewInitiativeUpdateNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write new initiative update: offset=%d len=%d", off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
-}
-
-func (n *NewInitiativeUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-	}
-
-	out.Mode = 0200
-	out.Size = uint64(len(n.content))
-	return 0
-}
-
-func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.created || len(n.content) == 0 {
-		return 0
-	}
-
-	// Parse the content - could be plain text or markdown with frontmatter.
-	// A parse error still goes through the create tail so it lands in .error;
-	// only whitespace-with-no-frontmatter is flush noise and no-ops.
-	body, health, perr := parseUpdateContent(n.content)
+// createUpdate is the initiative-updates create surface's onFlush: parse the
+// content and run the create tail. A parse error goes through the tail so it
+// lands in .error; only whitespace-with-no-frontmatter is flush noise and
+// no-ops.
+func (n *InitiativeUpdatesNode) createUpdate(ctx context.Context, content []byte) syscall.Errno {
+	body, health, perr := parseUpdateContent(content)
 	if perr == nil && body == "" {
 		return 0
 	}
@@ -971,15 +863,7 @@ func (n *NewInitiativeUpdateNode) Flush(ctx context.Context, f fs.FileHandle) sy
 		},
 		dir: initiativeUpdatesDirIno(n.initiativeID),
 	})
-	if errno != 0 {
-		return errno
-	}
-	n.created = true
-	return 0
-}
-
-func (n *NewInitiativeUpdateNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
+	return errno
 }
 
 // initiativeUpdateToMarkdown converts an initiative update to markdown with YAML frontmatter

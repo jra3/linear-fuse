@@ -29,13 +29,6 @@ func milestoneIno(milestoneID string) uint64 {
 	return h.Sum64()
 }
 
-// milestonesCreateIno generates a stable inode for the _create trigger file
-func milestonesCreateIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestones-create:" + projectID))
-	return h.Sum64()
-}
-
 // MilestonesNode represents a milestones/ directory within a project
 type MilestonesNode struct {
 	BaseNode
@@ -58,20 +51,11 @@ func (n *MilestonesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
 	if err != nil {
-		// On error, return just _create and .error
-		return fs.NewListDirStream([]fuse.DirEntry{
-			{Name: "_create", Mode: syscall.S_IFREG},
-			{Name: ".error", Mode: syscall.S_IFREG},
-		}), 0
+		// On error, still serve the trio
+		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	// Always include _create for creating milestones and .error for feedback
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
-
+	entries := n.trio().entries()
 	for _, m := range milestones {
 		entries = append(entries, fuse.DirEntry{
 			Name: milestoneFilename(m),
@@ -82,34 +66,14 @@ func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating milestones
-	if name == "_create" {
-		now := time.Now()
-		node := &NewMilestoneNode{
-			BaseNode:  BaseNode{lfs: n.lfs},
-			projectID: n.projectID,
-		}
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  milestonesCreateIno(n.projectID),
-		}), 0
-	}
+// trio declares the milestones collection's writable surfaces.
+func (n *MilestonesNode) trio() collectionTrio {
+	return collectionTrio{kind: "milestones", parentID: n.projectID, onFlush: n.createMilestone}
+}
 
-	// Handle .error feedback file (last failed milestone write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("milestones", n.projectID), out), 0
-	}
-	// Handle .last feedback file (recent successful milestone creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("milestones", n.projectID), out), 0
+func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
@@ -378,97 +342,14 @@ func (n *MilestoneFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags ui
 	return 0
 }
 
-// NewMilestoneNode handles creating new milestones
-type NewMilestoneNode struct {
-	BaseNode
-	projectID string
-
-	mu      sync.Mutex
-	content []byte
-	created bool
-}
-
-var _ fs.NodeGetattrer = (*NewMilestoneNode)(nil)
-var _ fs.NodeOpener = (*NewMilestoneNode)(nil)
-var _ fs.NodeReader = (*NewMilestoneNode)(nil)
-var _ fs.NodeWriter = (*NewMilestoneNode)(nil)
-var _ fs.NodeFlusher = (*NewMilestoneNode)(nil)
-var _ fs.NodeFsyncer = (*NewMilestoneNode)(nil)
-var _ fs.NodeSetattrer = (*NewMilestoneNode)(nil)
-
-func (n *NewMilestoneNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	now := time.Now()
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewMilestoneNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewMilestoneNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// _create is write-only
-	return nil, syscall.EACCES
-}
-
-func (n *NewMilestoneNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write new milestone: offset=%d len=%d", off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
-}
-
-func (n *NewMilestoneNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-	}
-
-	out.Mode = 0200
-	out.Size = uint64(len(n.content))
-	return 0
-}
-
-func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.created || len(n.content) == 0 {
-		return 0
-	}
-
+// createMilestone is the milestones create surface's onFlush: parse the
+// frontmatter and run the create tail.
+func (n *MilestonesNode) createMilestone(ctx context.Context, content []byte) syscall.Errno {
 	_, errno := commitCreate(ctx, n.lfs, createSpec[api.ProjectMilestone]{
 		op:  "create milestone",
 		key: collectionErrorKey("milestones", n.projectID),
 		mutate: func(ctx context.Context) (*api.ProjectMilestone, error) {
-			name, description := marshal.ParseNewMilestone(n.content)
+			name, description := marshal.ParseNewMilestone(content)
 			if name == "" {
 				return nil, &FieldError{Field: "name", Message: "milestone has no name. Add a 'name:' field to the frontmatter."}
 			}
@@ -486,13 +367,5 @@ func (n *NewMilestoneNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		dir:       milestonesDirIno(n.projectID),
 		entryName: func(m *api.ProjectMilestone) string { return milestoneFilename(*m) },
 	})
-	if errno != 0 {
-		return errno
-	}
-	n.created = true
-	return 0
-}
-
-func (n *NewMilestoneNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
+	return errno
 }

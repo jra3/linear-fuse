@@ -28,7 +28,11 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	// "recent created updates" guards the updates trio: updates/ directories were
 	// the last create surface without .error/.last, which made the README's global
 	// "every writable directory has a .error" claim false there.
-	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates"} {
+	// "relations, updates" pins updates' membership in the .last surface list;
+	// "creates one item" pins the per-write-cycle semantics (each write to
+	// _create creates another item — the old node-level buffers silently
+	// swallowed the second write, so nothing documented it).
+	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not mention %q", want)
 		}

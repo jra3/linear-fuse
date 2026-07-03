@@ -57,60 +57,25 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// +3 for _create, .error and .last
-	entries := make([]fuse.DirEntry, len(labels)+3)
-
-	// Always include _create for creating labels and .error/.last for feedback
-	entries[0] = fuse.DirEntry{
-		Name: "_create",
-		Mode: syscall.S_IFREG,
-	}
-	entries[1] = fuse.DirEntry{
-		Name: ".error",
-		Mode: syscall.S_IFREG,
-	}
-	entries[2] = fuse.DirEntry{
-		Name: ".last",
-		Mode: syscall.S_IFREG,
-	}
-
-	for i, label := range labels {
-		entries[i+3] = fuse.DirEntry{
+	entries := n.trio().entries()
+	for _, label := range labels {
+		entries = append(entries, fuse.DirEntry{
 			Name: labelFilename(label),
 			Mode: syscall.S_IFREG,
-		}
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating labels
-	if name == "_create" {
-		now := time.Now()
-		node := &NewLabelNode{
-			BaseNode: BaseNode{lfs: n.lfs},
-			teamID:   n.teamID,
-		}
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-		}), 0
-	}
+// trio declares the labels collection's writable surfaces.
+func (n *LabelsNode) trio() collectionTrio {
+	return collectionTrio{kind: "labels", parentID: n.teamID, onFlush: n.createLabel}
+}
 
-	// Handle .error feedback file (last failed label write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("labels", n.teamID), out), 0
-	}
-	// Handle .last feedback file (recent successful label creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("labels", n.teamID), out), 0
+func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
@@ -274,14 +239,10 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 		}
 	}
 
-	node := &NewLabelNode{
-		BaseNode: BaseNode{lfs: n.lfs},
-		teamID:   n.teamID,
-	}
-
+	node := newCreateFile(n.lfs, n.createLabel)
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
 
-	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
+	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // labelFilename returns the filename for a label
@@ -491,97 +452,14 @@ func (n *LabelFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32
 	return 0
 }
 
-// NewLabelNode handles creating new labels
-type NewLabelNode struct {
-	BaseNode
-	teamID string
-
-	mu      sync.Mutex
-	content []byte
-	created bool
-}
-
-var _ fs.NodeGetattrer = (*NewLabelNode)(nil)
-var _ fs.NodeOpener = (*NewLabelNode)(nil)
-var _ fs.NodeReader = (*NewLabelNode)(nil)
-var _ fs.NodeWriter = (*NewLabelNode)(nil)
-var _ fs.NodeFlusher = (*NewLabelNode)(nil)
-var _ fs.NodeFsyncer = (*NewLabelNode)(nil)
-var _ fs.NodeSetattrer = (*NewLabelNode)(nil)
-
-func (n *NewLabelNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	now := time.Now()
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewLabelNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewLabelNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// _create is write-only - return permission denied
-	return nil, syscall.EACCES
-}
-
-func (n *NewLabelNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write new label: offset=%d len=%d", off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
-}
-
-func (n *NewLabelNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-	}
-
-	out.Mode = 0200
-	out.Size = uint64(len(n.content))
-	return 0
-}
-
-func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.created || len(n.content) == 0 {
-		return 0
-	}
-
+// createLabel is the labels create surface's onFlush: parse the frontmatter
+// and run the create tail.
+func (n *LabelsNode) createLabel(ctx context.Context, content []byte) syscall.Errno {
 	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Label]{
 		op:  "create label",
 		key: collectionErrorKey("labels", n.teamID),
 		mutate: func(ctx context.Context) (*api.Label, error) {
-			name, color, description, err := parseNewLabelMarkdown(n.content)
+			name, color, description, err := parseNewLabelMarkdown(content)
 			if err != nil {
 				return nil, &FieldError{Field: "content", Message: "parse error: " + err.Error()}
 			}
@@ -612,15 +490,7 @@ func (n *NewLabelNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno
 		dir:       labelsDirIno(n.teamID),
 		entryName: func(l *api.Label) string { return labelFilename(*l) },
 	})
-	if errno != 0 {
-		return errno
-	}
-	n.created = true
-	return 0
-}
-
-func (n *NewLabelNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
+	return errno
 }
 
 // parseLabelMarkdown parses markdown and returns fields that changed

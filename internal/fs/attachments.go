@@ -38,13 +38,6 @@ func externalAttachmentIno(attachmentID string) uint64 {
 	return h.Sum64()
 }
 
-// attachmentsCreateIno generates a stable inode for the _create trigger file
-func attachmentsCreateIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("attachments-create:" + issueID))
-	return h.Sum64()
-}
-
 // AttachmentsNode represents the /teams/{KEY}/issues/{ID}/attachments directory
 type AttachmentsNode struct {
 	BaseNode
@@ -67,12 +60,7 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	// Trigger background refresh of sub-resources if stale
 	n.lfs.MaybeRefreshIssueDetails(n.issueID)
 
-	// Start with _create, .error, and .last entries
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Add embedded files (images, etc.)
 	files, err := n.lfs.GetIssueEmbeddedFiles(ctx, n.issueID)
@@ -102,34 +90,14 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create trigger file
-	if name == "_create" {
-		node := &NewAttachmentNode{
-			BaseNode: BaseNode{lfs: n.lfs},
-			issueID:  n.issueID,
-		}
-		now := time.Now()
-		out.Attr.Mode = 0200 | syscall.S_IFREG // Write-only
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		out.Attr.SetTimes(&now, &now, &now)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  attachmentsCreateIno(n.issueID),
-		}), 0
-	}
+// trio declares the attachments collection's writable surfaces.
+func (n *AttachmentsNode) trio() collectionTrio {
+	return collectionTrio{kind: "attachments", parentID: n.issueID, onFlush: n.createAttachment}
+}
 
-	// Handle .error feedback file (last failed attachment write in this dir)
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("attachments", n.issueID), out), 0
-	}
-	// Handle .last feedback file (recent successful attachment creations)
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("attachments", n.issueID), out), 0
+func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	// Handle .link files (external attachments)
@@ -362,64 +330,10 @@ func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscal
 	})
 }
 
-// NewAttachmentNode represents the _create file for creating new attachments
-type NewAttachmentNode struct {
-	BaseNode
-	issueID string
-}
-
-var _ fs.NodeGetattrer = (*NewAttachmentNode)(nil)
-var _ fs.NodeSetattrer = (*NewAttachmentNode)(nil)
-var _ fs.NodeOpener = (*NewAttachmentNode)(nil)
-var _ fs.NodeWriter = (*NewAttachmentNode)(nil)
-var _ fs.NodeFlusher = (*NewAttachmentNode)(nil)
-var _ fs.NodeFsyncer = (*NewAttachmentNode)(nil)
-
-func (n *NewAttachmentNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0200 // Write-only
-	n.SetOwner(out)
-	out.Size = 0
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewAttachmentNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	// Allow truncation (for > redirect) - just return success
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = 0
-	return 0
-}
-
-func (n *NewAttachmentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return &attachmentCreateHandle{}, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewAttachmentNode) Write(ctx context.Context, fh fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	handle, ok := fh.(*attachmentCreateHandle)
-	if !ok {
-		return 0, syscall.EIO
-	}
-	handle.buffer = append(handle.buffer, data...)
-	return uint32(len(data)), 0
-}
-
-// Fsync is a no-op; actual persistence happens in Flush. It must be
-// implemented (not return ENOTSUP) so editors that write-then-fsync
-// (e.g. Claude Code's Edit tool, vim, VS Code) can save the _create file.
-func (n *NewAttachmentNode) Fsync(ctx context.Context, fh fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
-}
-
-func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {
-	handle, ok := fh.(*attachmentCreateHandle)
-	if !ok || len(handle.buffer) == 0 {
-		return 0
-	}
-
-	content := strings.TrimSpace(string(handle.buffer))
-	handle.buffer = nil
+// createAttachment is the attachments create surface's onFlush: parse
+// "url [title]" and run the create tail.
+func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) syscall.Errno {
+	content := strings.TrimSpace(string(raw))
 
 	// Idempotency (#146): if the URL is already attached, linking it again is a
 	// success, not a failure. Linear rejects the duplicate with an opaque
@@ -493,7 +407,7 @@ func (n *NewAttachmentNode) Flush(ctx context.Context, fh fs.FileHandle) syscall
 
 // upsertAttachment writes an attachment to SQLite for immediate visibility.
 // Failures are logged, not fatal: the sync worker will reconcile.
-func (n *NewAttachmentNode) upsertAttachment(ctx context.Context, att api.Attachment) {
+func (n *AttachmentsNode) upsertAttachment(ctx context.Context, att api.Attachment) {
 	data, _ := json.Marshal(att)
 	if err := n.lfs.store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
 		ID:         att.ID,
@@ -516,8 +430,4 @@ func (n *NewAttachmentNode) upsertAttachment(ctx context.Context, att api.Attach
 // to recognize a duplicate without false positives.
 func attachmentURLsEqual(a, b string) bool {
 	return strings.TrimRight(strings.TrimSpace(a), "/") == strings.TrimRight(strings.TrimSpace(b), "/")
-}
-
-type attachmentCreateHandle struct {
-	buffer []byte
 }

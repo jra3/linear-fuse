@@ -66,11 +66,9 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return nil, syscall.EIO
 	}
 
-	// .error reports the last failed project creation in this team; .last reports
-	// the identities of recent successful creations (#149).
-	entries := make([]fuse.DirEntry, 0, len(projects)+2)
-	entries = append(entries, fuse.DirEntry{Name: ".error", Mode: syscall.S_IFREG})
-	entries = append(entries, fuse.DirEntry{Name: ".last", Mode: syscall.S_IFREG})
+	// Projects are created by mkdir, so the collection has no _create; the
+	// trio degrades to .error/.last (#149).
+	entries := p.trio().entries()
 	for _, project := range projects {
 		entries = append(entries, fuse.DirEntry{
 			Name: projectDirName(project),
@@ -81,14 +79,15 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	return fs.NewListDirStream(entries), 0
 }
 
+// trio declares the projects collection's feedback surfaces. Projects are
+// created by mkdir rather than a _create trigger, so onFlush stays nil.
+func (p *ProjectsNode) trio() collectionTrio {
+	return collectionTrio{kind: "projects", parentID: p.team.ID}
+}
+
 func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle .error feedback file (last failed project creation in this team)
-	if name == ".error" {
-		return p.lfs.lookupErrorFile(ctx, p, collectionErrorKey("projects", p.team.ID), out), 0
-	}
-	// Handle .last feedback file (recent successful project creations)
-	if name == ".last" {
-		return p.lfs.lookupSuccessFile(ctx, p, collectionSuccessKey("projects", p.team.ID), out), 0
+	if inode, ok := p.lfs.lookupCollectionTrio(ctx, p, p.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
@@ -791,12 +790,7 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// Always include the create feedback trio
-	entries := []fuse.DirEntry{
-		{Name: "_create", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-	}
+	entries := n.trio().entries()
 
 	// Sort updates by creation time
 	sort.Slice(updates, func(i, j int) bool {
@@ -816,29 +810,14 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	return fs.NewListDirStream(entries), 0
 }
 
-func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle _create for creating updates
-	if name == "_create" {
-		now := time.Now()
-		node := &NewUpdateNode{
-			BaseNode:  BaseNode{lfs: n.lfs},
-			projectID: n.projectID,
-		}
-		out.Attr.Mode = 0200 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = 0
-		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-	}
+// trio declares the project-updates collection's writable surfaces.
+func (n *UpdatesNode) trio() collectionTrio {
+	return collectionTrio{kind: "updates", parentID: n.projectID, onFlush: n.createUpdate}
+}
 
-	if name == ".error" {
-		return n.lfs.lookupErrorFile(ctx, n, collectionErrorKey("updates", n.projectID), out), 0
-	}
-	if name == ".last" {
-		return n.lfs.lookupSuccessFile(ctx, n, collectionSuccessKey("updates", n.projectID), out), 0
+func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
+		return inode, 0
 	}
 
 	updates, err := n.lfs.GetProjectUpdates(ctx, n.projectID)
@@ -884,13 +863,9 @@ func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mod
 		return nil, nil, 0, syscall.EINVAL
 	}
 
-	node := &NewUpdateNode{
-		BaseNode:  BaseNode{lfs: n.lfs},
-		projectID: n.projectID,
-	}
-
+	node := newCreateFile(n.lfs, n.createUpdate)
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
-	return inode, nil, fuse.FOPEN_DIRECT_IO, 0
+	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // UpdateNode represents a single project update file (read-only)
@@ -928,96 +903,12 @@ func (n *UpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 	return fuse.ReadResultData(n.content[off:end]), 0
 }
 
-// NewUpdateNode handles creating new project updates
-type NewUpdateNode struct {
-	BaseNode
-	projectID string
-
-	mu      sync.Mutex
-	content []byte
-	created bool
-}
-
-var _ fs.NodeGetattrer = (*NewUpdateNode)(nil)
-var _ fs.NodeOpener = (*NewUpdateNode)(nil)
-var _ fs.NodeReader = (*NewUpdateNode)(nil)
-var _ fs.NodeWriter = (*NewUpdateNode)(nil)
-var _ fs.NodeFlusher = (*NewUpdateNode)(nil)
-var _ fs.NodeFsyncer = (*NewUpdateNode)(nil)
-var _ fs.NodeSetattrer = (*NewUpdateNode)(nil)
-
-func (n *NewUpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	now := time.Now()
-	out.Mode = 0200
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *NewUpdateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (n *NewUpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	// _create is write-only - return permission denied
-	return nil, syscall.EACCES
-}
-
-func (n *NewUpdateNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write new update: offset=%d len=%d", off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	return uint32(len(data)), 0
-}
-
-func (n *NewUpdateNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-	}
-
-	out.Mode = 0200
-	out.Size = uint64(len(n.content))
-	return 0
-}
-
-func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.created || len(n.content) == 0 {
-		return 0
-	}
-
-	// Parse the content - could be plain text or markdown with frontmatter.
-	// A parse error still goes through the create tail so it lands in .error;
-	// only whitespace-with-no-frontmatter is flush noise and no-ops.
-	body, health, perr := parseUpdateContent(n.content)
+// createUpdate is the project-updates create surface's onFlush: parse the
+// content and run the create tail. A parse error goes through the tail so it
+// lands in .error; only whitespace-with-no-frontmatter is flush noise and
+// no-ops.
+func (n *UpdatesNode) createUpdate(ctx context.Context, content []byte) syscall.Errno {
+	body, health, perr := parseUpdateContent(content)
 	if perr == nil && body == "" {
 		return 0
 	}
@@ -1046,15 +937,7 @@ func (n *NewUpdateNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		},
 		dir: updatesDirIno(n.projectID),
 	})
-	if errno != 0 {
-		return errno
-	}
-	n.created = true
-	return 0
-}
-
-func (n *NewUpdateNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
+	return errno
 }
 
 // parseUpdateContent extracts body and health from update content (shared by

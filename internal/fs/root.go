@@ -290,8 +290,11 @@ _create is a write-only trigger file (like /proc/sysrq-trigger):
 - Use piped output: echo "text" > _create, cat file > _create
 - Created items appear as separate files (e.g., 001-2025-01-15.md). Every create
   surface (issues, children, comments, docs, labels, projects, milestones,
-  attachments, relations) exposes a sibling .last with the new identity; read
-  .error for a failure.
+  attachments, relations, updates) exposes a sibling .last with the new identity;
+  read .error for a failure.
+- Each open-write-close cycle creates one item: writing to _create again creates
+  another item, so a repeated identical write creates a duplicate. After a failed
+  write (.error explains it), simply write the corrected content again.
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
 </_create_behavior>
 
