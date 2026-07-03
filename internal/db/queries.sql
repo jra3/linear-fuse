@@ -438,6 +438,16 @@ DELETE FROM project_teams WHERE project_id = ?;
 -- name: ListProjectTeamIDs :many
 SELECT team_id FROM project_teams WHERE project_id = ?;
 
+-- name: GetProjectPrimaryTeamKey :one
+-- The canonical team for a project that spans teams: first by key order.
+-- This is the one place that rule lives; symlink targets and any future
+-- "which team dir hosts this project" consumer must go through it.
+SELECT t.key FROM teams t
+JOIN project_teams pt ON t.id = pt.team_id
+WHERE pt.project_id = ?
+ORDER BY t.key
+LIMIT 1;
+
 -- =============================================================================
 -- Project Milestones queries
 -- =============================================================================

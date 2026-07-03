@@ -45,6 +45,10 @@ fmt:
 lint:
 	golangci-lint run
 
+# Pinned so regeneration doesn't churn version comments in generated files
+sqlc:
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+
 # Generate full coverage report (unit + integration tests)
 # Uses -coverpkg to measure cross-package coverage from integration tests
 coverage:

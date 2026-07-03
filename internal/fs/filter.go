@@ -228,17 +228,9 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			node := &FilterIssueSymlink{
-				BaseNode:   BaseNode{lfs: f.lfs},
-				identifier: issue.Identifier,
-				createdAt:  issue.CreatedAt,
-				updatedAt:  issue.UpdatedAt,
-			}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.Uid = f.lfs.uid
-			out.Attr.Gid = f.lfs.gid
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return f.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			// From by/category/value/ go up 3 levels to team dir, then into issues/
+			target := fmt.Sprintf("../../../issues/%s", issue.Identifier)
+			return f.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}
 	return nil, syscall.ENOENT
@@ -279,31 +271,4 @@ func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error)
 		}
 	}
 	return "", fmt.Errorf("unknown assignee: %s", f.value)
-}
-
-// FilterIssueSymlink is a symlink pointing to an issue directory
-// Path from by/category/value/ to issues/ is ../../../issues/
-type FilterIssueSymlink struct {
-	BaseNode
-	identifier string
-	createdAt  time.Time
-	updatedAt  time.Time
-}
-
-var _ fs.NodeReadlinker = (*FilterIssueSymlink)(nil)
-var _ fs.NodeGetattrer = (*FilterIssueSymlink)(nil)
-
-func (s *FilterIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// From by/category/value/ go up 3 levels to team dir, then into issues/
-	target := fmt.Sprintf("../../../issues/%s", s.identifier)
-	return []byte(target), 0
-}
-
-func (s *FilterIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	target := fmt.Sprintf("../../../issues/%s", s.identifier)
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	out.Size = uint64(len(target))
-	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
-	return 0
 }

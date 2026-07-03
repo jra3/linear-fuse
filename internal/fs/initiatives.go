@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -99,8 +98,7 @@ func initiativeDirName(init api.Initiative) string {
 	// Always derive from name (Linear's slugId for initiatives is not human-readable)
 	name := strings.ToLower(init.Name)
 	name = strings.ReplaceAll(name, " ", "-")
-	reg := regexp.MustCompile(`[^a-z0-9-]`)
-	name = reg.ReplaceAllString(name, "")
+	name = dirNameUnsafe.ReplaceAllString(name, "")
 	if name != "" {
 		return name
 	}
@@ -611,19 +609,41 @@ func (p *InitiativeProjectsNode) Readdir(ctx context.Context) (fs.DirStream, sys
 func (p *InitiativeProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	for _, proj := range p.initiative.Projects.Nodes {
 		if initiativeProjectDirName(proj) == name {
-			// We need to find which team this project belongs to
-			// For now, create a symlink that requires resolving the team
-			node := &InitiativeProjectSymlink{
-				BaseNode: BaseNode{lfs: p.lfs},
-				project:  proj,
+			target, createdAt, updatedAt, errno := p.resolveProjectTarget(ctx, proj.ID)
+			if errno != 0 {
+				return nil, errno
 			}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.Uid = p.lfs.uid
-			out.Attr.Gid = p.lfs.gid
-			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			return p.newSymlinkInode(ctx, out, target, createdAt, updatedAt), 0
 		}
 	}
 	return nil, syscall.ENOENT
+}
+
+// resolveProjectTarget resolves an initiative project's symlink target and
+// timestamps. The initiative payload carries only ID/Name/Slug; the full
+// project row supplies the team-side dir name and real timestamps, and
+// GetProjectPrimaryTeamKey supplies the canonical team. Until sync has both
+// the project and its team association, the name is a reference to something
+// that doesn't exist yet -> ENOENT.
+func (p *InitiativeProjectsNode) resolveProjectTarget(ctx context.Context, projectID string) (string, time.Time, time.Time, syscall.Errno) {
+	full, err := p.lfs.repo.GetProjectByID(ctx, projectID)
+	if err != nil {
+		return "", time.Time{}, time.Time{}, syscall.EIO
+	}
+	if full == nil {
+		return "", time.Time{}, time.Time{}, syscall.ENOENT
+	}
+	teamKey, err := p.lfs.repo.GetProjectPrimaryTeamKey(ctx, projectID)
+	if err != nil {
+		return "", time.Time{}, time.Time{}, syscall.EIO
+	}
+	if teamKey == "" {
+		return "", time.Time{}, time.Time{}, syscall.ENOENT
+	}
+	// The symlink lives at initiatives/{slug}/projects/{name}, three levels
+	// below the mount root.
+	target := fmt.Sprintf("../../../teams/%s/projects/%s", teamKey, projectDirName(*full))
+	return target, full.CreatedAt, full.UpdatedAt, 0
 }
 
 // initiativeProjectDirName returns a safe directory name for an initiative project
@@ -631,8 +651,7 @@ func initiativeProjectDirName(proj api.InitiativeProject) string {
 	// Derive from name (not slugId, which is an opaque hash in Linear)
 	name := strings.ToLower(proj.Name)
 	name = strings.ReplaceAll(name, " ", "-")
-	reg := regexp.MustCompile(`[^a-z0-9-]`)
-	name = reg.ReplaceAllString(name, "")
+	name = dirNameUnsafe.ReplaceAllString(name, "")
 	if name != "" {
 		return name
 	}
@@ -641,50 +660,6 @@ func initiativeProjectDirName(proj api.InitiativeProject) string {
 		return proj.Slug
 	}
 	return proj.ID
-}
-
-// InitiativeProjectSymlink is a symlink pointing to a project directory
-type InitiativeProjectSymlink struct {
-	BaseNode
-	project api.InitiativeProject
-}
-
-var _ fs.NodeReadlinker = (*InitiativeProjectSymlink)(nil)
-var _ fs.NodeGetattrer = (*InitiativeProjectSymlink)(nil)
-
-func (s *InitiativeProjectSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// Find the project's team by checking all teams
-	teams, err := s.lfs.GetTeams(ctx)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	for _, team := range teams {
-		projects, err := s.lfs.GetTeamProjects(ctx, team.ID)
-		if err != nil {
-			continue
-		}
-		for _, proj := range projects {
-			if proj.ID == s.project.ID {
-				// Found the project - create relative symlink
-				target := fmt.Sprintf("../../teams/%s/projects/%s", team.Key, projectDirName(proj))
-				return []byte(target), 0
-			}
-		}
-	}
-
-	// Fallback: project not found in any team
-	return []byte("broken-link"), syscall.ENOENT
-}
-
-func (s *InitiativeProjectSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	// Use a reasonable estimate for symlink size
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	out.Size = 64
-	out.SetTimes(&now, &now, &now)
-	return 0
 }
 
 // InitiativeUpdatesNode represents /initiatives/{slug}/updates/

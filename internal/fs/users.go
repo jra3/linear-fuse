@@ -137,53 +137,15 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			// Create symlink to team issue directory
-			teamKey := ""
-			if issue.Team != nil {
-				teamKey = issue.Team.Key
+			target, errno := teamIssueTarget(issue)
+			if errno != 0 {
+				return nil, errno
 			}
-			node := &IssueDirSymlink{
-				BaseNode:   BaseNode{lfs: u.lfs},
-				teamKey:    teamKey,
-				identifier: issue.Identifier,
-				createdAt:  issue.CreatedAt,
-				updatedAt:  issue.UpdatedAt,
-			}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.Uid = u.lfs.uid
-			out.Attr.Gid = u.lfs.gid
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			return u.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}
 
 	return nil, syscall.ENOENT
-}
-
-// IssueDirSymlink is a symlink pointing to an issue directory in /teams/<KEY>/issues/<identifier>/
-type IssueDirSymlink struct {
-	BaseNode
-	teamKey    string
-	identifier string
-	createdAt  time.Time
-	updatedAt  time.Time
-}
-
-var _ fs.NodeReadlinker = (*IssueDirSymlink)(nil)
-var _ fs.NodeGetattrer = (*IssueDirSymlink)(nil)
-
-func (s *IssueDirSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	target := fmt.Sprintf("../../teams/%s/issues/%s", s.teamKey, s.identifier)
-	return []byte(target), 0
-}
-
-func (s *IssueDirSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	target := fmt.Sprintf("../../teams/%s/issues/%s", s.teamKey, s.identifier)
-	out.Size = uint64(len(target))
-	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
-	return 0
 }
 
 // UserInfoNode is a virtual file containing user metadata

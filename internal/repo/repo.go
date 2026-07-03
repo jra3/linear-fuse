@@ -146,6 +146,11 @@ type Repository interface {
 	// GetProjectByID returns a project by its ID
 	GetProjectByID(ctx context.Context, id string) (*api.Project, error)
 
+	// GetProjectPrimaryTeamKey returns the key of the canonical team for a
+	// project (first by key order when a project spans teams), or "" when the
+	// project has no team association yet
+	GetProjectPrimaryTeamKey(ctx context.Context, projectID string) (string, error)
+
 	// ==========================================================================
 	// Project Milestones
 	// ==========================================================================

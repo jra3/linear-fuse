@@ -63,6 +63,11 @@ type SQLiteRepository struct {
 	reconcilePending atomic.Bool
 }
 
+// Compile-time interface compliance: without this, a method added to
+// Repository but forgotten here would still build (nothing else consumes
+// the interface with this implementation).
+var _ Repository = (*SQLiteRepository)(nil)
+
 // NewSQLiteRepository creates a new SQLite-backed repository.
 // If client is nil, the repository will only serve data from SQLite.
 func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository {
@@ -709,6 +714,17 @@ func (r *SQLiteRepository) GetProjectByID(ctx context.Context, id string) (*api.
 		return nil, err
 	}
 	return &result, nil
+}
+
+func (r *SQLiteRepository) GetProjectPrimaryTeamKey(ctx context.Context, projectID string) (string, error) {
+	key, err := r.store.Queries().GetProjectPrimaryTeamKey(ctx, projectID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("get project primary team key: %w", err)
+	}
+	return key, nil
 }
 
 // =============================================================================

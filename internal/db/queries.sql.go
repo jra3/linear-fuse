@@ -1128,6 +1128,24 @@ func (q *Queries) GetProjectMilestone(ctx context.Context, id string) (ProjectMi
 	return i, err
 }
 
+const getProjectPrimaryTeamKey = `-- name: GetProjectPrimaryTeamKey :one
+SELECT t.key FROM teams t
+JOIN project_teams pt ON t.id = pt.team_id
+WHERE pt.project_id = ?
+ORDER BY t.key
+LIMIT 1
+`
+
+// The canonical team for a project that spans teams: first by key order.
+// This is the one place that rule lives; symlink targets and any future
+// "which team dir hosts this project" consumer must go through it.
+func (q *Queries) GetProjectPrimaryTeamKey(ctx context.Context, projectID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getProjectPrimaryTeamKey, projectID)
+	var key string
+	err := row.Scan(&key)
+	return key, err
+}
+
 const getProjectUpdate = `-- name: GetProjectUpdate :one
 
 SELECT id, project_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM project_updates WHERE id = ?

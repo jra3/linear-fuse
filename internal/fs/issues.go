@@ -900,18 +900,10 @@ func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	}
 	for _, child := range children {
 		if child.Identifier == name {
-			node := &ChildSymlinkNode{
-				child: api.ChildIssue{
-					ID:         child.ID,
-					Identifier: child.Identifier,
-					Title:      child.Title,
-					CreatedAt:  child.CreatedAt,
-					UpdatedAt:  child.UpdatedAt,
-				},
-			}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.SetTimes(&child.UpdatedAt, &child.UpdatedAt, &child.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			// The link lives at issues/{PARENT}/children/{ID}; the sibling
+			// issue dir is two levels up.
+			target := "../../" + child.Identifier
+			return n.newSymlinkInode(ctx, out, target, child.CreatedAt, child.UpdatedAt), 0
 		}
 	}
 	return nil, syscall.ENOENT
@@ -969,28 +961,6 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		Mode: syscall.S_IFDIR,
 		Ino:  issueDirIno(issue.ID),
 	}), 0
-}
-
-// ChildSymlinkNode is a symlink pointing to a child issue directory
-type ChildSymlinkNode struct {
-	fs.Inode
-	child api.ChildIssue
-}
-
-var _ fs.NodeReadlinker = (*ChildSymlinkNode)(nil)
-var _ fs.NodeGetattrer = (*ChildSymlinkNode)(nil)
-
-func (s *ChildSymlinkNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	// Point to sibling issue directory: ../ENG-456
-	target := "../" + s.child.Identifier
-	return []byte(target), 0
-}
-
-func (s *ChildSymlinkNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0777 | syscall.S_IFLNK
-	out.Size = uint64(len("../") + len(s.child.Identifier))
-	out.SetTimes(&s.child.UpdatedAt, &s.child.UpdatedAt, &s.child.CreatedAt)
-	return 0
 }
 
 // HistoryFileNode represents a history.md file inside /teams/{KEY}/issues/{ID}/

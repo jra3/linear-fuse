@@ -198,7 +198,7 @@ initiatives/{slug}/
   docs/                             [_create=trigger, .error=feedback]
     {slug}.md                       [read/write]
   projects/                         [symlinks to team projects]
-    {project-slug}                  [symlink to ../../teams/{KEY}/projects/{slug}]
+    {project-slug}                  [symlink to ../../../teams/{KEY}/projects/{slug}]
   updates/                          [status updates]
     _create                         [write with health: onTrack|atRisk|offTrack]
     .error                          [read-only: last failed write here]

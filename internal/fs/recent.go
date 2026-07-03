@@ -92,37 +92,9 @@ func (n *RecentNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			node := &RecentIssueSymlink{BaseNode: BaseNode{lfs: n.lfs}, identifier: issue.Identifier, createdAt: issue.CreatedAt, updatedAt: issue.UpdatedAt}
-			out.Attr.Mode = 0777 | syscall.S_IFLNK
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFLNK}), 0
+			target := fmt.Sprintf("../issues/%s", issue.Identifier)
+			return n.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}
 	return nil, syscall.ENOENT
-}
-
-// RecentIssueSymlink points from teams/{KEY}/recent/ to ../issues/{identifier}.
-type RecentIssueSymlink struct {
-	BaseNode
-	identifier string
-	createdAt  time.Time
-	updatedAt  time.Time
-}
-
-var _ fs.NodeReadlinker = (*RecentIssueSymlink)(nil)
-var _ fs.NodeGetattrer = (*RecentIssueSymlink)(nil)
-
-func (s *RecentIssueSymlink) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	return []byte(fmt.Sprintf("../issues/%s", s.identifier)), 0
-}
-
-func (s *RecentIssueSymlink) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	target := fmt.Sprintf("../issues/%s", s.identifier)
-	out.Mode = 0777 | syscall.S_IFLNK
-	s.SetOwner(out)
-	out.Size = uint64(len(target))
-	out.SetTimes(&s.updatedAt, &s.updatedAt, &s.createdAt)
-	return 0
 }
