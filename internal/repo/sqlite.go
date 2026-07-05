@@ -228,25 +228,42 @@ func (r *SQLiteRepository) reconcileIssues(ctx context.Context) int {
 	return deleted
 }
 
+// reconcileAgainst diffs a provably-complete authoritative ID set (apiIDs)
+// against the local IDs from getLocal, deletes every local orphan through
+// deleteOrphan, and returns the count removed. The diff-and-delete that can
+// mass-delete rows lives here once, behind the getLocal/deleteOrphan seam;
+// each caller owns only the budget-gated authoritative fetch and its
+// per-entity local query and orphan delete. label names the entity in the
+// log line when the local query fails.
+func (r *SQLiteRepository) reconcileAgainst(ctx context.Context, label string, apiIDs []string, getLocal func() ([]string, error), deleteOrphan func(context.Context, string)) int {
+	localIDs, err := getLocal()
+	if err != nil {
+		log.Printf("[reconcile] list local %s: %v", label, err)
+		return 0
+	}
+	deleted := 0
+	for _, id := range setDiff(localIDs, apiIDs) {
+		deleteOrphan(ctx, id)
+		deleted++
+	}
+	return deleted
+}
+
 // reconcileIssuesForTeam diffs apiIDs against SQLite's issue IDs for the
 // given team and deletes any locals missing from the API set. Split out
 // so tests can drive the diff/delete logic without needing a live client.
 func (r *SQLiteRepository) reconcileIssuesForTeam(ctx context.Context, teamID string, apiIDs []string) int {
-	rows, err := r.store.Queries().ListTeamIssueIDs(ctx, teamID)
-	if err != nil {
-		log.Printf("[reconcile] list local issues for team %s: %v", teamID, err)
-		return 0
-	}
-	localIDs := make([]string, 0, len(rows))
-	for _, row := range rows {
-		localIDs = append(localIDs, row.ID)
-	}
-	deleted := 0
-	for _, id := range setDiff(localIDs, apiIDs) {
-		r.deleteOrphanIssue(ctx, id)
-		deleted++
-	}
-	return deleted
+	return r.reconcileAgainst(ctx, "issues for team "+teamID, apiIDs, func() ([]string, error) {
+		rows, err := r.store.Queries().ListTeamIssueIDs(ctx, teamID)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		return ids, nil
+	}, r.deleteOrphanIssue)
 }
 
 // reconcileProjects fetches the authoritative project ID set from Linear,
@@ -261,21 +278,17 @@ func (r *SQLiteRepository) reconcileProjects(ctx context.Context) int {
 		log.Printf("[reconcile] projects fetch: %v (skipping)", err)
 		return 0
 	}
-	rows, err := r.store.Queries().ListProjects(ctx)
-	if err != nil {
-		log.Printf("[reconcile] list local projects: %v", err)
-		return 0
-	}
-	localIDs := make([]string, 0, len(rows))
-	for _, p := range rows {
-		localIDs = append(localIDs, p.ID)
-	}
-	deleted := 0
-	for _, id := range setDiff(localIDs, apiIDs) {
-		r.deleteOrphanProject(ctx, id)
-		deleted++
-	}
-	return deleted
+	return r.reconcileAgainst(ctx, "projects", apiIDs, func() ([]string, error) {
+		rows, err := r.store.Queries().ListProjects(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(rows))
+		for _, p := range rows {
+			ids = append(ids, p.ID)
+		}
+		return ids, nil
+	}, r.deleteOrphanProject)
 }
 
 // reconcileInitiatives fetches the authoritative initiative ID set,
@@ -290,21 +303,17 @@ func (r *SQLiteRepository) reconcileInitiatives(ctx context.Context) int {
 		log.Printf("[reconcile] initiatives fetch: %v (skipping)", err)
 		return 0
 	}
-	rows, err := r.store.Queries().ListInitiatives(ctx)
-	if err != nil {
-		log.Printf("[reconcile] list local initiatives: %v", err)
-		return 0
-	}
-	localIDs := make([]string, 0, len(rows))
-	for _, i := range rows {
-		localIDs = append(localIDs, i.ID)
-	}
-	deleted := 0
-	for _, id := range setDiff(localIDs, apiIDs) {
-		r.deleteOrphanInitiative(ctx, id)
-		deleted++
-	}
-	return deleted
+	return r.reconcileAgainst(ctx, "initiatives", apiIDs, func() ([]string, error) {
+		rows, err := r.store.Queries().ListInitiatives(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(rows))
+		for _, i := range rows {
+			ids = append(ids, i.ID)
+		}
+		return ids, nil
+	}, r.deleteOrphanInitiative)
 }
 
 // setDiff returns elements in `local` that are not in `api`. Used by the

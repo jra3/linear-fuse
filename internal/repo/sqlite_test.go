@@ -2627,3 +2627,55 @@ func TestReconcileIssuesForTeam_DeletesOrphans(t *testing.T) {
 		t.Errorf("alsogone issue still present: err=%v", err)
 	}
 }
+
+// TestReconcileAgainst_DeletesOrphans drives the shared diff-and-delete seam
+// that reconcileIssuesForTeam, reconcileProjects, and reconcileInitiatives
+// now route through — with closures, no live client or store. This is the
+// coverage projects/initiatives never had (their fetch needed a real client).
+func TestReconcileAgainst_DeletesOrphans(t *testing.T) {
+	t.Parallel()
+	repo := &SQLiteRepository{}
+	ctx := context.Background()
+
+	var deleted []string
+	n := repo.reconcileAgainst(ctx, "test",
+		[]string{"alive", "also-alive"}, // authoritative set
+		func() ([]string, error) {
+			return []string{"alive", "gone", "also-alive", "gone2"}, nil
+		},
+		func(_ context.Context, id string) { deleted = append(deleted, id) },
+	)
+
+	if n != 2 {
+		t.Errorf("deleted count = %d, want 2", n)
+	}
+	want := map[string]bool{"gone": true, "gone2": true}
+	for _, id := range deleted {
+		if !want[id] {
+			t.Errorf("deleted %q, which is in the authoritative set", id)
+		}
+		delete(want, id)
+	}
+	if len(want) != 0 {
+		t.Errorf("orphans not deleted: %v", want)
+	}
+}
+
+// TestReconcileAgainst_LocalQueryErrorDeletesNothing: a failed local read must
+// delete nothing — an empty/partial local set must never read as "everything
+// is an orphan".
+func TestReconcileAgainst_LocalQueryErrorDeletesNothing(t *testing.T) {
+	t.Parallel()
+	repo := &SQLiteRepository{}
+	ctx := context.Background()
+
+	called := false
+	n := repo.reconcileAgainst(ctx, "test",
+		[]string{"alive"},
+		func() ([]string, error) { return nil, fmt.Errorf("db down") },
+		func(_ context.Context, _ string) { called = true },
+	)
+	if n != 0 || called {
+		t.Errorf("deleted=%d called=%v, want 0 deletes on local-query error", n, called)
+	}
+}
