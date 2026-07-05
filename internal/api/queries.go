@@ -205,8 +205,15 @@ query MyActiveIssues($after: String) {
 }
 ` + issueFieldsFragmentLite
 
-// queryTeamMetadata fetches all team metadata in a single query:
-// states, labels, cycles, projects (with milestones), members, and workspace labels.
+// queryTeamMetadata fetches team metadata in a single query: states,
+// labels, cycles, members, and workspace labels. Projects deliberately live
+// in their own paginated query (queryTeamProjects): their nested selections
+// cost ~187 complexity points per node, so even 50 of them consume nearly
+// the whole 10k complexity budget Linear allows a single query.
+//
+// Every unbounded connection selects pageInfo and is drained to completion
+// by GetTeamMetadata when hasNextPage reports more (Linear caps a page at
+// 250 nodes); states are workflow-bounded (~a dozen) and stay undrained.
 var queryTeamMetadata = `
 query TeamMetadata($teamId: String!) {
   team(id: $teamId) {
@@ -217,10 +224,12 @@ query TeamMetadata($teamId: String!) {
         type
       }
     }
-    labels {
+    labels(first: 250) {
+      pageInfo { hasNextPage endCursor }
       nodes { ...LabelFields }
     }
-    cycles {
+    cycles(first: 250) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         id
         number
@@ -231,45 +240,8 @@ query TeamMetadata($teamId: String!) {
         issueCountHistory
       }
     }
-    projects {
-      nodes {
-        id
-        name
-        slugId
-        description
-        url
-        state
-        startDate
-        targetDate
-        createdAt
-        updatedAt
-        lead {
-          id
-          name
-          email
-        }
-        status {
-          id
-          name
-        }
-        initiatives {
-          nodes {
-            id
-            name
-          }
-        }
-        projectMilestones {
-          nodes {
-            id
-            name
-            description
-            targetDate
-            sortOrder
-          }
-        }
-      }
-    }
-    members {
+    members(first: 250) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         id
         name
@@ -279,7 +251,67 @@ query TeamMetadata($teamId: String!) {
       }
     }
   }
-  issueLabels {
+  issueLabels(first: 250) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...LabelFields }
+  }
+}
+` + labelFieldsFragment
+
+// Per-connection drain queries: resumed from the combined query's endCursor
+// when a connection reports hasNextPage (see the paginate module).
+
+var queryTeamLabelsPage = `
+query TeamLabelsPage($teamId: String!, $after: String) {
+  team(id: $teamId) {
+    labels(first: 250, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...LabelFields }
+    }
+  }
+}
+` + labelFieldsFragment
+
+const queryTeamCyclesPage = `
+query TeamCyclesPage($teamId: String!, $after: String) {
+  team(id: $teamId) {
+    cycles(first: 250, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        number
+        name
+        startsAt
+        endsAt
+        completedIssueCountHistory
+        issueCountHistory
+      }
+    }
+  }
+}
+`
+
+const queryTeamMembersPage = `
+query TeamMembersPage($teamId: String!, $after: String) {
+  team(id: $teamId) {
+    members(first: 250, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        email
+        displayName
+        active
+      }
+    }
+  }
+}
+`
+
+var queryWorkspaceLabelsPage = `
+query WorkspaceLabelsPage($after: String) {
+  issueLabels(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes { ...LabelFields }
   }
 }
@@ -354,10 +386,15 @@ query CycleIssues($cycleId: String!, $after: String) {
 }
 `
 
+// queryTeamProjects pages at 50: the nested initiatives/projectMilestones
+// selections cost ~187 complexity points per project node, so 50 is the
+// largest page that fits Linear's 10k complexity budget (measured live:
+// first:100 scores 18751).
 const queryTeamProjects = `
-query TeamProjects($teamId: String!) {
+query TeamProjects($teamId: String!, $after: String) {
   team(id: $teamId) {
-    projects {
+    projects(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         id
         name
@@ -660,10 +697,16 @@ mutation InitiativeToProjectDelete($initiativeId: String!, $projectId: String!) 
 }
 `
 
-// queryWorkspace fetches workspace-level entities (users and initiatives) in a single query.
+// queryWorkspace fetches workspace-level entities (users and initiatives)
+// in a single query. Initiatives page at 50 because each node carries a
+// nested projects connection; that nested connection selects pageInfo too,
+// and GetWorkspace drains it per initiative (an initiative's junction rows
+// feed a prune, so its project list must be provably complete — a
+// truncated list would read as removals).
 const queryWorkspace = `
 query Workspace {
-  users {
+  users(first: 250) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       id
       name
@@ -672,7 +715,8 @@ query Workspace {
       active
     }
   }
-  initiatives {
+  initiatives(first: 50) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       id
       name
@@ -690,12 +734,77 @@ query Workspace {
         name
         email
       }
-      projects {
+      projects(first: 50) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           name
           slugId
         }
+      }
+    }
+  }
+}
+`
+
+const queryWorkspaceUsersPage = `
+query WorkspaceUsersPage($after: String) {
+  users(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      name
+      email
+      displayName
+      active
+    }
+  }
+}
+`
+
+const queryWorkspaceInitiativesPage = `
+query WorkspaceInitiativesPage($after: String) {
+  initiatives(first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      name
+      slugId
+      description
+      status
+      color
+      icon
+      targetDate
+      url
+      createdAt
+      updatedAt
+      owner {
+        id
+        name
+        email
+      }
+      projects(first: 50) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          name
+          slugId
+        }
+      }
+    }
+  }
+}
+`
+
+const queryInitiativeProjectsPage = `
+query InitiativeProjectsPage($id: String!, $after: String) {
+  initiative(id: $id) {
+    projects(first: 250, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id
+        name
+        slugId
       }
     }
   }
@@ -1205,22 +1314,26 @@ query TeamIssueIDs($teamId: String!, $first: Int!, $after: String) {
 }
 `
 
-// queryWorkspaceProjectIDs returns IDs of all projects in the workspace.
-// first: 250 matches Linear's max page size — workspaces with more than
-// 250 active projects would need pagination here.
+// queryWorkspaceProjectIDs returns IDs of all projects in the workspace,
+// paginated. The reconcile pass diffs-and-deletes against this set, so it
+// must be complete or fail loudly — a truncated page would read as mass
+// deletion (the paginate module guarantees all-or-nothing).
 const queryWorkspaceProjectIDs = `
-query WorkspaceProjectIDs {
-  projects(first: 250) {
+query WorkspaceProjectIDs($after: String) {
+  projects(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes { id }
   }
 }
 `
 
-// queryWorkspaceInitiativeIDs returns IDs of all initiatives in the workspace.
-// See queryWorkspaceProjectIDs for the first: 250 rationale.
+// queryWorkspaceInitiativeIDs returns IDs of all initiatives in the
+// workspace, paginated. See queryWorkspaceProjectIDs for why completeness
+// is load-bearing.
 const queryWorkspaceInitiativeIDs = `
-query WorkspaceInitiativeIDs {
-  initiatives(first: 250) {
+query WorkspaceInitiativeIDs($after: String) {
+  initiatives(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes { id }
   }
 }

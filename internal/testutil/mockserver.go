@@ -16,6 +16,7 @@ type MockLinearServer struct {
 
 	mu        sync.RWMutex
 	responses map[string]any   // query/mutation name -> response data
+	sequences map[string][]any // query/mutation name -> per-call responses
 	errors    map[string]error // query/mutation name -> error to return
 	calls     []GraphQLCall    // recorded calls for assertions
 }
@@ -31,6 +32,7 @@ type GraphQLCall struct {
 func NewMockLinearServer() *MockLinearServer {
 	m := &MockLinearServer{
 		responses: make(map[string]any),
+		sequences: make(map[string][]any),
 		errors:    make(map[string]error),
 	}
 
@@ -54,6 +56,17 @@ func (m *MockLinearServer) SetResponse(operation string, data any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.responses[operation] = data
+}
+
+// SetResponseSequence configures the mock to return one response per call
+// for an operation, in order — how a cursor-paginated connection is
+// scripted (SetResponse's single static response can never terminate a
+// pagination loop whose first page says hasNextPage). Calls beyond the last
+// response repeat it. A sequence takes precedence over SetResponse.
+func (m *MockLinearServer) SetResponseSequence(operation string, pages ...any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sequences[operation] = pages
 }
 
 // SetError configures the mock to return an error for a specific operation.
@@ -85,6 +98,7 @@ func (m *MockLinearServer) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.responses = make(map[string]any)
+	m.sequences = make(map[string][]any)
 	m.errors = make(map[string]error)
 	m.calls = nil
 }
@@ -116,13 +130,20 @@ func (m *MockLinearServer) handleRequest(w http.ResponseWriter, r *http.Request)
 	// Extract operation name
 	operation := extractOperation(req.Query)
 
-	// Record the call
+	// Record the call and note how many calls this operation has seen,
+	// which indexes its response sequence (if one is configured).
 	m.mu.Lock()
 	m.calls = append(m.calls, GraphQLCall{
 		Query:     req.Query,
 		Variables: req.Variables,
 		Operation: operation,
 	})
+	opCalls := 0
+	for _, c := range m.calls {
+		if c.Operation == operation {
+			opCalls++
+		}
+	}
 	m.mu.Unlock()
 
 	// Check for configured error
@@ -139,8 +160,19 @@ func (m *MockLinearServer) handleRequest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check for configured response
-	data, ok := m.responses[operation]
+	// A response sequence takes precedence; the last page repeats if the
+	// operation is called more times than pages were scripted.
+	var data any
+	var ok bool
+	if seq, has := m.sequences[operation]; has && len(seq) > 0 {
+		idx := opCalls - 1
+		if idx >= len(seq) {
+			idx = len(seq) - 1
+		}
+		data, ok = seq[idx], true
+	} else {
+		data, ok = m.responses[operation]
+	}
 	m.mu.RUnlock()
 
 	if !ok {
