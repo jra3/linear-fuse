@@ -3919,6 +3919,25 @@ func (q *Queries) ListWorkspaceLabels(ctx context.Context) ([]Label, error) {
 	return items, nil
 }
 
+const pruneInitiativeProjects = `-- name: PruneInitiativeProjects :exec
+DELETE FROM initiative_projects WHERE initiative_id = ? AND synced_at < ?
+`
+
+type PruneInitiativeProjectsParams struct {
+	InitiativeID string    `json:"initiative_id"`
+	SyncedAt     time.Time `json:"synced_at"`
+}
+
+// Delete an initiative's junction rows the workspace sync no longer sees.
+// Only safe against a provably complete (drained) initiative projects
+// fetch, with the cutoff taken before the sync's upserts: a link the user
+// creates mid-sync (persistInitiativeProjectLink stamps a fresh synced_at)
+// survives.
+func (q *Queries) PruneInitiativeProjects(ctx context.Context, arg PruneInitiativeProjectsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneInitiativeProjects, arg.InitiativeID, arg.SyncedAt)
+	return err
+}
+
 const pruneIssueAttachments = `-- name: PruneIssueAttachments :exec
 DELETE FROM attachments WHERE issue_id = ? AND synced_at < ?
 `
@@ -3962,6 +3981,23 @@ type PruneIssueDocumentsParams struct {
 
 func (q *Queries) PruneIssueDocuments(ctx context.Context, arg PruneIssueDocumentsParams) error {
 	_, err := q.db.ExecContext(ctx, pruneIssueDocuments, arg.IssueID, arg.SyncedAt)
+	return err
+}
+
+const pruneProjectTeams = `-- name: PruneProjectTeams :exec
+DELETE FROM project_teams WHERE team_id = ? AND synced_at < ?
+`
+
+type PruneProjectTeamsParams struct {
+	TeamID   string    `json:"team_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+// Delete a team's associations the metadata sync no longer sees. Only safe
+// against a provably complete (drained) projects fetch, with the cutoff
+// taken before the sync's upserts, so rows written mid-sync survive.
+func (q *Queries) PruneProjectTeams(ctx context.Context, arg PruneProjectTeamsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneProjectTeams, arg.TeamID, arg.SyncedAt)
 	return err
 }
 

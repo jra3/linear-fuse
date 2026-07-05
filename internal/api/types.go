@@ -171,9 +171,9 @@ type InitiativeUpdateInput struct {
 
 // ProjectMilestoneUpdateInput is the input for updating a project milestone
 type ProjectMilestoneUpdateInput struct {
-	Name        *string `json:"name,omitempty"`
-	Description *string `json:"description,omitempty"`
-	TargetDate  *string `json:"targetDate,omitempty"`
+	Name        *string  `json:"name,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	TargetDate  *string  `json:"targetDate,omitempty"`
 	SortOrder   *float64 `json:"sortOrder,omitempty"`
 }
 
@@ -265,7 +265,12 @@ type Initiative struct {
 }
 
 type InitiativeProjects struct {
-	Nodes []InitiativeProject `json:"nodes"`
+	// PageInfo is populated by queries that select it (queryWorkspace and
+	// its drain pages) and consumed by GetWorkspace, which drains any
+	// remainder and then clears it — callers downstream of GetWorkspace
+	// always see a complete Nodes list and a nil PageInfo.
+	PageInfo *PageInfo           `json:"pageInfo,omitempty"`
+	Nodes    []InitiativeProject `json:"nodes"`
 }
 
 type InitiativeProject struct {

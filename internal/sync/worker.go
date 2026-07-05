@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -78,8 +79,9 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
-	budget  BudgetReporter     // optional: for rate limit budget logging
-	catchUp CatchUpModeToggler // optional: controls repo staleness during catch-up
+	budget   BudgetReporter     // optional: for rate limit budget logging
+	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
+	cycle    atomic.Int64       // sync-cycle counter; rotates the team order
 
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
@@ -230,6 +232,20 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 		return fmt.Errorf("get teams: %w", err)
 	}
 
+	// Rotate the starting team each cycle. Teams sync in order against one
+	// token bucket, so under budget pressure the deferrals always land on
+	// whoever is last — with a fixed order that is the same team every
+	// cycle, which starved it permanently (observed live once metadata
+	// went from one call per team to two). Rotation bounds any team's
+	// worst-case staleness at len(teams) cycles instead.
+	if n := len(teams); n > 0 {
+		start := int(w.cycle.Add(1)-1) % n
+		rotated := make([]api.Team, 0, n)
+		rotated = append(rotated, teams[start:]...)
+		rotated = append(rotated, teams[:start]...)
+		teams = rotated
+	}
+
 	for _, team := range teams {
 		// Upsert team
 		if err := w.store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
@@ -257,11 +273,11 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 
 // SyncTeamResult contains the results of syncing a single team
 type SyncTeamResult struct {
-	TeamID       string
-	IssuesAdded  int
+	TeamID        string
+	IssuesAdded   int
 	IssuesUpdated int
-	PagesFetched int
-	Duration     time.Duration
+	PagesFetched  int
+	Duration      time.Duration
 }
 
 func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
@@ -432,8 +448,16 @@ func (w *Worker) CleanupArchivedIssues(ctx context.Context, teamID string) (int6
 // Workspace-Level Sync
 // =============================================================================
 
-// syncWorkspace syncs workspace-level entities (users + initiatives) in a single API call.
+// syncWorkspace syncs workspace-level entities (users + initiatives).
+// GetWorkspace drains every connection — including each initiative's
+// nested projects — so the junction prune in syncInitiativeProjects runs
+// against the complete server-side truth.
 func (w *Worker) syncWorkspace(ctx context.Context) error {
+	// The prune cutoff is taken BEFORE the fetch: any junction row upserted
+	// after this instant (this pass, or a user linking a project mid-sync)
+	// survives.
+	pruneCutoff := db.Now()
+
 	data, err := w.client.GetWorkspace(ctx)
 	if err != nil {
 		return fmt.Errorf("get workspace: %w", err)
@@ -467,7 +491,7 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 		}
 
 		// Sync initiative-project associations
-		if err := w.syncInitiativeProjects(ctx, initiative); err != nil {
+		if err := w.syncInitiativeProjects(ctx, initiative, pruneCutoff); err != nil {
 			log.Printf("[sync] sync initiative %s projects failed: %v", initiative.Slug, err)
 		}
 	}
@@ -479,8 +503,13 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 	return nil
 }
 
-func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Initiative) error {
-	// Get projects from the initiative's Projects field
+// syncInitiativeProjects upserts an initiative's junction rows and prunes
+// the ones the fetch no longer returned (a project unlinked in Linear).
+// The prune only runs after every upsert succeeded — a row that merely
+// failed to refresh must not read as a removal — and initiative.Projects
+// is complete by GetWorkspace's contract, which is what makes pruning
+// against it safe.
+func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Initiative, pruneCutoff time.Time) error {
 	for _, project := range initiative.Projects.Nodes {
 		if err := w.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 			InitiativeID: initiative.ID,
@@ -490,6 +519,12 @@ func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Init
 			return fmt.Errorf("upsert initiative-project %s-%s: %w", initiative.ID, project.ID, err)
 		}
 	}
+	if err := w.store.Queries().PruneInitiativeProjects(ctx, db.PruneInitiativeProjectsParams{
+		InitiativeID: initiative.ID,
+		SyncedAt:     pruneCutoff,
+	}); err != nil {
+		return fmt.Errorf("prune initiative-projects %s: %w", initiative.ID, err)
+	}
 	return nil
 }
 
@@ -497,9 +532,15 @@ func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Init
 // Team Metadata Sync
 // =============================================================================
 
-// syncTeamMetadata syncs all metadata for a team in a single API call:
-// states, labels, cycles, projects (with milestones), and members.
+// syncTeamMetadata syncs all metadata for a team: states, labels, cycles,
+// projects (with milestones), and members. GetTeamMetadata drains every
+// unbounded connection, so meta is the complete server-side truth — which
+// is what makes the project_teams prune below safe.
 func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
+	// The prune cutoff is taken BEFORE the fetch: any association upserted
+	// after this instant (this pass, or a concurrent user edit) survives.
+	pruneCutoff := db.Now()
+
 	meta, err := w.client.GetTeamMetadata(ctx, team.ID)
 	if err != nil {
 		return fmt.Errorf("get team metadata: %w", err)
@@ -542,14 +583,17 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	}
 
 	// Process projects (includes milestones)
+	projectsClean := true
 	for _, project := range meta.Projects {
 		params, err := db.APIProjectToDBProject(project)
 		if err != nil {
 			log.Printf("[sync] convert project %s failed: %v", project.Slug, err)
+			projectsClean = false
 			continue
 		}
 		if err := w.store.Queries().UpsertProject(ctx, params); err != nil {
 			log.Printf("[sync] upsert project %s failed: %v", project.Slug, err)
+			projectsClean = false
 			continue
 		}
 
@@ -560,6 +604,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 			SyncedAt:  db.Now(),
 		}); err != nil {
 			log.Printf("[sync] upsert project-team %s-%s failed: %v", project.ID, team.ID, err)
+			projectsClean = false
 		}
 
 		// Upsert milestones inline from the metadata query (no extra API calls)
@@ -574,6 +619,19 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 					log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
 				}
 			}
+		}
+	}
+
+	// Prune associations the (complete) fetch no longer returned — a project
+	// moved off this team, or deleted in Linear. Skipped when any upsert
+	// above failed: a row that merely failed to refresh must not read as a
+	// removal.
+	if projectsClean {
+		if err := w.store.Queries().PruneProjectTeams(ctx, db.PruneProjectTeamsParams{
+			TeamID:   team.ID,
+			SyncedAt: pruneCutoff,
+		}); err != nil {
+			log.Printf("[sync] prune project-teams %s: %v", team.Key, err)
 		}
 	}
 
@@ -876,7 +934,6 @@ func (w *Worker) drainPendingDetailSync(ctx context.Context) {
 		w.syncIssueDetailsBatch(ctx, batchArg)
 	}
 }
-
 
 // =============================================================================
 // Embedded Files Extraction

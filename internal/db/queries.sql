@@ -429,6 +429,12 @@ VALUES (?, ?, ?)
 ON CONFLICT(project_id, team_id) DO UPDATE SET
     synced_at = excluded.synced_at;
 
+-- Delete a team's associations the metadata sync no longer sees. Only safe
+-- against a provably complete (drained) projects fetch, with the cutoff
+-- taken before the sync's upserts, so rows written mid-sync survive.
+-- name: PruneProjectTeams :exec
+DELETE FROM project_teams WHERE team_id = ? AND synced_at < ?;
+
 -- name: DeleteProjectTeam :exec
 DELETE FROM project_teams WHERE project_id = ? AND team_id = ?;
 
@@ -630,6 +636,14 @@ INSERT INTO initiative_projects (initiative_id, project_id, synced_at)
 VALUES (?, ?, ?)
 ON CONFLICT(initiative_id, project_id) DO UPDATE SET
     synced_at = excluded.synced_at;
+
+-- Delete an initiative's junction rows the workspace sync no longer sees.
+-- Only safe against a provably complete (drained) initiative projects
+-- fetch, with the cutoff taken before the sync's upserts: a link the user
+-- creates mid-sync (persistInitiativeProjectLink stamps a fresh synced_at)
+-- survives.
+-- name: PruneInitiativeProjects :exec
+DELETE FROM initiative_projects WHERE initiative_id = ? AND synced_at < ?;
 
 -- name: DeleteInitiativeProject :exec
 DELETE FROM initiative_projects WHERE initiative_id = ? AND project_id = ?;

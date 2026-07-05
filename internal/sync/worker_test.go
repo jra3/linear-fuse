@@ -41,6 +41,8 @@ type mockAPIClient struct {
 	rateLimitResetAt time.Time                    // M-3: configurable reset time for adaptive backoff tests
 	detailsByIssue   map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
 	onDetailsBatch   func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
+	onTeamMetadata   func()                       // if set, runs inside GetTeamMetadata (simulates writes racing the fetch)
+	onWorkspace      func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
 }
 
 func newMockAPIClient() *mockAPIClient {
@@ -116,6 +118,9 @@ func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*ap
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
+	if m.onTeamMetadata != nil {
+		m.onTeamMetadata()
+	}
 	return &api.TeamMetadata{
 		States:   m.statesByTeam[teamID],
 		Labels:   m.labelsByTeam[teamID],
@@ -128,6 +133,9 @@ func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*ap
 func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, error) {
 	if m.simulateError != nil {
 		return nil, m.simulateError
+	}
+	if m.onWorkspace != nil {
+		m.onWorkspace()
 	}
 	return &api.WorkspaceData{
 		Users:       m.users,

@@ -1399,8 +1399,9 @@ func TestMutationPriorityReservesTokensForWrites(t *testing.T) {
 	client := NewClient("test-api-key")
 	client.SetAPIURL(server.URL)
 
-	// Drain the token bucket to near-empty (burst=10, drain all but 1)
-	for i := 0; i < 10; i++ {
+	// Drain the token bucket to near-empty (below the 2-token write
+	// reserve), whatever the burst size.
+	for client.limiter.Tokens() >= 2 {
 		client.limiter.Allow()
 	}
 
@@ -1424,12 +1425,12 @@ func TestMutationPriorityReservesTokensForWrites(t *testing.T) {
 
 func TestClient_LowBudget(t *testing.T) {
 	c := NewClient("test-key")
-	// Fresh limiter has full burst (10 tokens). Should not be low.
+	// Fresh limiter has a full burst. Should not be low.
 	if c.LowBudget() {
 		t.Error("LowBudget true with full burst")
 	}
-	// Drain burst.
-	for i := 0; i < 9; i++ {
+	// Drain the burst to just under the threshold, whatever its size.
+	for c.limiter.Tokens() >= 5 {
 		c.limiter.Reserve()
 	}
 	if !c.LowBudget() {
@@ -1459,7 +1460,7 @@ func TestClient_GetTeamIssueIDs(t *testing.T) {
 func TestClient_GetWorkspaceProjectIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"projects":{"nodes":[{"id":"p1"},{"id":"p2"}]}}}`))
+		_, _ = w.Write([]byte(`{"data":{"projects":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"p1"},{"id":"p2"}]}}}`))
 	}))
 	defer server.Close()
 
@@ -1478,7 +1479,7 @@ func TestClient_GetWorkspaceProjectIDs(t *testing.T) {
 func TestClient_GetWorkspaceInitiativeIDs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"initiatives":{"nodes":[{"id":"i1"}]}}}`))
+		_, _ = w.Write([]byte(`{"data":{"initiatives":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"i1"}]}}}`))
 	}))
 	defer server.Close()
 

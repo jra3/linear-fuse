@@ -402,12 +402,15 @@ func CreateIssueResponse(issue map[string]any) map[string]any {
 	}
 }
 
-// TeamProjectsResponse returns a response for GetTeamProjects.
+// TeamProjectsResponse returns a response for GetTeamProjects. The
+// pageInfo is required: connections without it fail the paginate module's
+// silent-truncation guard.
 func TeamProjectsResponse(projects ...map[string]any) map[string]any {
 	return map[string]any{
 		"team": map[string]any{
 			"projects": map[string]any{
-				"nodes": projects,
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+				"nodes":    projects,
 			},
 		},
 	}

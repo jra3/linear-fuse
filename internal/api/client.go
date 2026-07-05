@@ -57,8 +57,13 @@ func NewClient(apiKey string) *Client {
 
 func NewClientWithOptions(apiKey string, opts ClientOptions) *Client {
 	// Linear allows 1,500 requests/hour (0.417/sec sustained).
-	// Burst of 10 absorbs brief spikes; sustained rate stays within budget.
-	limiter := rate.NewLimiter(rate.Limit(1500.0/3600.0), 10)
+	// The burst absorbs one sync cycle's spike; sustained rate stays within
+	// budget regardless of burst size. Sizing: a cycle is workspace (1) +
+	// per-team metadata (2: combined query + paginated projects) + issues
+	// (1+) for every team, and the write-reserve gate defers reads below 2
+	// tokens — at burst 10 a 4-team cycle spent exactly ~10 before the last
+	// team, which therefore never synced (its reads deferred every cycle).
+	limiter := rate.NewLimiter(rate.Limit(1500.0/3600.0), 16)
 
 	return &Client{
 		apiKey:     apiKey,
@@ -719,30 +724,23 @@ func (c *Client) ArchiveIssue(ctx context.Context, issueID string) error {
 	return execMutationOK(ctx, c, mutationArchiveIssue, map[string]any{"id": issueID}, "issueArchive")
 }
 
-// GetTeamMetadata fetches all metadata for a team in a single query:
-// states, labels (team + workspace, deduplicated), cycles, projects (with milestones), and members.
+// GetTeamMetadata fetches all metadata for a team: states, labels (team +
+// workspace, deduplicated), cycles, members — one combined query, with any
+// connection reporting hasNextPage drained to completion — and projects via
+// the paginated GetTeamProjects (too complexity-expensive to share the
+// combined query; see queryTeamMetadata). The returned sets are complete:
+// the sync worker prunes against them.
 func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetadata, error) {
 	var result struct {
 		Team struct {
 			States struct {
 				Nodes []State `json:"nodes"`
 			} `json:"states"`
-			Labels struct {
-				Nodes []Label `json:"nodes"`
-			} `json:"labels"`
-			Cycles struct {
-				Nodes []Cycle `json:"nodes"`
-			} `json:"cycles"`
-			Projects struct {
-				Nodes []Project `json:"nodes"`
-			} `json:"projects"`
-			Members struct {
-				Nodes []User `json:"nodes"`
-			} `json:"members"`
+			Labels  conn[Label] `json:"labels"`
+			Cycles  conn[Cycle] `json:"cycles"`
+			Members conn[User]  `json:"members"`
 		} `json:"team"`
-		IssueLabels struct {
-			Nodes []Label `json:"nodes"`
-		} `json:"issueLabels"`
+		IssueLabels conn[Label] `json:"issueLabels"`
 	}
 
 	vars := map[string]any{
@@ -754,16 +752,49 @@ func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetad
 		return nil, err
 	}
 
+	teamLabels := result.Team.Labels.Nodes
+	moreLabels, err := drain[Label](ctx, c, queryTeamLabelsPage, vars, result.Team.Labels.PageInfo, "team", "labels")
+	if err != nil {
+		return nil, fmt.Errorf("drain team labels: %w", err)
+	}
+	teamLabels = append(teamLabels, moreLabels...)
+
+	cycles := result.Team.Cycles.Nodes
+	moreCycles, err := drain[Cycle](ctx, c, queryTeamCyclesPage, vars, result.Team.Cycles.PageInfo, "team", "cycles")
+	if err != nil {
+		return nil, fmt.Errorf("drain team cycles: %w", err)
+	}
+	cycles = append(cycles, moreCycles...)
+
+	members := result.Team.Members.Nodes
+	moreMembers, err := drain[User](ctx, c, queryTeamMembersPage, vars, result.Team.Members.PageInfo, "team", "members")
+	if err != nil {
+		return nil, fmt.Errorf("drain team members: %w", err)
+	}
+	members = append(members, moreMembers...)
+
+	workspaceLabels := result.IssueLabels.Nodes
+	moreWorkspace, err := drain[Label](ctx, c, queryWorkspaceLabelsPage, nil, result.IssueLabels.PageInfo, "issueLabels")
+	if err != nil {
+		return nil, fmt.Errorf("drain workspace labels: %w", err)
+	}
+	workspaceLabels = append(workspaceLabels, moreWorkspace...)
+
+	projects, err := c.GetTeamProjects(ctx, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("fetch team projects: %w", err)
+	}
+
 	// Combine team labels and workspace labels, deduplicating by ID
 	seen := make(map[string]bool)
 	var labels []Label
-	for _, l := range result.Team.Labels.Nodes {
+	for _, l := range teamLabels {
 		if !seen[l.ID] {
 			seen[l.ID] = true
 			labels = append(labels, l)
 		}
 	}
-	for _, l := range result.IssueLabels.Nodes {
+	for _, l := range workspaceLabels {
 		if !seen[l.ID] {
 			seen[l.ID] = true
 			labels = append(labels, l)
@@ -773,21 +804,22 @@ func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetad
 	return &TeamMetadata{
 		States:   result.Team.States.Nodes,
 		Labels:   labels,
-		Cycles:   result.Team.Cycles.Nodes,
-		Projects: result.Team.Projects.Nodes,
-		Members:  result.Team.Members.Nodes,
+		Cycles:   cycles,
+		Projects: projects,
+		Members:  members,
 	}, nil
 }
 
-// GetWorkspace fetches workspace-level entities (users and initiatives) in a single query.
+// GetWorkspace fetches workspace-level entities (users and initiatives),
+// drained to completion — including each initiative's nested projects
+// connection, whose completeness is load-bearing: the sync worker prunes
+// initiative_projects junction rows against it, so a truncated list would
+// read as removals. Every returned Initiative has a complete Projects.Nodes
+// and a nil Projects.PageInfo.
 func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
 	var result struct {
-		Users struct {
-			Nodes []User `json:"nodes"`
-		} `json:"users"`
-		Initiatives struct {
-			Nodes []Initiative `json:"nodes"`
-		} `json:"initiatives"`
+		Users       conn[User]       `json:"users"`
+		Initiatives conn[Initiative] `json:"initiatives"`
 	}
 
 	err := c.query(ctx, queryWorkspace, nil, &result)
@@ -795,9 +827,34 @@ func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
 		return nil, err
 	}
 
+	users := result.Users.Nodes
+	moreUsers, err := drain[User](ctx, c, queryWorkspaceUsersPage, nil, result.Users.PageInfo, "users")
+	if err != nil {
+		return nil, fmt.Errorf("drain users: %w", err)
+	}
+	users = append(users, moreUsers...)
+
+	initiatives := result.Initiatives.Nodes
+	moreInitiatives, err := drain[Initiative](ctx, c, queryWorkspaceInitiativesPage, nil, result.Initiatives.PageInfo, "initiatives")
+	if err != nil {
+		return nil, fmt.Errorf("drain initiatives: %w", err)
+	}
+	initiatives = append(initiatives, moreInitiatives...)
+
+	for i := range initiatives {
+		init := &initiatives[i]
+		moreProjects, err := drain[InitiativeProject](ctx, c, queryInitiativeProjectsPage,
+			map[string]any{"id": init.ID}, init.Projects.PageInfo, "initiative", "projects")
+		if err != nil {
+			return nil, fmt.Errorf("drain initiative %s projects: %w", init.Slug, err)
+		}
+		init.Projects.Nodes = append(init.Projects.Nodes, moreProjects...)
+		init.Projects.PageInfo = nil
+	}
+
 	return &WorkspaceData{
-		Users:       result.Users.Nodes,
-		Initiatives: result.Initiatives.Nodes,
+		Users:       users,
+		Initiatives: initiatives,
 	}, nil
 }
 
@@ -823,26 +880,12 @@ func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, err
 	return result.Team.States.Nodes, nil
 }
 
-// GetTeamProjects fetches projects for a team
+// GetTeamProjects fetches all projects for a team. Paginated: a team's
+// projects connection was the first observed to overflow a page (silently
+// truncating teams/ views and dangling initiative symlinks).
 func (c *Client) GetTeamProjects(ctx context.Context, teamID string) ([]Project, error) {
-	var result struct {
-		Team struct {
-			Projects struct {
-				Nodes []Project `json:"nodes"`
-			} `json:"projects"`
-		} `json:"team"`
-	}
-
-	vars := map[string]any{
-		"teamId": teamID,
-	}
-
-	err := c.query(ctx, queryTeamProjects, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Team.Projects.Nodes, nil
+	return fetchAll[Project](ctx, c, queryTeamProjects,
+		map[string]any{"teamId": teamID}, "team", "projects")
 }
 
 // GetProjectIssues fetches issues for a project
@@ -1652,39 +1695,36 @@ func (c *Client) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, 
 	return ids, nil
 }
 
+// idNode is the projection the reconcile ID sweeps decode.
+type idNode struct {
+	ID string `json:"id"`
+}
+
 // GetWorkspaceProjectIDs returns IDs of every project in the workspace.
+// All-or-nothing: the reconcile pass diffs-and-deletes against this set,
+// so a partial result must surface as an error, never as a short list
+// (fetchAll guarantees it).
 func (c *Client) GetWorkspaceProjectIDs(ctx context.Context) ([]string, error) {
-	var result struct {
-		Projects struct {
-			Nodes []struct {
-				ID string `json:"id"`
-			} `json:"nodes"`
-		} `json:"projects"`
-	}
-	if err := c.query(ctx, queryWorkspaceProjectIDs, nil, &result); err != nil {
+	nodes, err := fetchAll[idNode](ctx, c, queryWorkspaceProjectIDs, nil, "projects")
+	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(result.Projects.Nodes))
-	for _, n := range result.Projects.Nodes {
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
 		ids = append(ids, n.ID)
 	}
 	return ids, nil
 }
 
-// GetWorkspaceInitiativeIDs returns IDs of every initiative in the workspace.
+// GetWorkspaceInitiativeIDs returns IDs of every initiative in the
+// workspace. Complete or error, like GetWorkspaceProjectIDs.
 func (c *Client) GetWorkspaceInitiativeIDs(ctx context.Context) ([]string, error) {
-	var result struct {
-		Initiatives struct {
-			Nodes []struct {
-				ID string `json:"id"`
-			} `json:"nodes"`
-		} `json:"initiatives"`
-	}
-	if err := c.query(ctx, queryWorkspaceInitiativeIDs, nil, &result); err != nil {
+	nodes, err := fetchAll[idNode](ctx, c, queryWorkspaceInitiativeIDs, nil, "initiatives")
+	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(result.Initiatives.Nodes))
-	for _, n := range result.Initiatives.Nodes {
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
 		ids = append(ids, n.ID)
 	}
 	return ids, nil
