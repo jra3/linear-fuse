@@ -1057,59 +1057,6 @@ func TestDBAttachmentsToAPIAttachments(t *testing.T) {
 // Embedded File Conversion Tests
 // =============================================================================
 
-func TestAPIEmbeddedFileToDBFile(t *testing.T) {
-	t.Parallel()
-	file := api.EmbeddedFile{
-		ID:        "file-1",
-		IssueID:   "issue-1",
-		URL:       "https://uploads.linear.app/workspace/file1/screenshot.png",
-		Filename:  "screenshot.png",
-		MimeType:  "image/png",
-		FileSize:  12345,
-		CachePath: "/tmp/cache/file-1",
-		Source:    "description",
-	}
-
-	params := APIEmbeddedFileToDBFile(file)
-
-	if params.ID != file.ID {
-		t.Errorf("ID mismatch: got %s, want %s", params.ID, file.ID)
-	}
-	if params.IssueID != file.IssueID {
-		t.Errorf("IssueID mismatch: got %s, want %s", params.IssueID, file.IssueID)
-	}
-	if params.Url != file.URL {
-		t.Errorf("URL mismatch: got %s, want %s", params.Url, file.URL)
-	}
-	if params.Filename != file.Filename {
-		t.Errorf("Filename mismatch: got %s, want %s", params.Filename, file.Filename)
-	}
-	if params.MimeType.String != file.MimeType {
-		t.Errorf("MimeType mismatch: got %s, want %s", params.MimeType.String, file.MimeType)
-	}
-	if params.Source != file.Source {
-		t.Errorf("Source mismatch: got %s, want %s", params.Source, file.Source)
-	}
-}
-
-func TestAPIEmbeddedFileToDBFileWithEmptyMimeType(t *testing.T) {
-	t.Parallel()
-	file := api.EmbeddedFile{
-		ID:       "file-1",
-		IssueID:  "issue-1",
-		URL:      "https://uploads.linear.app/workspace/file1/data.bin",
-		Filename: "data.bin",
-		MimeType: "", // Empty MIME type
-		Source:   "description",
-	}
-
-	params := APIEmbeddedFileToDBFile(file)
-
-	if params.MimeType.Valid {
-		t.Error("MimeType should be invalid for empty string")
-	}
-}
-
 func TestDBEmbeddedFileToAPIFile(t *testing.T) {
 	t.Parallel()
 	now := time.Now()

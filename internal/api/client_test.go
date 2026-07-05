@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -84,37 +85,6 @@ func TestGetIssue(t *testing.T) {
 
 	if len(result.Labels.Nodes) != 2 {
 		t.Errorf("expected 2 labels, got %d", len(result.Labels.Nodes))
-	}
-}
-
-func TestGetTeamIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue1 := testutil.FixtureIssue()
-	issue2 := testutil.FixtureIssueMinimal()
-	mock.SetResponse("TeamIssues", testutil.TeamIssuesResponse(issue1, issue2))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetTeamIssues(context.Background(), "team-123")
-	if err != nil {
-		t.Fatalf("GetTeamIssues failed: %v", err)
-	}
-
-	if len(issues) != 2 {
-		t.Fatalf("expected 2 issues, got %d", len(issues))
-	}
-
-	// Verify variables were passed correctly
-	call := mock.LastCall()
-	if call == nil {
-		t.Fatal("expected a call to be recorded")
-	}
-	if call.Variables["teamId"] != "team-123" {
-		t.Errorf("expected teamId 'team-123', got %v", call.Variables["teamId"])
 	}
 }
 
@@ -410,209 +380,6 @@ func TestMockReset(t *testing.T) {
 	}
 }
 
-func TestGetTeamIssuesByStatus(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("TeamIssuesByStatus", testutil.FilteredIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetTeamIssuesByStatus(context.Background(), "team-123", "In Progress")
-	if err != nil {
-		t.Fatalf("GetTeamIssuesByStatus failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["teamId"] != "team-123" {
-		t.Errorf("expected teamId 'team-123', got %v", call.Variables["teamId"])
-	}
-	if call.Variables["statusName"] != "In Progress" {
-		t.Errorf("expected statusName 'In Progress', got %v", call.Variables["statusName"])
-	}
-}
-
-func TestGetTeamIssuesByPriority(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("TeamIssuesByPriority", testutil.IssuesByPriorityResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetTeamIssuesByPriority(context.Background(), "team-123", 2)
-	if err != nil {
-		t.Fatalf("GetTeamIssuesByPriority failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["teamId"] != "team-123" {
-		t.Errorf("expected teamId 'team-123', got %v", call.Variables["teamId"])
-	}
-	if call.Variables["priority"] != float64(2) {
-		t.Errorf("expected priority 2, got %v", call.Variables["priority"])
-	}
-}
-
-func TestGetTeamIssuesByLabel(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("TeamIssuesByLabel", testutil.FilteredIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetTeamIssuesByLabel(context.Background(), "team-123", "Bug")
-	if err != nil {
-		t.Fatalf("GetTeamIssuesByLabel failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["labelName"] != "Bug" {
-		t.Errorf("expected labelName 'Bug', got %v", call.Variables["labelName"])
-	}
-}
-
-func TestGetTeamIssuesByAssignee(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("TeamIssuesByAssignee", testutil.FilteredIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetTeamIssuesByAssignee(context.Background(), "team-123", "user-456")
-	if err != nil {
-		t.Fatalf("GetTeamIssuesByAssignee failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["assigneeId"] != "user-456" {
-		t.Errorf("expected assigneeId 'user-456', got %v", call.Variables["assigneeId"])
-	}
-}
-
-func TestGetTeamIssuesUnassigned(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssueMinimal()
-	mock.SetResponse("TeamIssuesUnassigned", testutil.FilteredIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetTeamIssuesUnassigned(context.Background(), "team-123")
-	if err != nil {
-		t.Fatalf("GetTeamIssuesUnassigned failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["teamId"] != "team-123" {
-		t.Errorf("expected teamId 'team-123', got %v", call.Variables["teamId"])
-	}
-}
-
-func TestGetMyIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("MyIssues", testutil.MyIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetMyIssues(context.Background())
-	if err != nil {
-		t.Fatalf("GetMyIssues failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	if issues[0].ID != "issue-123" {
-		t.Errorf("expected issue ID 'issue-123', got %q", issues[0].ID)
-	}
-}
-
-func TestGetMyCreatedIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("MyCreatedIssues", testutil.MyCreatedIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetMyCreatedIssues(context.Background())
-	if err != nil {
-		t.Fatalf("GetMyCreatedIssues failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-}
-
-func TestGetMyActiveIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("MyActiveIssues", testutil.MyIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetMyActiveIssues(context.Background())
-	if err != nil {
-		t.Fatalf("GetMyActiveIssues failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-}
-
 func TestArchiveIssue(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()
@@ -696,37 +463,6 @@ func TestGetTeamProjects(t *testing.T) {
 
 	if projects[0].Name != "Test Project" {
 		t.Errorf("expected project name 'Test Project', got %q", projects[0].Name)
-	}
-}
-
-func TestGetProjectIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := map[string]any{
-		"id":         "issue-proj-123",
-		"identifier": "TST-999",
-		"title":      "Project Issue",
-		"state":      testutil.FixtureState("started"),
-	}
-	mock.SetResponse("ProjectIssues", testutil.ProjectIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetProjectIssues(context.Background(), "project-123")
-	if err != nil {
-		t.Fatalf("GetProjectIssues failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["projectId"] != "project-123" {
-		t.Errorf("expected projectId 'project-123', got %v", call.Variables["projectId"])
 	}
 }
 
@@ -828,32 +564,6 @@ func TestGetTeamCycles(t *testing.T) {
 
 	if cycles[0].Number != 42 {
 		t.Errorf("expected cycle number 42, got %d", cycles[0].Number)
-	}
-}
-
-func TestGetCycleIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureCycleIssue()
-	mock.SetResponse("CycleIssues", testutil.CycleIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetCycleIssues(context.Background(), "cycle-123")
-	if err != nil {
-		t.Fatalf("GetCycleIssues failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["cycleId"] != "cycle-123" {
-		t.Errorf("expected cycleId 'cycle-123', got %v", call.Variables["cycleId"])
 	}
 }
 
@@ -1194,32 +904,6 @@ func TestGetTeamDocuments(t *testing.T) {
 	}
 }
 
-func TestGetUserIssues(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	issue := testutil.FixtureIssue()
-	mock.SetResponse("UserIssues", testutil.UserIssuesResponse(issue))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	issues, err := client.GetUserIssues(context.Background(), "user-123")
-	if err != nil {
-		t.Fatalf("GetUserIssues failed: %v", err)
-	}
-
-	if len(issues) != 1 {
-		t.Fatalf("expected 1 issue, got %d", len(issues))
-	}
-
-	call := mock.LastCall()
-	if call.Variables["userId"] != "user-123" {
-		t.Errorf("expected userId 'user-123', got %v", call.Variables["userId"])
-	}
-}
-
 func TestGetTeamMembers(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()
@@ -1439,9 +1123,18 @@ func TestClient_LowBudget(t *testing.T) {
 }
 
 func TestClient_GetTeamIssueIDs(t *testing.T) {
+	// Two pages: proves the migrated method drains the connection through
+	// the paginate seam (not just the first page) and threads the cursor.
+	var secondPageCursor string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"i1"},{"id":"i2"},{"id":"i3"}]}}}}`))
+		if strings.Contains(string(body), `"after":"c1"`) {
+			secondPageCursor = "c1"
+			_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"i4"},{"id":"i5"}]}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[{"id":"i1"},{"id":"i2"},{"id":"i3"}]}}}}`))
 	}))
 	defer server.Close()
 
@@ -1452,8 +1145,11 @@ func TestClient_GetTeamIssueIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := strings.Join(ids, ","); got != "i1,i2,i3" {
-		t.Errorf("got %q, want i1,i2,i3", got)
+	if got := strings.Join(ids, ","); got != "i1,i2,i3,i4,i5" {
+		t.Errorf("got %q, want i1,i2,i3,i4,i5", got)
+	}
+	if secondPageCursor != "c1" {
+		t.Error("second page was not fetched with the page-1 cursor")
 	}
 }
 

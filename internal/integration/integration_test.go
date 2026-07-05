@@ -71,7 +71,12 @@ func setupLiveAPI(apiKey string) error {
 		},
 	}
 
-	server, lfs, err = fs.Mount(mountPoint, cfg, false)
+	lfs, err = fs.NewLinearFS(cfg, false)
+	if err != nil {
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("create filesystem: %w", err)
+	}
+	server, err = fs.MountFS(mountPoint, lfs, false)
 	if err != nil {
 		os.RemoveAll(mountPoint)
 		return fmt.Errorf("mount filesystem: %w", err)
