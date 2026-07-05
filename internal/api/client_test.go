@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1122,9 +1123,18 @@ func TestClient_LowBudget(t *testing.T) {
 }
 
 func TestClient_GetTeamIssueIDs(t *testing.T) {
+	// Two pages: proves the migrated method drains the connection through
+	// the paginate seam (not just the first page) and threads the cursor.
+	var secondPageCursor string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"i1"},{"id":"i2"},{"id":"i3"}]}}}}`))
+		if strings.Contains(string(body), `"after":"c1"`) {
+			secondPageCursor = "c1"
+			_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"i4"},{"id":"i5"}]}}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"team":{"issues":{"pageInfo":{"hasNextPage":true,"endCursor":"c1"},"nodes":[{"id":"i1"},{"id":"i2"},{"id":"i3"}]}}}}`))
 	}))
 	defer server.Close()
 
@@ -1135,8 +1145,11 @@ func TestClient_GetTeamIssueIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := strings.Join(ids, ","); got != "i1,i2,i3" {
-		t.Errorf("got %q, want i1,i2,i3", got)
+	if got := strings.Join(ids, ","); got != "i1,i2,i3,i4,i5" {
+		t.Errorf("got %q, want i1,i2,i3,i4,i5", got)
+	}
+	if secondPageCursor != "c1" {
+		t.Error("second page was not fetched with the page-1 cursor")
 	}
 }
 

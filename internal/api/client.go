@@ -1199,47 +1199,21 @@ func (c *Client) LowBudget() bool {
 	return c.limiter.Tokens() < 5
 }
 
-// GetTeamIssueIDs paginates issue IDs for the given team. Used by the
-// reconciliation pass — much cheaper than fetching full IssueFields.
+// GetTeamIssueIDs returns the IDs of every issue in the team, draining the
+// connection through the paginate seam. Used by the reconciliation pass —
+// much cheaper than fetching full IssueFields. All-or-nothing: the reconcile
+// pass diffs-and-deletes against this set, so a partial result must surface
+// as an error, never as a short list (fetchAll guarantees it), like
+// GetWorkspaceProjectIDs.
 func (c *Client) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, error) {
-	var ids []string
-	var cursor *string
-	const pageSize = 100
-
-	for {
-		var result struct {
-			Team struct {
-				Issues struct {
-					PageInfo PageInfo `json:"pageInfo"`
-					Nodes    []struct {
-						ID string `json:"id"`
-					} `json:"nodes"`
-				} `json:"issues"`
-			} `json:"team"`
-		}
-
-		vars := map[string]any{
-			"teamId": teamID,
-			"first":  pageSize,
-		}
-		if cursor != nil {
-			vars["after"] = *cursor
-		}
-
-		if err := c.query(ctx, queryTeamIssueIDs, vars, &result); err != nil {
-			return nil, err
-		}
-
-		for _, node := range result.Team.Issues.Nodes {
-			ids = append(ids, node.ID)
-		}
-
-		if !result.Team.Issues.PageInfo.HasNextPage {
-			break
-		}
-		cursor = &result.Team.Issues.PageInfo.EndCursor
+	nodes, err := fetchAll[idNode](ctx, c, queryTeamIssueIDs, map[string]any{"teamId": teamID}, "team", "issues")
+	if err != nil {
+		return nil, err
 	}
-
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		ids = append(ids, n.ID)
+	}
 	return ids, nil
 }
 

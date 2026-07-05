@@ -1144,9 +1144,9 @@ query IssueHistory($issueId: String!) {
 // reconciliation pass to enumerate the authoritative set of issue IDs
 // without paying the cost of full IssueFields.
 const queryTeamIssueIDs = `
-query TeamIssueIDs($teamId: String!, $first: Int!, $after: String) {
+query TeamIssueIDs($teamId: String!, $after: String) {
   team(id: $teamId) {
-    issues(first: $first, after: $after) {
+    issues(first: 100, after: $after) {
       pageInfo { hasNextPage endCursor }
       nodes { id }
     }
