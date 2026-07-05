@@ -17,17 +17,6 @@ query Teams {
 }
 `
 
-var queryTeamIssues = `
-query TeamIssues($teamId: String!, $after: String) {
-  team(id: $teamId) {
-    issues(first: 100, after: $after) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
 // queryTeamIssuesByUpdatedAt fetches issues ordered by updatedAt DESC for incremental sync
 var queryTeamIssuesByUpdatedAt = `
 query TeamIssuesByUpdatedAt($teamId: String!, $first: Int!, $after: String) {
@@ -167,43 +156,6 @@ fragment AttachmentFields on Attachment {
   creator { id name email }
 }
 `
-
-var queryMyIssues = `
-query MyIssues($after: String) {
-  viewer {
-    assignedIssues(first: 100, after: $after) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
-var queryMyCreatedIssues = `
-query MyCreatedIssues($after: String) {
-  viewer {
-    createdIssues(first: 100, after: $after) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
-var queryMyActiveIssues = `
-query MyActiveIssues($after: String) {
-  viewer {
-    assignedIssues(
-      first: 100
-      after: $after
-      filter: { state: { type: { nin: ["completed", "canceled"] } } }
-    ) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
 
 // queryTeamMetadata fetches team metadata in a single query: states,
 // labels, cycles, members, and workspace labels. Projects deliberately live
@@ -362,30 +314,6 @@ query TeamCycles($teamId: String!) {
 }
 `
 
-const queryCycleIssues = `
-query CycleIssues($cycleId: String!, $after: String) {
-  cycle(id: $cycleId) {
-    issues(first: 100, after: $after) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        createdAt
-        updatedAt
-        team {
-          id
-          key
-        }
-      }
-    }
-  }
-}
-`
-
 // queryTeamProjects pages at 50: the nested initiatives/projectMilestones
 // selections cost ~187 complexity points per project node, so 50 is the
 // largest page that fits Linear's 10k complexity budget (measured live:
@@ -471,30 +399,6 @@ query Project($id: String!) {
         description
         targetDate
         sortOrder
-      }
-    }
-  }
-}
-`
-
-const queryProjectIssues = `
-query ProjectIssues($projectId: String!, $after: String) {
-  project(id: $projectId) {
-    issues(first: 100, after: $after) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        id
-        identifier
-        title
-        createdAt
-        updatedAt
-        team {
-          id
-          key
-        }
       }
     }
   }
@@ -853,17 +757,6 @@ query TeamMembers($teamId: String!) {
 }
 `
 
-var queryUserIssues = `
-query UserIssues($userId: String!, $after: String) {
-  user(id: $userId) {
-    assignedIssues(first: 100, after: $after) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
 const mutationUpdateIssue = `
 mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
   issueUpdate(id: $id, input: $input) {
@@ -1076,59 +969,6 @@ mutation DeleteLabel($id: String!) {
 `
 
 // Filtered team issues queries - server-side filtering for by/ directories
-
-var queryTeamIssuesByStatus = `
-query TeamIssuesByStatus($teamId: String!, $statusName: String!, $after: String) {
-  team(id: $teamId) {
-    issues(first: 100, after: $after, filter: { state: { name: { eq: $statusName } } }) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
-var queryTeamIssuesByPriority = `
-query TeamIssuesByPriority($teamId: ID!, $priority: Int!, $after: String) {
-  issues(first: 100, after: $after, filter: { team: { id: { eq: $teamId } }, priority: { eq: $priority } }) {
-    pageInfo { hasNextPage endCursor }
-    nodes { ...IssueFieldsLite }
-  }
-}
-` + issueFieldsFragmentLite
-
-var queryTeamIssuesByLabel = `
-query TeamIssuesByLabel($teamId: String!, $labelName: String!, $after: String) {
-  team(id: $teamId) {
-    issues(first: 100, after: $after, filter: { labels: { name: { eq: $labelName } } }) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
-var queryTeamIssuesByAssignee = `
-query TeamIssuesByAssignee($teamId: String!, $assigneeId: ID!, $after: String) {
-  team(id: $teamId) {
-    issues(first: 100, after: $after, filter: { assignee: { id: { eq: $assigneeId } } }) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
-
-var queryTeamIssuesUnassigned = `
-query TeamIssuesUnassigned($teamId: String!, $after: String) {
-  team(id: $teamId) {
-    issues(first: 100, after: $after, filter: { assignee: { null: true } }) {
-      pageInfo { hasNextPage endCursor }
-      nodes { ...IssueFieldsLite }
-    }
-  }
-}
-` + issueFieldsFragmentLite
 
 const queryInitiatives = `
 query Initiatives {

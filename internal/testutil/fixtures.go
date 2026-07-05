@@ -223,21 +223,6 @@ func IssueResponse(issue map[string]any) map[string]any {
 	}
 }
 
-// TeamIssuesResponse returns a response structure for GetTeamIssues.
-func TeamIssuesResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"team": map[string]any{
-			"issues": map[string]any{
-				"pageInfo": map[string]any{
-					"hasNextPage": false,
-					"endCursor":   "",
-				},
-				"nodes": issues,
-			},
-		},
-	}
-}
-
 // UpdateIssueResponse returns a response for UpdateIssue mutation.
 func UpdateIssueResponse(success bool) map[string]any {
 	return map[string]any{
@@ -340,49 +325,6 @@ func FilteredIssuesResponse(issues ...map[string]any) map[string]any {
 	}
 }
 
-// IssuesByPriorityResponse returns a response for GetTeamIssuesByPriority (uses issues root).
-func IssuesByPriorityResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"issues": map[string]any{
-			"pageInfo": map[string]any{
-				"hasNextPage": false,
-				"endCursor":   "",
-			},
-			"nodes": issues,
-		},
-	}
-}
-
-// MyIssuesResponse returns a response for GetMyIssues.
-func MyIssuesResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"viewer": map[string]any{
-			"assignedIssues": map[string]any{
-				"pageInfo": map[string]any{
-					"hasNextPage": false,
-					"endCursor":   "",
-				},
-				"nodes": issues,
-			},
-		},
-	}
-}
-
-// MyCreatedIssuesResponse returns a response for GetMyCreatedIssues.
-func MyCreatedIssuesResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"viewer": map[string]any{
-			"createdIssues": map[string]any{
-				"pageInfo": map[string]any{
-					"hasNextPage": false,
-					"endCursor":   "",
-				},
-				"nodes": issues,
-			},
-		},
-	}
-}
-
 // ArchiveIssueResponse returns a response for ArchiveIssue mutation.
 func ArchiveIssueResponse(success bool) map[string]any {
 	return map[string]any{
@@ -411,21 +353,6 @@ func TeamProjectsResponse(projects ...map[string]any) map[string]any {
 			"projects": map[string]any{
 				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
 				"nodes":    projects,
-			},
-		},
-	}
-}
-
-// ProjectIssuesResponse returns a response for GetProjectIssues.
-func ProjectIssuesResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"project": map[string]any{
-			"issues": map[string]any{
-				"pageInfo": map[string]any{
-					"hasNextPage": false,
-					"endCursor":   "",
-				},
-				"nodes": issues,
 			},
 		},
 	}
@@ -492,21 +419,6 @@ func FixtureCycleIssue() map[string]any {
 		"identifier": "TST-789",
 		"title":      "Cycle Issue",
 		"state":      FixtureState("started"),
-	}
-}
-
-// CycleIssuesResponse returns a response for GetCycleIssues.
-func CycleIssuesResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"cycle": map[string]any{
-			"issues": map[string]any{
-				"pageInfo": map[string]any{
-					"hasNextPage": false,
-					"endCursor":   "",
-				},
-				"nodes": issues,
-			},
-		},
 	}
 }
 
@@ -634,21 +546,6 @@ func ProjectDocumentsResponse(docs ...map[string]any) map[string]any {
 	return map[string]any{
 		"documents": map[string]any{
 			"nodes": docs,
-		},
-	}
-}
-
-// UserIssuesResponse returns a response for GetUserIssues.
-func UserIssuesResponse(issues ...map[string]any) map[string]any {
-	return map[string]any{
-		"user": map[string]any{
-			"assignedIssues": map[string]any{
-				"pageInfo": map[string]any{
-					"hasNextPage": false,
-					"endCursor":   "",
-				},
-				"nodes": issues,
-			},
 		},
 	}
 }
