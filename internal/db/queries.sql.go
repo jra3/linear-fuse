@@ -4001,6 +4001,55 @@ func (q *Queries) PruneProjectTeams(ctx context.Context, arg PruneProjectTeamsPa
 	return err
 }
 
+const pruneTeamCycles = `-- name: PruneTeamCycles :exec
+DELETE FROM cycles WHERE team_id = ? AND synced_at < ?
+`
+
+type PruneTeamCyclesParams struct {
+	TeamID   string    `json:"team_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+func (q *Queries) PruneTeamCycles(ctx context.Context, arg PruneTeamCyclesParams) error {
+	_, err := q.db.ExecContext(ctx, pruneTeamCycles, arg.TeamID, arg.SyncedAt)
+	return err
+}
+
+const pruneTeamLabels = `-- name: PruneTeamLabels :exec
+DELETE FROM labels WHERE team_id = ? AND synced_at < ?
+`
+
+type PruneTeamLabelsParams struct {
+	TeamID   sql.NullString `json:"team_id"`
+	SyncedAt time.Time      `json:"synced_at"`
+}
+
+// Prune the team metadata rows the drained (complete) metadata fetch no
+// longer returned: renamed or deleted labels, cycles, and departed members.
+// Same contract as PruneProjectTeams, only safe against a complete fetch with
+// the cutoff taken before the sync upserts. Workspace labels commingle into
+// the labels table under whichever team synced them, but every team fetch
+// re-includes all workspace labels (via issueLabels), so they are always
+// refreshed above the cutoff before this prune runs and are never removed here.
+func (q *Queries) PruneTeamLabels(ctx context.Context, arg PruneTeamLabelsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneTeamLabels, arg.TeamID, arg.SyncedAt)
+	return err
+}
+
+const pruneTeamMembers = `-- name: PruneTeamMembers :exec
+DELETE FROM team_members WHERE team_id = ? AND synced_at < ?
+`
+
+type PruneTeamMembersParams struct {
+	TeamID   string    `json:"team_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+func (q *Queries) PruneTeamMembers(ctx context.Context, arg PruneTeamMembersParams) error {
+	_, err := q.db.ExecContext(ctx, pruneTeamMembers, arg.TeamID, arg.SyncedAt)
+	return err
+}
+
 const setIssueParent = `-- name: SetIssueParent :exec
 UPDATE issues SET parent_id = ? WHERE id = ?
 `

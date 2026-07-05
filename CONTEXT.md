@@ -177,12 +177,19 @@ Linear scores a query's cost, and `team.projects`' nested selections price it
 out of the combined metadata query entirely (~187 points/node; 50/page max —
 measured live, documented at the query).
 
-Completeness is what licenses the **association prunes**: after a drained
-fetch, `project_teams` (per team) and `initiative_projects` (per initiative)
-rows the response no longer contains are deleted, using the Delete-tail
-prune's pre-fetch `synced_at` cutoff so mid-sync writes survive, and skipped
-whenever the fetch or any upsert failed. Prune only against a drained fetch —
-a truncated list reads as removals.
+Completeness is what licenses the **metadata prunes**: after a drained
+fetch, the rows the response no longer contains are deleted — `project_teams`
+and `initiative_projects` junctions (per team / per initiative), and the
+team's own `labels`, `cycles`, and `team_members` (departed members leave the
+junction; the workspace-wide `users` table is never pruned). Each uses the
+pre-fetch `synced_at` cutoff so mid-sync writes survive, is gated on a
+per-entity clean flag (skipped when that entity's fetch or any upsert failed),
+and runs only against a drained fetch — a truncated list reads as removals.
+`states` are workflow-bounded and fetched single-page, so they stay
+upsert-only. Workspace labels commingle into `labels` under whichever team
+synced them, but every team fetch re-includes all workspace labels (via
+`issueLabels`), so they are always refreshed above the cutoff and never pruned
+by a team that no longer "owns" them.
 
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for

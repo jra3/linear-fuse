@@ -435,6 +435,22 @@ ON CONFLICT(project_id, team_id) DO UPDATE SET
 -- name: PruneProjectTeams :exec
 DELETE FROM project_teams WHERE team_id = ? AND synced_at < ?;
 
+-- Prune the team metadata rows the drained (complete) metadata fetch no
+-- longer returned: renamed or deleted labels, cycles, and departed members.
+-- Same contract as PruneProjectTeams, only safe against a complete fetch with
+-- the cutoff taken before the sync upserts. Workspace labels commingle into
+-- the labels table under whichever team synced them, but every team fetch
+-- re-includes all workspace labels (via issueLabels), so they are always
+-- refreshed above the cutoff before this prune runs and are never removed here.
+-- name: PruneTeamLabels :exec
+DELETE FROM labels WHERE team_id = ? AND synced_at < ?;
+
+-- name: PruneTeamCycles :exec
+DELETE FROM cycles WHERE team_id = ? AND synced_at < ?;
+
+-- name: PruneTeamMembers :exec
+DELETE FROM team_members WHERE team_id = ? AND synced_at < ?;
+
 -- name: DeleteProjectTeam :exec
 DELETE FROM project_teams WHERE project_id = ? AND team_id = ?;
 
