@@ -894,6 +894,16 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error)
 		return nil, err
 	}
 
+	// Block until the kernel has completed the mount handshake. fs.Mount
+	// returns as soon as the serve loop starts in the background, so without
+	// this the first operation against the mount can race the handshake and
+	// get EIO — observed as a flaky "readdirent teams: input/output error"
+	// in CI's integration suite.
+	if err := server.WaitMount(); err != nil {
+		_ = server.Unmount()
+		return nil, fmt.Errorf("wait for mount: %w", err)
+	}
+
 	lfs.SetServer(server)
 	lfs.mountPoint = mountpoint
 	return server, nil
