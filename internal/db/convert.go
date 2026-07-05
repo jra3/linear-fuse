@@ -758,22 +758,6 @@ func DBAttachmentsToAPIAttachments(attachments []Attachment) ([]api.Attachment, 
 // EmbeddedFile Conversion (images, PDFs from Linear CDN)
 // =============================================================================
 
-// APIEmbeddedFileToDBFile converts an api.EmbeddedFile to UpsertEmbeddedFileParams
-func APIEmbeddedFileToDBFile(file api.EmbeddedFile) UpsertEmbeddedFileParams {
-	return UpsertEmbeddedFileParams{
-		ID:        file.ID,
-		IssueID:   file.IssueID,
-		Url:       file.URL,
-		Filename:  file.Filename,
-		MimeType:  sql.NullString{String: file.MimeType, Valid: file.MimeType != ""},
-		FileSize:  sql.NullInt64{Int64: file.FileSize, Valid: file.FileSize > 0},
-		CachePath: sql.NullString{String: file.CachePath, Valid: file.CachePath != ""},
-		Source:    file.Source,
-		CreatedAt: Now(),
-		SyncedAt:  Now(),
-	}
-}
-
 // DBEmbeddedFileToAPIFile converts a db.EmbeddedFile to api.EmbeddedFile
 func DBEmbeddedFileToAPIFile(file EmbeddedFile) api.EmbeddedFile {
 	return api.EmbeddedFile{

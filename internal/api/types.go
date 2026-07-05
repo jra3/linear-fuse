@@ -305,22 +305,6 @@ func PriorityName(p int) string {
 	}
 }
 
-// PriorityValue converts string priority to numeric (silently defaults to 0)
-func PriorityValue(name string) int {
-	switch name {
-	case "urgent":
-		return 1
-	case "high":
-		return 2
-	case "medium":
-		return 3
-	case "low":
-		return 4
-	default:
-		return 0
-	}
-}
-
 // ValidatePriority validates and converts string priority to numeric, returning error for invalid values
 func ValidatePriority(name string) (int, error) {
 	switch name {

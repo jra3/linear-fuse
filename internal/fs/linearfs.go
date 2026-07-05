@@ -870,46 +870,6 @@ func (lfs *LinearFS) GetInitiatives(ctx context.Context) ([]api.Initiative, erro
 	return lfs.repo.GetInitiatives(ctx)
 }
 
-func Mount(mountpoint string, cfg *config.Config, debug bool) (*fuse.Server, *LinearFS, error) {
-	lfs, err := NewLinearFS(cfg, debug)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	root := &RootNode{BaseNode: BaseNode{lfs: lfs}}
-
-	// Use longer timeouts to reduce kernel→userspace calls
-	// AttrTimeout: how long kernel caches file attributes (size, mtime, etc.)
-	// EntryTimeout: how long kernel caches directory entry lookups
-	attrTimeout := 60 * time.Second  // Attributes change less often
-	entryTimeout := 30 * time.Second // Directory contents change more often
-
-	opts := &fs.Options{
-		AttrTimeout:  &attrTimeout,
-		EntryTimeout: &entryTimeout,
-		MountOptions: fuse.MountOptions{
-			Name:   "linearfs",
-			FsName: "linear",
-			Debug:  debug,
-		},
-	}
-
-	if debug {
-		log.Println("Mounting with debug enabled")
-	}
-
-	server, err := fs.Mount(mountpoint, root, opts)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Store server reference for kernel cache invalidation
-	lfs.SetServer(server)
-	lfs.mountPoint = mountpoint
-
-	return server, lfs, nil
-}
-
 // MountFS mounts an existing LinearFS instance at the given path.
 // This is useful for testing when you need to configure LinearFS before mounting.
 func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error) {
