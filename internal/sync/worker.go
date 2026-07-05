@@ -559,26 +559,48 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	}
 
 	// Process labels (already deduplicated by GetTeamMetadata)
+	labelsClean := true
 	for _, label := range meta.Labels {
 		params, err := db.APILabelToDBLabel(label, team.ID)
 		if err != nil {
 			log.Printf("[sync] convert label %s failed: %v", label.Name, err)
+			labelsClean = false
 			continue
 		}
 		if err := w.store.Queries().UpsertLabel(ctx, params); err != nil {
 			log.Printf("[sync] upsert label %s failed: %v", label.Name, err)
+			labelsClean = false
+		}
+	}
+	if labelsClean {
+		if err := w.store.Queries().PruneTeamLabels(ctx, db.PruneTeamLabelsParams{
+			TeamID:   sql.NullString{String: team.ID, Valid: true},
+			SyncedAt: pruneCutoff,
+		}); err != nil {
+			log.Printf("[sync] prune labels %s: %v", team.Key, err)
 		}
 	}
 
 	// Process cycles
+	cyclesClean := true
 	for _, cycle := range meta.Cycles {
 		params, err := db.APICycleToDBCycle(cycle, team.ID)
 		if err != nil {
 			log.Printf("[sync] convert cycle %s failed: %v", cycle.Name, err)
+			cyclesClean = false
 			continue
 		}
 		if err := w.store.Queries().UpsertCycle(ctx, params); err != nil {
 			log.Printf("[sync] upsert cycle %s failed: %v", cycle.Name, err)
+			cyclesClean = false
+		}
+	}
+	if cyclesClean {
+		if err := w.store.Queries().PruneTeamCycles(ctx, db.PruneTeamCyclesParams{
+			TeamID:   team.ID,
+			SyncedAt: pruneCutoff,
+		}); err != nil {
+			log.Printf("[sync] prune cycles %s: %v", team.Key, err)
 		}
 	}
 
@@ -636,15 +658,18 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	}
 
 	// Process members
+	membersClean := true
 	for _, member := range meta.Members {
 		// Ensure user exists in users table
 		params, err := db.APIUserToDBUser(member)
 		if err != nil {
 			log.Printf("[sync] convert member %s failed: %v", member.Email, err)
+			membersClean = false
 			continue
 		}
 		if err := w.store.Queries().UpsertUser(ctx, params); err != nil {
 			log.Printf("[sync] upsert member user %s failed: %v", member.Email, err)
+			membersClean = false
 			continue
 		}
 
@@ -655,6 +680,17 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 			SyncedAt: db.Now(),
 		}); err != nil {
 			log.Printf("[sync] upsert team member %s failed: %v", member.Email, err)
+			membersClean = false
+		}
+	}
+	// Prune departed members from the team_members junction (not the
+	// workspace-wide users table, which other teams share).
+	if membersClean {
+		if err := w.store.Queries().PruneTeamMembers(ctx, db.PruneTeamMembersParams{
+			TeamID:   team.ID,
+			SyncedAt: pruneCutoff,
+		}); err != nil {
+			log.Printf("[sync] prune members %s: %v", team.Key, err)
 		}
 	}
 
@@ -722,6 +758,24 @@ func (w *Worker) setRateLimited() {
 // Issue Details Sync (Comments and Documents)
 // =============================================================================
 
+// deferDetailIssues enqueues every issue to pending_detail_sync for a later
+// cycle, stamping one QueuedAt for the batch. Shared by the three defer paths
+// (budget low, rate-limited before the fetch, rate-limited mid-fetch) so the
+// enqueue contract lives in one place and a fourth path cannot drift.
+func (w *Worker) deferDetailIssues(ctx context.Context, issues []struct {
+	ID         string
+	Identifier string
+}) {
+	now := db.Now()
+	for _, issue := range issues {
+		_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+			IssueID:    issue.ID,
+			Identifier: issue.Identifier,
+			QueuedAt:   now,
+		})
+	}
+}
+
 // syncOrDeferDetailBatch syncs issue details if budget allows, otherwise
 // defers to pending_detail_sync for a later cycle.
 func (w *Worker) syncOrDeferDetailBatch(ctx context.Context, issues []struct {
@@ -729,14 +783,7 @@ func (w *Worker) syncOrDeferDetailBatch(ctx context.Context, issues []struct {
 	Identifier string
 }) {
 	if w.budgetExceeds(budgetDeferDetailPct) {
-		now := db.Now()
-		for _, issue := range issues {
-			_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
-				IssueID:    issue.ID,
-				Identifier: issue.Identifier,
-				QueuedAt:   now,
-			})
-		}
+		w.deferDetailIssues(ctx, issues)
 		return
 	}
 	w.syncIssueDetailsBatch(ctx, issues)
@@ -749,14 +796,7 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 }) {
 	// H-5: If rate limited, persist issues to pending_detail_sync so they survive the backoff
 	if w.isRateLimited() {
-		now := db.Now()
-		for _, issue := range issues {
-			_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
-				IssueID:    issue.ID,
-				Identifier: issue.Identifier,
-				QueuedAt:   now,
-			})
-		}
+		w.deferDetailIssues(ctx, issues)
 		return
 	}
 
@@ -780,14 +820,7 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		if isRateLimitError(err) {
 			w.setRateLimited()
 			// H-5: Persist the issues we couldn't sync so they survive the backoff
-			now := db.Now()
-			for _, issue := range issues {
-				_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
-					IssueID:    issue.ID,
-					Identifier: issue.Identifier,
-					QueuedAt:   now,
-				})
-			}
+			w.deferDetailIssues(ctx, issues)
 			return
 		}
 		log.Printf("[sync] batch fetch details failed: %v", err)

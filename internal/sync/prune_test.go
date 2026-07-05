@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -140,6 +142,262 @@ func TestTeamMetadataFetchErrorPrunesNothing(t *testing.T) {
 
 	if got := projectTeamIDs(t, store, "proj-stale"); len(got) != 1 {
 		t.Errorf("proj-stale teams = %v, want untouched after failed fetch", got)
+	}
+}
+
+func seedLabel(t *testing.T, store *db.Store, id, teamID string, syncedAt time.Time) {
+	t.Helper()
+	if err := store.Queries().UpsertLabel(context.Background(), db.UpsertLabelParams{
+		ID:       id,
+		TeamID:   sql.NullString{String: teamID, Valid: true},
+		Name:     id,
+		SyncedAt: syncedAt,
+		Data:     json.RawMessage("{}"),
+	}); err != nil {
+		t.Fatalf("seed label %s: %v", id, err)
+	}
+}
+
+func seedCycle(t *testing.T, store *db.Store, id, teamID string, syncedAt time.Time) {
+	t.Helper()
+	if err := store.Queries().UpsertCycle(context.Background(), db.UpsertCycleParams{
+		ID:       id,
+		TeamID:   teamID,
+		Number:   1,
+		Name:     sql.NullString{String: id, Valid: true},
+		SyncedAt: syncedAt,
+		Data:     json.RawMessage("{}"),
+	}); err != nil {
+		t.Fatalf("seed cycle %s: %v", id, err)
+	}
+}
+
+// seedMember writes both the workspace user row and the team_members junction
+// row (ListTeamMembers joins users), so the seeded membership is observable
+// before the prune runs.
+func seedMember(t *testing.T, store *db.Store, teamID, userID string, syncedAt time.Time) {
+	t.Helper()
+	if err := store.Queries().UpsertUser(context.Background(), db.UpsertUserParams{
+		ID:       userID,
+		Email:    userID + "@test.com",
+		Name:     userID,
+		SyncedAt: syncedAt,
+		Data:     json.RawMessage("{}"),
+	}); err != nil {
+		t.Fatalf("seed user %s: %v", userID, err)
+	}
+	if err := store.Queries().UpsertTeamMember(context.Background(), db.UpsertTeamMemberParams{
+		TeamID:   teamID,
+		UserID:   userID,
+		SyncedAt: syncedAt,
+	}); err != nil {
+		t.Fatalf("seed team_member %s-%s: %v", teamID, userID, err)
+	}
+}
+
+func teamLabelIDs(t *testing.T, store *db.Store, teamID string) []string {
+	t.Helper()
+	rows, err := store.Queries().ListTeamLabels(context.Background(), sql.NullString{String: teamID, Valid: true})
+	if err != nil {
+		t.Fatalf("list team labels: %v", err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
+
+func teamCycleIDs(t *testing.T, store *db.Store, teamID string) []string {
+	t.Helper()
+	rows, err := store.Queries().ListTeamCycles(context.Background(), teamID)
+	if err != nil {
+		t.Fatalf("list team cycles: %v", err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
+
+func teamMemberIDs(t *testing.T, store *db.Store, teamID string) []string {
+	t.Helper()
+	rows, err := store.Queries().ListTeamMembers(context.Background(), teamID)
+	if err != nil {
+		t.Fatalf("list team members: %v", err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
+	}
+	return ids
+}
+
+// contains reports whether ids includes want.
+func contains(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestTeamMetadataSyncPrunesStaleLabels: a label the drained labels fetch no
+// longer returns — renamed or deleted in Linear — must go; the returned label
+// stays. (Only team-scoped labels are seeded; workspace labels re-arrive on
+// every team fetch and so are always refreshed above the cutoff.)
+func TestTeamMetadataSyncPrunesStaleLabels(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	old := db.Now().Add(-time.Minute)
+	seedLabel(t, store, "label-live", "team-1", old)
+	seedLabel(t, store, "label-stale", "team-1", old)
+
+	mock := newMockAPIClient()
+	mock.labelsByTeam["team-1"] = []api.Label{{ID: "label-live", Name: "Live"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncTeamMetadata(ctx, api.Team{ID: "team-1", Key: "T1"}); err != nil {
+		t.Fatalf("syncTeamMetadata: %v", err)
+	}
+
+	got := teamLabelIDs(t, store, "team-1")
+	if !contains(got, "label-live") {
+		t.Errorf("labels = %v, want label-live retained (returned row re-stamped)", got)
+	}
+	if contains(got, "label-stale") {
+		t.Errorf("labels = %v, want label-stale pruned", got)
+	}
+}
+
+// TestTeamMetadataSyncPrunesStaleCycles: a cycle absent from the drained fetch
+// is pruned; a returned cycle survives.
+func TestTeamMetadataSyncPrunesStaleCycles(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	old := db.Now().Add(-time.Minute)
+	seedCycle(t, store, "cycle-live", "team-1", old)
+	seedCycle(t, store, "cycle-stale", "team-1", old)
+	seedCycle(t, store, "cycle-elsewhere", "team-2", old) // other team: out of scope
+
+	mock := newMockAPIClient()
+	mock.cyclesByTeam["team-1"] = []api.Cycle{{ID: "cycle-live", Number: 1, Name: "Live"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncTeamMetadata(ctx, api.Team{ID: "team-1", Key: "T1"}); err != nil {
+		t.Fatalf("syncTeamMetadata: %v", err)
+	}
+
+	got := teamCycleIDs(t, store, "team-1")
+	if !contains(got, "cycle-live") || contains(got, "cycle-stale") {
+		t.Errorf("team-1 cycles = %v, want [cycle-live] (stale pruned)", got)
+	}
+	if other := teamCycleIDs(t, store, "team-2"); !contains(other, "cycle-elsewhere") {
+		t.Errorf("team-2 cycles = %v, want cycle-elsewhere untouched", other)
+	}
+}
+
+// TestTeamMetadataSyncPrunesStaleMembers: a departed member is pruned from the
+// team_members junction; the returned member stays and another team's roster is
+// untouched. The workspace users table is not pruned.
+func TestTeamMetadataSyncPrunesStaleMembers(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	old := db.Now().Add(-time.Minute)
+	seedMember(t, store, "team-1", "user-live", old)
+	seedMember(t, store, "team-1", "user-gone", old)
+	seedMember(t, store, "team-2", "user-elsewhere", old) // other team: out of scope
+
+	mock := newMockAPIClient()
+	mock.membersByTeam["team-1"] = []api.User{{ID: "user-live", Email: "user-live@test.com", Name: "Live"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncTeamMetadata(ctx, api.Team{ID: "team-1", Key: "T1"}); err != nil {
+		t.Fatalf("syncTeamMetadata: %v", err)
+	}
+
+	got := teamMemberIDs(t, store, "team-1")
+	if !contains(got, "user-live") || contains(got, "user-gone") {
+		t.Errorf("team-1 members = %v, want [user-live] (departed member pruned)", got)
+	}
+	if other := teamMemberIDs(t, store, "team-2"); !contains(other, "user-elsewhere") {
+		t.Errorf("team-2 members = %v, want user-elsewhere untouched", other)
+	}
+}
+
+// TestTeamMetadataFetchErrorSparesMetadata: a failed metadata fetch prunes
+// nothing — labels, cycles, and members all survive.
+func TestTeamMetadataFetchErrorSparesMetadata(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	old := db.Now().Add(-time.Minute)
+	seedLabel(t, store, "label-stale", "team-1", old)
+	seedCycle(t, store, "cycle-stale", "team-1", old)
+	seedMember(t, store, "team-1", "user-stale", old)
+
+	mock := newMockAPIClient()
+	mock.simulateError = errors.New("api down")
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncTeamMetadata(ctx, api.Team{ID: "team-1", Key: "T1"}); err == nil {
+		t.Fatal("syncTeamMetadata should surface the fetch error")
+	}
+
+	if !contains(teamLabelIDs(t, store, "team-1"), "label-stale") {
+		t.Error("label-stale pruned after failed fetch, want untouched")
+	}
+	if !contains(teamCycleIDs(t, store, "team-1"), "cycle-stale") {
+		t.Error("cycle-stale pruned after failed fetch, want untouched")
+	}
+	if !contains(teamMemberIDs(t, store, "team-1"), "user-stale") {
+		t.Error("user-stale pruned after failed fetch, want untouched")
+	}
+}
+
+// TestDeferDetailIssues: every issue handed to the shared defer helper lands in
+// pending_detail_sync so a later cycle can retry it.
+func TestDeferDetailIssues(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker := NewWorker(newMockAPIClient(), store, Config{Interval: time.Hour})
+	worker.deferDetailIssues(ctx, []struct {
+		ID         string
+		Identifier string
+	}{
+		{ID: "issue-1", Identifier: "TST-1"},
+		{ID: "issue-2", Identifier: "TST-2"},
+	})
+
+	rows, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("pending rows = %d, want 2", len(rows))
+	}
+	seen := map[string]string{}
+	for _, r := range rows {
+		seen[r.IssueID] = r.Identifier
+	}
+	if seen["issue-1"] != "TST-1" || seen["issue-2"] != "TST-2" {
+		t.Errorf("pending rows = %v, want issue-1/TST-1 and issue-2/TST-2", seen)
 	}
 }
 
