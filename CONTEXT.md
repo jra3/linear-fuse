@@ -155,6 +155,35 @@ something that doesn't exist -> `ENOENT` at Lookup, never a dangling
 placeholder. Lives in `internal/fs/symlink.go`;
 unit-tested directly, no FUSE mount.
 
+### Connection drain (`paginate`)
+The **deep module** owning cursor pagination of Linear GraphQL connections —
+the read-side counterpart to `execMutation`. Linear silently caps a
+connection without a `first:` argument at 50 nodes (and any page at 250), so
+"fetch the projects" without draining is a lie past one page: the team
+metadata sync shipped that lie for months (a 50-project cap that dangled a
+third of the live initiative symlinks), and the reconcile ID fetches carried
+a worse one (a truncated "authoritative" set feeding a diff-and-delete).
+`drainFrom` (`internal/api/paginate.go`) owns the invariant tail — cursor
+threading, termination, a stalled-cursor guard, an `ErrBudget` abort between
+pages, and an **all-or-nothing result** (a nil-error return is the complete
+set; diff-and-delete callers rely on this) — over a `pageFetch` closure, its
+test seam. The `fetchAll`/`drain` spellings walk the response by path the way
+`execMutation` does; `drain` resumes a connection whose first page arrived
+embedded in a combined query (`queryTeamMetadata`, `queryWorkspace`) and
+costs zero API calls when nothing overflowed. The envelope type carries
+`*PageInfo` so a query that forgets to select `pageInfo` is a loud error,
+never a silent single-page truncation. Page sizes are complexity-budgeted:
+Linear scores a query's cost, and `team.projects`' nested selections price it
+out of the combined metadata query entirely (~187 points/node; 50/page max —
+measured live, documented at the query).
+
+Completeness is what licenses the **association prunes**: after a drained
+fetch, `project_teams` (per team) and `initiative_projects` (per initiative)
+rows the response no longer contains are deleted, using the Delete-tail
+prune's pre-fetch `synced_at` cutoff so mid-sync writes survive, and skipped
+whenever the fetch or any upsert failed. Prune only against a drained fetch —
+a truncated list reads as removals.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`
