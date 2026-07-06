@@ -361,6 +361,21 @@ correctly suppresses the prune (a stale junction row must never be wrongly
 deleted). The closure author honors the contract by choosing what to return
 versus swallow.
 
+The **per-issue detail sync** (`syncIssueDetailsBatch` — an issue's comments,
+documents, attachments) reconciles through the same tail, three calls per issue.
+Here completeness is *page*-shaped rather than *drain*-shaped: a full page
+(`len == IssueDetailsPageSize`) may be truncated, so the caller composes a
+`pruneWhenComplete(complete, fn)` policy that passes the real prune only on a
+short (provably complete) page and `nil` otherwise — the module then adds its
+clean guard, so a detail prune fires **iff clean AND complete**. This closed a
+silent-prune bug the hand-rolled version carried: it gated the prune on page
+completeness alone, so a failed comment/doc/attachment upsert (its `synced_at`
+left un-stamped) was deleted as stale on the next complete page. Embedded-file
+extraction from a comment body is the nested best-effort here (its own
+never-pruned `embedded_files` table), analogous to milestones — it runs inside
+the comment `upsert` closure regardless of the upsert result and cannot affect
+cleanliness.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`
