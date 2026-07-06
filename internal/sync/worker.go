@@ -811,77 +811,81 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		return
 	}
 
-	// Store results
+	// Store each issue's comments/documents/attachments through the shared
+	// syncCollection tail. The module contributes the CLEAN guard (a failed
+	// convert/upsert marks the collection unclean and suppresses its prune —
+	// the fix for the old silent-prune bug, where a failed upsert left a row's
+	// synced_at un-stamped yet the prune still deleted it); the caller
+	// contributes COMPLETENESS via prune-or-nil below. A prune therefore fires
+	// only when the fetch was clean AND complete.
+	//
+	// The prunes must run before the Touch* pass below, which re-stamps ALL of
+	// an issue's rows and would exempt phantoms from the cutoff. Completeness
+	// still relies on the API client's all-or-nothing batch semantics — c.query
+	// fails the WHOLE batch on any GraphQL error, so a partially-failed response
+	// never reaches this loop as a short-but-"complete" details struct.
+	pruneWhenComplete := func(complete bool, fn func(context.Context) error) func(context.Context) error {
+		if !complete {
+			return nil // a full page may be truncated — pruning against it would delete real rows
+		}
+		return fn
+	}
+
 	for issueID, details := range detailsMap {
 		if details == nil {
 			continue
 		}
 
-		// Store comments
-		for _, comment := range details.Comments {
-			params, err := db.APICommentToDBComment(comment, issueID)
-			if err != nil {
-				continue
-			}
-			if err := w.store.Queries().UpsertComment(ctx, params); err != nil {
-				log.Printf("[sync] upsert comment %s failed: %v", comment.ID, err)
-			}
+		syncCollection(ctx, syncCollectionSpec[api.Comment]{
+			label: "comment " + issueID,
+			items: details.Comments,
+			upsert: func(ctx context.Context, comment api.Comment) error {
+				params, err := db.APICommentToDBComment(comment, issueID)
+				if err != nil {
+					return err
+				}
+				upsertErr := w.store.Queries().UpsertComment(ctx, params)
+				// Embedded files are a nested best-effort sub-write to a
+				// separate, never-pruned table — outside this prune's
+				// completeness set — so extraction runs regardless of the
+				// upsert result and cannot affect cleanliness.
+				w.extractAndStoreEmbeddedFiles(ctx, issueID, comment.Body, "comment:"+comment.ID)
+				return upsertErr
+			},
+			prune: pruneWhenComplete(len(details.Comments) < api.IssueDetailsPageSize, func(ctx context.Context) error {
+				return w.store.Queries().PruneIssueComments(ctx, db.PruneIssueCommentsParams{IssueID: issueID, SyncedAt: pruneCutoff})
+			}),
+		})
 
-			// Extract embedded files from comment body
-			w.extractAndStoreEmbeddedFiles(ctx, issueID, comment.Body, "comment:"+comment.ID)
-		}
+		syncCollection(ctx, syncCollectionSpec[api.Document]{
+			label: "document " + issueID,
+			items: details.Documents,
+			upsert: func(ctx context.Context, doc api.Document) error {
+				params, err := db.APIDocumentToDBDocument(doc)
+				if err != nil {
+					return err
+				}
+				return w.store.Queries().UpsertDocument(ctx, params)
+			},
+			prune: pruneWhenComplete(len(details.Documents) < api.IssueDetailsPageSize, func(ctx context.Context) error {
+				return w.store.Queries().PruneIssueDocuments(ctx, db.PruneIssueDocumentsParams{IssueID: sql.NullString{String: issueID, Valid: true}, SyncedAt: pruneCutoff})
+			}),
+		})
 
-		// Store documents
-		for _, doc := range details.Documents {
-			params, err := db.APIDocumentToDBDocument(doc)
-			if err != nil {
-				continue
-			}
-			if err := w.store.Queries().UpsertDocument(ctx, params); err != nil {
-				log.Printf("[sync] upsert document %s failed: %v", doc.ID, err)
-			}
-		}
-
-		// Store attachments
-		for _, attachment := range details.Attachments {
-			params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
-			if err != nil {
-				continue
-			}
-			if err := w.store.Queries().UpsertAttachment(ctx, params); err != nil {
-				log.Printf("[sync] upsert attachment %s failed: %v", attachment.ID, err)
-			}
-		}
-
-		// Prune rows the fetch no longer returned — a comment/doc/attachment
-		// deleted in Linear, or a phantom left by a delete whose SQLite forget
-		// failed. The upserts above re-stamped every fetched row's synced_at,
-		// so anything still older than the pre-fetch cutoff is stale. Only a
-		// provably complete set may prune: a full page (IssueDetailsPageSize)
-		// may be truncated, and pruning against it would delete real rows.
-		// This must run before the Touch* pass below, which re-stamps ALL of
-		// an issue's rows and would exempt phantoms from the cutoff.
-		//
-		// SAFETY: pruning against an empty-but-wrong set relies on the API
-		// client's all-or-nothing batch semantics — c.query fails the WHOLE
-		// batch on any GraphQL error, so a partially-failed response can never
-		// reach this loop as an empty details struct. If that ever relaxes to
-		// "return the data we got", this prune becomes silent data loss.
-		if len(details.Comments) < api.IssueDetailsPageSize {
-			if err := w.store.Queries().PruneIssueComments(ctx, db.PruneIssueCommentsParams{IssueID: issueID, SyncedAt: pruneCutoff}); err != nil {
-				log.Printf("[sync] prune comments %s: %v", issueID, err)
-			}
-		}
-		if len(details.Documents) < api.IssueDetailsPageSize {
-			if err := w.store.Queries().PruneIssueDocuments(ctx, db.PruneIssueDocumentsParams{IssueID: sql.NullString{String: issueID, Valid: true}, SyncedAt: pruneCutoff}); err != nil {
-				log.Printf("[sync] prune documents %s: %v", issueID, err)
-			}
-		}
-		if len(details.Attachments) < api.IssueDetailsPageSize {
-			if err := w.store.Queries().PruneIssueAttachments(ctx, db.PruneIssueAttachmentsParams{IssueID: issueID, SyncedAt: pruneCutoff}); err != nil {
-				log.Printf("[sync] prune attachments %s: %v", issueID, err)
-			}
-		}
+		syncCollection(ctx, syncCollectionSpec[api.Attachment]{
+			label: "attachment " + issueID,
+			items: details.Attachments,
+			upsert: func(ctx context.Context, attachment api.Attachment) error {
+				params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
+				if err != nil {
+					return err
+				}
+				return w.store.Queries().UpsertAttachment(ctx, params)
+			},
+			prune: pruneWhenComplete(len(details.Attachments) < api.IssueDetailsPageSize, func(ctx context.Context) error {
+				return w.store.Queries().PruneIssueAttachments(ctx, db.PruneIssueAttachmentsParams{IssueID: issueID, SyncedAt: pruneCutoff})
+			}),
+		})
 	}
 
 	// Touch synced_at for all fetched issues so the FS layer doesn't immediately

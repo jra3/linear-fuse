@@ -967,6 +967,85 @@ func TestDetailsSyncFullPageSkipsPrune(t *testing.T) {
 	}
 }
 
+// TestDetailsSyncPrunesStaleDocsAndAttachments guards the document/attachment
+// wiring of the three near-identical syncCollection specs the details sync now
+// uses: a mis-wired items slice or issueID (e.g. handing details.Comments to the
+// document spec, or the wrong id to a prune) would leave a stale row un-pruned or
+// a live one deleted. Comments have their own prune test above; this covers the
+// other two collections end-to-end.
+func TestDetailsSyncPrunesStaleDocsAndAttachments(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	old := time.Now().Add(-time.Minute)
+	issueRef := &api.Issue{ID: "issue-1"} // documents key their issue_id off document.Issue.ID
+
+	liveDoc := api.Document{ID: "doc-live", SlugID: "slug-live", Title: "Live", Issue: issueRef, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	staleDoc := api.Document{ID: "doc-stale", SlugID: "slug-stale", Title: "Stale", Issue: issueRef, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	for _, d := range []api.Document{liveDoc, staleDoc} {
+		params, err := db.APIDocumentToDBDocument(d)
+		if err != nil {
+			t.Fatalf("convert document: %v", err)
+		}
+		params.SyncedAt = old
+		if err := store.Queries().UpsertDocument(ctx, params); err != nil {
+			t.Fatalf("seed document: %v", err)
+		}
+	}
+
+	liveAtt := api.Attachment{ID: "att-live", Title: "Live", URL: "https://x/live", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	staleAtt := api.Attachment{ID: "att-stale", Title: "Stale", URL: "https://x/stale", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	for _, a := range []api.Attachment{liveAtt, staleAtt} {
+		params, err := db.APIAttachmentToDBAttachment(a, "issue-1")
+		if err != nil {
+			t.Fatalf("convert attachment: %v", err)
+		}
+		params.SyncedAt = old
+		if err := store.Queries().UpsertAttachment(ctx, params); err != nil {
+			t.Fatalf("seed attachment: %v", err)
+		}
+	}
+
+	// The fetch returns only the live row for each collection.
+	mock := newMockAPIClient()
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{
+		Documents:   []api.Document{liveDoc},
+		Attachments: []api.Attachment{liveAtt},
+	}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.syncIssueDetailsBatch(ctx, []struct {
+		ID         string
+		Identifier string
+	}{{ID: "issue-1", Identifier: "TST-1"}})
+
+	docs, err := store.Queries().ListIssueDocuments(ctx, sql.NullString{String: "issue-1", Valid: true})
+	if err != nil {
+		t.Fatalf("list documents: %v", err)
+	}
+	if len(docs) != 1 || docs[0].ID != "doc-live" {
+		got := []string{}
+		for _, d := range docs {
+			got = append(got, d.ID)
+		}
+		t.Errorf("documents = %v, want [doc-live] (stale pruned, live retained)", got)
+	}
+
+	atts, err := store.Queries().ListIssueAttachments(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("list attachments: %v", err)
+	}
+	if len(atts) != 1 || atts[0].ID != "att-live" {
+		got := []string{}
+		for _, a := range atts {
+			got = append(got, a.ID)
+		}
+		t.Errorf("attachments = %v, want [att-live] (stale pruned, live retained)", got)
+	}
+}
+
 // TestSetRateLimitedAdaptiveBackoff verifies M-3: when the API client reports a non-zero
 // RateLimitResetAt(), setRateLimited() uses that time (+ 5s buffer) instead of the 15-min default.
 func TestSetRateLimitedAdaptiveBackoff(t *testing.T) {
