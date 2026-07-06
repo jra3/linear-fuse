@@ -158,6 +158,45 @@ fragment AttachmentFields on Attachment {
 }
 `
 
+// ProjectMilestoneFields is the shared projection for a project milestone,
+// used by the nested selections in queryTeamProjects/queryProject, the
+// standalone queryProjectMilestones, and the create/update mutations.
+const projectMilestoneFieldsFragment = `
+fragment ProjectMilestoneFields on ProjectMilestone {
+  id
+  name
+  description
+  targetDate
+  sortOrder
+}
+`
+
+// ProjectUpdateFields / InitiativeUpdateFields are the shared projections for
+// status updates. The create mutations previously omitted updatedAt; the
+// fragment canonicalizes to the query's fuller set so a created update carries
+// the same fields a fetched one does.
+const projectUpdateFieldsFragment = `
+fragment ProjectUpdateFields on ProjectUpdate {
+  id
+  body
+  health
+  createdAt
+  updatedAt
+  user { id name email }
+}
+`
+
+const initiativeUpdateFieldsFragment = `
+fragment InitiativeUpdateFields on InitiativeUpdate {
+  id
+  body
+  health
+  createdAt
+  updatedAt
+  user { id name email }
+}
+`
+
 // queryTeamMetadata fetches team metadata in a single query: states,
 // labels, cycles, members, and workspace labels. Projects deliberately live
 // in their own paginated query (queryTeamProjects): their nested selections
@@ -319,7 +358,7 @@ query TeamCycles($teamId: String!) {
 // selections cost ~187 complexity points per project node, so 50 is the
 // largest page that fits Linear's 10k complexity budget (measured live:
 // first:100 scores 18751).
-const queryTeamProjects = `
+var queryTeamProjects = `
 query TeamProjects($teamId: String!, $after: String) {
   team(id: $teamId) {
     projects(first: 50, after: $after) {
@@ -351,21 +390,15 @@ query TeamProjects($teamId: String!, $after: String) {
           }
         }
         projectMilestones {
-          nodes {
-            id
-            name
-            description
-            targetDate
-            sortOrder
-          }
+          nodes { ...ProjectMilestoneFields }
         }
       }
     }
   }
 }
-`
+` + projectMilestoneFieldsFragment
 
-const queryProject = `
+var queryProject = `
 query Project($id: String!) {
   project(id: $id) {
     id
@@ -394,33 +427,21 @@ query Project($id: String!) {
       }
     }
     projectMilestones {
-      nodes {
-        id
-        name
-        description
-        targetDate
-        sortOrder
-      }
+      nodes { ...ProjectMilestoneFields }
     }
   }
 }
-`
+` + projectMilestoneFieldsFragment
 
-const queryProjectMilestones = `
+var queryProjectMilestones = `
 query ProjectMilestones($projectId: String!) {
   project(id: $projectId) {
     projectMilestones {
-      nodes {
-        id
-        name
-        description
-        targetDate
-        sortOrder
-      }
+      nodes { ...ProjectMilestoneFields }
     }
   }
 }
-`
+` + projectMilestoneFieldsFragment
 
 // =============================================================================
 // Project Milestones Mutations
@@ -442,35 +463,23 @@ mutation UpdateInitiative($id: String!, $input: InitiativeUpdateInput!) {
 }
 `
 
-const mutationCreateProjectMilestone = `
+var mutationCreateProjectMilestone = `
 mutation CreateProjectMilestone($projectId: String!, $name: String!, $description: String) {
   projectMilestoneCreate(input: { projectId: $projectId, name: $name, description: $description }) {
     success
-    projectMilestone {
-      id
-      name
-      description
-      targetDate
-      sortOrder
-    }
+    projectMilestone { ...ProjectMilestoneFields }
   }
 }
-`
+` + projectMilestoneFieldsFragment
 
-const mutationUpdateProjectMilestone = `
+var mutationUpdateProjectMilestone = `
 mutation UpdateProjectMilestone($id: String!, $input: ProjectMilestoneUpdateInput!) {
   projectMilestoneUpdate(id: $id, input: $input) {
     success
-    projectMilestone {
-      id
-      name
-      description
-      targetDate
-      sortOrder
-    }
+    projectMilestone { ...ProjectMilestoneFields }
   }
 }
-`
+` + projectMilestoneFieldsFragment
 
 const mutationDeleteProjectMilestone = `
 mutation DeleteProjectMilestone($id: String!) {
@@ -480,85 +489,43 @@ mutation DeleteProjectMilestone($id: String!) {
 }
 `
 
-const queryProjectUpdates = `
+var queryProjectUpdates = `
 query ProjectUpdates($projectId: String!) {
   project(id: $projectId) {
     projectUpdates {
-      nodes {
-        id
-        body
-        health
-        createdAt
-        updatedAt
-        user {
-          id
-          name
-          email
-        }
-      }
+      nodes { ...ProjectUpdateFields }
     }
   }
 }
-`
+` + projectUpdateFieldsFragment
 
-const mutationCreateProjectUpdate = `
+var mutationCreateProjectUpdate = `
 mutation CreateProjectUpdate($projectId: String!, $body: String!, $health: ProjectUpdateHealthType) {
   projectUpdateCreate(input: {projectId: $projectId, body: $body, health: $health}) {
     success
-    projectUpdate {
-      id
-      body
-      health
-      createdAt
-      user {
-        id
-        name
-        email
-      }
-    }
+    projectUpdate { ...ProjectUpdateFields }
   }
 }
-`
+` + projectUpdateFieldsFragment
 
-const queryInitiativeUpdates = `
+var queryInitiativeUpdates = `
 query InitiativeUpdates($initiativeId: String!) {
   initiative(id: $initiativeId) {
     initiativeUpdates {
-      nodes {
-        id
-        body
-        health
-        createdAt
-        updatedAt
-        user {
-          id
-          name
-          email
-        }
-      }
+      nodes { ...InitiativeUpdateFields }
     }
   }
 }
-`
+` + initiativeUpdateFieldsFragment
 
-const mutationCreateInitiativeUpdate = `
+var mutationCreateInitiativeUpdate = `
 mutation CreateInitiativeUpdate($initiativeId: String!, $body: String!, $health: InitiativeUpdateHealthType) {
   initiativeUpdateCreate(input: {initiativeId: $initiativeId, body: $body, health: $health}) {
     success
-    initiativeUpdate {
-      id
-      body
-      health
-      createdAt
-      user {
-        id
-        name
-        email
-      }
-    }
+    initiativeUpdate { ...InitiativeUpdateFields }
   }
 }
-`
+` + initiativeUpdateFieldsFragment
 
 const mutationCreateProject = `
 mutation CreateProject($input: ProjectCreateInput!) {
@@ -770,46 +737,14 @@ mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
 }
 `
 
-const mutationCreateIssue = `
+var mutationCreateIssue = `
 mutation CreateIssue($input: IssueCreateInput!) {
   issueCreate(input: $input) {
     success
-    issue {
-      id
-      identifier
-      title
-      description
-      state {
-        id
-        name
-        type
-      }
-      assignee {
-        id
-        name
-        email
-      }
-      priority
-      labels {
-        nodes {
-          id
-          name
-          color
-          description
-        }
-      }
-      createdAt
-      updatedAt
-      url
-      team {
-        id
-        key
-        name
-      }
-    }
+    issue { ...IssueFieldsLite }
   }
 }
-`
+` + issueFieldsFragmentLite
 
 const mutationArchiveIssue = `
 mutation ArchiveIssue($id: String!) {
@@ -1063,39 +998,23 @@ mutation DeleteIssueRelation($id: String!) {
 // Attachments Create/Link
 // =============================================================================
 
-const mutationCreateAttachment = `
+var mutationCreateAttachment = `
 mutation CreateAttachment($issueId: String!, $title: String!, $url: String!, $subtitle: String) {
   attachmentCreate(input: { issueId: $issueId, title: $title, url: $url, subtitle: $subtitle }) {
     success
-    attachment {
-      id
-      title
-      subtitle
-      url
-      sourceType
-      createdAt
-      updatedAt
-    }
+    attachment { ...AttachmentFields }
   }
 }
-`
+` + AttachmentFieldsFragment
 
-const mutationLinkURL = `
+var mutationLinkURL = `
 mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) {
   attachmentLinkURL(issueId: $issueId, url: $url, title: $title) {
     success
-    attachment {
-      id
-      title
-      subtitle
-      url
-      sourceType
-      createdAt
-      updatedAt
-    }
+    attachment { ...AttachmentFields }
   }
 }
-`
+` + AttachmentFieldsFragment
 
 const mutationDeleteAttachment = `
 mutation DeleteAttachment($id: String!) {
