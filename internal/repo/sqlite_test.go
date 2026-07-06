@@ -1846,46 +1846,31 @@ func TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient(t *testing.T) {
 	repo.MaybeRefreshIssueDetails("issue-2")
 }
 
-func TestSQLiteRepository_MaybeRefreshProjectDocuments_NoClient(t *testing.T) {
+// The four Get*Documents/Get*Updates read paths must be safe no-ops in fixture
+// mode (nil client): maybeRefresh short-circuits, so the read returns whatever
+// is cached without touching the API. Exercised through the real Get* methods
+// now that the per-entity maybeRefresh* wrappers fold into one helper.
+func TestSQLiteRepository_StaleReadPaths_NoClient(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Create repo without API client
 	repo := NewSQLiteRepository(store, nil)
 	defer repo.Close()
+	ctx := context.Background()
 
-	// Should be a no-op - no panic
-	repo.maybeRefreshProjectDocuments("project-1", true)
-	repo.maybeRefreshProjectDocuments("project-2", false)
-}
-
-func TestSQLiteRepository_MaybeRefreshProjectUpdates_NoClient(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Create repo without API client
-	repo := NewSQLiteRepository(store, nil)
-	defer repo.Close()
-
-	// Should be a no-op - no panic
-	repo.maybeRefreshProjectUpdates("project-1", true)
-	repo.maybeRefreshProjectUpdates("project-2", false)
-}
-
-func TestSQLiteRepository_MaybeRefreshInitiativeUpdates_NoClient(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Create repo without API client
-	repo := NewSQLiteRepository(store, nil)
-	defer repo.Close()
-
-	// Should be a no-op - no panic
-	repo.maybeRefreshInitiativeUpdates("init-1", true)
-	repo.maybeRefreshInitiativeUpdates("init-2", false)
+	if _, err := repo.GetProjectDocuments(ctx, "project-1"); err != nil {
+		t.Errorf("GetProjectDocuments (nil client): %v", err)
+	}
+	if _, err := repo.GetInitiativeDocuments(ctx, "init-1"); err != nil {
+		t.Errorf("GetInitiativeDocuments (nil client): %v", err)
+	}
+	if _, err := repo.GetProjectUpdates(ctx, "project-1"); err != nil {
+		t.Errorf("GetProjectUpdates (nil client): %v", err)
+	}
+	if _, err := repo.GetInitiativeUpdates(ctx, "init-1"); err != nil {
+		t.Errorf("GetInitiativeUpdates (nil client): %v", err)
+	}
 }
 
 // =============================================================================
@@ -2658,6 +2643,47 @@ func TestReconcileAgainst_DeletesOrphans(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("orphans not deleted: %v", want)
+	}
+}
+
+// TestStaleSince pins the staleness rule the four Get*Documents/Get*Updates
+// read paths share via maybeRefresh — the parseTime/threshold comparison that
+// has historically hidden timezone bugs.
+func TestStaleSince(t *testing.T) {
+	t.Parallel()
+	const threshold = time.Hour
+	cases := []struct {
+		name     string
+		syncedAt interface{}
+		err      error
+		want     bool
+	}{
+		{"query error is stale", nil, fmt.Errorf("boom"), true},
+		{"never synced (nil) is stale", nil, nil, true},
+		{"recently synced is fresh", time.Now(), nil, false},
+		{"older than threshold is stale", time.Now().Add(-2 * threshold), nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := staleSince(c.syncedAt, c.err, threshold); got != c.want {
+				t.Errorf("staleSince(%v, %v) = %v, want %v", c.syncedAt, c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// TestMaybeRefreshNilClientNoop: in fixture mode (nil client) maybeRefresh must
+// short-circuit before even querying syncedAt — no refresh, no query.
+func TestMaybeRefreshNilClientNoop(t *testing.T) {
+	t.Parallel()
+	repo := &SQLiteRepository{} // nil client
+	queried := false
+	repo.maybeRefresh("k",
+		func() (interface{}, error) { queried = true; return nil, nil },
+		func(_ context.Context) error { return nil },
+	)
+	if queried {
+		t.Error("maybeRefresh queried syncedAt with a nil client; want a no-op")
 	}
 }
 

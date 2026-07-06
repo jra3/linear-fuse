@@ -1098,33 +1098,44 @@ func (r *SQLiteRepository) GetIssueDocuments(ctx context.Context, issueID string
 	return db.DBDocumentsToAPIDocuments(docs)
 }
 
+// staleSince reports whether a cached entity's last-sync instant is older than
+// threshold. A query error or a nil instant (never synced) counts as stale, so
+// the caller refreshes. Pure, so the parseTime/threshold rule — historically a
+// source of timezone-comparison bugs — is unit-tested directly.
+func staleSince(syncedAt interface{}, err error, threshold time.Duration) bool {
+	return err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > threshold
+}
+
+// maybeRefresh triggers a deduplicated background refresh when an entity's
+// cached rows are staler than the threshold. syncedAt returns the entity's
+// last-sync instant, key dedups concurrent refreshes, and refresh does the
+// fetch-and-upsert. In fixture mode (nil client) it never fires. The refresh
+// runs in the background so a directory listing (e.g. find) never blocks on
+// the API. This owns the staleness/trigger policy the four Get*Documents and
+// Get*Updates read paths used to each restate.
+func (r *SQLiteRepository) maybeRefresh(key string, syncedAt func() (interface{}, error), refresh func(context.Context) error) {
+	if r.client == nil {
+		return
+	}
+	ts, err := syncedAt()
+	if staleSince(ts, err, r.stalenessThreshold) {
+		r.triggerBackgroundRefresh(key, refresh)
+	}
+}
+
 func (r *SQLiteRepository) GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error) {
 	docs, err := r.store.Queries().ListProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("list project documents: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshProjectDocuments(projectID, len(docs) == 0)
+	r.maybeRefresh("project-docs:"+projectID, func() (interface{}, error) {
+		return r.store.Queries().GetProjectDocumentsSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
+	}, func(ctx context.Context) error {
+		return r.refreshProjectDocuments(ctx, projectID)
+	})
 
 	return db.DBDocumentsToAPIDocuments(docs)
-}
-
-// maybeRefreshProjectDocuments checks if project documents need refreshing
-func (r *SQLiteRepository) maybeRefreshProjectDocuments(projectID string, isEmpty bool) {
-	if r.client == nil {
-		return
-	}
-
-	syncedAt, err := r.store.Queries().GetProjectDocumentsSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
-
-	// Always refresh in background to avoid blocking on directory listings (e.g., find)
-	if isStale {
-		r.triggerBackgroundRefresh("project-docs:"+projectID, func(ctx context.Context) error {
-			return r.refreshProjectDocuments(ctx, projectID)
-		})
-	}
 }
 
 // refreshProjectDocuments fetches documents from API and stores in SQLite
@@ -1155,27 +1166,13 @@ func (r *SQLiteRepository) GetInitiativeDocuments(ctx context.Context, initiativ
 		return nil, fmt.Errorf("list initiative documents: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshInitiativeDocuments(initiativeID, len(docs) == 0)
+	r.maybeRefresh("initiative-docs:"+initiativeID, func() (interface{}, error) {
+		return r.store.Queries().GetInitiativeDocumentsSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
+	}, func(ctx context.Context) error {
+		return r.refreshInitiativeDocuments(ctx, initiativeID)
+	})
 
 	return db.DBDocumentsToAPIDocuments(docs)
-}
-
-// maybeRefreshInitiativeDocuments checks if initiative documents need refreshing
-func (r *SQLiteRepository) maybeRefreshInitiativeDocuments(initiativeID string, isEmpty bool) {
-	if r.client == nil {
-		return
-	}
-
-	syncedAt, err := r.store.Queries().GetInitiativeDocumentsSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
-
-	// Always refresh in background to avoid blocking on directory listings (e.g., find)
-	if isStale {
-		r.triggerBackgroundRefresh("initiative-docs:"+initiativeID, func(ctx context.Context) error {
-			return r.refreshInitiativeDocuments(ctx, initiativeID)
-		})
-	}
 }
 
 // refreshInitiativeDocuments fetches documents from API and stores in SQLite
@@ -1260,27 +1257,13 @@ func (r *SQLiteRepository) GetProjectUpdates(ctx context.Context, projectID stri
 		return nil, fmt.Errorf("list project updates: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshProjectUpdates(projectID, len(updates) == 0)
+	r.maybeRefresh("project-updates:"+projectID, func() (interface{}, error) {
+		return r.store.Queries().GetProjectUpdatesSyncedAt(context.Background(), projectID)
+	}, func(ctx context.Context) error {
+		return r.refreshProjectUpdates(ctx, projectID)
+	})
 
 	return db.DBProjectUpdatesToAPIUpdates(updates)
-}
-
-// maybeRefreshProjectUpdates checks if project updates need refreshing
-func (r *SQLiteRepository) maybeRefreshProjectUpdates(projectID string, isEmpty bool) {
-	if r.client == nil {
-		return
-	}
-
-	syncedAt, err := r.store.Queries().GetProjectUpdatesSyncedAt(context.Background(), projectID)
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
-
-	// Always refresh in background to avoid blocking on directory listings (e.g., find)
-	if isStale {
-		r.triggerBackgroundRefresh("project-updates:"+projectID, func(ctx context.Context) error {
-			return r.refreshProjectUpdates(ctx, projectID)
-		})
-	}
 }
 
 // refreshProjectUpdates fetches updates from API and stores in SQLite
@@ -1311,27 +1294,13 @@ func (r *SQLiteRepository) GetInitiativeUpdates(ctx context.Context, initiativeI
 		return nil, fmt.Errorf("list initiative updates: %w", err)
 	}
 
-	// Check staleness and trigger background refresh if needed
-	r.maybeRefreshInitiativeUpdates(initiativeID, len(updates) == 0)
+	r.maybeRefresh("initiative-updates:"+initiativeID, func() (interface{}, error) {
+		return r.store.Queries().GetInitiativeUpdatesSyncedAt(context.Background(), initiativeID)
+	}, func(ctx context.Context) error {
+		return r.refreshInitiativeUpdates(ctx, initiativeID)
+	})
 
 	return db.DBInitiativeUpdatesToAPIUpdates(updates)
-}
-
-// maybeRefreshInitiativeUpdates checks if initiative updates need refreshing
-func (r *SQLiteRepository) maybeRefreshInitiativeUpdates(initiativeID string, isEmpty bool) {
-	if r.client == nil {
-		return
-	}
-
-	syncedAt, err := r.store.Queries().GetInitiativeUpdatesSyncedAt(context.Background(), initiativeID)
-	isStale := err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > r.stalenessThreshold
-
-	// Always refresh in background to avoid blocking on directory listings (e.g., find)
-	if isStale {
-		r.triggerBackgroundRefresh("initiative-updates:"+initiativeID, func(ctx context.Context) error {
-			return r.refreshInitiativeUpdates(ctx, initiativeID)
-		})
-	}
 }
 
 // refreshInitiativeUpdates fetches updates from API and stores in SQLite
