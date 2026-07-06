@@ -31,7 +31,7 @@ func relationIno(relationID string) uint64 {
 
 // RelationsNode represents the /teams/{KEY}/issues/{ID}/relations directory
 type RelationsNode struct {
-	BaseNode
+	attrNode
 	issueID string
 	teamID  string
 }
@@ -39,14 +39,6 @@ type RelationsNode struct {
 var _ fs.NodeReaddirer = (*RelationsNode)(nil)
 var _ fs.NodeLookuper = (*RelationsNode)(nil)
 var _ fs.NodeGetattrer = (*RelationsNode)(nil)
-
-func (n *RelationsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Get both outgoing and incoming relations

@@ -275,15 +275,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if name == "project.md" {
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: p.project}
 		content := node.generateContent()
-		out.Attr.Mode = 0644 | syscall.S_IFREG
-		out.Attr.Uid = p.lfs.uid
-		out.Attr.Gid = p.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  projectInfoIno(p.project.ID),
-		}), 0
+		return p.newFileInode(ctx, out, node, fileAttr(len(content), p.project.CreatedAt, p.project.UpdatedAt), projectInfoIno(p.project.ID), 0), 0
 	}
 
 	// Handle project.meta (read-only server-managed fields), rendered read-through
@@ -315,38 +307,20 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 
 	// Handle docs/ directory
 	if name == "docs" {
-		node := &DocsNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = p.lfs.uid
-		out.Attr.Gid = p.lfs.gid
-		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  docsDirIno(p.project.ID),
-		}), 0
+		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, projectID: p.project.ID}
+		return p.newDirInode(ctx, out, node, dirAttr(p.project.CreatedAt, p.project.UpdatedAt), docsDirIno(p.project.ID), 0), 0
 	}
 
 	// Handle updates/ directory
 	if name == "updates" {
-		node := &UpdatesNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID, projectUpdatedAt: p.project.UpdatedAt}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = p.lfs.uid
-		out.Attr.Gid = p.lfs.gid
-		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &UpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, projectID: p.project.ID}
+		return p.newDirInode(ctx, out, node, dirAttr(p.project.CreatedAt, p.project.UpdatedAt), updatesDirIno(p.project.ID), 0), 0
 	}
 
 	// Handle milestones/ directory
 	if name == "milestones" {
-		node := &MilestonesNode{BaseNode: BaseNode{lfs: p.lfs}, projectID: p.project.ID}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = p.lfs.uid
-		out.Attr.Gid = p.lfs.gid
-		out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-		return p.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  milestonesDirIno(p.project.ID),
-		}), 0
+		node := &MilestonesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, projectID: p.project.ID}
+		return p.newDirInode(ctx, out, node, dirAttr(p.project.CreatedAt, p.project.UpdatedAt), milestonesDirIno(p.project.ID), 0), 0
 	}
 
 	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)
@@ -735,22 +709,14 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 // UpdatesNode represents /teams/{KEY}/projects/{slug}/updates/
 type UpdatesNode struct {
-	BaseNode
-	projectID        string
-	projectUpdatedAt time.Time
+	attrNode
+	projectID string
 }
 
 var _ fs.NodeReaddirer = (*UpdatesNode)(nil)
 var _ fs.NodeLookuper = (*UpdatesNode)(nil)
 var _ fs.NodeCreater = (*UpdatesNode)(nil)
 var _ fs.NodeGetattrer = (*UpdatesNode)(nil)
-
-func (n *UpdatesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&n.projectUpdatedAt, &n.projectUpdatedAt, &n.projectUpdatedAt)
-	return 0
-}
 
 func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	updates, err := n.lfs.GetProjectUpdates(ctx, n.projectID)

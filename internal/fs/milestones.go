@@ -31,7 +31,7 @@ func milestoneIno(milestoneID string) uint64 {
 
 // MilestonesNode represents a milestones/ directory within a project
 type MilestonesNode struct {
-	BaseNode
+	attrNode
 	projectID string
 }
 
@@ -39,14 +39,6 @@ var _ fs.NodeReaddirer = (*MilestonesNode)(nil)
 var _ fs.NodeLookuper = (*MilestonesNode)(nil)
 var _ fs.NodeUnlinker = (*MilestonesNode)(nil)
 var _ fs.NodeGetattrer = (*MilestonesNode)(nil)
-
-func (n *MilestonesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)

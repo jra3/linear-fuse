@@ -34,10 +34,9 @@ func commentIno(commentID string) uint64 {
 
 // CommentsNode represents /teams/{KEY}/issues/{ID}/comments/
 type CommentsNode struct {
-	BaseNode
-	issueID        string
-	teamID         string
-	issueUpdatedAt time.Time
+	attrNode
+	issueID string
+	teamID  string
 }
 
 var _ fs.NodeReaddirer = (*CommentsNode)(nil)
@@ -45,13 +44,6 @@ var _ fs.NodeLookuper = (*CommentsNode)(nil)
 var _ fs.NodeCreater = (*CommentsNode)(nil)
 var _ fs.NodeUnlinker = (*CommentsNode)(nil)
 var _ fs.NodeGetattrer = (*CommentsNode)(nil)
-
-func (n *CommentsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&n.issueUpdatedAt, &n.issueUpdatedAt, &n.issueUpdatedAt)
-	return 0
-}
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Trigger background refresh of sub-resources if stale
@@ -116,18 +108,8 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 				content:      content,
 				contentReady: true,
 			}
-			out.Attr.Mode = 0644 | syscall.S_IFREG // Read-write
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
-			out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
-			// Use updatedAt for mtime (comments can be edited)
-			out.Attr.SetTimes(&comment.UpdatedAt, &comment.UpdatedAt, &comment.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  commentIno(comment.ID),
-			}), 0
+			// Shorter timeout for writable files.
+			return n.newFileInode(ctx, out, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
 		}
 	}
 

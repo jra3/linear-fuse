@@ -155,6 +155,40 @@ something that doesn't exist -> `ENOENT` at Lookup, never a dangling
 placeholder. Lives in `internal/fs/symlink.go`;
 unit-tested directly, no FUSE mount.
 
+### Attr construction (`nodeAttr`/`attrNode`)
+The **deep module** owning how a directory or file node's attributes are
+constructed — the non-symlink complement to Symlink views (`symlinkNode`), and
+the same guarantee: construction fixes the reporting data, so a Lookup answer
+and a later `Getattr` render it identically and can never disagree. `nodeAttr`
+(`{mode, size, created, updated}`, `internal/fs/nodeattr.go`) has one
+`fill(*fuse.Attr)` that owns mode/uid/gid/size/times; the `attrNode` mixin
+(`BaseNode` + a stored `nodeAttr`) **provides the default `Getattr`**, so a
+directory node cannot hand-write a divergent one. The `newDirInode`/`newFileInode`
+`BaseNode` constructors stash the `nodeAttr` on the child, fill the Lookup
+`EntryOut` from that same value, take the entry timeout as an explicit param
+(the deliberate 30s/5s/0/1s classes are preserved verbatim, never rationalized
+here), and return `StableAttr{Mode, Ino}`.
+
+This replaced 54 hand-fabricated attribute blocks whose per-site copies had
+already drifted: `DocsNode`/`AttachmentsNode.Getattr` reported `time.Now()`
+(non-deterministic — every `ls -lt` reshuffled, violating the `mtime=updatedAt`
+convention), and `CommentsNode.Getattr` reported a wrong ctime, all disagreeing
+with the times their parent's Lookup answered. The collapsed contract is the
+issue's times uniformly (`atime/mtime = UpdatedAt`, `ctime = CreatedAt`), which
+forced the directory nodes to become self-describing — carry the times they
+report rather than re-derive them per call.
+
+**Directories vs files.** A directory's attributes are wholly static, so it
+gets the mixin and the inherited `Getattr` (true no-drift). A file's `Size` is
+a *legitimately* dynamic edit-buffer value (it grows after a write and is meant
+to diverge from what Lookup first reported), so a file keeps its own `Getattr`
+and reuses only the immutable half of `nodeAttr.fill` (mode/uid/gid/times) — its
+dynamic size stays owned by the node. Unit-tested directly (the `fill` fields
+plus an anti-drift equality test: the Lookup `EntryOut.Attr` and the node's
+`Getattr` `AttrOut.Attr` must be equal for each directory kind), with a mounted
+attr-conformance/stat-determinism test in `internal/integration` guarding the
+real kernel `Getattr` path.
+
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
 the read-side counterpart to `execMutation`. Linear silently caps a

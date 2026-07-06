@@ -185,26 +185,12 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		}), 0
 
 	case "docs":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &DocsNode{BaseNode: BaseNode{lfs: t.lfs}, teamID: t.team.ID}
-		return t.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  docsDirIno(t.team.ID),
-		}), 0
+		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: t.team.ID}
+		return t.newDirInode(ctx, out, node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), docsDirIno(t.team.ID), 0), 0
 
 	case "labels":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &LabelsNode{BaseNode: BaseNode{lfs: t.lfs}, teamID: t.team.ID}
-		return t.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  labelsDirIno(t.team.ID),
-		}), 0
+		node := &LabelsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: t.team.ID}
+		return t.newDirInode(ctx, out, node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), labelsDirIno(t.team.ID), 0), 0
 	}
 
 	return nil, syscall.ENOENT
