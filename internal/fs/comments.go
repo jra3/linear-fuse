@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"sort"
 	"strings"
@@ -17,20 +16,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"gopkg.in/yaml.v3"
 )
-
-// commentsDirIno generates a stable inode number for a comments directory
-func commentsDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("comments:" + issueID))
-	return h.Sum64()
-}
-
-// commentIno generates a stable inode number for a comment
-func commentIno(commentID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("comment:" + commentID))
-	return h.Sum64()
-}
 
 // CommentsNode represents /teams/{KEY}/issues/{ID}/comments/
 type CommentsNode struct {

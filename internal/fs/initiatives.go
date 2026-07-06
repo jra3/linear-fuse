@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"sort"
 	"strings"
@@ -17,27 +16,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
-
-// initiativeInfoIno generates a stable inode number for an initiative.md file
-func initiativeInfoIno(initiativeID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("initiative-info:" + initiativeID))
-	return h.Sum64()
-}
-
-// initiativeProjectsIno generates a stable inode number for an initiative projects directory
-func initiativeProjectsIno(initiativeID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("initiative-projects:" + initiativeID))
-	return h.Sum64()
-}
-
-// initiativeUpdatesDirIno generates a stable inode number for an initiative updates directory
-func initiativeUpdatesDirIno(initiativeID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("initiative-updates:" + initiativeID))
-	return h.Sum64()
-}
 
 // InitiativesNode represents the /initiatives directory
 type InitiativesNode struct {

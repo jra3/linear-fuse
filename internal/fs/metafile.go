@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"hash/fnv"
 	"syscall"
 	"time"
 
@@ -28,15 +27,6 @@ import (
 // means the served node always reflects current state. Editors of the sibling
 // editable file call InvalidateUpdated(metaIno(id)) so the kernel drops its
 // cached size/attrs and re-reads.
-
-// metaIno derives the stable inode for an `<entity>.meta` file from a key
-// (typically the entity's Linear ID). The "meta:" prefix keeps it from colliding
-// with error/success/entity inodes.
-func metaIno(key string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("meta:" + key))
-	return h.Sum64()
-}
 
 // metaRender returns the current `.meta` bytes plus the entity's updated/created
 // times, all from a live source. Times are rendered through (not baked at Lookup)

@@ -480,35 +480,3 @@ key2:value2
 		})
 	}
 }
-
-func TestLabelsDirIno(t *testing.T) {
-	t.Parallel()
-	// Same team ID should produce same inode
-	ino1 := labelsDirIno("team-123")
-	ino2 := labelsDirIno("team-123")
-	if ino1 != ino2 {
-		t.Errorf("labelsDirIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different team IDs should produce different inodes
-	ino3 := labelsDirIno("team-456")
-	if ino1 == ino3 {
-		t.Errorf("labelsDirIno() collision: got same inode %d for different teams", ino1)
-	}
-}
-
-func TestLabelIno(t *testing.T) {
-	t.Parallel()
-	// Same label ID should produce same inode
-	ino1 := labelIno("label-123")
-	ino2 := labelIno("label-123")
-	if ino1 != ino2 {
-		t.Errorf("labelIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different label IDs should produce different inodes
-	ino3 := labelIno("label-456")
-	if ino1 == ino3 {
-		t.Errorf("labelIno() collision: got same inode %d for different labels", ino1)
-	}
-}

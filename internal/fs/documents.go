@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -14,20 +13,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
-
-// docsDirIno generates a stable inode number for a docs directory
-func docsDirIno(parentID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("docs:" + parentID))
-	return h.Sum64()
-}
-
-// documentIno generates a stable inode number for a document
-func documentIno(docID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("doc:" + docID))
-	return h.Sum64()
-}
 
 // DocsNode represents a docs/ directory within issues, teams, projects, or initiatives
 type DocsNode struct {

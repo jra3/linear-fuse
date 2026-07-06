@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -14,20 +13,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
-
-// milestonesDirIno generates a stable inode for a milestones directory
-func milestonesDirIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestones:" + projectID))
-	return h.Sum64()
-}
-
-// milestoneIno generates a stable inode for a milestone file
-func milestoneIno(milestoneID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("milestone:" + milestoneID))
-	return h.Sum64()
-}
 
 // MilestonesNode represents a milestones/ directory within a project
 type MilestonesNode struct {

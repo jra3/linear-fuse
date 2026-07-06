@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"sort"
 	"syscall"
 	"time"
@@ -15,15 +14,6 @@ import (
 
 // recentLimit caps how many issues the recent/ view exposes.
 const recentLimit = 50
-
-// recentDirIno generates the stable inode for a team's recent/ directory, so
-// issue creates can re-coher the view (a fresh issue must appear in recent/
-// immediately, not after the dir cache TTL).
-func recentDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("recentdir:" + teamID))
-	return h.Sum64()
-}
 
 // RecentNode is teams/{KEY}/recent/: a read-only view listing the team's issues
 // as symlinks, newest-first by updatedAt, capped to recentLimit. It gives an
