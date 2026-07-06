@@ -490,10 +490,8 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 			continue
 		}
 
-		// Sync initiative-project associations
-		if err := w.syncInitiativeProjects(ctx, initiative, pruneCutoff); err != nil {
-			log.Printf("[sync] sync initiative %s projects failed: %v", initiative.Slug, err)
-		}
+		// Sync initiative-project associations (best-effort; logs internally)
+		w.syncInitiativeProjects(ctx, initiative, pruneCutoff)
 	}
 	log.Printf("[sync] synced %d initiatives", len(data.Initiatives))
 
@@ -508,24 +506,25 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 // The prune only runs after every upsert succeeded — a row that merely
 // failed to refresh must not read as a removal — and initiative.Projects
 // is complete by GetWorkspace's contract, which is what makes pruning
-// against it safe.
-func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Initiative, pruneCutoff time.Time) error {
-	for _, project := range initiative.Projects.Nodes {
-		if err := w.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
-			InitiativeID: initiative.ID,
-			ProjectID:    project.ID,
-			SyncedAt:     db.Now(),
-		}); err != nil {
-			return fmt.Errorf("upsert initiative-project %s-%s: %w", initiative.ID, project.ID, err)
-		}
-	}
-	if err := w.store.Queries().PruneInitiativeProjects(ctx, db.PruneInitiativeProjectsParams{
-		InitiativeID: initiative.ID,
-		SyncedAt:     pruneCutoff,
-	}); err != nil {
-		return fmt.Errorf("prune initiative-projects %s: %w", initiative.ID, err)
-	}
-	return nil
+// against it safe. Reconciles through the shared syncCollection tail.
+func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Initiative, pruneCutoff time.Time) {
+	syncCollection(ctx, syncCollectionSpec[api.InitiativeProject]{
+		label: "initiative-project",
+		items: initiative.Projects.Nodes,
+		upsert: func(ctx context.Context, project api.InitiativeProject) error {
+			return w.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
+				InitiativeID: initiative.ID,
+				ProjectID:    project.ID,
+				SyncedAt:     db.Now(),
+			})
+		},
+		prune: func(ctx context.Context) error {
+			return w.store.Queries().PruneInitiativeProjects(ctx, db.PruneInitiativeProjectsParams{
+				InitiativeID: initiative.ID,
+				SyncedAt:     pruneCutoff,
+			})
+		},
+	})
 }
 
 // =============================================================================
@@ -546,156 +545,138 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 		return fmt.Errorf("get team metadata: %w", err)
 	}
 
-	// Process states
-	for _, state := range meta.States {
-		params, err := db.APIStateToDBState(state, team.ID)
-		if err != nil {
-			log.Printf("[sync] convert state %s failed: %v", state.Name, err)
-			continue
-		}
-		if err := w.store.Queries().UpsertState(ctx, params); err != nil {
-			log.Printf("[sync] upsert state %s failed: %v", state.Name, err)
-		}
-	}
+	// Each metadata collection reconciles through the same tail — upsert every
+	// item, then prune the rows the (complete) fetch no longer returned, but
+	// only if every upsert succeeded. syncCollection owns that prune-safety
+	// invariant so no site can drop the guard. See CONTEXT.md "Sync reconcile
+	// tail (syncCollection)".
 
-	// Process labels (already deduplicated by GetTeamMetadata)
-	labelsClean := true
-	for _, label := range meta.Labels {
-		// team_id comes from label.Team (fetched via the LabelFields fragment),
-		// not team.ID: team.labels returns workspace labels mixed in, so
-		// stamping team.ID here is what churned workspace labels between teams.
-		params, err := db.APILabelToDBLabel(label)
-		if err != nil {
-			log.Printf("[sync] convert label %s failed: %v", label.Name, err)
-			labelsClean = false
-			continue
-		}
-		if err := w.store.Queries().UpsertLabel(ctx, params); err != nil {
-			log.Printf("[sync] upsert label %s failed: %v", label.Name, err)
-			labelsClean = false
-		}
-	}
-	if labelsClean {
-		if err := w.store.Queries().PruneTeamLabels(ctx, db.PruneTeamLabelsParams{
-			TeamID:   sql.NullString{String: team.ID, Valid: true},
-			SyncedAt: pruneCutoff,
-		}); err != nil {
-			log.Printf("[sync] prune labels %s: %v", team.Key, err)
-		}
-	}
+	// States are workflow-bounded and fetched single-page, so nothing licenses
+	// a prune — upsert-only (nil prune).
+	syncCollection(ctx, syncCollectionSpec[api.State]{
+		label: "state",
+		items: meta.States,
+		upsert: func(ctx context.Context, state api.State) error {
+			params, err := db.APIStateToDBState(state, team.ID)
+			if err != nil {
+				return err
+			}
+			return w.store.Queries().UpsertState(ctx, params)
+		},
+	})
 
-	// Process cycles
-	cyclesClean := true
-	for _, cycle := range meta.Cycles {
-		params, err := db.APICycleToDBCycle(cycle, team.ID)
-		if err != nil {
-			log.Printf("[sync] convert cycle %s failed: %v", cycle.Name, err)
-			cyclesClean = false
-			continue
-		}
-		if err := w.store.Queries().UpsertCycle(ctx, params); err != nil {
-			log.Printf("[sync] upsert cycle %s failed: %v", cycle.Name, err)
-			cyclesClean = false
-		}
-	}
-	if cyclesClean {
-		if err := w.store.Queries().PruneTeamCycles(ctx, db.PruneTeamCyclesParams{
-			TeamID:   team.ID,
-			SyncedAt: pruneCutoff,
-		}); err != nil {
-			log.Printf("[sync] prune cycles %s: %v", team.Key, err)
-		}
-	}
+	// Labels are already deduplicated by GetTeamMetadata. team_id comes from
+	// label.Team (fetched via the LabelFields fragment), not team.ID: team.labels
+	// returns workspace labels mixed in, so stamping team.ID here is what churned
+	// workspace labels between teams.
+	syncCollection(ctx, syncCollectionSpec[api.Label]{
+		label: "label",
+		items: meta.Labels,
+		upsert: func(ctx context.Context, label api.Label) error {
+			params, err := db.APILabelToDBLabel(label)
+			if err != nil {
+				return err
+			}
+			return w.store.Queries().UpsertLabel(ctx, params)
+		},
+		prune: func(ctx context.Context) error {
+			return w.store.Queries().PruneTeamLabels(ctx, db.PruneTeamLabelsParams{
+				TeamID:   sql.NullString{String: team.ID, Valid: true},
+				SyncedAt: pruneCutoff,
+			})
+		},
+	})
 
-	// Process projects (includes milestones)
-	projectsClean := true
-	for _, project := range meta.Projects {
-		params, err := db.APIProjectToDBProject(project)
-		if err != nil {
-			log.Printf("[sync] convert project %s failed: %v", project.Slug, err)
-			projectsClean = false
-			continue
-		}
-		if err := w.store.Queries().UpsertProject(ctx, params); err != nil {
-			log.Printf("[sync] upsert project %s failed: %v", project.Slug, err)
-			projectsClean = false
-			continue
-		}
+	syncCollection(ctx, syncCollectionSpec[api.Cycle]{
+		label: "cycle",
+		items: meta.Cycles,
+		upsert: func(ctx context.Context, cycle api.Cycle) error {
+			params, err := db.APICycleToDBCycle(cycle, team.ID)
+			if err != nil {
+				return err
+			}
+			return w.store.Queries().UpsertCycle(ctx, params)
+		},
+		prune: func(ctx context.Context) error {
+			return w.store.Queries().PruneTeamCycles(ctx, db.PruneTeamCyclesParams{
+				TeamID:   team.ID,
+				SyncedAt: pruneCutoff,
+			})
+		},
+	})
 
-		// Upsert project-team association
-		if err := w.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
-			ProjectID: project.ID,
-			TeamID:    team.ID,
-			SyncedAt:  db.Now(),
-		}); err != nil {
-			log.Printf("[sync] upsert project-team %s-%s failed: %v", project.ID, team.ID, err)
-			projectsClean = false
-		}
-
-		// Upsert milestones inline from the metadata query (no extra API calls)
-		if project.Milestones != nil {
-			for _, milestone := range project.Milestones.Nodes {
-				mParams, mErr := db.APIProjectMilestoneToDBMilestone(milestone, project.ID)
-				if mErr != nil {
-					log.Printf("[sync] convert milestone %s failed: %v", milestone.Name, mErr)
-					continue
-				}
-				if err := w.store.Queries().UpsertProjectMilestone(ctx, mParams); err != nil {
-					log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
+	// Projects prune the project_teams junction (a project that moved off this
+	// team, or was deleted). The upsert closure's completeness set is the project
+	// entity plus the project_teams row: a failure in either suppresses the
+	// prune. Milestones are a nested best-effort sub-write in a capped,
+	// never-pruned connection — outside that set — so a milestone failure is
+	// logged and swallowed, never suppressing the prune.
+	syncCollection(ctx, syncCollectionSpec[api.Project]{
+		label: "project",
+		items: meta.Projects,
+		upsert: func(ctx context.Context, project api.Project) error {
+			params, err := db.APIProjectToDBProject(project)
+			if err != nil {
+				return err
+			}
+			if err := w.store.Queries().UpsertProject(ctx, params); err != nil {
+				return err
+			}
+			// A junction failure marks the item unclean but does not abort the
+			// milestone sub-writes below, so return it after they run.
+			junctionErr := w.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
+				ProjectID: project.ID,
+				TeamID:    team.ID,
+				SyncedAt:  db.Now(),
+			})
+			if project.Milestones != nil {
+				for _, milestone := range project.Milestones.Nodes {
+					mParams, mErr := db.APIProjectMilestoneToDBMilestone(milestone, project.ID)
+					if mErr != nil {
+						log.Printf("[sync] convert milestone %s failed: %v", milestone.Name, mErr)
+						continue
+					}
+					if err := w.store.Queries().UpsertProjectMilestone(ctx, mParams); err != nil {
+						log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
+					}
 				}
 			}
-		}
-	}
+			return junctionErr
+		},
+		prune: func(ctx context.Context) error {
+			return w.store.Queries().PruneProjectTeams(ctx, db.PruneProjectTeamsParams{
+				TeamID:   team.ID,
+				SyncedAt: pruneCutoff,
+			})
+		},
+	})
 
-	// Prune associations the (complete) fetch no longer returned — a project
-	// moved off this team, or deleted in Linear. Skipped when any upsert
-	// above failed: a row that merely failed to refresh must not read as a
-	// removal.
-	if projectsClean {
-		if err := w.store.Queries().PruneProjectTeams(ctx, db.PruneProjectTeamsParams{
-			TeamID:   team.ID,
-			SyncedAt: pruneCutoff,
-		}); err != nil {
-			log.Printf("[sync] prune project-teams %s: %v", team.Key, err)
-		}
-	}
-
-	// Process members
-	membersClean := true
-	for _, member := range meta.Members {
-		// Ensure user exists in users table
-		params, err := db.APIUserToDBUser(member)
-		if err != nil {
-			log.Printf("[sync] convert member %s failed: %v", member.Email, err)
-			membersClean = false
-			continue
-		}
-		if err := w.store.Queries().UpsertUser(ctx, params); err != nil {
-			log.Printf("[sync] upsert member user %s failed: %v", member.Email, err)
-			membersClean = false
-			continue
-		}
-
-		// Upsert team membership
-		if err := w.store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
-			TeamID:   team.ID,
-			UserID:   member.ID,
-			SyncedAt: db.Now(),
-		}); err != nil {
-			log.Printf("[sync] upsert team member %s failed: %v", member.Email, err)
-			membersClean = false
-		}
-	}
-	// Prune departed members from the team_members junction (not the
-	// workspace-wide users table, which other teams share).
-	if membersClean {
-		if err := w.store.Queries().PruneTeamMembers(ctx, db.PruneTeamMembersParams{
-			TeamID:   team.ID,
-			SyncedAt: pruneCutoff,
-		}); err != nil {
-			log.Printf("[sync] prune members %s: %v", team.Key, err)
-		}
-	}
+	// Members prune the team_members junction (a departed member), not the
+	// workspace-wide users table, which other teams share.
+	syncCollection(ctx, syncCollectionSpec[api.User]{
+		label: "member",
+		items: meta.Members,
+		upsert: func(ctx context.Context, member api.User) error {
+			params, err := db.APIUserToDBUser(member)
+			if err != nil {
+				return err
+			}
+			if err := w.store.Queries().UpsertUser(ctx, params); err != nil {
+				return err
+			}
+			return w.store.Queries().UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
+				TeamID:   team.ID,
+				UserID:   member.ID,
+				SyncedAt: db.Now(),
+			})
+		},
+		prune: func(ctx context.Context) error {
+			return w.store.Queries().PruneTeamMembers(ctx, db.PruneTeamMembersParams{
+				TeamID:   team.ID,
+				SyncedAt: pruneCutoff,
+			})
+		},
+	})
 
 	return nil
 }
