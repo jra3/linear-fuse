@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"hash/fnv"
 	"strings"
 	"syscall"
 	"time"
@@ -47,14 +46,6 @@ type writeResultYAML struct {
 	Path       string `yaml:"path"`
 	Title      string `yaml:"title"`
 	Status     string `yaml:"status"`
-}
-
-// successIno derives the stable inode for a `.last` file from its key. The
-// "last:" prefix keeps it from ever colliding with errorIno ("error:"+key).
-func successIno(key string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("last:" + key))
-	return h.Sum64()
 }
 
 // firstLine returns the first non-empty line of s, trimmed, capped to 80 runes —

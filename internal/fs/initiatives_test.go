@@ -12,59 +12,6 @@ import (
 // Inode Generation Tests
 // =============================================================================
 
-func TestInitiativeInfoInoStability(t *testing.T) {
-	// Same ID should always produce same inode
-	id := "test-initiative-id-123"
-	ino1 := initiativeInfoIno(id)
-	ino2 := initiativeInfoIno(id)
-
-	if ino1 != ino2 {
-		t.Errorf("Inode not stable: got %d and %d for same ID", ino1, ino2)
-	}
-
-	// Different IDs should produce different inodes
-	id2 := "test-initiative-id-456"
-	ino3 := initiativeInfoIno(id2)
-
-	if ino1 == ino3 {
-		t.Errorf("Different IDs produced same inode: %d", ino1)
-	}
-}
-
-func TestInitiativeProjectsInoStability(t *testing.T) {
-	id := "test-initiative-id-123"
-	ino1 := initiativeProjectsIno(id)
-	ino2 := initiativeProjectsIno(id)
-
-	if ino1 != ino2 {
-		t.Errorf("Projects inode not stable: got %d and %d for same ID", ino1, ino2)
-	}
-
-	// Should be different from info inode
-	infoIno := initiativeInfoIno(id)
-	if ino1 == infoIno {
-		t.Errorf("Projects inode same as info inode: %d", ino1)
-	}
-}
-
-func TestInitiativeUpdatesDirInoStability(t *testing.T) {
-	id := "test-initiative-id-123"
-	ino1 := initiativeUpdatesDirIno(id)
-	ino2 := initiativeUpdatesDirIno(id)
-
-	if ino1 != ino2 {
-		t.Errorf("Updates dir inode not stable: got %d and %d for same ID", ino1, ino2)
-	}
-
-	// Should be different from other initiative inodes
-	infoIno := initiativeInfoIno(id)
-	projectsIno := initiativeProjectsIno(id)
-
-	if ino1 == infoIno || ino1 == projectsIno {
-		t.Errorf("Updates inode collides with other inodes")
-	}
-}
-
 // =============================================================================
 // Content Round-Trip Tests
 // =============================================================================

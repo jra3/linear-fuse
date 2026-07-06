@@ -189,6 +189,24 @@ plus an anti-drift equality test: the Lookup `EntryOut.Attr` and the node's
 attr-conformance/stat-determinism test in `internal/integration` guarding the
 real kernel `Getattr` path.
 
+### Inode namespace (`ino`)
+Every virtual inode number the filesystem hands the kernel is
+`fnv64a("kind:"+id)` through the single `ino(kind, id)` function
+(`internal/fs/ino.go`). The kind prefix is a hard invariant — there are **no
+bare hashes** — so two entities that happen to share an id (an issue and its
+`comments/` directory) never collide. The ~28 named one-line wrappers
+(`commentsDirIno`, `issueIno`, …) gathered in that one file **are** the
+namespace: they keep call sites typo-proof (the `"comment:"`/`"comments:"`
+one-character gap is written exactly once) and make the whole set auditable at
+a glance. Adding a virtual file means adding a wrapper here, never hashing
+inline. `issueIno` used to hash the bare id — the lone exception the registry
+removed. `TestInodeNamespaceDistinct` calls every wrapper with one shared id and
+asserts distinct results, guarding against a duplicated or mistyped prefix and
+serving as the checklist a new kind must join. `scratchIno` (`atomicwrite.go`)
+is deliberately **not** a wrapper: its key mixes the parent directory inode with
+the name (so concurrent temp files in different dirs don't collide), a different
+shape than `kind:id`.
+
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
 the read-side counterpart to `execMutation`. Linear silently caps a

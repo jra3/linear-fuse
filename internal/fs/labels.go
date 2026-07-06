@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -14,20 +13,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
 )
-
-// labelsDirIno generates a stable inode number for a labels directory
-func labelsDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("labels:" + teamID))
-	return h.Sum64()
-}
-
-// labelIno generates a stable inode number for a label
-func labelIno(labelID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("label:" + labelID))
-	return h.Sum64()
-}
 
 // LabelsNode represents the /teams/{KEY}/labels/ directory
 type LabelsNode struct {

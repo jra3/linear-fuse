@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"syscall"
@@ -16,27 +15,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
 )
-
-// attachmentsDirIno generates a stable inode for an issue's attachments directory
-func attachmentsDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("attachments:" + issueID))
-	return h.Sum64()
-}
-
-// embeddedFileIno generates a stable inode for an embedded file
-func embeddedFileIno(fileID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("file:" + fileID))
-	return h.Sum64()
-}
-
-// externalAttachmentIno generates a stable inode for an external attachment (.link file)
-func externalAttachmentIno(attachmentID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("extatt:" + attachmentID))
-	return h.Sum64()
-}
 
 // AttachmentsNode represents the /teams/{KEY}/issues/{ID}/attachments directory
 type AttachmentsNode struct {

@@ -8,38 +8,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-func TestCommentsDirIno(t *testing.T) {
-	t.Parallel()
-	// Same issue ID should produce same inode
-	ino1 := commentsDirIno("issue-123")
-	ino2 := commentsDirIno("issue-123")
-	if ino1 != ino2 {
-		t.Errorf("commentsDirIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different issue IDs should produce different inodes
-	ino3 := commentsDirIno("issue-456")
-	if ino1 == ino3 {
-		t.Errorf("commentsDirIno() collision: got same inode %d for different issues", ino1)
-	}
-}
-
-func TestCommentIno(t *testing.T) {
-	t.Parallel()
-	// Same comment ID should produce same inode
-	ino1 := commentIno("comment-123")
-	ino2 := commentIno("comment-123")
-	if ino1 != ino2 {
-		t.Errorf("commentIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different comment IDs should produce different inodes
-	ino3 := commentIno("comment-456")
-	if ino1 == ino3 {
-		t.Errorf("commentIno() collision: got same inode %d for different comments", ino1)
-	}
-}
-
 func TestExtractCommentBody(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"strings"
 	"sync"
@@ -16,48 +15,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
-
-// issueIno generates a stable inode number from an issue ID
-func issueIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte(issueID))
-	return h.Sum64()
-}
-
-// issuesDirIno generates a stable inode number for a team's issues directory
-func issuesDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("issues:" + teamID))
-	return h.Sum64()
-}
-
-// issueDirIno generates a stable inode number for an issue directory
-func issueDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("dir:" + issueID))
-	return h.Sum64()
-}
-
-// childrenDirIno generates a stable inode number for a children directory
-func childrenDirIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("children:" + issueID))
-	return h.Sum64()
-}
-
-// historyIno generates a stable inode number for an issue's history.md file
-func historyIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("history:" + issueID))
-	return h.Sum64()
-}
-
-// errorIno generates a stable inode number for an issue's .error file
-func errorIno(issueID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("error:" + issueID))
-	return h.Sum64()
-}
 
 // issueWriteResult projects a freshly-created issue into a .last success entry.
 // Path is the issue's identifier — the addressable on-disk directory name.

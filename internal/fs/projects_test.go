@@ -9,59 +9,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-func TestProjectsDirIno(t *testing.T) {
-	t.Parallel()
-	// Same team ID should produce same inode
-	ino1 := projectsDirIno("team-123")
-	ino2 := projectsDirIno("team-123")
-	if ino1 != ino2 {
-		t.Errorf("projectsDirIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different team IDs should produce different inodes
-	ino3 := projectsDirIno("team-456")
-	if ino1 == ino3 {
-		t.Errorf("projectsDirIno() collision: got same inode %d for different teams", ino1)
-	}
-}
-
-func TestProjectInfoIno(t *testing.T) {
-	t.Parallel()
-	// Same project ID should produce same inode
-	ino1 := projectInfoIno("project-123")
-	ino2 := projectInfoIno("project-123")
-	if ino1 != ino2 {
-		t.Errorf("projectInfoIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different project IDs should produce different inodes
-	ino3 := projectInfoIno("project-456")
-	if ino1 == ino3 {
-		t.Errorf("projectInfoIno() collision: got same inode %d for different projects", ino1)
-	}
-}
-
-func TestUpdatesDirIno(t *testing.T) {
-	t.Parallel()
-	// Same project ID should produce same inode
-	ino1 := updatesDirIno("project-123")
-	ino2 := updatesDirIno("project-123")
-	if ino1 != ino2 {
-		t.Errorf("updatesDirIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different project IDs should produce different inodes
-	ino3 := updatesDirIno("project-456")
-	if ino1 == ino3 {
-		t.Errorf("updatesDirIno() collision: got same inode %d for different projects", ino1)
-	}
-
-	// Updates inode should differ from project info inode
-	if ino1 == projectInfoIno("project-123") {
-		t.Error("updatesDirIno() should differ from projectInfoIno()")
-	}
-}
-
 func TestProjectDirName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

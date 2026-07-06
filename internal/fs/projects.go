@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"regexp"
 	"sort"
@@ -18,27 +17,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
-
-// projectsDirIno generates a stable inode number for a projects directory
-func projectsDirIno(teamID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("projects:" + teamID))
-	return h.Sum64()
-}
-
-// projectInfoIno generates a stable inode number for a project info file
-func projectInfoIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("project-info:" + projectID))
-	return h.Sum64()
-}
-
-// updatesDirIno generates a stable inode number for a project updates directory
-func updatesDirIno(projectID string) uint64 {
-	h := fnv.New64a()
-	h.Write([]byte("updates:" + projectID))
-	return h.Sum64()
-}
 
 // ProjectsNode represents the /teams/{KEY}/projects directory
 type ProjectsNode struct {

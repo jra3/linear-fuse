@@ -6,38 +6,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-func TestDocsDirIno(t *testing.T) {
-	t.Parallel()
-	// Same parent ID should produce same inode
-	ino1 := docsDirIno("parent-123")
-	ino2 := docsDirIno("parent-123")
-	if ino1 != ino2 {
-		t.Errorf("docsDirIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different parent IDs should produce different inodes
-	ino3 := docsDirIno("parent-456")
-	if ino1 == ino3 {
-		t.Errorf("docsDirIno() collision: got same inode %d for different parents", ino1)
-	}
-}
-
-func TestDocumentIno(t *testing.T) {
-	t.Parallel()
-	// Same document ID should produce same inode
-	ino1 := documentIno("doc-123")
-	ino2 := documentIno("doc-123")
-	if ino1 != ino2 {
-		t.Errorf("documentIno() not stable: got %d and %d for same input", ino1, ino2)
-	}
-
-	// Different document IDs should produce different inodes
-	ino3 := documentIno("doc-456")
-	if ino1 == ino3 {
-		t.Errorf("documentIno() collision: got same inode %d for different documents", ino1)
-	}
-}
-
 func TestDocumentFilename(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

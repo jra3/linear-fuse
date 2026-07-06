@@ -85,11 +85,3 @@ func TestRenderWriteSuccessYAML(t *testing.T) {
 		}
 	}
 }
-
-// TestSuccessInoDistinctFromErrorIno: a surface's .last and .error never collide.
-func TestSuccessInoDistinctFromErrorIno(t *testing.T) {
-	key := collectionSuccessKey("issues", "team-1")
-	if successIno(key) == errorIno(key) {
-		t.Error("successIno collides with errorIno for the same key")
-	}
-}
