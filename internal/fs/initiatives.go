@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -627,29 +626,23 @@ func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, sysc
 		return nil, syscall.EIO
 	}
 
-	entries := n.trio().entries()
-
-	// Sort updates by creation time
-	sort.Slice(updates, func(i, j int) bool {
-		return updates[i].CreatedAt.Before(updates[j].CreatedAt)
-	})
-
-	for i, update := range updates {
-		// Format: 001-2025-01-15-ontrack.md
-		timestamp := update.CreatedAt.Format("2006-01-02")
-		healthSuffix := strings.ToLower(update.Health)
-		entries = append(entries, fuse.DirEntry{
-			Name: fmt.Sprintf("%04d-%s-%s.md", i+1, timestamp, healthSuffix),
-			Mode: syscall.S_IFREG,
-		})
-	}
-
+	entries := append(n.trio().entries(), n.listing(updates).entries()...)
 	return fs.NewListDirStream(entries), 0
 }
 
 // trio declares the initiative-updates collection's writable surfaces.
 func (n *InitiativeUpdatesNode) trio() collectionTrio {
 	return collectionTrio{kind: "updates", parentID: n.initiativeID, onFlush: n.createUpdate}
+}
+
+// listing declares how update files are named — <NNNN>-<date>-<health>.md by
+// creation order — so Readdir and Lookup derive identical names.
+func (n *InitiativeUpdatesNode) listing(updates []api.InitiativeUpdate) indexedListing[api.InitiativeUpdate] {
+	return indexedListing[api.InitiativeUpdate]{
+		items:   updates,
+		lessKey: func(u api.InitiativeUpdate) time.Time { return u.CreatedAt },
+		nameOf:  func(i int, u api.InitiativeUpdate) string { return updateEntryName(i, u.CreatedAt, u.Health) },
+	}
 }
 
 func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -662,32 +655,22 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 		return nil, syscall.EIO
 	}
 
-	// Sort updates by creation time
-	sort.Slice(updates, func(i, j int) bool {
-		return updates[i].CreatedAt.Before(updates[j].CreatedAt)
-	})
-
-	// Match by filename pattern
-	for i, update := range updates {
-		timestamp := update.CreatedAt.Format("2006-01-02")
-		healthSuffix := strings.ToLower(update.Health)
-		expectedName := fmt.Sprintf("%04d-%s-%s.md", i+1, timestamp, healthSuffix)
-		if expectedName == name {
-			content := initiativeUpdateToMarkdown(&update)
-			node := &InitiativeUpdateNode{
-				BaseNode: BaseNode{lfs: n.lfs},
-				update:   update,
-				content:  content,
-			}
-			out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
-			out.Attr.SetTimes(&update.UpdatedAt, &update.UpdatedAt, &update.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	update, ok := n.listing(updates).find(name)
+	if ok {
+		content := initiativeUpdateToMarkdown(&update)
+		node := &InitiativeUpdateNode{
+			BaseNode: BaseNode{lfs: n.lfs},
+			update:   update,
+			content:  content,
 		}
+		out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
+		out.Attr.Uid = n.lfs.uid
+		out.Attr.Gid = n.lfs.gid
+		out.Attr.Size = uint64(len(content))
+		out.SetAttrTimeout(30 * time.Second)
+		out.SetEntryTimeout(30 * time.Second)
+		out.Attr.SetTimes(&update.UpdatedAt, &update.UpdatedAt, &update.CreatedAt)
+		return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 	}
 
 	return nil, syscall.ENOENT

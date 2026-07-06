@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -702,29 +701,23 @@ func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	entries := n.trio().entries()
-
-	// Sort updates by creation time
-	sort.Slice(updates, func(i, j int) bool {
-		return updates[i].CreatedAt.Before(updates[j].CreatedAt)
-	})
-
-	for i, update := range updates {
-		// Format: 001-2025-01-15-ontrack.md
-		timestamp := update.CreatedAt.Format("2006-01-02")
-		healthSuffix := strings.ToLower(update.Health)
-		entries = append(entries, fuse.DirEntry{
-			Name: fmt.Sprintf("%04d-%s-%s.md", i+1, timestamp, healthSuffix),
-			Mode: syscall.S_IFREG,
-		})
-	}
-
+	entries := append(n.trio().entries(), n.listing(updates).entries()...)
 	return fs.NewListDirStream(entries), 0
 }
 
 // trio declares the project-updates collection's writable surfaces.
 func (n *UpdatesNode) trio() collectionTrio {
 	return collectionTrio{kind: "updates", parentID: n.projectID, onFlush: n.createUpdate}
+}
+
+// listing declares how update files are named — <NNNN>-<date>-<health>.md by
+// creation order — so Readdir and Lookup derive identical names.
+func (n *UpdatesNode) listing(updates []api.ProjectUpdate) indexedListing[api.ProjectUpdate] {
+	return indexedListing[api.ProjectUpdate]{
+		items:   updates,
+		lessKey: func(u api.ProjectUpdate) time.Time { return u.CreatedAt },
+		nameOf:  func(i int, u api.ProjectUpdate) string { return updateEntryName(i, u.CreatedAt, u.Health) },
+	}
 }
 
 func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -737,32 +730,21 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		return nil, syscall.EIO
 	}
 
-	// Sort updates by creation time
-	sort.Slice(updates, func(i, j int) bool {
-		return updates[i].CreatedAt.Before(updates[j].CreatedAt)
-	})
-
-	// Match by filename pattern
-	for i, update := range updates {
-		timestamp := update.CreatedAt.Format("2006-01-02")
-		healthSuffix := strings.ToLower(update.Health)
-		expectedName := fmt.Sprintf("%04d-%s-%s.md", i+1, timestamp, healthSuffix)
-		if expectedName == name {
-			content := updateToMarkdown(&update)
-			node := &UpdateNode{
-				update:  update,
-				content: content,
-			}
-			out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(30 * time.Second)
-			out.SetEntryTimeout(30 * time.Second)
-			out.Attr.SetTimes(&update.UpdatedAt, &update.UpdatedAt, &update.CreatedAt)
-			return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
-		}
+	update, ok := n.listing(updates).find(name)
+	if !ok {
+		return nil, syscall.ENOENT
 	}
-
-	return nil, syscall.ENOENT
+	content := updateToMarkdown(&update)
+	node := &UpdateNode{
+		update:  update,
+		content: content,
+	}
+	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
+	out.Attr.Size = uint64(len(content))
+	out.SetAttrTimeout(30 * time.Second)
+	out.SetEntryTimeout(30 * time.Second)
+	out.Attr.SetTimes(&update.UpdatedAt, &update.UpdatedAt, &update.CreatedAt)
+	return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
 }
 
 func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

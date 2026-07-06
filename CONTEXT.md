@@ -207,6 +207,27 @@ is deliberately **not** a wrapper: its key mixes the parent directory inode with
 the name (so concurrent temp files in different dirs don't collide), a different
 shape than `kind:id`.
 
+### Indexed listing (`indexedListing`)
+The **deep module** owning the index-derived filenames of a collection whose
+entries are named `<NNNN>-<date>…md` by creation order — comments and the
+project/initiative status updates. The sibling of `collectionTrio` (which owns
+the same collection's `_create`/`.error`/`.last`): the trio owns the *virtual*
+files, this owns the *item* files. `indexedListing[T]{items, lessKey, nameOf}`
+(`internal/fs/indexedlisting.go`) **owns the sort** and the name derivation, and
+exposes `entries()` (the Readdir projection) and `find(name)` (the Lookup/Unlink
+projection). Because all three surfaces derive names through the one module over
+one canonical order, they cannot disagree — a file you can `ls` you can also
+open and `rm`. Before this, each surface re-sorted and re-`Sprintf`'d
+independently (seven copies across three files), so a timestamp-format tweak or
+an off-by-one in one surface would silently strand a file: listed but
+un-openable. Each collection declares its listing via a `listing(items)` method
+(mirroring `trio()`); the two update collections share the `updateEntryName`
+formatter (their `<NNNN>-<date>-<health>.md` convention is identical), while
+comments own a per-minute timestamp format with no health. `TestIndexedListing-
+RoundTrip` guards the invariant: every name `entries()` emits resolves back
+through `find`, and same-second items still get distinct names via the 1-based
+index.
+
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
 the read-side counterpart to `execMutation`. Linear silently caps a

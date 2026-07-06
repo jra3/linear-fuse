@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,28 +40,25 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	entries := n.trio().entries()
-
-	// Sort comments by creation time
-	sort.Slice(comments, func(i, j int) bool {
-		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
-	})
-
-	for i, comment := range comments {
-		// Format: 001-2025-01-10T14:30.md
-		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		entries = append(entries, fuse.DirEntry{
-			Name: fmt.Sprintf("%04d-%s.md", i+1, timestamp),
-			Mode: syscall.S_IFREG,
-		})
-	}
-
+	entries := append(n.trio().entries(), n.listing(comments).entries()...)
 	return fs.NewListDirStream(entries), 0
 }
 
 // trio declares the comments collection's writable surfaces.
 func (n *CommentsNode) trio() collectionTrio {
 	return collectionTrio{kind: "comments", parentID: n.issueID, onFlush: n.createComment}
+}
+
+// listing declares how comment files are named — <NNNN>-<date-time>.md by
+// creation order — so Readdir, Lookup, and Unlink derive identical names.
+func (n *CommentsNode) listing(comments []api.Comment) indexedListing[api.Comment] {
+	return indexedListing[api.Comment]{
+		items:   comments,
+		lessKey: func(c api.Comment) time.Time { return c.CreatedAt },
+		nameOf: func(i int, c api.Comment) string {
+			return fmt.Sprintf("%04d-%s.md", i+1, c.CreatedAt.Format("2006-01-02T15-04"))
+		},
+	}
 }
 
 func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -75,30 +71,20 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return nil, syscall.EIO
 	}
 
-	// Sort comments by creation time
-	sort.Slice(comments, func(i, j int) bool {
-		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
-	})
-
-	// Match by filename pattern
-	for i, comment := range comments {
-		timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-		expectedName := fmt.Sprintf("%04d-%s.md", i+1, timestamp)
-		if expectedName == name {
-			content := commentToMarkdown(&comment)
-			node := &CommentNode{
-				BaseNode:     BaseNode{lfs: n.lfs},
-				issueID:      n.issueID,
-				comment:      comment,
-				content:      content,
-				contentReady: true,
-			}
-			// Shorter timeout for writable files.
-			return n.newFileInode(ctx, out, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
-		}
+	comment, ok := n.listing(comments).find(name)
+	if !ok {
+		return nil, syscall.ENOENT
 	}
-
-	return nil, syscall.ENOENT
+	content := commentToMarkdown(&comment)
+	node := &CommentNode{
+		BaseNode:     BaseNode{lfs: n.lfs},
+		issueID:      n.issueID,
+		comment:      comment,
+		content:      content,
+		contentReady: true,
+	}
+	// Shorter timeout for writable files.
+	return n.newFileInode(ctx, out, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
 }
 
 func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -119,15 +105,8 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			if err != nil {
 				return nil, err
 			}
-			// Filenames are index-derived from creation order.
-			sort.Slice(comments, func(i, j int) bool {
-				return comments[i].CreatedAt.Before(comments[j].CreatedAt)
-			})
-			for i, comment := range comments {
-				timestamp := comment.CreatedAt.Format("2006-01-02T15-04")
-				if fmt.Sprintf("%04d-%s.md", i+1, timestamp) == name {
-					return &comment, nil
-				}
+			if c, ok := n.listing(comments).find(name); ok {
+				return &c, nil
 			}
 			return nil, nil
 		},
