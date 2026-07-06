@@ -376,6 +376,60 @@ never-pruned `embedded_files` table), analogous to milestones — it runs inside
 the comment `upsert` closure regardless of the upsert result and cannot affect
 cleanliness.
 
+### Rate budget (`rateBudget`)
+The **deep module** governing Linear's hourly rate limits
+(`internal/api/ratebudget.go`). Linear meters every key on TWO axes —
+requests AND complexity points — and reports both on every response
+(`X-RateLimit-{Requests,Complexity}-{Limit,Remaining,Reset}` plus
+`X-Complexity`, this query's actual cost). The old client governed only
+request count, at a hardcoded 1500/hr that matched neither the docs (5000)
+nor the live limit (2500), and parsed the reset from a header Linear doesn't
+send, as seconds — Linear sends per-axis epoch **milliseconds** — so the
+complexity axis (the one that actually gets exhausted; it wedged the account
+into `RATELIMITED` on 2026-07-06) was never governed and adaptive backoff was
+dead. `Client.query` makes exactly two calls: `admit(op, priority)` before
+sending, and on the returned admission `observe(headers)` /
+`rateLimited(headers)` / `release()` after (idempotent; a deferred `release`
+is the catch-all for early returns).
+
+Inside: two windowed budgets `{limit, remaining, resetAt}` — **all read from
+response headers, never hardcoded** — reconciled to server truth on every
+round-trip (a restart self-heals on the first response); a per-op cost
+predictor (last-seen `X-Complexity`, conservative 10k default for unmeasured
+ops); a **priority-reserve ladder** (write > interactive > skeleton > list >
+detail, each with a reserve floor as a fraction of the limit) so detail
+fetches stop first and cold-start gentleness is emergent, not a mode —
+blocked reads defer to the existing retry queues, blocked mutations wait
+briefly for the window; a reserve-on-admit/release-on-settle **in-flight
+semaphore** on both axes (concurrent admits see `remaining − inFlight −
+reserve`); **optimistic refill** past `resetAt`; and a defensive
+`RATELIMITED` snap-to-zero honoring the error's reset (bounded fallback when
+headerless). Base tier comes from a static `opName → tier` intent map in the
+module; `WithInteractive(ctx)` is the promotion mechanism for on-demand FS
+reads (mechanism only in PR1 — call sites not yet threaded). It collapsed
+`checkRateLimitHeaders`, the inline `Tokens() < 2` write-reserve gate, the
+`linearHourlyLimit` constant, and the token-count `LowBudget`;
+`Client.LowBudget`/`RateLimitResetAt` now delegate to it (paginate's
+`ErrBudget` gate and the worker's backoff consult real budget state), and the
+micro-burst `rate.Limiter` survives only as a spike smoother re-sized from
+the observed request limit. The injected clock (`now func() time.Time`) is
+the test seam: `ratebudget_test.go` drives the ladder, reconcile, semaphore,
+rollover, and RATELIMITED paths with a fake clock and synthetic headers — no
+HTTP, no live API.
+
+An unseen axis doesn't gate, so a fresh process would burst un-gated before
+the first response lands. The **cold-start probe** closes that hole:
+`Worker.probeBudget` (`internal/sync/worker.go`) fires one cheap
+`GetViewer` (now on the worker's `APIClient` interface) synchronously at the
+top of `run()`, so the probe's headers seed the budget strictly before the
+first `syncAllTeams` issues expensive work. A `RATELIMITED` probe (account
+already exhausted) marks the worker rate-limited — the backoff honors the
+budget's reset, seeded by that very response — and sleeps until expiry
+before starting sync (interruptible by ctx/Stop); any other probe failure
+logs and proceeds. Probe sequencing and the delay path are unit-tested in
+`worker_test.go` (`TestProbe*`); the client-level seed-then-defer wiring in
+`client_test.go` (`TestViewerProbeSeedsBudget`).
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`

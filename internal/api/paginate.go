@@ -31,8 +31,8 @@ import (
 // has started runs to completion instead: aborting between pages would
 // discard pages already paid for, and observed live it burned one token
 // per cycle on a page-1 fetch it then threw away, forever. The transport's
-// own write-reserve gate (reads deferred under 2 tokens) remains the hard
-// floor under a running drain. Exported so schedulers (the reconcile pass
+// own gate (the rateBudget priority-reserve ladder in Client.query) remains
+// the hard floor under a running drain. Exported so schedulers (the reconcile pass
 // in internal/repo) can distinguish "retry later" from "broken" with
 // errors.Is; treating it as an ordinary error is always safe.
 var ErrBudget = errors.New("pagination deferred: rate-limit budget low")

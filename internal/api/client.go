@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -30,16 +29,31 @@ const (
 	circuitBreakerCooldown  = 30 * time.Second // how long to stay open
 )
 
+// maxWriteWait caps how long a blocked mutation waits for the budget window
+// to reset before it is returned as a deferral error instead. Mutations are
+// user-facing (a FUSE flush blocks on them), so waiting past the HTTP
+// timeout is absurd; reads never wait — a blocked read defers immediately
+// and the sync worker's queues retry it.
+const maxWriteWait = 30 * time.Second
+
 type Client struct {
 	apiKey     string
 	apiURL     string
 	httpClient *http.Client
-	limiter    *rate.Limiter
 	stats      *APIStats
 
-	// M-3: server-reported rate limit reset time (from X-RateLimit-Reset header)
-	rateLimitMu      gosync.RWMutex
-	rateLimitResetAt time.Time
+	// budget is the hourly rate-limit governor (see ratebudget.go): query
+	// admits every request through its priority-reserve ladder and observes
+	// every response's headers back into it.
+	budget *rateBudget
+
+	// limiter is a thin micro-burst smoother only — the budget prevents
+	// hourly overshoot, the limiter prevents instantaneous spikes. It is
+	// re-sized from the server-reported request limit on first observation
+	// (see syncLimiterSize); the construction-time rate is just a seed.
+	limiter         *rate.Limiter
+	limiterMu       gosync.Mutex
+	limiterSizedFor float64 // last request limit applied to limiter/stats
 
 	// Circuit breaker: stop burning rate limiter tokens during connectivity loss
 	consecutiveErrors atomic.Int32
@@ -56,19 +70,19 @@ func NewClient(apiKey string) *Client {
 }
 
 func NewClientWithOptions(apiKey string, opts ClientOptions) *Client {
-	// Linear allows 1,500 requests/hour (0.417/sec sustained).
-	// The burst absorbs one sync cycle's spike; sustained rate stays within
-	// budget regardless of burst size. Sizing: a cycle is workspace (1) +
-	// per-team metadata (2: combined query + paginated projects) + issues
-	// (1+) for every team, and the write-reserve gate defers reads below 2
-	// tokens — at burst 10 a 4-team cycle spent exactly ~10 before the last
-	// team, which therefore never synced (its reads deferred every cycle).
-	limiter := rate.NewLimiter(rate.Limit(1500.0/3600.0), 16)
+	// The limiter is a micro-burst smoother, not the budget: hourly
+	// governance lives in rateBudget (both axes, limits read from response
+	// headers). The seed rate here is replaced by the observed request
+	// limit on the first response (syncLimiterSize). The burst absorbs one
+	// sync cycle's spike; sustained rate stays within budget regardless of
+	// burst size.
+	limiter := rate.NewLimiter(rate.Limit(float64(seedHourlyRequestLimit)/3600.0), 16)
 
 	return &Client{
 		apiKey:     apiKey,
 		apiURL:     defaultAPIURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		budget:     newRateBudget(time.Now),
 		limiter:    limiter,
 		stats:      NewAPIStats(opts.APIStatsEnabled),
 	}
@@ -120,13 +134,35 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		c.circuitOpenUntil.Store(0)
 	}
 
-	// Mutation priority: reserve the last 2 burst tokens for user-facing writes.
-	// Non-mutation queries are rejected when tokens are critically low, so writes
-	// don't get stuck behind a queue of background reads.
+	// Budget gate: the priority-reserve ladder (ratebudget.go). Reads that
+	// trip their tier's reserve defer immediately (the sync worker's queues
+	// retry them); a blocked mutation waits for the window when the wait is
+	// short, because writes are user-facing and must not be silently dropped.
 	isMutation := strings.HasPrefix(strings.TrimSpace(query), "mutation")
-	if !isMutation && c.limiter.Tokens() < 2 {
-		return fmt.Errorf("rate limit: query %s deferred (reserving capacity for writes)", opName)
+	tier := tierFor(ctx, opName, isMutation)
+	adm, dec := c.budget.admit(opName, tier)
+	if adm == nil && tier == pWrite && dec.retryAfter > 0 && dec.retryAfter <= maxWriteWait {
+		log.Printf("[ratelimit] mutation %s waiting %s for budget window reset", opName, dec.retryAfter.Round(time.Second))
+		timer := time.NewTimer(dec.retryAfter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("rate limit wait cancelled: %w", ctx.Err())
+		case <-timer.C:
+		}
+		adm, dec = c.budget.admit(opName, tier)
 	}
+	if adm == nil {
+		return fmt.Errorf("rate limit: query %s deferred (%s)", opName, dec.reason)
+	}
+	// The admission must be settled exactly once. The success and
+	// rate-limited paths settle explicitly below (observe/rateLimited);
+	// this deferred release is the idempotent catch-all for every early
+	// return (marshal error, transport error, cancellation).
+	defer adm.release()
+	// After the response has been observed, re-size the micro-burst
+	// limiter to the server-reported request limit.
+	defer c.syncLimiterSize()
 
 	// Log token bucket exhaustion before blocking
 	if tokens := c.limiter.Tokens(); tokens <= 0 {
@@ -153,10 +189,9 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	}
 	// Always log noisy rate limit waits (no env var required)
 	if rateLimitWait > 100*time.Millisecond {
-		hourly := c.stats.HourlyCount()
-		pct := float64(hourly) / float64(linearHourlyLimit) * 100
-		log.Printf("[ratelimit] %s waited %s (budget: %d/%d this hour, %.0f%% used)",
-			opName, rateLimitWait.Round(time.Millisecond), hourly, linearHourlyLimit, pct)
+		hourly, pct := c.stats.BudgetSnapshot()
+		log.Printf("[ratelimit] %s waited %s (budget: %d requests this hour, %.0f%% of limit)",
+			opName, rateLimitWait.Round(time.Millisecond), hourly, pct)
 	}
 
 	// Track request duration for stats
@@ -201,28 +236,39 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	// Request succeeded at the network level — reset circuit breaker
 	c.consecutiveErrors.Store(0)
 
-	// Check server-side rate limit headers
-	c.checkRateLimitHeaders(resp, opName)
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		// Headers arrived even though the body didn't: still observe them.
+		adm.observe(resp.Header)
 		queryErr = fmt.Errorf("failed to read response: %w", err)
 		return queryErr
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {
+		adm.rateLimited(resp.Header)
 		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 		log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP 429): %s", opName, string(respBody))
 		return queryErr
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Linear reports budget exhaustion as HTTP 400 with a RATELIMITED
+		// error code in the body. Non-200 bodies are Linear's own error
+		// envelope (never user data), so a substring check cannot false-
+		// positive on issue content.
+		if strings.Contains(string(respBody), "RATELIMITED") {
+			adm.rateLimited(resp.Header)
+			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP %d): %s", opName, resp.StatusCode, string(respBody))
+		} else {
+			adm.observe(resp.Header)
+		}
 		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 		return queryErr
 	}
 
 	var gqlResp graphQLResponse
 	if err := json.Unmarshal(respBody, &gqlResp); err != nil {
+		adm.observe(resp.Header)
 		queryErr = fmt.Errorf("failed to parse response: %w", err)
 		return queryErr
 	}
@@ -231,10 +277,17 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		errMsg := gqlResp.Errors[0].Message
 		queryErr = fmt.Errorf("GraphQL error: %s", errMsg)
 		if strings.Contains(errMsg, "RATELIMITED") || strings.Contains(strings.ToLower(errMsg), "rate limit") {
+			adm.rateLimited(resp.Header)
 			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, errMsg)
+		} else {
+			adm.observe(resp.Header)
 		}
 		return queryErr
 	}
+
+	// Success: settle the reservation and reconcile the budget to the
+	// server-reported headers (both axes + this op's actual X-Complexity).
+	adm.observe(resp.Header)
 
 	if err := json.Unmarshal(gqlResp.Data, result); err != nil {
 		queryErr = fmt.Errorf("failed to parse data: %w", err)
@@ -244,50 +297,32 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	return nil
 }
 
-// checkRateLimitHeaders logs warnings when Linear's rate limit headers indicate low remaining budget
-// and records the reset time for adaptive backoff.
-func (c *Client) checkRateLimitHeaders(resp *http.Response, opName string) {
-	// M-3: Parse X-RateLimit-Reset for adaptive backoff in sync worker
-	if resetStr := resp.Header.Get("X-RateLimit-Reset"); resetStr != "" {
-		if resetUnix, err := strconv.ParseInt(resetStr, 10, 64); err == nil {
-			resetTime := time.Unix(resetUnix, 0)
-			c.rateLimitMu.Lock()
-			c.rateLimitResetAt = resetTime
-			c.rateLimitMu.Unlock()
-		}
-	}
-
-	remaining := resp.Header.Get("X-RateLimit-Requests-Remaining")
-	limit := resp.Header.Get("X-RateLimit-Requests-Limit")
-
-	if remaining == "" {
+// syncLimiterSize re-sizes the micro-burst limiter (and the stats
+// denominator) to the server-reported hourly request limit once the budget
+// has observed it. No-op until the first response and after that only on
+// change; the construction-time seed is never trusted past first contact.
+func (c *Client) syncLimiterSize() {
+	lim := c.budget.requestsLimit()
+	if lim <= 0 {
 		return
 	}
-
-	rem, err := strconv.Atoi(remaining)
-	if err != nil {
+	c.limiterMu.Lock()
+	defer c.limiterMu.Unlock()
+	if lim == c.limiterSizedFor {
 		return
 	}
-
-	lim := linearHourlyLimit
-	if limit != "" {
-		if parsed, err := strconv.Atoi(limit); err == nil {
-			lim = parsed
-		}
-	}
-
-	// Warn when below 20% of limit
-	if lim > 0 && float64(rem)/float64(lim) < 0.20 {
-		log.Printf("[ratelimit] Linear API: %d/%d requests remaining this hour (after %s)", rem, lim, opName)
-	}
+	c.limiterSizedFor = lim
+	c.limiter.SetLimit(rate.Limit(lim / 3600.0))
+	c.stats.SetHourlyLimit(int(lim))
+	log.Printf("[ratelimit] observed request limit %.0f/hr; limiter re-sized", lim)
 }
 
-// RateLimitResetAt returns the server-reported time when the rate limit window resets.
-// Returns zero time if no X-RateLimit-Reset header has been seen yet.
+// RateLimitResetAt returns the server-reported time when the rate limit
+// window resets (the later of the two axes' resets, parsed from the
+// per-axis millisecond headers). Zero until a response has been observed.
+// The sync worker's backoff consults this instead of guessing.
 func (c *Client) RateLimitResetAt() time.Time {
-	c.rateLimitMu.RLock()
-	defer c.rateLimitMu.RUnlock()
-	return c.rateLimitResetAt
+	return c.budget.resetAt()
 }
 
 // Stats returns the client's API stats tracker for external inspection.
@@ -1191,12 +1226,12 @@ func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) erro
 	return execMutationOK(ctx, c, mutationDeleteAttachment, map[string]any{"id": attachmentID}, "attachmentDelete")
 }
 
-// LowBudget reports whether the rate limiter has fewer than 5 tokens left.
-// The reconciliation pass uses this to defer the next per-team page when
-// budget is tight, leaving headroom for user-facing writes and ongoing sync.
+// LowBudget reports whether a conservatively-priced list-tier request would
+// currently be refused by the rate budget. The paginate module refuses to
+// start a new drain on it, and the reconciliation pass defers its per-team
+// sweeps — leaving headroom for user-facing writes and ongoing sync.
 func (c *Client) LowBudget() bool {
-	// 5 = write-reserve (2, see c.query) + sync headroom (~3 pages).
-	return c.limiter.Tokens() < 5
+	return c.budget.low(pList)
 }
 
 // GetTeamIssueIDs returns the IDs of every issue in the team, draining the

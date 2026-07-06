@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -929,15 +930,17 @@ func TestGetTeamMembers(t *testing.T) {
 	}
 }
 
-// TestRateLimitResetHeaderParsed verifies M-3: the X-RateLimit-Reset response header
-// is parsed and stored so the sync worker can use it for adaptive backoff.
+// TestRateLimitResetHeaderParsed verifies the per-axis reset headers are
+// parsed as epoch MILLISECONDS (Linear's actual unit) and surfaced through
+// RateLimitResetAt so the sync worker can use them for adaptive backoff.
 func TestRateLimitResetHeaderParsed(t *testing.T) {
 	t.Parallel()
 
-	resetUnix := time.Now().Add(60 * time.Second).Unix()
+	resetMs := time.Now().Add(60 * time.Second).UnixMilli()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetUnix, 10))
+		w.Header().Set("X-RateLimit-Complexity-Reset", strconv.FormatInt(resetMs, 10))
+		w.Header().Set("X-RateLimit-Requests-Reset", strconv.FormatInt(resetMs, 10))
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
 	}))
@@ -954,14 +957,73 @@ func TestRateLimitResetHeaderParsed(t *testing.T) {
 	_, _ = client.GetTeams(context.Background())
 
 	got := client.RateLimitResetAt()
-	expected := time.Unix(resetUnix, 0)
+	expected := time.UnixMilli(resetMs)
 	if !got.Equal(expected) {
 		t.Errorf("RateLimitResetAt() = %v, want %v", got, expected)
 	}
 }
 
-// TestRateLimitResetHeaderMissing verifies M-3: when no X-RateLimit-Reset header is sent,
-// RateLimitResetAt() remains zero.
+// TestViewerProbeSeedsBudget verifies the cold-start probe contract end to
+// end at the client level: before any response the budget is unseen (nothing
+// gates), and one cheap GetViewer whose headers report a nearly-exhausted
+// complexity window seeds the budget so the NEXT expensive query is deferred
+// without ever reaching the server. This is the hole the sync worker's probe
+// closes: without a first observed response, a cold start's burst would all
+// admit un-gated.
+func TestViewerProbeSeedsBudget(t *testing.T) {
+	t.Parallel()
+
+	resetMs := time.Now().Add(30 * time.Minute).UnixMilli()
+	var requests atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("X-Complexity", "1")
+		w.Header().Set("X-RateLimit-Complexity-Limit", "3000000")
+		w.Header().Set("X-RateLimit-Complexity-Remaining", "1000") // nearly exhausted
+		w.Header().Set("X-RateLimit-Complexity-Reset", strconv.FormatInt(resetMs, 10))
+		w.Header().Set("X-RateLimit-Requests-Limit", "2500")
+		w.Header().Set("X-RateLimit-Requests-Remaining", "2400")
+		w.Header().Set("X-RateLimit-Requests-Reset", strconv.FormatInt(resetMs, 10))
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"data": {"viewer": {"id": "user-1", "name": "Probe", "email": "p@example.com"}}}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	// Unseen budget: nothing gates yet.
+	if client.LowBudget() {
+		t.Fatal("LowBudget() = true before any response; an unseen budget must not gate")
+	}
+
+	viewer, err := client.GetViewer(context.Background())
+	if err != nil {
+		t.Fatalf("GetViewer failed: %v", err)
+	}
+	if viewer.ID != "user-1" {
+		t.Errorf("viewer.ID = %q, want user-1", viewer.ID)
+	}
+
+	// The probe's headers seeded the budget: 1000 complexity remaining is
+	// under every read tier's reserve, so expensive work now defers.
+	if !client.LowBudget() {
+		t.Error("LowBudget() = false after probe reported 1000/3000000 complexity remaining")
+	}
+	if _, err := client.GetTeams(context.Background()); err == nil || !strings.Contains(err.Error(), "deferred") {
+		t.Errorf("GetTeams after exhausted probe: err = %v, want budget deferral", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("server saw %d requests, want 1 (the deferred query must not reach the server)", got)
+	}
+	if got, want := client.RateLimitResetAt(), time.UnixMilli(resetMs); !got.Equal(want) {
+		t.Errorf("RateLimitResetAt() = %v, want %v (seeded by the probe)", got, want)
+	}
+}
+
+// TestRateLimitResetHeaderMissing verifies that when no reset headers are
+// sent, RateLimitResetAt() remains zero.
 func TestRateLimitResetHeaderMissing(t *testing.T) {
 	t.Parallel()
 
@@ -1071,7 +1133,10 @@ func TestCircuitBreakerCooldownAllowsProbe(t *testing.T) {
 // Mutation Priority Tests
 // =============================================================================
 
-func TestMutationPriorityReservesTokensForWrites(t *testing.T) {
+// TestMutationPriorityReservesBudgetForWrites verifies the reserve ladder
+// in Client.query: under a drained complexity budget a background read
+// defers, while a mutation (reserve 0) still flows.
+func TestMutationPriorityReservesBudgetForWrites(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1083,42 +1148,48 @@ func TestMutationPriorityReservesTokensForWrites(t *testing.T) {
 	client := NewClient("test-api-key")
 	client.SetAPIURL(server.URL)
 
-	// Drain the token bucket to near-empty (below the 2-token write
-	// reserve), whatever the burst size.
-	for client.limiter.Tokens() >= 2 {
-		client.limiter.Allow()
+	// Drain the budget: 20k complexity left of 3M — under every read
+	// tier's reserve floor, but enough for a write (reserve 0).
+	client.budget.mu.Lock()
+	client.budget.complexity = window{
+		name: "complexity", limit: 3000000, remaining: 20000,
+		resetAt: time.Now().Add(time.Hour), seen: true,
 	}
+	client.budget.mu.Unlock()
 
-	// Non-mutation query should be rejected when tokens < 2
+	// Non-mutation query should defer under the reserve floor
 	var result struct {
 		Teams struct {
 			Nodes []struct{} `json:"nodes"`
 		} `json:"teams"`
 	}
 	err := client.query(context.Background(), "query Teams { teams { nodes { id } } }", nil, &result)
-	if err == nil || !strings.Contains(err.Error(), "reserving capacity for writes") {
-		t.Errorf("expected query to be rejected for write reservation, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "deferred") {
+		t.Errorf("expected read to be deferred under drained budget, got: %v", err)
 	}
 
 	// Mutation should still be allowed through
 	err = client.query(context.Background(), "mutation UpdateIssue($id: String!) { issueUpdate(id: $id) { success } }", nil, &result)
-	if err != nil && strings.Contains(err.Error(), "reserving capacity") {
-		t.Errorf("mutation should bypass write reservation, got: %v", err)
+	if err != nil && strings.Contains(err.Error(), "deferred") {
+		t.Errorf("mutation should bypass the read reserves, got: %v", err)
 	}
 }
 
 func TestClient_LowBudget(t *testing.T) {
 	c := NewClient("test-key")
-	// Fresh limiter has a full burst. Should not be low.
+	// A fresh budget has observed nothing — unseen axes never gate.
 	if c.LowBudget() {
-		t.Error("LowBudget true with full burst")
+		t.Error("LowBudget true before any response observed")
 	}
-	// Drain the burst to just under the threshold, whatever its size.
-	for c.limiter.Tokens() >= 5 {
-		c.limiter.Reserve()
+	// Drain the complexity window below the list-tier reserve.
+	c.budget.mu.Lock()
+	c.budget.complexity = window{
+		name: "complexity", limit: 3000000, remaining: 100000,
+		resetAt: time.Now().Add(time.Hour), seen: true,
 	}
+	c.budget.mu.Unlock()
 	if !c.LowBudget() {
-		t.Error("LowBudget false with <5 tokens remaining")
+		t.Error("LowBudget false with remaining under the list reserve")
 	}
 }
 

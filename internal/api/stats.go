@@ -11,9 +11,6 @@ import (
 )
 
 const (
-	// Linear's rate limit
-	linearHourlyLimit = 1500
-
 	// How often to log stats (when enabled)
 	statsLogInterval = 5 * time.Minute
 
@@ -32,8 +29,9 @@ type OperationStats struct {
 type APIStats struct {
 	mu              sync.RWMutex
 	operations      map[string]*OperationStats
-	recentCalls     []time.Time // timestamps for rolling hourly window
-	rateLimitWaitNs int64       // total time waiting for rate limiter (atomic)
+	recentCalls     []time.Time  // timestamps for rolling hourly window
+	rateLimitWaitNs int64        // total time waiting for rate limiter (atomic)
+	hourlyLimit     atomic.Int64 // requests/hr denominator; seeded, then set from response headers
 	startTime       time.Time
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
@@ -49,6 +47,9 @@ func NewAPIStats(logEnabled bool) *APIStats {
 		startTime:   time.Now(),
 		stopCh:      make(chan struct{}),
 	}
+	// Seed only: the Client replaces this with the server-reported request
+	// limit on the first observed response (SetHourlyLimit).
+	s.hourlyLimit.Store(seedHourlyRequestLimit)
 
 	// Always run periodic logger — the 5-minute interval is not noisy
 	// and provides essential observability for rate limit issues.
@@ -118,9 +119,17 @@ func (s *APIStats) HourlyCount() int {
 	return count
 }
 
-// HourlyRate returns the percentage of Linear's hourly limit used.
+// SetHourlyLimit updates the requests/hr denominator to the server-reported
+// limit. Called by the Client when the rate budget observes it.
+func (s *APIStats) SetHourlyLimit(limit int) {
+	if limit > 0 {
+		s.hourlyLimit.Store(int64(limit))
+	}
+}
+
+// HourlyRate returns the percentage of Linear's hourly request limit used.
 func (s *APIStats) HourlyRate() float64 {
-	return float64(s.HourlyCount()) / float64(linearHourlyLimit) * 100
+	return float64(s.HourlyCount()) / float64(s.hourlyLimit.Load()) * 100
 }
 
 // RateLimitWaitTotal returns the total time spent waiting for the rate limiter.
@@ -131,7 +140,7 @@ func (s *APIStats) RateLimitWaitTotal() time.Duration {
 // BudgetSnapshot returns the current hourly call count and percentage used.
 func (s *APIStats) BudgetSnapshot() (count int, pct float64) {
 	count = s.HourlyCount()
-	pct = float64(count) / float64(linearHourlyLimit) * 100
+	pct = float64(count) / float64(s.hourlyLimit.Load()) * 100
 	return
 }
 
@@ -158,7 +167,7 @@ func (s *APIStats) Summary() string {
 		}
 	}
 
-	hourlyRate := float64(hourlyCount) / float64(linearHourlyLimit) * 100
+	hourlyRate := float64(hourlyCount) / float64(s.hourlyLimit.Load()) * 100
 	rateLimitWait := time.Duration(atomic.LoadInt64(&s.rateLimitWaitNs))
 
 	var sb strings.Builder
