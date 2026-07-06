@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -75,11 +74,10 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 func (n *LabelsNode) newLabelInode(ctx context.Context, label api.Label, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	content := labelToMarkdown(&label)
 	node := &LabelFileNode{
-		BaseNode:     BaseNode{lfs: n.lfs},
-		label:        label,
-		teamID:       n.teamID,
-		content:      content,
-		contentReady: true,
+		BaseNode:   BaseNode{lfs: n.lfs},
+		label:      label,
+		teamID:     n.teamID,
+		editBuffer: editBuffer{content: content},
 	}
 	now := time.Now()
 	out.Attr.Mode = 0644 | syscall.S_IFREG
@@ -261,13 +259,9 @@ description: %q
 // LabelFileNode represents a single label file (read-write)
 type LabelFileNode struct {
 	BaseNode
+	editBuffer
 	label  api.Label
 	teamID string
-
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
 }
 
 var _ fs.NodeGetattrer = (*LabelFileNode)(nil)
@@ -279,79 +273,9 @@ var _ fs.NodeFsyncer = (*LabelFileNode)(nil)
 var _ fs.NodeSetattrer = (*LabelFileNode)(nil)
 
 func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
+	// api.Label carries no timestamps, so there is nothing to report but now().
 	now := time.Now()
-	out.Mode = 0644
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *LabelFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *LabelFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
-}
-
-func (n *LabelFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write label %s: offset=%d len=%d", n.label.ID, off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	n.dirty = true
-
-	return uint32(len(data)), 0
-}
-
-func (n *LabelFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if n.lfs.debug {
-			log.Printf("Setattr truncate label %s: size=%d", n.label.ID, sz)
-		}
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-		n.dirty = true
-	}
-
-	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	fileAttr(n.size(), now, now).fill(&out.Attr, &n.BaseNode)
 	return 0
 }
 
@@ -417,16 +341,11 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	}
 
 	n.dirty = false
-	n.contentReady = false // Force regenerate on next read
 
 	// Invalidate kernel inode cache
 	n.lfs.InvalidateUpdated(labelIno(n.label.ID))
 
 	return errno
-}
-
-func (n *LabelFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
 }
 
 // createLabel is the labels create surface's onFlush: parse the frontmatter
