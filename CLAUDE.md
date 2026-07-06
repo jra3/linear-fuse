@@ -217,10 +217,19 @@ query TeamIssues($teamId: String!) {
 ```
 
 Available fragments:
-- `IssueFields` - All issue fields (used by 11 queries)
+- `IssueFields` / `IssueFieldsLite` - Issue fields; the Lite variant (no relations) also backs the create mutation
 - `CommentFields` - Comment fields (query, create, update)
 - `DocumentFields` - Document fields (issue docs, project docs, create)
 - `LabelFields` - Label fields (query, create, update)
+- `AttachmentFields` - Attachment fields (detail query, create, link)
+- `ProjectMilestoneFields` - Milestone fields (nested in project queries, milestone query, create, update)
+- `ProjectUpdateFields` / `InitiativeUpdateFields` - Status-update fields (query + create)
+
+**Every mutation that returns an entity must project it through the entity's
+fragment, not an inlined field list** — an inlined copy silently drifts when the
+fragment gains a field (a real instance: the attachment create/link mutations
+had drifted, omitting `metadata` and `creator`). A fragment canonicalizes to one
+field set, so a created entity carries the same fields a fetched one does.
 
 When adding new fields to an entity, update the corresponding fragment.
 
