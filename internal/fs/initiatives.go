@@ -321,20 +321,8 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		return syscall.EINVAL
 	}
 
-	// Extract projects from frontmatter
-	var newProjectSlugs []string
-	if projectsRaw, ok := doc.Frontmatter["projects"]; ok {
-		switch v := projectsRaw.(type) {
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					newProjectSlugs = append(newProjectSlugs, s)
-				}
-			}
-		case []string:
-			newProjectSlugs = v
-		}
-	}
+	// Extract projects from frontmatter (coerced via the shared marshal helper)
+	newProjectSlugs := marshal.StringSliceFromYAML(doc.Frontmatter["projects"])
 
 	// Get current project slugs
 	var currentProjectSlugs []string
@@ -373,22 +361,14 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 
 	// Persist editable scalar fields (name in frontmatter, description in body).
 	// The body maps to the initiative's description, matching generateContent().
-	var initiativeInput api.InitiativeUpdateInput
-	fieldChanged := false
-	if newDesc := strings.TrimSpace(doc.Body); newDesc != strings.TrimSpace(i.initiative.Description) {
-		initiativeInput.Description = &newDesc
-		fieldChanged = true
-	}
-	if name, ok := doc.Frontmatter["name"].(string); ok && name != "" && name != i.initiative.Name {
-		nameCopy := name
-		initiativeInput.Name = &nameCopy
-		fieldChanged = true
-	}
-	if fieldChanged {
+	// scalarEdit owns the diff, name coercion, and the divergence compare below.
+	edit := newScalarEdit(doc, i.initiative.Name, i.initiative.Description)
+	initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Description: edit.desc}
+	if edit.changed() {
 		if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
-			log.Printf("Failed to update initiative %s: %v", i.initiative.Name, err)
-			i.lfs.SetWriteError(i.initiativeID, "Field: name/description\nError: failed to update initiative: "+err.Error())
-			return syscall.EIO
+			msg, errno := classifyMutationErr("update initiative", err)
+			i.lfs.SetWriteError(i.initiativeID, msg)
+			return errno
 		}
 		if i.lfs.debug {
 			log.Printf("Updated initiative %s scalar fields", i.initiative.Name)
@@ -407,14 +387,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			return i.lfs.UpsertInitiative(ctx, *fresh)
 		},
 		compare: func(fresh *api.Initiative) []writeBackResult {
-			var results []writeBackResult
-			if initiativeInput.Name != nil {
-				results = append(results, writeBackDivergence("name", *initiativeInput.Name, fresh.Name, i.initiative.Name))
-			}
-			if initiativeInput.Description != nil {
-				results = append(results, writeBackDivergence("description (body)", *initiativeInput.Description, fresh.Description, i.initiative.Description))
-			}
-			return results
+			return edit.divergences(fresh.Name, fresh.Description)
 		},
 	})
 	if fresh != nil {

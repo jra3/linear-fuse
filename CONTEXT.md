@@ -109,6 +109,32 @@ unit-tested with recording closures (no FUSE mount, SQLite, or API). Persisting 
 junction row inline (rather than the old deferred batch a mid-loop failure skipped)
 keeps SQLite consistent with whatever the API actually accepted on a partial failure.
 
+### Scalar edit (`scalarEdit`)
+The **deep module** owning the *scalar* front half of a project/initiative edit —
+the counterpart to Link reconciliation, which owns the *relational* (list) front
+half of the same two mirror-image handlers. `project.md` and `initiative.md` each
+expose exactly two editable scalars: a **name** (frontmatter) and a
+**description** (body). `scalarEdit` (`internal/fs/scalaredit.go`) is the diff of
+those two — `{name, desc *string, origName, origDesc string}` — and owns the
+change decision (trim both sides of the body so a render/parse trailing-newline
+delta doesn't read as an edit; coerce the name via `marshal.ScalarToString` so a
+numeric/bare-scalar name updates instead of being silently dropped by a direct
+type assertion), the `changed()` predicate, and the read-your-writes
+`divergences(freshName, freshDesc)` classification (one canonical field order,
+`writeBackDivergence` per changed field). It stays **neutral to the entity type**:
+the caller maps `name`/`desc` onto its own typed `api.ProjectUpdateInput` /
+`api.InitiativeUpdateInput` and pulls the fresh values back out — nothing
+Project- or Initiative-shaped crosses the interface, so no generics. This
+collapsed the byte-identical `fieldChanged`-flag diff and the byte-identical
+`commitWriteBack` compare closure that both handlers hand-rolled. The scalar
+mutation failure now routes through the shared `classifyMutationErr` (like the
+reconcile path 20 lines above it), so a rate-limited scalar edit returns
+`EAGAIN` — not the old flat `EIO` — and the server's reason reaches `.error`.
+Pure of the FUSE mount, SQLite, and API: unit-tested directly on a parsed
+`marshal.Document` plus current values. (`marshal.ScalarToString` and
+`marshal.StringSliceFromYAML` — the list coercion the handlers now share for the
+relational front half — were exported from marshal for this.)
+
 ### Create trigger (`createFileNode`)
 The **deep module** owning the write-only `_create` file (and the named-file
 `Create` paths that share its mechanics): buffer written bytes, and on close hand

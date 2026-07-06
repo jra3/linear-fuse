@@ -474,20 +474,8 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return syscall.EINVAL
 	}
 
-	// Extract initiatives from frontmatter
-	var newInitiatives []string
-	if initiativesRaw, ok := doc.Frontmatter["initiatives"]; ok {
-		switch v := initiativesRaw.(type) {
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok {
-					newInitiatives = append(newInitiatives, s)
-				}
-			}
-		case []string:
-			newInitiatives = v
-		}
-	}
+	// Extract initiatives from frontmatter (coerced via the shared marshal helper)
+	newInitiatives := marshal.StringSliceFromYAML(doc.Frontmatter["initiatives"])
 
 	// Get current initiatives
 	var currentInitiatives []string
@@ -528,22 +516,14 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 	// Persist editable scalar fields (name in frontmatter, description in body).
 	// The body maps to the project's description, matching generateContent().
-	var projectInput api.ProjectUpdateInput
-	fieldChanged := false
-	if newDesc := strings.TrimSpace(doc.Body); newDesc != strings.TrimSpace(p.project.Description) {
-		projectInput.Description = &newDesc
-		fieldChanged = true
-	}
-	if name, ok := doc.Frontmatter["name"].(string); ok && name != "" && name != p.project.Name {
-		nameCopy := name
-		projectInput.Name = &nameCopy
-		fieldChanged = true
-	}
-	if fieldChanged {
+	// scalarEdit owns the diff, name coercion, and the divergence compare below.
+	edit := newScalarEdit(doc, p.project.Name, p.project.Description)
+	projectInput := api.ProjectUpdateInput{Name: edit.name, Description: edit.desc}
+	if edit.changed() {
 		if err := p.lfs.mutator().UpdateProject(ctx, p.project.ID, projectInput); err != nil {
-			log.Printf("Failed to update project %s: %v", p.project.Name, err)
-			p.lfs.SetWriteError(p.project.ID, "Field: name/description\nError: failed to update project: "+err.Error())
-			return syscall.EIO
+			msg, errno := classifyMutationErr("update project", err)
+			p.lfs.SetWriteError(p.project.ID, msg)
+			return errno
 		}
 		if p.lfs.debug {
 			log.Printf("Updated project %s scalar fields", p.project.Name)
@@ -560,14 +540,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)
 		},
 		compare: func(fresh *api.Project) []writeBackResult {
-			var results []writeBackResult
-			if projectInput.Name != nil {
-				results = append(results, writeBackDivergence("name", *projectInput.Name, fresh.Name, p.project.Name))
-			}
-			if projectInput.Description != nil {
-				results = append(results, writeBackDivergence("description (body)", *projectInput.Description, fresh.Description, p.project.Description))
-			}
-			return results
+			return edit.divergences(fresh.Name, fresh.Description)
 		},
 	})
 	if fresh != nil {
