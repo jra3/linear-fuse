@@ -327,7 +327,13 @@ func (lfs *LinearFS) UpsertLabel(ctx context.Context, teamID string, label api.L
 	if lfs.store == nil {
 		return nil // SQLite not enabled, skip silently
 	}
-	params, err := db.APILabelToDBLabel(label, teamID)
+	// A label created/edited under teams/{KEY}/labels is team-scoped; if the
+	// mutation response didn't carry team, stamp the known context so it isn't
+	// mistaken for a workspace label. A workspace label keeps team.
+	if label.Team == nil && teamID != "" {
+		label.Team = &api.Team{ID: teamID}
+	}
+	params, err := db.APILabelToDBLabel(label)
 	if err != nil {
 		return err
 	}

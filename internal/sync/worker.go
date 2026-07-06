@@ -561,7 +561,10 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// Process labels (already deduplicated by GetTeamMetadata)
 	labelsClean := true
 	for _, label := range meta.Labels {
-		params, err := db.APILabelToDBLabel(label, team.ID)
+		// team_id comes from label.Team (fetched via the LabelFields fragment),
+		// not team.ID: team.labels returns workspace labels mixed in, so
+		// stamping team.ID here is what churned workspace labels between teams.
+		params, err := db.APILabelToDBLabel(label)
 		if err != nil {
 			log.Printf("[sync] convert label %s failed: %v", label.Name, err)
 			labelsClean = false

@@ -186,10 +186,13 @@ pre-fetch `synced_at` cutoff so mid-sync writes survive, is gated on a
 per-entity clean flag (skipped when that entity's fetch or any upsert failed),
 and runs only against a drained fetch — a truncated list reads as removals.
 `states` are workflow-bounded and fetched single-page, so they stay
-upsert-only. Workspace labels commingle into `labels` under whichever team
-synced them, but every team fetch re-includes all workspace labels (via
-`issueLabels`), so they are always refreshed above the cutoff and never pruned
-by a team that no longer "owns" them.
+upsert-only. A label's `team_id` follows its own `team` (fetched via the
+`LabelFields` fragment) — `nil` means a workspace-level label, stored
+`team_id=NULL` — so a workspace label no longer churns to whichever team's
+sync last touched it (`team.labels` returns workspace labels mixed in, which
+is why stamping the syncing team was wrong). The team prune targets
+`team_id = <team>`, so `NULL` workspace labels are outside every team's prune
+scope.
 
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for

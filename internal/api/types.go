@@ -108,6 +108,11 @@ type Label struct {
 	Name        string `json:"name"`
 	Color       string `json:"color"`
 	Description string `json:"description"`
+	// Team is the label's owning team, or nil for a workspace-level label.
+	// Only the ID is fetched (team { id }); it is the authoritative source for
+	// the labels row's team_id, so a workspace label stays team_id=NULL no
+	// matter which team's sync pass touches it.
+	Team *Team `json:"team,omitempty"`
 }
 
 type Project struct {

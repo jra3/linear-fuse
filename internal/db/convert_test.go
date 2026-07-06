@@ -175,26 +175,42 @@ func TestDBStatesToAPIStates(t *testing.T) {
 
 func TestAPILabelToDBLabel(t *testing.T) {
 	t.Parallel()
-	label := api.Label{
+
+	// A team-scoped label carries its team; team_id follows label.Team, not a
+	// caller-supplied value.
+	teamLabel := api.Label{
 		ID:          "label-1",
 		Name:        "Bug",
 		Description: "Bug reports",
 		Color:       "#ff0000",
+		Team:        &api.Team{ID: "team-1"},
 	}
-
-	params, err := APILabelToDBLabel(label, "team-1")
+	params, err := APILabelToDBLabel(teamLabel)
 	if err != nil {
 		t.Fatalf("APILabelToDBLabel failed: %v", err)
 	}
-
-	if params.ID != label.ID {
+	if params.ID != teamLabel.ID {
 		t.Errorf("ID mismatch")
 	}
-	if params.Name != label.Name {
+	if params.Name != teamLabel.Name {
 		t.Errorf("Name mismatch")
 	}
-	if params.Color.String != label.Color {
+	if params.Color.String != teamLabel.Color {
 		t.Errorf("Color mismatch")
+	}
+	if !params.TeamID.Valid || params.TeamID.String != "team-1" {
+		t.Errorf("team_id = %+v, want team-1 (from label.Team)", params.TeamID)
+	}
+
+	// A workspace-level label has no team; team_id must stay NULL so it does
+	// not churn to whichever team's sync last touched it.
+	wsLabel := api.Label{ID: "label-2", Name: "Workspace", Team: nil}
+	wsParams, err := APILabelToDBLabel(wsLabel)
+	if err != nil {
+		t.Fatalf("APILabelToDBLabel (workspace) failed: %v", err)
+	}
+	if wsParams.TeamID.Valid {
+		t.Errorf("workspace label team_id = %q, want NULL", wsParams.TeamID.String)
 	}
 }
 

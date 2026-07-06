@@ -438,10 +438,9 @@ DELETE FROM project_teams WHERE team_id = ? AND synced_at < ?;
 -- Prune the team metadata rows the drained (complete) metadata fetch no
 -- longer returned: renamed or deleted labels, cycles, and departed members.
 -- Same contract as PruneProjectTeams, only safe against a complete fetch with
--- the cutoff taken before the sync upserts. Workspace labels commingle into
--- the labels table under whichever team synced them, but every team fetch
--- re-includes all workspace labels (via issueLabels), so they are always
--- refreshed above the cutoff before this prune runs and are never removed here.
+-- the cutoff taken before the sync upserts. A label's team_id follows its own
+-- team, so workspace labels are stored team_id=NULL and sit outside this
+-- team-scoped prune entirely (only genuine team labels are removed here).
 -- name: PruneTeamLabels :exec
 DELETE FROM labels WHERE team_id = ? AND synced_at < ?;
 
