@@ -286,7 +286,8 @@ func TestSQLiteRepository_Labels(t *testing.T) {
 		{ID: "l2", Name: "Feature", Color: "#00ff00"},
 	}
 	for _, label := range labels {
-		params, _ := db.APILabelToDBLabel(label, "team-1")
+		label.Team = &api.Team{ID: "team-1"}
+		params, _ := db.APILabelToDBLabel(label)
 		if err := store.Queries().UpsertLabel(ctx, params); err != nil {
 			t.Fatalf("setup: %v", err)
 		}
@@ -590,8 +591,8 @@ func TestSQLiteRepository_IssuesByLabel(t *testing.T) {
 	}
 
 	// Insert label
-	label := api.Label{ID: "label-1", Name: "Bug", Color: "#ff0000"}
-	labelParams, _ := db.APILabelToDBLabel(label, "team-1")
+	label := api.Label{ID: "label-1", Name: "Bug", Color: "#ff0000", Team: &api.Team{ID: "team-1"}}
+	labelParams, _ := db.APILabelToDBLabel(label)
 	if err := store.Queries().UpsertLabel(ctx, labelParams); err != nil {
 		t.Fatalf("setup: %v", err)
 	}

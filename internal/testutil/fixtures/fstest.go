@@ -133,7 +133,8 @@ func PopulateTestData(ctx context.Context, store *db.Store) error {
 
 	// Insert labels
 	for _, label := range FixtureAPILabels() {
-		labelParams, err := db.APILabelToDBLabel(label, team.ID)
+		label.Team = &api.Team{ID: team.ID} // team-scoped fixture labels
+		labelParams, err := db.APILabelToDBLabel(label)
 		if err != nil {
 			return err
 		}
@@ -199,7 +200,8 @@ func PopulateTeam(
 
 	// Insert labels
 	for _, label := range labels {
-		labelParams, err := db.APILabelToDBLabel(label, team.ID)
+		label.Team = &api.Team{ID: team.ID} // team-scoped fixture labels
+		labelParams, err := db.APILabelToDBLabel(label)
 		if err != nil {
 			return err
 		}

@@ -210,11 +210,20 @@ func DBStatesToAPIStates(states []State) []api.State {
 // Label Conversion
 // =============================================================================
 
-// APILabelToDBLabel converts an api.Label to UpsertLabelParams
-func APILabelToDBLabel(label api.Label, teamID string) (UpsertLabelParams, error) {
+// APILabelToDBLabel converts an api.Label to UpsertLabelParams. The row's
+// team_id comes from the label's own team — Linear's authoritative source —
+// not the team whose sync pass is running: a nil team is a workspace-level
+// label and stays team_id=NULL, so it no longer churns to whichever team
+// synced it last (team.labels returns workspace labels mixed in, so the old
+// caller-supplied teamID mis-stamped them).
+func APILabelToDBLabel(label api.Label) (UpsertLabelParams, error) {
 	data, err := json.Marshal(label)
 	if err != nil {
 		return UpsertLabelParams{}, err
+	}
+	teamID := ""
+	if label.Team != nil {
+		teamID = label.Team.ID
 	}
 	return UpsertLabelParams{
 		ID:          label.ID,

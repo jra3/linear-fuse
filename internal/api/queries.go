@@ -139,6 +139,7 @@ fragment LabelFields on IssueLabel {
   name
   color
   description
+  team { id }
 }
 `
 
