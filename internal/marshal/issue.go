@@ -192,7 +192,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	update := make(map[string]any)
 	fm := doc.Frontmatter
 
-	// Every editable field is coerced to its scalar form (scalarToString) before
+	// Every editable field is coerced to its scalar form (ScalarToString) before
 	// comparison so a wrong-typed-but-meaningful value — an unquoted `due:` that
 	// parsed as time.Time, a numeric `title:`/`cycle:`, a quoted `estimate: "3"` —
 	// is applied rather than silently ignored (the #148 no-op-write failure mode,
@@ -200,13 +200,13 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	// "not set"; explicit removal is keyed on the field being absent entirely.
 
 	if v, present := fm["title"]; present {
-		if title := scalarToString(v); title != "" && title != original.Title {
+		if title := ScalarToString(v); title != "" && title != original.Title {
 			update["title"] = title
 		}
 	}
 
 	if v, present := fm["status"]; present {
-		if status := scalarToString(v); status != "" {
+		if status := ScalarToString(v); status != "" {
 			origStatus := ""
 			if original.State.ID != "" {
 				origStatus = original.State.Name
@@ -229,7 +229,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Assignee
 	if v, present := fm["assignee"]; present {
-		if assignee := scalarToString(v); assignee != "" {
+		if assignee := ScalarToString(v); assignee != "" {
 			origAssignee := ""
 			if original.Assignee != nil {
 				origAssignee = original.Assignee.Email
@@ -244,7 +244,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Due date
 	if v, present := fm["due"]; present {
-		if due := scalarToString(v); due != "" {
+		if due := ScalarToString(v); due != "" {
 			origDue := ""
 			if original.DueDate != nil {
 				origDue = *original.DueDate
@@ -275,7 +275,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Labels
 	if labelsRaw, present := fm["labels"]; present {
-		newLabels := stringSliceFromYAML(labelsRaw)
+		newLabels := StringSliceFromYAML(labelsRaw)
 
 		origLabels := make([]string, len(original.Labels.Nodes))
 		for i, l := range original.Labels.Nodes {
@@ -292,7 +292,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Parent
 	if v, present := fm["parent"]; present {
-		if parent := scalarToString(v); parent != "" {
+		if parent := ScalarToString(v); parent != "" {
 			origParent := ""
 			if original.Parent != nil {
 				origParent = original.Parent.Identifier
@@ -307,7 +307,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Project
 	if v, present := fm["project"]; present {
-		if project := scalarToString(v); project != "" {
+		if project := ScalarToString(v); project != "" {
 			origProject := ""
 			if original.Project != nil {
 				origProject = original.Project.Name
@@ -322,7 +322,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Milestone
 	if v, present := fm["milestone"]; present {
-		if milestone := scalarToString(v); milestone != "" {
+		if milestone := ScalarToString(v); milestone != "" {
 			origMilestone := ""
 			if original.ProjectMilestone != nil {
 				origMilestone = original.ProjectMilestone.Name
@@ -337,7 +337,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 
 	// Cycle
 	if v, present := fm["cycle"]; present {
-		if cycle := scalarToString(v); cycle != "" {
+		if cycle := ScalarToString(v); cycle != "" {
 			origCycle := ""
 			if original.Cycle != nil {
 				origCycle = original.Cycle.Name
@@ -379,14 +379,14 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	// `due: 2026-02-01` parses as time.Time, `priority: 2` as int, etc. Silent
 	// field-drops are exactly the #148 failure mode this surface exists to kill.
 	if v, ok := fm["title"]; ok {
-		if s := scalarToString(v); s != "" {
+		if s := ScalarToString(v); s != "" {
 			create["title"] = s
 		}
 	}
-	// Relational fields are coerced to their string name (via scalarToString)
+	// Relational fields are coerced to their string name (via ScalarToString)
 	// rather than bare `.(string)` — a numeric name (`cycle: 42`) or other
 	// non-string scalar must not be silently dropped (#148).
-	if s := scalarToString(fm["status"]); s != "" {
+	if s := ScalarToString(fm["status"]); s != "" {
 		create["stateId"] = s // resolved to state ID
 	}
 	if v, ok := fm["priority"]; ok {
@@ -398,10 +398,10 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 			create["priority"] = n
 		}
 	}
-	if s := scalarToString(fm["assignee"]); s != "" {
+	if s := ScalarToString(fm["assignee"]); s != "" {
 		create["assigneeId"] = s // resolved to user ID
 	}
-	if labels := stringSliceFromYAML(fm["labels"]); len(labels) > 0 {
+	if labels := StringSliceFromYAML(fm["labels"]); len(labels) > 0 {
 		create["labelIds"] = labels // resolved to label IDs
 	}
 	if v, ok := fm["due"]; ok {
@@ -414,16 +414,16 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 			create["estimate"] = n // Linear estimate is an integer
 		}
 	}
-	if s := scalarToString(fm["project"]); s != "" {
+	if s := ScalarToString(fm["project"]); s != "" {
 		create["projectId"] = s // resolved to project ID
 	}
-	if s := scalarToString(fm["milestone"]); s != "" {
+	if s := ScalarToString(fm["milestone"]); s != "" {
 		create["projectMilestoneId"] = s // resolved to milestone ID
 	}
-	if s := scalarToString(fm["cycle"]); s != "" {
+	if s := ScalarToString(fm["cycle"]); s != "" {
 		create["cycleId"] = s // resolved to cycle ID
 	}
-	if s := scalarToString(fm["parent"]); s != "" {
+	if s := ScalarToString(fm["parent"]); s != "" {
 		create["parentId"] = s // resolved to issue ID
 	}
 	if body := doc.Body; body != "" {
@@ -433,9 +433,9 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	return create, nil
 }
 
-// scalarToString coerces a YAML scalar (string, number, bool) to its string
+// ScalarToString coerces a YAML scalar (string, number, bool) to its string
 // form so a wrong-typed-but-meaningful value isn't silently dropped.
-func scalarToString(v any) string {
+func ScalarToString(v any) string {
 	switch s := v.(type) {
 	case string:
 		return s
@@ -454,14 +454,14 @@ func dueToString(v any) string {
 	if t, ok := v.(time.Time); ok {
 		return t.Format("2006-01-02")
 	}
-	return scalarToString(v)
+	return ScalarToString(v)
 }
 
-// stringSliceFromYAML coerces a YAML value into a []string. It accepts a list
+// StringSliceFromYAML coerces a YAML value into a []string. It accepts a list
 // (`labels: [Bug, Backend]`) or a bare scalar (`labels: Bug`), and coerces each
-// element via scalarToString so a numeric-looking name (`2026`) isn't silently
+// element via ScalarToString so a numeric-looking name (`2026`) isn't silently
 // dropped — silent element-drops are the #148 failure mode this surface kills.
-func stringSliceFromYAML(v any) []string {
+func StringSliceFromYAML(v any) []string {
 	switch s := v.(type) {
 	case nil:
 		return nil
@@ -470,14 +470,14 @@ func stringSliceFromYAML(v any) []string {
 	case []any:
 		out := make([]string, 0, len(s))
 		for _, item := range s {
-			if str := scalarToString(item); str != "" {
+			if str := ScalarToString(item); str != "" {
 				out = append(out, str)
 			}
 		}
 		return out
 	default:
 		// A bare scalar (`labels: Bug`, or a number) — a single-element list.
-		if str := scalarToString(v); str != "" {
+		if str := ScalarToString(v); str != "" {
 			return []string{str}
 		}
 		return nil
