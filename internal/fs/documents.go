@@ -31,7 +31,7 @@ func documentIno(docID string) uint64 {
 
 // DocsNode represents a docs/ directory within issues, teams, projects, or initiatives
 type DocsNode struct {
-	BaseNode
+	attrNode
 	issueID      string // Set if issue docs
 	teamID       string // Set if team docs
 	projectID    string // Set if project docs
@@ -44,14 +44,6 @@ var _ fs.NodeCreater = (*DocsNode)(nil)
 var _ fs.NodeUnlinker = (*DocsNode)(nil)
 var _ fs.NodeRenamer = (*DocsNode)(nil)
 var _ fs.NodeGetattrer = (*DocsNode)(nil)
-
-func (n *DocsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 	if n.issueID != "" {
@@ -247,17 +239,8 @@ func (n *DocsNode) newDocumentInode(ctx context.Context, doc api.Document, out *
 		content:      content,
 		contentReady: true,
 	}
-	out.Attr.Mode = 0644 | syscall.S_IFREG
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.Attr.Size = uint64(len(content))
-	out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
-	out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
-	out.Attr.SetTimes(&doc.UpdatedAt, &doc.UpdatedAt, &doc.CreatedAt)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  documentIno(doc.ID),
-	}), 0
+	// Shorter timeout for writable files.
+	return n.newFileInode(ctx, out, node, fileAttr(len(content), doc.CreatedAt, doc.UpdatedAt), documentIno(doc.ID), 5*time.Second), 0
 }
 
 func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

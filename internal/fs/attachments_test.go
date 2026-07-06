@@ -74,7 +74,7 @@ func TestCreateAttachmentIdempotentOnDuplicate(t *testing.T) {
 	attErrKey := collectionErrorKey("attachments", issueID)
 	lfs.SetWriteError(attErrKey, "stale error from a prior failure")
 
-	dir := &AttachmentsNode{BaseNode: BaseNode{lfs: lfs}, issueID: issueID}
+	dir := &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, issueID: issueID}
 	// A trailing slash must still be recognized as the same URL.
 	if errno := dir.createAttachment(ctx, []byte(url+"/\n")); errno != 0 {
 		t.Fatalf("createAttachment() on duplicate URL errno = %d, want 0 (idempotent no-op)", errno)

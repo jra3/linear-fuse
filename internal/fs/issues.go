@@ -393,17 +393,7 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			content:      content,
 			contentReady: true,
 		}
-		out.Attr.Mode = 0644 | syscall.S_IFREG
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  issueIno(n.issue.ID),
-		}), 0
+		return n.newFileInode(ctx, out, node, fileAttr(len(content), n.issue.CreatedAt, n.issue.UpdatedAt), issueIno(n.issue.ID), 30*time.Second), 0
 
 	case "issue.meta":
 		// Read-only server-managed fields (identity, timestamps, links, relations),
@@ -443,17 +433,8 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			content:      content,
 			contentReady: true,
 		}
-		out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  historyIno(n.issue.ID),
-		}), 0
+		historyAttr := nodeAttr{mode: 0444 | syscall.S_IFREG, size: uint64(len(content)), created: n.issue.CreatedAt, updated: n.issue.UpdatedAt}
+		return n.newFileInode(ctx, out, node, historyAttr, historyIno(n.issue.ID), 30*time.Second), 0
 
 	case ".error":
 		return n.lfs.lookupErrorFile(ctx, n, n.issue.ID, out), 0
@@ -468,69 +449,32 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			teamID = n.issue.Team.ID
 		}
 		node := &CommentsNode{
-			BaseNode:       BaseNode{lfs: n.lfs},
-			issueID:        n.issue.ID,
-			teamID:         teamID,
-			issueUpdatedAt: n.issue.UpdatedAt,
+			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
+			issueID:  n.issue.ID,
+			teamID:   teamID,
 		}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  commentsDirIno(n.issue.ID),
-		}), 0
+		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), commentsDirIno(n.issue.ID), 30*time.Second), 0
 
 	case "docs":
 		node := &DocsNode{
-			BaseNode: BaseNode{lfs: n.lfs},
+			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
 			issueID:  n.issue.ID,
 		}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  docsDirIno(n.issue.ID),
-		}), 0
+		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), docsDirIno(n.issue.ID), 30*time.Second), 0
 
 	case "children":
 		node := &ChildrenNode{
-			BaseNode: BaseNode{lfs: n.lfs},
+			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
 			issue:    n.issue,
 		}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  childrenDirIno(n.issue.ID),
-		}), 0
+		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), childrenDirIno(n.issue.ID), 30*time.Second), 0
 
 	case "attachments":
 		node := &AttachmentsNode{
-			BaseNode: BaseNode{lfs: n.lfs},
+			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
 			issueID:  n.issue.ID,
 		}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  attachmentsDirIno(n.issue.ID),
-		}), 0
+		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), attachmentsDirIno(n.issue.ID), 30*time.Second), 0
 
 	case "relations":
 		teamID := ""
@@ -538,20 +482,11 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 			teamID = n.issue.Team.ID
 		}
 		node := &RelationsNode{
-			BaseNode: BaseNode{lfs: n.lfs},
+			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
 			issueID:  n.issue.ID,
 			teamID:   teamID,
 		}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = n.lfs.uid
-		out.Attr.Gid = n.lfs.gid
-		out.Attr.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-		out.SetAttrTimeout(30 * time.Second)
-		out.SetEntryTimeout(30 * time.Second)
-		return n.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  relationsDirIno(n.issue.ID),
-		}), 0
+		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), relationsDirIno(n.issue.ID), 30*time.Second), 0
 	}
 
 	return nil, syscall.ENOENT
@@ -860,7 +795,7 @@ func (i *IssueFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32
 
 // ChildrenNode represents the /teams/{KEY}/issues/{ID}/children/ directory
 type ChildrenNode struct {
-	BaseNode
+	attrNode
 	issue api.Issue
 }
 
@@ -868,13 +803,6 @@ var _ fs.NodeReaddirer = (*ChildrenNode)(nil)
 var _ fs.NodeLookuper = (*ChildrenNode)(nil)
 var _ fs.NodeGetattrer = (*ChildrenNode)(nil)
 var _ fs.NodeMkdirer = (*ChildrenNode)(nil)
-
-func (n *ChildrenNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-	return 0
-}
 
 func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Query children from database by parent_id

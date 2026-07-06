@@ -143,15 +143,7 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	case "initiative.md":
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
 		content := node.generateContent()
-		out.Attr.Mode = 0644 | syscall.S_IFREG
-		out.Attr.Uid = i.lfs.uid
-		out.Attr.Gid = i.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-		return i.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFREG,
-			Ino:  initiativeInfoIno(i.initiative.ID),
-		}), 0
+		return i.newFileInode(ctx, out, node, fileAttr(len(content), i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeInfoIno(i.initiative.ID), 0), 0
 
 	case "initiative.meta":
 		// Read-through from the freshest initiative so an edit to initiative.md is
@@ -177,31 +169,16 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return i.lfs.lookupErrorFile(ctx, i, i.initiative.ID, out), 0
 
 	case "docs":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = i.lfs.uid
-		out.Attr.Gid = i.lfs.gid
-		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-		node := &DocsNode{BaseNode: BaseNode{lfs: i.lfs}, initiativeID: i.initiative.ID}
-		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR, Ino: docsDirIno(i.initiative.ID)}), 0
+		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiativeID: i.initiative.ID}
+		return i.newDirInode(ctx, out, node, dirAttr(i.initiative.CreatedAt, i.initiative.UpdatedAt), docsDirIno(i.initiative.ID), 0), 0
 
 	case "projects":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = i.lfs.uid
-		out.Attr.Gid = i.lfs.gid
-		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-		node := &InitiativeProjectsNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative}
-		return i.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  initiativeProjectsIno(i.initiative.ID),
-		}), 0
+		node := &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiative: i.initiative}
+		return i.newDirInode(ctx, out, node, dirAttr(i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeProjectsIno(i.initiative.ID), 0), 0
 
 	case "updates":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = i.lfs.uid
-		out.Attr.Gid = i.lfs.gid
-		out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-		node := &InitiativeUpdatesNode{BaseNode: BaseNode{lfs: i.lfs}, initiativeID: i.initiative.ID, initiativeUpdatedAt: i.initiative.UpdatedAt}
-		return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &InitiativeUpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiativeID: i.initiative.ID}
+		return i.newDirInode(ctx, out, node, dirAttr(i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeUpdatesDirIno(i.initiative.ID), 0), 0
 	}
 
 	return nil, syscall.ENOENT
@@ -580,20 +557,13 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 
 // InitiativeProjectsNode represents the projects/ directory within an initiative
 type InitiativeProjectsNode struct {
-	BaseNode
+	attrNode
 	initiative api.Initiative
 }
 
 var _ fs.NodeReaddirer = (*InitiativeProjectsNode)(nil)
 var _ fs.NodeLookuper = (*InitiativeProjectsNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativeProjectsNode)(nil)
-
-func (p *InitiativeProjectsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	p.SetOwner(out)
-	out.SetTimes(&p.initiative.UpdatedAt, &p.initiative.UpdatedAt, &p.initiative.CreatedAt)
-	return 0
-}
 
 func (p *InitiativeProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, len(p.initiative.Projects.Nodes))
@@ -664,22 +634,14 @@ func initiativeProjectDirName(proj api.InitiativeProject) string {
 
 // InitiativeUpdatesNode represents /initiatives/{slug}/updates/
 type InitiativeUpdatesNode struct {
-	BaseNode
-	initiativeID        string
-	initiativeUpdatedAt time.Time
+	attrNode
+	initiativeID string
 }
 
 var _ fs.NodeReaddirer = (*InitiativeUpdatesNode)(nil)
 var _ fs.NodeLookuper = (*InitiativeUpdatesNode)(nil)
 var _ fs.NodeCreater = (*InitiativeUpdatesNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativeUpdatesNode)(nil)
-
-func (n *InitiativeUpdatesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&n.initiativeUpdatedAt, &n.initiativeUpdatedAt, &n.initiativeUpdatedAt)
-	return 0
-}
 
 func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	updates, err := n.lfs.GetInitiativeUpdates(ctx, n.initiativeID)

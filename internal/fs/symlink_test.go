@@ -170,7 +170,7 @@ func TestResolveProjectTargetResolvesTeamAndTimes(t *testing.T) {
 	if err := lfs.InjectTestStore(store); err != nil {
 		t.Fatalf("inject store: %v", err)
 	}
-	node := &InitiativeProjectsNode{BaseNode: BaseNode{lfs: lfs}}
+	node := &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}}
 
 	target, gotCreated, gotUpdated, errno := node.resolveProjectTarget(ctx, "project-1")
 	if errno != 0 {
@@ -214,7 +214,7 @@ func TestResolveProjectTargetMultiTeamIsFirstByKey(t *testing.T) {
 	if err := lfs.InjectTestStore(store); err != nil {
 		t.Fatalf("inject store: %v", err)
 	}
-	node := &InitiativeProjectsNode{BaseNode: BaseNode{lfs: lfs}}
+	node := &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}}
 
 	target, _, _, errno := node.resolveProjectTarget(ctx, "project-shared")
 	if errno != 0 {
@@ -238,7 +238,7 @@ func TestResolveProjectTargetUnsyncedIsENOENT(t *testing.T) {
 	if err := lfs.InjectTestStore(store); err != nil {
 		t.Fatalf("inject store: %v", err)
 	}
-	node := &InitiativeProjectsNode{BaseNode: BaseNode{lfs: lfs}}
+	node := &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}}
 
 	// Project row missing entirely.
 	if _, _, _, errno := node.resolveProjectTarget(ctx, "project-absent"); errno != syscall.ENOENT {

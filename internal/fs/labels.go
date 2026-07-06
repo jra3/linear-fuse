@@ -31,7 +31,7 @@ func labelIno(labelID string) uint64 {
 
 // LabelsNode represents the /teams/{KEY}/labels/ directory
 type LabelsNode struct {
-	BaseNode
+	attrNode
 	teamID string
 }
 
@@ -41,14 +41,6 @@ var _ fs.NodeGetattrer = (*LabelsNode)(nil)
 var _ fs.NodeCreater = (*LabelsNode)(nil)
 var _ fs.NodeUnlinker = (*LabelsNode)(nil)
 var _ fs.NodeRenamer = (*LabelsNode)(nil)
-
-func (n *LabelsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)

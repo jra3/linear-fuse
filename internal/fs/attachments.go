@@ -40,21 +40,13 @@ func externalAttachmentIno(attachmentID string) uint64 {
 
 // AttachmentsNode represents the /teams/{KEY}/issues/{ID}/attachments directory
 type AttachmentsNode struct {
-	BaseNode
+	attrNode
 	issueID string
 }
 
 var _ fs.NodeReaddirer = (*AttachmentsNode)(nil)
 var _ fs.NodeLookuper = (*AttachmentsNode)(nil)
 var _ fs.NodeGetattrer = (*AttachmentsNode)(nil)
-
-func (n *AttachmentsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Trigger background refresh of sub-resources if stale
