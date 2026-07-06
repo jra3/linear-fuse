@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -67,11 +66,10 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 				return nil, syscall.EIO
 			}
 			node := &MilestoneFileNode{
-				BaseNode:     BaseNode{lfs: n.lfs},
-				milestone:    m,
-				projectID:    n.projectID,
-				content:      content,
-				contentReady: true,
+				BaseNode:   BaseNode{lfs: n.lfs},
+				milestone:  m,
+				projectID:  n.projectID,
+				editBuffer: editBuffer{content: content},
 			}
 			now := time.Now()
 			out.Attr.Mode = 0644 | syscall.S_IFREG
@@ -138,13 +136,9 @@ func milestoneFilename(m api.ProjectMilestone) string {
 // MilestoneFileNode represents a single milestone file (read-write)
 type MilestoneFileNode struct {
 	BaseNode
+	editBuffer
 	milestone api.ProjectMilestone
 	projectID string
-
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
 }
 
 var _ fs.NodeGetattrer = (*MilestoneFileNode)(nil)
@@ -156,79 +150,9 @@ var _ fs.NodeFsyncer = (*MilestoneFileNode)(nil)
 var _ fs.NodeSetattrer = (*MilestoneFileNode)(nil)
 
 func (n *MilestoneFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
+	// api.ProjectMilestone carries no timestamps, so there is nothing but now().
 	now := time.Now()
-	out.Mode = 0644
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *MilestoneFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *MilestoneFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
-}
-
-func (n *MilestoneFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write milestone %s: offset=%d len=%d", n.milestone.ID, off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	n.dirty = true
-
-	return uint32(len(data)), 0
-}
-
-func (n *MilestoneFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if n.lfs.debug {
-			log.Printf("Setattr truncate milestone %s: size=%d", n.milestone.ID, sz)
-		}
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-		n.dirty = true
-	}
-
-	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	fileAttr(n.size(), now, now).fill(&out.Attr, &n.BaseNode)
 	return 0
 }
 
@@ -313,10 +237,6 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 
 	n.dirty = false
 	return errno
-}
-
-func (n *MilestoneFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	return 0
 }
 
 // createMilestone is the milestones create surface's onFlush: parse the

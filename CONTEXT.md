@@ -207,6 +207,33 @@ is deliberately **not** a wrapper: its key mixes the parent directory inode with
 the name (so concurrent temp files in different dirs don't collide), a different
 shape than `kind:id`.
 
+### Edit buffer (`editBuffer`)
+The **deep module** owning the read/write byte buffer of every editable file
+node — the edit-side twin of `createFileNode`'s buffer. `editBuffer`
+(`internal/fs/editbuffer.go`) is `{mu, content, dirty}` and provides the FUSE
+buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into the
+node** the way `attrNode` promotes `Getattr`. Each of the seven editable file
+nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
+`LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
+only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`
+— the file-side of the Attr-construction module) and its **`Flush`** (the
+per-entity parse → API → write-back tail). This replaced ~5 byte-identical
+buffer methods hand-copied across all seven.
+
+**Content is eagerly seeded at construction, never lazily generated — and that
+is forced, not a shortcut.** Lookup must report an accurate size (the kernel
+skips READ entirely when size is 0), and the size is `len(markdown)`, so every
+Lookup already materialises the content for the size; a lazy path could only
+duplicate that work, never avoid it. An audit at the time confirmed the pre-
+existing lazy machinery was vestigial: `IssueFileNode.ensureContent` never fired
+(its two construction sites both seeded), and `project.md`/`initiative.md`
+Lookup computed the content for the size and then *discarded* it, forcing a
+regenerate on first Read — a live double-compute this fix removed by seeding.
+`labelfile`/`milestonefile` remain the timestamp-less exception (their API types
+carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
+[[attr-construction]]). Unit-tested directly (write-expands, in-place,
+truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
+
 ### Indexed listing (`indexedListing`)
 The **deep module** owning the index-derived filenames of a collection whose
 entries are named `<NNNN>-<date>…md` by creation order — comments and the

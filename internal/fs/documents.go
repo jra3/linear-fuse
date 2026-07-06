@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -221,8 +220,7 @@ func (n *DocsNode) newDocumentInode(ctx context.Context, doc api.Document, out *
 		teamID:       n.teamID,
 		projectID:    n.projectID,
 		initiativeID: n.initiativeID,
-		content:      content,
-		contentReady: true,
+		editBuffer:   editBuffer{content: content},
 	}
 	// Shorter timeout for writable files.
 	return n.newFileInode(ctx, out, node, fileAttr(len(content), doc.CreatedAt, doc.UpdatedAt), documentIno(doc.ID), 5*time.Second), 0
@@ -278,16 +276,12 @@ func documentFilename(doc api.Document) string {
 // DocumentFileNode represents a single document file (read-write)
 type DocumentFileNode struct {
 	BaseNode
+	editBuffer
 	document     api.Document
 	issueID      string
 	teamID       string
 	projectID    string
 	initiativeID string
-
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
 }
 
 var _ fs.NodeGetattrer = (*DocumentFileNode)(nil)
@@ -299,78 +293,7 @@ var _ fs.NodeFsyncer = (*DocumentFileNode)(nil)
 var _ fs.NodeSetattrer = (*DocumentFileNode)(nil)
 
 func (n *DocumentFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	out.Mode = 0644
-	n.SetOwner(out)
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&n.document.UpdatedAt, &n.document.UpdatedAt, &n.document.CreatedAt)
-	return 0
-}
-
-func (n *DocumentFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *DocumentFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
-}
-
-func (n *DocumentFileNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.lfs.debug {
-		log.Printf("Write document %s: offset=%d len=%d", n.document.ID, off, len(data))
-	}
-
-	// Expand buffer if needed
-	newLen := int(off) + len(data)
-	if newLen > len(n.content) {
-		newContent := make([]byte, newLen)
-		copy(newContent, n.content)
-		n.content = newContent
-	}
-
-	copy(n.content[off:], data)
-	n.dirty = true
-
-	return uint32(len(data)), 0
-}
-
-func (n *DocumentFileNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if n.lfs.debug {
-			log.Printf("Setattr truncate document %s: size=%d", n.document.ID, sz)
-		}
-		if int(sz) < len(n.content) {
-			n.content = n.content[:sz]
-		} else if int(sz) > len(n.content) {
-			newContent := make([]byte, sz)
-			copy(newContent, n.content)
-			n.content = newContent
-		}
-		n.dirty = true
-	}
-
-	out.Mode = 0644
-	out.Size = uint64(len(n.content))
+	fileAttr(n.size(), n.document.CreatedAt, n.document.UpdatedAt).fill(&out.Attr, &n.BaseNode)
 	return 0
 }
 
@@ -440,13 +363,7 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		n.document = *fresh
 	}
 	n.dirty = false
-	n.contentReady = false // Force regenerate on next read
 	return errno
-}
-
-func (n *DocumentFileNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
-	// Fsync is a no-op; actual persistence happens in Flush
-	return 0
 }
 
 // createDocument returns the docs create surface's onFlush for one write

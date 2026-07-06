@@ -7,7 +7,6 @@ import (
 	"log"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -251,8 +250,8 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	// Handle project.md metadata file
 	if name == "project.md" {
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: p.project}
-		content := node.generateContent()
-		return p.newFileInode(ctx, out, node, fileAttr(len(content), p.project.CreatedAt, p.project.UpdatedAt), projectInfoIno(p.project.ID), 0), 0
+		node.content = node.generateContent() // seed once; Lookup needs the size anyway
+		return p.newFileInode(ctx, out, node, fileAttr(node.size(), p.project.CreatedAt, p.project.UpdatedAt), projectInfoIno(p.project.ID), 0), 0
 	}
 
 	// Handle project.meta (read-only server-managed fields), rendered read-through
@@ -350,12 +349,10 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	}
 
 	fileNode := &ProjectInfoNode{
-		BaseNode:     BaseNode{lfs: p.lfs},
-		team:         p.team,
-		project:      p.project,
-		content:      content,
-		contentReady: true,
-		dirty:        true,
+		BaseNode:   BaseNode{lfs: p.lfs},
+		team:       p.team,
+		project:    p.project,
+		editBuffer: editBuffer{content: content, dirty: true},
 	}
 	errno := fileNode.Flush(ctx, nil)
 
@@ -379,12 +376,9 @@ func (p *ProjectNode) Unlink(ctx context.Context, name string) syscall.Errno {
 // ProjectInfoNode is a virtual file containing project metadata
 type ProjectInfoNode struct {
 	BaseNode
-	team         api.Team
-	project      api.Project
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
+	editBuffer
+	team    api.Team
+	project api.Project
 }
 
 var _ fs.NodeGetattrer = (*ProjectInfoNode)(nil)
@@ -452,98 +446,7 @@ func (p *ProjectInfoNode) metaContent() []byte {
 }
 
 func (p *ProjectInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	var size int
-	if p.contentReady && p.content != nil {
-		size = len(p.content)
-	} else {
-		size = len(p.generateContent())
-	}
-	out.Mode = 0644 | syscall.S_IFREG
-	p.SetOwner(out)
-	out.Size = uint64(size)
-	out.Attr.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-	return 0
-}
-
-func (p *ProjectInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (p *ProjectInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if !p.contentReady {
-		p.content = p.generateContent()
-		p.contentReady = true
-	}
-
-	if off >= int64(len(p.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(p.content)) {
-		end = int64(len(p.content))
-	}
-	return fuse.ReadResultData(p.content[off:end]), 0
-}
-
-func (p *ProjectInfoNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Initialize content if not ready
-	if !p.contentReady {
-		p.content = p.generateContent()
-		p.contentReady = true
-	}
-
-	// Expand buffer if needed
-	end := off + int64(len(data))
-	if end > int64(len(p.content)) {
-		newContent := make([]byte, end)
-		copy(newContent, p.content)
-		p.content = newContent
-	}
-
-	copy(p.content[off:], data)
-	p.dirty = true
-	return uint32(len(data)), 0
-}
-
-func (p *ProjectInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if !p.contentReady {
-			p.content = p.generateContent()
-			p.contentReady = true
-		}
-		if int(sz) < len(p.content) {
-			p.content = p.content[:sz]
-			p.dirty = true
-		}
-	}
-
-	var size int
-	if p.contentReady && p.content != nil {
-		size = len(p.content)
-	} else {
-		size = len(p.generateContent())
-	}
-	out.Mode = 0644 | syscall.S_IFREG
-	out.Size = uint64(size)
-	return 0
-}
-
-// Fsync is a no-op; actual persistence happens in Flush. It must be
-// implemented (not return ENOTSUP) so editors that write-then-fsync
-// (e.g. Claude Code's Edit tool, vim, VS Code) can save project.md.
-func (p *ProjectInfoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	fileAttr(p.size(), p.project.CreatedAt, p.project.UpdatedAt).fill(&out.Attr, &p.BaseNode)
 	return 0
 }
 
@@ -680,7 +583,6 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	p.lfs.InvalidateUpdated(metaIno(p.project.ID)) // project.meta reflects the edit
 
 	p.dirty = false
-	p.contentReady = false // Force re-generate on next read
 	return errno
 }
 

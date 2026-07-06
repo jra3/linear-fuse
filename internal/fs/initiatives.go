@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -119,8 +118,8 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	switch name {
 	case "initiative.md":
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
-		content := node.generateContent()
-		return i.newFileInode(ctx, out, node, fileAttr(len(content), i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeInfoIno(i.initiative.ID), 0), 0
+		node.content = node.generateContent() // seed once; Lookup needs the size anyway
+		return i.newFileInode(ctx, out, node, fileAttr(node.size(), i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeInfoIno(i.initiative.ID), 0), 0
 
 	case "initiative.meta":
 		// Read-through from the freshest initiative so an edit to initiative.md is
@@ -199,9 +198,7 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 		BaseNode:     BaseNode{lfs: i.lfs},
 		initiative:   i.initiative,
 		initiativeID: i.initiative.ID,
-		content:      content,
-		contentReady: true,
-		dirty:        true,
+		editBuffer:   editBuffer{content: content, dirty: true},
 	}
 	errno := fileNode.Flush(ctx, nil)
 
@@ -225,14 +222,11 @@ func (i *InitiativeNode) Unlink(ctx context.Context, name string) syscall.Errno 
 // InitiativeInfoNode is a virtual file containing initiative metadata
 type InitiativeInfoNode struct {
 	BaseNode
+	editBuffer
 	initiative   api.Initiative
 	initiativeID string
 
 	// Write buffer and cached content
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-	dirty        bool
 }
 
 var _ fs.NodeGetattrer = (*InitiativeInfoNode)(nil)
@@ -299,98 +293,7 @@ func (i *InitiativeInfoNode) metaContent() []byte {
 }
 
 func (i *InitiativeInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	var size int
-	if i.contentReady && i.content != nil {
-		size = len(i.content)
-	} else {
-		size = len(i.generateContent())
-	}
-	out.Mode = 0644 | syscall.S_IFREG
-	i.SetOwner(out)
-	out.Size = uint64(size)
-	out.Attr.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-	return 0
-}
-
-func (i *InitiativeInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (i *InitiativeInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	if !i.contentReady {
-		i.content = i.generateContent()
-		i.contentReady = true
-	}
-
-	if off >= int64(len(i.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(i.content)) {
-		end = int64(len(i.content))
-	}
-	return fuse.ReadResultData(i.content[off:end]), 0
-}
-
-func (i *InitiativeInfoNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	// Initialize content if not ready
-	if !i.contentReady {
-		i.content = i.generateContent()
-		i.contentReady = true
-	}
-
-	// Expand buffer if needed
-	end := off + int64(len(data))
-	if end > int64(len(i.content)) {
-		newContent := make([]byte, end)
-		copy(newContent, i.content)
-		i.content = newContent
-	}
-
-	copy(i.content[off:], data)
-	i.dirty = true
-	return uint32(len(data)), 0
-}
-
-func (i *InitiativeInfoNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	if sz, ok := in.GetSize(); ok {
-		if !i.contentReady {
-			i.content = i.generateContent()
-			i.contentReady = true
-		}
-		if int(sz) < len(i.content) {
-			i.content = i.content[:sz]
-			i.dirty = true
-		}
-	}
-
-	var size int
-	if i.contentReady && i.content != nil {
-		size = len(i.content)
-	} else {
-		size = len(i.generateContent())
-	}
-	out.Mode = 0644 | syscall.S_IFREG
-	out.Size = uint64(size)
-	return 0
-}
-
-// Fsync is a no-op; actual persistence happens in Flush. It must be
-// implemented (not return ENOTSUP) so editors that write-then-fsync
-// (e.g. Claude Code's Edit tool, vim, VS Code) can save initiative.md.
-func (i *InitiativeInfoNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	fileAttr(i.size(), i.initiative.CreatedAt, i.initiative.UpdatedAt).fill(&out.Attr, &i.BaseNode)
 	return 0
 }
 
@@ -528,7 +431,6 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	i.lfs.InvalidateUpdated(initiativeProjectsIno(i.initiativeID))
 
 	i.dirty = false
-	i.contentReady = false // Force re-generate on next read
 	return errno
 }
 
