@@ -13,24 +13,24 @@ import (
 // All data is stored in maps and can be set directly for test setup.
 type MockRepository struct {
 	// Entity storage
-	Teams       []api.Team
-	Issues      map[string][]api.Issue // keyed by teamID
-	States      map[string][]api.State // keyed by teamID
-	Labels      map[string][]api.Label // keyed by teamID
-	Users       []api.User
-	TeamMembers map[string][]api.User // keyed by teamID
-	Cycles      map[string][]api.Cycle // keyed by teamID
-	Projects    map[string][]api.Project // keyed by teamID
-	Milestones  map[string][]api.ProjectMilestone // keyed by projectID
-	Comments    map[string][]api.Comment // keyed by issueID
-	Documents   map[string][]api.Document // keyed by issueID or projectID
-	Initiatives []api.Initiative
-	InitiativeProjects map[string][]api.Project // keyed by initiativeID
-	ProjectUpdates map[string][]api.ProjectUpdate // keyed by projectID
-	InitiativeUpdates map[string][]api.InitiativeUpdate // keyed by initiativeID
-	Attachments    map[string][]api.Attachment   // keyed by issueID
-	EmbeddedFiles  map[string][]api.EmbeddedFile // keyed by issueID
-	IssueHistory   map[string][]api.IssueHistoryEntry // keyed by issueID
+	Teams              []api.Team
+	Issues             map[string][]api.Issue // keyed by teamID
+	States             map[string][]api.State // keyed by teamID
+	Labels             map[string][]api.Label // keyed by teamID
+	Users              []api.User
+	TeamMembers        map[string][]api.User             // keyed by teamID
+	Cycles             map[string][]api.Cycle            // keyed by teamID
+	Projects           map[string][]api.Project          // keyed by teamID
+	Milestones         map[string][]api.ProjectMilestone // keyed by projectID
+	Comments           map[string][]api.Comment          // keyed by issueID
+	Documents          map[string][]api.Document         // keyed by issueID or projectID
+	Initiatives        []api.Initiative
+	InitiativeProjects map[string][]api.Project           // keyed by initiativeID
+	ProjectUpdates     map[string][]api.ProjectUpdate     // keyed by projectID
+	InitiativeUpdates  map[string][]api.InitiativeUpdate  // keyed by initiativeID
+	Attachments        map[string][]api.Attachment        // keyed by issueID
+	EmbeddedFiles      map[string][]api.EmbeddedFile      // keyed by issueID
+	IssueHistory       map[string][]api.IssueHistoryEntry // keyed by issueID
 
 	// Current user
 	CurrentUser *api.User
@@ -74,6 +74,61 @@ func (m *MockRepository) AddIssue(issue api.Issue) {
 }
 
 // =============================================================================
+// Query helpers — every filter/finder in the mock collapses to these four,
+// so only the predicate (the real per-query variance) is written by hand.
+// =============================================================================
+
+// filter returns the items matching pred, preserving order.
+func filter[T any](items []T, pred func(T) bool) []T {
+	var out []T
+	for _, it := range items {
+		if pred(it) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// first returns a pointer to the first item matching pred, or nil. The pointer
+// aliases the slice element, matching the hand-written finders it replaced.
+func first[T any](items []T, pred func(T) bool) *T {
+	for i := range items {
+		if pred(items[i]) {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+// filterInMap returns every inner-slice element matching pred across all map
+// values, in unspecified (map-iteration) order.
+func filterInMap[K comparable, V any](m map[K][]V, pred func(V) bool) []V {
+	var out []V
+	for _, vs := range m {
+		for _, v := range vs {
+			if pred(v) {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// firstInMap returns a pointer to the first inner-slice element matching pred
+// across all map values, or nil. Map order is unspecified, so callers use it
+// for lookups by a unique key.
+func firstInMap[K comparable, V any](m map[K][]V, pred func(V) bool) *V {
+	for _, vs := range m {
+		for i := range vs {
+			if pred(vs[i]) {
+				return &vs[i]
+			}
+		}
+	}
+	return nil
+}
+
+// =============================================================================
 // Teams
 // =============================================================================
 
@@ -82,12 +137,7 @@ func (m *MockRepository) GetTeams(ctx context.Context) ([]api.Team, error) {
 }
 
 func (m *MockRepository) GetTeamByKey(ctx context.Context, key string) (*api.Team, error) {
-	for i := range m.Teams {
-		if m.Teams[i].Key == key {
-			return &m.Teams[i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Teams, func(t api.Team) bool { return t.Key == key }), nil
 }
 
 // =============================================================================
@@ -107,15 +157,9 @@ func (m *MockRepository) GetIssueByID(ctx context.Context, id string) (*api.Issu
 }
 
 func (m *MockRepository) GetIssueChildren(ctx context.Context, parentID string) ([]api.Issue, error) {
-	var children []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if issue.Parent != nil && issue.Parent.ID == parentID {
-				children = append(children, issue)
-			}
-		}
-	}
-	return children, nil
+	return filterInMap(m.Issues, func(i api.Issue) bool {
+		return i.Parent != nil && i.Parent.ID == parentID
+	}), nil
 }
 
 // =============================================================================
@@ -123,80 +167,39 @@ func (m *MockRepository) GetIssueChildren(ctx context.Context, parentID string) 
 // =============================================================================
 
 func (m *MockRepository) GetIssuesByState(ctx context.Context, teamID, stateID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issue := range m.Issues[teamID] {
-		if issue.State.ID == stateID {
-			result = append(result, issue)
-		}
-	}
-	return result, nil
+	return filter(m.Issues[teamID], func(i api.Issue) bool { return i.State.ID == stateID }), nil
 }
 
 func (m *MockRepository) GetIssuesByAssignee(ctx context.Context, teamID, assigneeID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issue := range m.Issues[teamID] {
-		if issue.Assignee != nil && issue.Assignee.ID == assigneeID {
-			result = append(result, issue)
-		}
-	}
-	return result, nil
+	return filter(m.Issues[teamID], func(i api.Issue) bool {
+		return i.Assignee != nil && i.Assignee.ID == assigneeID
+	}), nil
 }
 
 func (m *MockRepository) GetIssuesByLabel(ctx context.Context, teamID, labelID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issue := range m.Issues[teamID] {
-		for _, label := range issue.Labels.Nodes {
-			if label.ID == labelID {
-				result = append(result, issue)
-				break
-			}
-		}
-	}
-	return result, nil
+	return filter(m.Issues[teamID], func(i api.Issue) bool {
+		return slices.ContainsFunc(i.Labels.Nodes, func(l api.Label) bool { return l.ID == labelID })
+	}), nil
 }
 
 func (m *MockRepository) GetIssuesByPriority(ctx context.Context, teamID string, priority int) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issue := range m.Issues[teamID] {
-		if issue.Priority == priority {
-			result = append(result, issue)
-		}
-	}
-	return result, nil
+	return filter(m.Issues[teamID], func(i api.Issue) bool { return i.Priority == priority }), nil
 }
 
 func (m *MockRepository) GetUnassignedIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issue := range m.Issues[teamID] {
-		if issue.Assignee == nil {
-			result = append(result, issue)
-		}
-	}
-	return result, nil
+	return filter(m.Issues[teamID], func(i api.Issue) bool { return i.Assignee == nil }), nil
 }
 
 func (m *MockRepository) GetIssuesByProject(ctx context.Context, projectID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if issue.Project != nil && issue.Project.ID == projectID {
-				result = append(result, issue)
-			}
-		}
-	}
-	return result, nil
+	return filterInMap(m.Issues, func(i api.Issue) bool {
+		return i.Project != nil && i.Project.ID == projectID
+	}), nil
 }
 
 func (m *MockRepository) GetIssuesByCycle(ctx context.Context, cycleID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if issue.Cycle != nil && issue.Cycle.ID == cycleID {
-				result = append(result, issue)
-			}
-		}
-	}
-	return result, nil
+	return filterInMap(m.Issues, func(i api.Issue) bool {
+		return i.Cycle != nil && i.Cycle.ID == cycleID
+	}), nil
 }
 
 // =============================================================================
@@ -207,15 +210,9 @@ func (m *MockRepository) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
 	if m.CurrentUser == nil {
 		return []api.Issue{}, nil
 	}
-	var result []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if issue.Assignee != nil && issue.Assignee.ID == m.CurrentUser.ID {
-				result = append(result, issue)
-			}
-		}
-	}
-	return result, nil
+	return filterInMap(m.Issues, func(i api.Issue) bool {
+		return i.Assignee != nil && i.Assignee.ID == m.CurrentUser.ID
+	}), nil
 }
 
 func (m *MockRepository) GetMyCreatedIssues(ctx context.Context) ([]api.Issue, error) {
@@ -227,30 +224,18 @@ func (m *MockRepository) GetMyActiveIssues(ctx context.Context) ([]api.Issue, er
 	if m.CurrentUser == nil {
 		return []api.Issue{}, nil
 	}
-	var result []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if issue.Assignee != nil && issue.Assignee.ID == m.CurrentUser.ID {
-				stateType := issue.State.Type
-				if stateType != "completed" && stateType != "canceled" {
-					result = append(result, issue)
-				}
-			}
+	return filterInMap(m.Issues, func(i api.Issue) bool {
+		if i.Assignee == nil || i.Assignee.ID != m.CurrentUser.ID {
+			return false
 		}
-	}
-	return result, nil
+		return i.State.Type != "completed" && i.State.Type != "canceled"
+	}), nil
 }
 
 func (m *MockRepository) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
-	var result []api.Issue
-	for _, issues := range m.Issues {
-		for _, issue := range issues {
-			if issue.Assignee != nil && issue.Assignee.ID == userID {
-				result = append(result, issue)
-			}
-		}
-	}
-	return result, nil
+	return filterInMap(m.Issues, func(i api.Issue) bool {
+		return i.Assignee != nil && i.Assignee.ID == userID
+	}), nil
 }
 
 // =============================================================================
@@ -262,12 +247,7 @@ func (m *MockRepository) GetTeamStates(ctx context.Context, teamID string) ([]ap
 }
 
 func (m *MockRepository) GetStateByName(ctx context.Context, teamID, name string) (*api.State, error) {
-	for i := range m.States[teamID] {
-		if m.States[teamID][i].Name == name {
-			return &m.States[teamID][i], nil
-		}
-	}
-	return nil, nil
+	return first(m.States[teamID], func(s api.State) bool { return s.Name == name }), nil
 }
 
 // =============================================================================
@@ -279,12 +259,7 @@ func (m *MockRepository) GetTeamLabels(ctx context.Context, teamID string) ([]ap
 }
 
 func (m *MockRepository) GetLabelByName(ctx context.Context, teamID, name string) (*api.Label, error) {
-	for i := range m.Labels[teamID] {
-		if m.Labels[teamID][i].Name == name {
-			return &m.Labels[teamID][i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Labels[teamID], func(l api.Label) bool { return l.Name == name }), nil
 }
 
 // =============================================================================
@@ -296,21 +271,11 @@ func (m *MockRepository) GetUsers(ctx context.Context) ([]api.User, error) {
 }
 
 func (m *MockRepository) GetUserByID(ctx context.Context, id string) (*api.User, error) {
-	for i := range m.Users {
-		if m.Users[i].ID == id {
-			return &m.Users[i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Users, func(u api.User) bool { return u.ID == id }), nil
 }
 
 func (m *MockRepository) GetUserByEmail(ctx context.Context, email string) (*api.User, error) {
-	for i := range m.Users {
-		if m.Users[i].Email == email {
-			return &m.Users[i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Users, func(u api.User) bool { return u.Email == email }), nil
 }
 
 func (m *MockRepository) GetCurrentUser(ctx context.Context) (*api.User, error) {
@@ -334,12 +299,7 @@ func (m *MockRepository) GetTeamCycles(ctx context.Context, teamID string) ([]ap
 }
 
 func (m *MockRepository) GetCycleByName(ctx context.Context, teamID, name string) (*api.Cycle, error) {
-	for i := range m.Cycles[teamID] {
-		if m.Cycles[teamID][i].Name == name {
-			return &m.Cycles[teamID][i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Cycles[teamID], func(c api.Cycle) bool { return c.Name == name }), nil
 }
 
 // =============================================================================
@@ -366,25 +326,11 @@ func (m *MockRepository) GetProjectPrimaryTeamKey(ctx context.Context, projectID
 }
 
 func (m *MockRepository) GetProjectBySlug(ctx context.Context, slug string) (*api.Project, error) {
-	for _, projects := range m.Projects {
-		for i := range projects {
-			if projects[i].Slug == slug {
-				return &projects[i], nil
-			}
-		}
-	}
-	return nil, nil
+	return firstInMap(m.Projects, func(p api.Project) bool { return p.Slug == slug }), nil
 }
 
 func (m *MockRepository) GetProjectByID(ctx context.Context, id string) (*api.Project, error) {
-	for _, projects := range m.Projects {
-		for i := range projects {
-			if projects[i].ID == id {
-				return &projects[i], nil
-			}
-		}
-	}
-	return nil, nil
+	return firstInMap(m.Projects, func(p api.Project) bool { return p.ID == id }), nil
 }
 
 // =============================================================================
@@ -396,23 +342,11 @@ func (m *MockRepository) GetProjectMilestones(ctx context.Context, projectID str
 }
 
 func (m *MockRepository) GetMilestoneByName(ctx context.Context, projectID, name string) (*api.ProjectMilestone, error) {
-	for i := range m.Milestones[projectID] {
-		if m.Milestones[projectID][i].Name == name {
-			return &m.Milestones[projectID][i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Milestones[projectID], func(ms api.ProjectMilestone) bool { return ms.Name == name }), nil
 }
 
 func (m *MockRepository) GetMilestoneByID(ctx context.Context, id string) (*api.ProjectMilestone, error) {
-	for _, milestones := range m.Milestones {
-		for i := range milestones {
-			if milestones[i].ID == id {
-				return &milestones[i], nil
-			}
-		}
-	}
-	return nil, nil
+	return firstInMap(m.Milestones, func(ms api.ProjectMilestone) bool { return ms.ID == id }), nil
 }
 
 func (m *MockRepository) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
@@ -476,14 +410,7 @@ func (m *MockRepository) GetIssueComments(ctx context.Context, issueID string) (
 }
 
 func (m *MockRepository) GetCommentByID(ctx context.Context, id string) (*api.Comment, error) {
-	for _, comments := range m.Comments {
-		for i := range comments {
-			if comments[i].ID == id {
-				return &comments[i], nil
-			}
-		}
-	}
-	return nil, nil
+	return firstInMap(m.Comments, func(c api.Comment) bool { return c.ID == id }), nil
 }
 
 // =============================================================================
@@ -503,14 +430,7 @@ func (m *MockRepository) GetInitiativeDocuments(ctx context.Context, initiativeI
 }
 
 func (m *MockRepository) GetDocumentBySlug(ctx context.Context, slug string) (*api.Document, error) {
-	for _, docs := range m.Documents {
-		for i := range docs {
-			if docs[i].SlugID == slug {
-				return &docs[i], nil
-			}
-		}
-	}
-	return nil, nil
+	return firstInMap(m.Documents, func(d api.Document) bool { return d.SlugID == slug }), nil
 }
 
 // =============================================================================
@@ -522,12 +442,7 @@ func (m *MockRepository) GetInitiatives(ctx context.Context) ([]api.Initiative, 
 }
 
 func (m *MockRepository) GetInitiativeBySlug(ctx context.Context, slug string) (*api.Initiative, error) {
-	for i := range m.Initiatives {
-		if m.Initiatives[i].Slug == slug {
-			return &m.Initiatives[i], nil
-		}
-	}
-	return nil, nil
+	return first(m.Initiatives, func(i api.Initiative) bool { return i.Slug == slug }), nil
 }
 
 func (m *MockRepository) GetInitiativeProjects(ctx context.Context, initiativeID string) ([]api.Project, error) {
@@ -573,14 +488,7 @@ func (m *MockRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cacheP
 }
 
 func (m *MockRepository) GetAttachmentByID(ctx context.Context, id string) (*api.Attachment, error) {
-	for _, attachments := range m.Attachments {
-		for _, att := range attachments {
-			if att.ID == id {
-				return &att, nil
-			}
-		}
-	}
-	return nil, nil
+	return firstInMap(m.Attachments, func(a api.Attachment) bool { return a.ID == id }), nil
 }
 
 func (m *MockRepository) GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error) {
