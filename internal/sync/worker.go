@@ -46,7 +46,15 @@ type APIClient interface {
 	// Auth
 	AuthHeader() string
 
-	// M-3: server-reported rate limit window reset time (zero if not yet seen)
+	// Viewer (the authenticated user). The worker fires this once as the
+	// cold-start budget probe (see probeBudget): the cheapest possible
+	// query whose response headers seed the client's rate budget before
+	// any expensive work is issued.
+	GetViewer(ctx context.Context) (*api.User, error)
+
+	// Server-reported rate limit window reset time, per the client's rate
+	// budget (parsed from the per-axis millisecond reset headers; zero if
+	// no response has been observed yet).
 	RateLimitResetAt() time.Time
 }
 
@@ -182,6 +190,12 @@ func (w *Worker) run(ctx context.Context) {
 		w.mu.Unlock()
 		close(w.doneCh)
 	}()
+
+	// Cold-start probe: seed the rate budget from one cheap query BEFORE
+	// the first (expensive) sync cycle. Aborts only on shutdown.
+	if !w.probeBudget(ctx) {
+		return
+	}
 
 	// Initial sync
 	if err := w.syncAllTeams(ctx); err != nil {
@@ -713,15 +727,17 @@ func (w *Worker) isRateLimited() bool {
 	return time.Now().Before(w.rateLimitExpiry)
 }
 
-// setRateLimited marks that we've hit a rate limit.
-// M-3: Uses the server-provided X-RateLimit-Reset time when available for accurate backoff;
-// falls back to a 15-minute fixed backoff.
+// setRateLimited marks that we've hit a rate limit. The backoff consults
+// the client's rate budget: RateLimitResetAt is the server-reported window
+// reset (parsed from the per-axis millisecond headers), so the pause ends
+// when the budget actually refills; the fixed 15-minute backoff is only the
+// fallback for a reset the server never told us about.
 func (w *Worker) setRateLimited() {
 	w.rateLimitMu.Lock()
 	defer w.rateLimitMu.Unlock()
 	w.rateLimitedAt = time.Now()
 
-	// Use server-provided reset time if it's in the future (M-3)
+	// Use the budget's server-provided reset time if it's in the future
 	backoff := 15 * time.Minute
 	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(time.Now()) {
 		backoff = time.Until(resetAt) + 5*time.Second // 5s buffer past the reset
@@ -730,11 +746,63 @@ func (w *Worker) setRateLimited() {
 
 	if w.budget != nil {
 		count, pct := w.budget.BudgetSnapshot()
-		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s, budget: %d/1500 used this hour, %.0f%%)",
+		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s, budget: %d requests this hour, %.0f%%)",
 			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second), count, pct)
 	} else {
 		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s)",
 			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second))
+	}
+}
+
+// probeBudget is the cold-start probe: before the worker's first sync cycle
+// it fires one cheap viewer query so the client's rate budget is seeded from
+// real response headers BEFORE any expensive team-metadata/issue/detail
+// query is admitted. Without it a fresh process's budget has seen neither
+// axis (unseen axes don't gate), so the initial burst could all admit
+// un-gated before any response lands — the exact cold-start thundering herd
+// the budget exists to prevent. The viewer is the cheapest query we have
+// (~1-2 complexity points) and dual-purpose: /my needs it anyway.
+//
+// If the probe itself reports RATELIMITED, the account is already exhausted:
+// mark the worker rate-limited (the backoff honors the budget's
+// server-reported reset, which this very response's headers just seeded) and
+// sleep until the backoff expires instead of bursting into the wall. Any
+// other probe failure (network down, auth) is logged and sync proceeds —
+// those failures repeat identically in syncAllTeams and are handled there,
+// and the budget stays conservative once the first response does land.
+//
+// Returns false only when shutdown (ctx cancellation / Stop) interrupts the
+// delay, so run can exit without firing a post-stop sync cycle.
+func (w *Worker) probeBudget(ctx context.Context) bool {
+	_, err := w.client.GetViewer(ctx)
+	if err == nil {
+		return true
+	}
+	if !isRateLimitError(err) {
+		log.Printf("[sync] budget probe failed (continuing): %v", err)
+		return true
+	}
+
+	w.setRateLimited()
+	w.rateLimitMu.RLock()
+	expiry := w.rateLimitExpiry
+	w.rateLimitMu.RUnlock()
+
+	wait := time.Until(expiry)
+	log.Printf("[sync] budget probe RATELIMITED; delaying sync start %s (until %s)",
+		wait.Round(time.Second), expiry.Format(time.RFC3339))
+	if wait <= 0 {
+		return true
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-w.stopCh:
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

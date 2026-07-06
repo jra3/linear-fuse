@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
+	gosync "sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +45,24 @@ type mockAPIClient struct {
 	onDetailsBatch   func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
 	onTeamMetadata   func()                       // if set, runs inside GetTeamMetadata (simulates writes racing the fetch)
 	onWorkspace      func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
+	viewerErr        error                        // if set, GetViewer (the cold-start budget probe) fails with this
+	getViewerCalls   int32
+	opMu             gosync.Mutex
+	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeams (probe-sequencing tests)
+}
+
+// recordOp appends op to the observed call order.
+func (m *mockAPIClient) recordOp(op string) {
+	m.opMu.Lock()
+	m.opOrder = append(m.opOrder, op)
+	m.opMu.Unlock()
+}
+
+// callOrder returns a snapshot of the observed call order.
+func (m *mockAPIClient) callOrder() []string {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	return append([]string(nil), m.opOrder...)
 }
 
 func newMockAPIClient() *mockAPIClient {
@@ -60,6 +80,7 @@ func newMockAPIClient() *mockAPIClient {
 }
 
 func (m *mockAPIClient) GetTeams(ctx context.Context) ([]api.Team, error) {
+	m.recordOp("GetTeams")
 	atomic.AddInt32(&m.getTeamsCalls, 1)
 	if m.simulateError != nil {
 		return nil, m.simulateError
@@ -131,6 +152,7 @@ func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*ap
 }
 
 func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, error) {
+	m.recordOp("GetWorkspace")
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -199,6 +221,15 @@ func (m *mockAPIClient) GetIssueAttachments(ctx context.Context, issueID string)
 
 func (m *mockAPIClient) AuthHeader() string {
 	return "Bearer test-token"
+}
+
+func (m *mockAPIClient) GetViewer(ctx context.Context) (*api.User, error) {
+	m.recordOp("GetViewer")
+	atomic.AddInt32(&m.getViewerCalls, 1)
+	if m.viewerErr != nil {
+		return nil, m.viewerErr
+	}
+	return &api.User{ID: "viewer-1", Name: "Test Viewer", Email: "viewer@example.com"}, nil
 }
 
 func (m *mockAPIClient) RateLimitResetAt() time.Time {
@@ -1099,6 +1130,118 @@ func TestSetRateLimitedFallback(t *testing.T) {
 	}
 	if diff > 2*time.Second {
 		t.Errorf("rateLimitExpiry = %v, want ~%v (diff %v)", got, expected, diff)
+	}
+}
+
+// =============================================================================
+// Cold-Start Budget Probe Tests
+// =============================================================================
+
+// TestProbeSeedsBudgetBeforeFirstSync verifies the ordering guarantee of the
+// cold-start probe: the cheap viewer query completes (seeding the client's
+// rate budget from its response headers) BEFORE the worker issues any
+// expensive work (workspace, teams, metadata, issues).
+func TestProbeSeedsBudgetBeforeFirstSync(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	worker.Start(ctx)
+	defer worker.Stop()
+
+	// Wait for the initial sync cycle to reach GetTeams.
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("initial sync never called GetTeams")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	order := mock.callOrder()
+	if len(order) == 0 || order[0] != "GetViewer" {
+		t.Fatalf("call order = %v, want GetViewer (the budget probe) strictly first", order)
+	}
+	if atomic.LoadInt32(&mock.getViewerCalls) != 1 {
+		t.Errorf("GetViewer calls = %d, want exactly 1 probe", atomic.LoadInt32(&mock.getViewerCalls))
+	}
+}
+
+// TestProbeRateLimitedDelaysSyncStart verifies the exhausted-account path:
+// when the probe itself reports RATELIMITED, the worker marks itself
+// rate-limited (honoring the budget's server-reported reset) and delays the
+// entire sync start instead of bursting into the wall — and shutdown during
+// that delay exits cleanly without firing a post-stop sync cycle.
+func TestProbeRateLimitedDelaysSyncStart(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+	mock.viewerErr = errors.New("GraphQL error: RATELIMITED: rate limit exceeded")
+	// The budget's server-reported reset (seeded by the probe response's
+	// headers in production) is an hour out.
+	mock.rateLimitResetAt = time.Now().Add(time.Hour)
+
+	worker := NewWorker(mock, store, Config{Interval: 10 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	worker.Start(ctx)
+
+	// Give the worker ample time to (incorrectly) start syncing.
+	time.Sleep(200 * time.Millisecond)
+
+	if got := atomic.LoadInt32(&mock.getTeamsCalls); got != 0 {
+		t.Errorf("GetTeams calls during rate-limited probe delay = %d, want 0", got)
+	}
+	if !worker.isRateLimited() {
+		t.Error("worker should report rate-limited after a RATELIMITED probe")
+	}
+
+	// Stop must interrupt the delay; no sync cycle may fire on the way out.
+	worker.Stop()
+	if order := mock.callOrder(); len(order) != 1 || order[0] != "GetViewer" {
+		t.Errorf("call order after stop = %v, want just the probe [GetViewer]", order)
+	}
+}
+
+// TestProbeFailureProceeds verifies that a non-rate-limit probe failure
+// (network down, bad auth) does not block sync: those failures repeat in
+// syncAllTeams and are handled there.
+func TestProbeFailureProceeds(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+	mock.viewerErr = errors.New("connection refused")
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	worker.Start(ctx)
+	defer worker.Stop()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("sync never proceeded past a non-rate-limit probe failure")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if worker.isRateLimited() {
+		t.Error("a non-rate-limit probe failure must not mark the worker rate-limited")
 	}
 }
 

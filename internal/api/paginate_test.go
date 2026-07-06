@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jra3/linear-fuse/internal/testutil"
 )
@@ -115,11 +116,20 @@ func TestDrainFromAllOrNothing(t *testing.T) {
 	}
 }
 
+// drainClientBudget puts the client's rate budget under the list-tier
+// reserve so LowBudget() reports true (the way a busy hour would).
+func drainClientBudget(c *Client) {
+	c.budget.mu.Lock()
+	c.budget.complexity = window{
+		name: "complexity", limit: 3000000, remaining: 100000,
+		resetAt: time.Now().Add(time.Hour), seen: true,
+	}
+	c.budget.mu.Unlock()
+}
+
 func TestDrainFromBudgetRefusesToStart(t *testing.T) {
 	c := NewClient("test")
-	for !c.LowBudget() {
-		c.limiter.Reserve() // drain burst below the LowBudget threshold
-	}
+	drainClientBudget(c)
 	calls := 0
 	fetch := func(_ context.Context, _ string) (conn[int], error) {
 		calls++
@@ -143,9 +153,7 @@ func TestDrainFromStartedDrainIgnoresBudget(t *testing.T) {
 	c := NewClient("test")
 	fetch := func(_ context.Context, after string) (conn[int], error) {
 		if after == "" {
-			for !c.LowBudget() {
-				c.limiter.Reserve() // budget collapses after page 1
-			}
+			drainClientBudget(c) // budget collapses after page 1
 			return conn[int]{PageInfo: pi(true, "c1"), Nodes: []int{1}}, nil
 		}
 		return conn[int]{PageInfo: pi(false, ""), Nodes: []int{2}}, nil

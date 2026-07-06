@@ -66,8 +66,11 @@ func TestAPIStats_HourlyRate(t *testing.T) {
 	stats := NewAPIStats(false)
 	defer stats.Close()
 
-	// Record 150 calls (10% of 1500 limit)
-	for i := 0; i < 150; i++ {
+	// The denominator follows the server-reported request limit.
+	stats.SetHourlyLimit(2000)
+
+	// Record 200 calls (10% of the 2000 limit)
+	for i := 0; i < 200; i++ {
 		stats.Record("TestOp", 10*time.Millisecond, nil)
 	}
 
