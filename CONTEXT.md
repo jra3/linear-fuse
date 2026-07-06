@@ -294,6 +294,47 @@ is why stamping the syncing team was wrong). The team prune targets
 `team_id = <team>`, so `NULL` workspace labels are outside every team's prune
 scope.
 
+### Sync reconcile tail (`syncCollection`)
+The **deep module** owning the invariant tail of every metadata sync — the
+sync-side sibling of the write-path tails (`commitCreate`/`commitWriteBack`/
+`commitDelete`) and the module that actually **performs the metadata prunes**
+`paginate`'s completeness licenses. Its shape is `convert → upsert-all →
+prune-if-clean`. Six sites reconcile through it: `states` (upsert-only),
+`labels`, `cycles`, `projects` (entity + `project_teams` junction + nested
+milestones), `members` (entity + `team_members` junction), and
+`initiativeProjects` (junction-only). Each restated the same `clean`-flag idiom
+by hand — declare `xClean := true`, loop upserting, `if xClean { Prune }` — so a
+new metadata kind copy-pasted it and a forgotten flag would let a *partial* fetch
+read as removals (silent data loss). `initiativeProjects` even hand-rolled a
+fail-fast variant whose error the caller only logged.
+
+Its interface is closures, no `*db.Store`: `syncCollectionSpec[T]{label, items,
+upsert, prune}`. `upsert(ctx, T)` does whatever the kind needs — convert, entity
+upsert, any junction upsert, nested sub-writes — and `prune(ctx)` runs **once,
+iff every `upsert` returned nil**; a `nil` prune closure means no prune (the
+`states` case). Semantics are uniform **log-and-continue**: a failed `upsert` is
+logged, marks the collection unclean, and does not abort the loop (so
+`initiativeProjects` trades its fail-fast for continue — the observable outcome,
+prune-skipped-on-any-failure, is unchanged and strictly more rows refresh). The
+module returns nothing; sync is best-effort. Pure over closures, so it is
+unit-tested with recording closures asserting *prune runs iff clean* — no real
+store or API.
+
+**"Clean" is completeness-set membership, not "no error anywhere."** An item is
+unclean **iff a write the prune depends on failed** — a write in the prune's
+completeness set. This is grounded in Linear's ontology and the drain contract:
+`Project.teams` is a **peer many-to-many association** (the prunable
+`project_teams` junction, safe to prune because the *projects* connection is
+drained), whereas `ProjectMilestone.project` is **composition** — a milestone is
+wholly owned by one project, its nested `projectMilestones` connection is
+**capped at 50, never drained**, and it has **no prune anywhere**. So a milestone
+upsert failure is a nested best-effort write outside the `project_teams` prune's
+completeness set: the `projects` closure **logs-and-swallows** it (returns nil),
+while a project-entity or `project_teams`-junction failure returns an error and
+correctly suppresses the prune (a stale junction row must never be wrongly
+deleted). The closure author honors the contract by choosing what to return
+versus swallow.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`
