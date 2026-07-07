@@ -623,23 +623,8 @@ func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateNam
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, state := range states {
-		if state.Name == stateName {
-			return state.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(stateName)
-	for _, state := range states {
-		if strings.ToLower(state.Name) == lowerName {
-			return state.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown state: %s", stateName)
+	return resolveByName(states, stateName, "state",
+		func(s api.State) string { return s.Name }, func(s api.State) string { return s.ID })
 }
 
 // ResolveLabelIDs converts label names to their IDs for a given team
@@ -676,23 +661,8 @@ func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projec
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, project := range projects {
-		if project.Name == projectName {
-			return project.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(projectName)
-	for _, project := range projects {
-		if strings.ToLower(project.Name) == lowerName {
-			return project.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown project: %s", projectName)
+	return resolveByName(projects, projectName, "project",
+		func(p api.Project) string { return p.Name }, func(p api.Project) string { return p.ID })
 }
 
 // ResolveProjectSlugToID converts a project slug to its ID by searching all teams.
@@ -730,23 +700,8 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, milestone := range milestones {
-		if milestone.Name == milestoneName {
-			return milestone.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(milestoneName)
-	for _, milestone := range milestones {
-		if strings.ToLower(milestone.Name) == lowerName {
-			return milestone.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
+	return resolveByName(milestones, milestoneName, "milestone",
+		func(m api.ProjectMilestone) string { return m.Name }, func(m api.ProjectMilestone) string { return m.ID })
 }
 
 // UpdateProjectMilestone updates an existing milestone via the mutation seam,
@@ -775,23 +730,8 @@ func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleNam
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, cycle := range cycles {
-		if cycle.Name == cycleName {
-			return cycle.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(cycleName)
-	for _, cycle := range cycles {
-		if strings.ToLower(cycle.Name) == lowerName {
-			return cycle.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown cycle: %s", cycleName)
+	return resolveByName(cycles, cycleName, "cycle",
+		func(c api.Cycle) string { return c.Name }, func(c api.Cycle) string { return c.ID })
 }
 
 // GetProjectUpdates fetches status updates for a project
@@ -810,23 +750,8 @@ func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName str
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, initiative := range initiatives {
-		if initiative.Name == initiativeName {
-			return initiative.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(initiativeName)
-	for _, initiative := range initiatives {
-		if strings.ToLower(initiative.Name) == lowerName {
-			return initiative.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown initiative: %s", initiativeName)
+	return resolveByName(initiatives, initiativeName, "initiative",
+		func(i api.Initiative) string { return i.Name }, func(i api.Initiative) string { return i.ID })
 }
 
 // UpdateLabel updates a label
