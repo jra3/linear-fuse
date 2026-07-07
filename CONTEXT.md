@@ -277,9 +277,13 @@ truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
 The **deep module** owning every read-only *generated* file — the render-through
 file complement to `attrNode` (the directory mixin) and the read-side twin of
 `editBuffer` (the editable-file buffer). `renderFile` (`internal/fs/renderfile.go`)
-is `{BaseNode, render func() (content []byte, mtime, ctime time.Time)}` and
+is `{BaseNode, render func(ctx) (content []byte, mtime, ctime time.Time)}` and
 provides the three FUSE ops such a file needs — `Open`/`Read`/`Getattr`, promoted
-into whatever embeds it. Its whole interface is the one render closure. It
+into whatever embeds it. Its whole interface is the one render closure, which
+receives the FUSE handler's ctx on every path (Read, Getattr, and the
+Lookup-time render — `TestRenderFileThreadsContext` pins it): a closure whose
+source is a synchronous API call promotes it via `api.WithInteractive` at the
+call; SQLite-backed closures pass it through for cancellation. It
 replaced **nine** hand-copied node types (`TeamInfoNode`, `StatesInfoNode`,
 `LabelsInfoNode`, `UserInfoNode`, `CycleFileNode`, `ReadmeNode`, `MetaFileNode`,
 `ErrorFileNode`, `SuccessFileNode`) and reduced two more (`RelationFileNode`,
@@ -673,7 +677,11 @@ reserve`); **optimistic refill** past `resetAt`; and a defensive
 `RATELIMITED` snap-to-zero honoring the error's reset (bounded fallback when
 headerless). Base tier comes from a static `opName → tier` intent map in the
 module; `WithInteractive(ctx)` is the promotion mechanism for on-demand FS
-reads (mechanism only in PR1 — call sites not yet threaded). It collapsed
+reads — threaded at the **only two** synchronous user-blocking API calls
+(`GetTeamDocuments`; the attachment-create re-check); every other FS read is
+SQLite-first with background refresh, which must stay at base tier. The rule
+at `WithInteractive`: promote at the moment of the call, never store a
+promoted ctx or hand it to a goroutine. It collapsed
 `checkRateLimitHeaders`, the inline `Tokens() < 2` write-reserve gate, the
 `linearHourlyLimit` constant, and the token-count `LowBudget`;
 `Client.LowBudget`/`RateLimitResetAt` now delegate to it (paginate's

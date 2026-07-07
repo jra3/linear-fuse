@@ -13,7 +13,12 @@ import (
 // it should report (mtime=updated, ctime=created), from a live source. A zero
 // time reports "unknown" (nonZeroTime renders it as an unset attr), never a
 // fabricated now() — that fabrication was the drift this module exists to kill.
-type renderFunc func() (content []byte, mtime, ctime time.Time)
+//
+// The ctx is the FUSE handler's: a closure whose source is a synchronous
+// Linear API call (a live user is blocked on it) wraps it with
+// api.WithInteractive(ctx) at the call so the request spends from the
+// interactive budget reserve. SQLite-only closures ignore it.
+type renderFunc func(ctx context.Context) (content []byte, mtime, ctime time.Time)
 
 // renderFile is the mixin every read-only generated file embeds — the
 // render-through file complement to attrNode (the directory mixin) and the
@@ -45,15 +50,15 @@ var _ renderChild = (*renderFile)(nil)
 // renderAttr renders the current content and returns the reporting identity a
 // Getattr and a Lookup must agree on. Both go through this one path, so — as
 // with attrNode — the two can never disagree.
-func (r *renderFile) renderAttr() nodeAttr {
-	content, mtime, ctime := r.render()
+func (r *renderFile) renderAttr(ctx context.Context) nodeAttr {
+	content, mtime, ctime := r.render(ctx)
 	return nodeAttr{mode: 0444 | syscall.S_IFREG, size: uint64(len(content)), created: ctime, updated: mtime}
 }
 
 func (r *renderFile) baseNode() *BaseNode { return &r.BaseNode }
 
 func (r *renderFile) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	r.renderAttr().fill(&out.Attr, &r.BaseNode)
+	r.renderAttr(ctx).fill(&out.Attr, &r.BaseNode)
 	return 0
 }
 
@@ -69,7 +74,7 @@ func (r *renderFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 }
 
 func (r *renderFile) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content, _, _ := r.render()
+	content, _, _ := r.render(ctx)
 	return readWindow(content, dest, off), 0
 }
 
@@ -91,7 +96,7 @@ func readWindow(content, dest []byte, off int64) fuse.ReadResult {
 // embedding one plus extra methods (Unlink). newRenderInode builds any of them.
 type renderChild interface {
 	fs.InodeEmbedder
-	renderAttr() nodeAttr
+	renderAttr(ctx context.Context) nodeAttr
 	baseNode() *BaseNode
 }
 
@@ -104,8 +109,8 @@ const inheritTimeout = time.Duration(-1)
 // same renderAttr() path its Getattr uses, so the two can never disagree — and
 // applies the timeout (< 0 inherits the mount default). Shared by both mount
 // paths below.
-func fillRenderEntry(out *fuse.EntryOut, child renderChild, timeout time.Duration) {
-	child.renderAttr().fill(&out.Attr, child.baseNode())
+func fillRenderEntry(ctx context.Context, out *fuse.EntryOut, child renderChild, timeout time.Duration) {
+	child.renderAttr(ctx).fill(&out.Attr, child.baseNode())
 	if timeout >= 0 {
 		out.SetAttrTimeout(timeout)
 		out.SetEntryTimeout(timeout)
@@ -117,7 +122,7 @@ func fillRenderEntry(out *fuse.EntryOut, child renderChild, timeout time.Duratio
 // parent. Used by the nodes that embed renderFile plus extra methods
 // (RelationFileNode/ExternalAttachmentNode). ino 0 auto-assigns.
 func (b *BaseNode) newRenderInode(ctx context.Context, out *fuse.EntryOut, child renderChild, ino uint64, timeout time.Duration) *fs.Inode {
-	fillRenderEntry(out, child, timeout)
+	fillRenderEntry(ctx, out, child, timeout)
 	return b.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG, Ino: ino})
 }
 
@@ -135,6 +140,6 @@ func (b *BaseNode) lookupRenderFile(ctx context.Context, out *fuse.EntryOut, ren
 // as an fs.InodeEmbedder rather than a *BaseNode.
 func (lfs *LinearFS) mountRenderFile(ctx context.Context, parent fs.InodeEmbedder, render renderFunc, ino uint64, timeout time.Duration, out *fuse.EntryOut) *fs.Inode {
 	node := &renderFile{BaseNode: BaseNode{lfs: lfs}, render: render}
-	fillRenderEntry(out, node, timeout)
+	fillRenderEntry(ctx, out, node, timeout)
 	return parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG, Ino: ino})
 }

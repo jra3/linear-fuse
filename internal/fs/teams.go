@@ -104,7 +104,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	switch name {
 	case "team.md":
 		team := t.team
-		return t.lookupRenderFile(ctx, out, func() ([]byte, time.Time, time.Time) {
+		return t.lookupRenderFile(ctx, out, func(context.Context) ([]byte, time.Time, time.Time) {
 			return teamMarkdown(team), team.UpdatedAt, team.CreatedAt
 		}, 0, inheritTimeout), 0
 
@@ -113,8 +113,8 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		// team's times as a stable proxy — never now(). Content is fetched from
 		// SQLite on each read (cheap), so no node-level cache is needed.
 		lfs, team := t.lfs, t.team
-		return t.lookupRenderFile(ctx, out, func() ([]byte, time.Time, time.Time) {
-			states, err := lfs.GetTeamStates(context.Background(), team.ID)
+		return t.lookupRenderFile(ctx, out, func(ctx context.Context) ([]byte, time.Time, time.Time) {
+			states, err := lfs.GetTeamStates(ctx, team.ID)
 			if err != nil {
 				return []byte("# Error loading states\n"), team.UpdatedAt, team.CreatedAt
 			}
@@ -123,8 +123,8 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	case "labels.md":
 		lfs, team := t.lfs, t.team
-		return t.lookupRenderFile(ctx, out, func() ([]byte, time.Time, time.Time) {
-			labels, err := lfs.GetTeamLabels(context.Background(), team.ID)
+		return t.lookupRenderFile(ctx, out, func(ctx context.Context) ([]byte, time.Time, time.Time) {
+			labels, err := lfs.GetTeamLabels(ctx, team.ID)
 			if err != nil {
 				return []byte("# Error loading labels\n"), team.UpdatedAt, team.CreatedAt
 			}

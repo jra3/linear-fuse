@@ -119,9 +119,9 @@ func (i *InitiativeNode) manifest() *dirManifest {
 
 	// initiative.meta: read-through from the freshest initiative so an edit to
 	// initiative.md is reflected here.
-	m.metaFile("initiative.meta", func() ([]byte, time.Time, time.Time) {
+	m.metaFile("initiative.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		init := initiative
-		if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
+		if inits, err := lfs.GetInitiatives(ctx); err == nil {
 			init = freshestByID(inits, initiative.ID, func(i api.Initiative) string { return i.ID }, initiative)
 		}
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}

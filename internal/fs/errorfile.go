@@ -73,7 +73,7 @@ func collectionErrorKey(kind, parentID string) string {
 // with zero timeouts, so it always reflects the most recent write rather than a
 // stale cached (often empty) value; the reported time is when the error was set.
 func (lfs *LinearFS) lookupErrorFile(ctx context.Context, parent fs.InodeEmbedder, entityID string, out *fuse.EntryOut) *fs.Inode {
-	render := func() ([]byte, time.Time, time.Time) {
+	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		if e := lfs.GetWriteError(entityID); e != nil {
 			return []byte(e.Message + "\n"), e.Timestamp, e.Timestamp
 		}

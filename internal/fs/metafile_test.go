@@ -16,7 +16,7 @@ import (
 func TestMetaFileNodeReadThrough(t *testing.T) {
 	current := "id: X\nupdated: T1\n"
 	mtime := time.Unix(1000, 0)
-	node := &renderFile{render: func() ([]byte, time.Time, time.Time) {
+	node := &renderFile{render: func(context.Context) ([]byte, time.Time, time.Time) {
 		return []byte(current), mtime, time.Unix(500, 0)
 	}}
 

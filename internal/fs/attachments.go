@@ -113,7 +113,7 @@ func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, att 
 	node := &ExternalAttachmentNode{
 		renderFile: renderFile{
 			BaseNode: BaseNode{lfs: n.lfs},
-			render: func() ([]byte, time.Time, time.Time) {
+			render: func(context.Context) ([]byte, time.Time, time.Time) {
 				return []byte(externalAttachmentContent(att)), att.UpdatedAt, att.CreatedAt
 			},
 		},
@@ -265,7 +265,9 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 			// duplicate. On failure, re-check authoritatively against the API:
 			// if the URL is in fact already attached, treat it as the idempotent
 			// success it is rather than surfacing the raw GraphQL rejection.
-			if live, lerr := n.lfs.client.GetIssueAttachments(ctx, n.issueID); lerr == nil {
+			// Synchronous API read inside a user-blocking flush: promote it so
+			// a tight detail budget can't stall the user's write verdict.
+			if live, lerr := n.lfs.client.GetIssueAttachments(api.WithInteractive(ctx), n.issueID); lerr == nil {
 				for _, ex := range live {
 					if attachmentURLsEqual(ex.URL, url) {
 						return &ex, nil
