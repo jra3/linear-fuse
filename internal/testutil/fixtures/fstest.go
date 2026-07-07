@@ -13,64 +13,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/repo"
 )
 
-// LinearFSForTest is a minimal interface for fs.LinearFS that can be used in tests.
-// This avoids circular imports with the fs package.
-type LinearFSForTest interface {
-	Close()
-}
-
-// TestLinearFSConfig holds configuration for creating a test LinearFS.
-type TestLinearFSConfig struct {
-	// WithIssues pre-populates the repository with test issues
-	WithIssues []api.Issue
-	// WithTeams pre-populates the repository with test teams
-	WithTeams []api.Team
-	// WithStates pre-populates the repository with test states (keyed by team ID)
-	WithStates map[string][]api.State
-	// WithLabels pre-populates the repository with test labels (keyed by team ID)
-	WithLabels map[string][]api.Label
-	// WithUsers pre-populates the repository with test users
-	WithUsers []api.User
-	// CurrentUser sets the current user for "my" issue queries
-	CurrentUser *api.User
-}
-
-// NewTestMockRepository creates a MockRepository with optional pre-populated data.
-// Use this for fast, in-memory tests that don't need SQLite.
-func NewTestMockRepository(t *testing.T, cfg *TestLinearFSConfig) *repo.MockRepository {
-	t.Helper()
-
-	mockRepo := repo.NewMockRepository()
-
-	if cfg == nil {
-		return mockRepo
-	}
-
-	// Populate teams
-	mockRepo.Teams = cfg.WithTeams
-
-	// Populate states
-	if cfg.WithStates != nil {
-		mockRepo.States = cfg.WithStates
-	}
-
-	// Populate labels
-	if cfg.WithLabels != nil {
-		mockRepo.Labels = cfg.WithLabels
-	}
-
-	// Populate users
-	mockRepo.Users = cfg.WithUsers
-	mockRepo.CurrentUser = cfg.CurrentUser
-
-	// Populate issues
-	for _, issue := range cfg.WithIssues {
-		mockRepo.AddIssue(issue)
-	}
-
-	return mockRepo
-}
-
 // NewTestSQLiteStore creates a SQLite store in a temp directory with automatic cleanup.
 func NewTestSQLiteStore(t *testing.T) *db.Store {
 	t.Helper()

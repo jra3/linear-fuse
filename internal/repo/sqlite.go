@@ -25,9 +25,18 @@ const defaultStalenessThreshold = 5 * time.Minute
 // suppressed for this window to bound API cost.
 const reconcileCooldown = 6 * time.Hour
 
-// SQLiteRepository implements Repository using SQLite as the data store.
-// It reads from SQLite and optionally falls back to the API client
-// for data that hasn't been synced yet.
+// SQLiteRepository is the read path: it reads from SQLite and optionally
+// falls back to the API client for data that hasn't been synced yet.
+//
+// It is deliberately a concrete type with no interface in front of it. A
+// Repository interface (with an in-memory mock) existed for the project's
+// whole life without ever gaining a consumer — one adapter means a
+// hypothetical seam — so it was deleted (round 14). If a real second
+// adapter appears (a read-through cache, an alternate store), re-extract
+// the interface from this type mechanically. Testing strategy for fs code
+// is pure-projection extraction (dirManifest.find, the listing modules),
+// not repo mocking; fs write handlers touch *db.Store directly anyway, so
+// a mock repo could never unit-test them.
 //
 // For on-demand data (comments, documents, updates), it implements
 // stale-while-revalidate: returns cached data immediately and triggers
@@ -62,11 +71,6 @@ type SQLiteRepository struct {
 	lastReconcileAt  time.Time
 	reconcilePending atomic.Bool
 }
-
-// Compile-time interface compliance: without this, a method added to
-// Repository but forgotten here would still build (nothing else consumes
-// the interface with this implementation).
-var _ Repository = (*SQLiteRepository)(nil)
 
 // NewSQLiteRepository creates a new SQLite-backed repository.
 // If client is nil, the repository will only serve data from SQLite.

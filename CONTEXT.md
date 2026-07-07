@@ -635,6 +635,25 @@ logs and proceeds. Probe sequencing and the delay path are unit-tested in
 `worker_test.go` (`TestProbe*`); the client-level seed-then-defer wiring in
 `client_test.go` (`TestViewerProbeSeedsBudget`).
 
+### Repository read path (deliberately concrete — no interface)
+The read path is the concrete `*repo.SQLiteRepository`; there is **no
+Repository interface in front of it, on purpose** (round 14 decision — a
+future review must not re-suggest one "for testability"). A 59-method
+interface plus an in-memory mock existed for the project's whole life without
+ever gaining a consumer: `LinearFS.repo` was always the concrete type, the
+sync worker has its own narrow `APIClient` seam, and the mock's sole caller
+was its own fixture's test — one adapter means a hypothetical seam, so both
+were deleted (~900 lines). Two reasons a mock repo can't buy fs testability
+here: fs write handlers hit `lfs.store.Queries()` directly (24 sites), so
+write tests need real SQLite regardless; and node `Lookup`/`Readdir` need a
+live inode tree (round-7 finding), which is why this codebase's testing
+strategy is **pure-projection extraction** (`dirManifest.find`, the listing
+modules) rather than mocking under node methods. If a real second adapter
+ever appears (read-through cache, alternate store), re-extract the interface
+from `SQLiteRepository` mechanically. The SQLite fixture helpers
+(`fixtures.PopulateTestData` et al.) are the surviving, genuinely-used part
+of the old scaffolding.
+
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`

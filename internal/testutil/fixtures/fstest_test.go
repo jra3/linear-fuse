@@ -4,42 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
-
-	"github.com/jra3/linear-fuse/internal/api"
 )
-
-func TestNewTestMockRepository(t *testing.T) {
-	team := FixtureAPITeam()
-	issues := FixtureAPIIssues(3)
-
-	mockRepo := NewTestMockRepository(t, &TestLinearFSConfig{
-		WithTeams:  []api.Team{team},
-		WithIssues: issues,
-		WithStates: map[string][]api.State{
-			team.ID: FixtureAPIStates(),
-		},
-	})
-
-	ctx := context.Background()
-
-	// Verify teams
-	teams, err := mockRepo.GetTeams(ctx)
-	if err != nil {
-		t.Fatalf("GetTeams failed: %v", err)
-	}
-	if len(teams) != 1 {
-		t.Errorf("expected 1 team, got %d", len(teams))
-	}
-
-	// Verify issues
-	teamIssues, err := mockRepo.GetTeamIssues(ctx, team.ID)
-	if err != nil {
-		t.Fatalf("GetTeamIssues failed: %v", err)
-	}
-	if len(teamIssues) != 3 {
-		t.Errorf("expected 3 issues, got %d", len(teamIssues))
-	}
-}
 
 func TestNewTestSQLiteRepository(t *testing.T) {
 	sqliteRepo, store := NewTestSQLiteRepository(t)
