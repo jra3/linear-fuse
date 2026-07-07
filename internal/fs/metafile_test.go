@@ -9,14 +9,14 @@ import (
 )
 
 // TestMetaFileNodeReadThrough guards the blocker the naive review caught: a
-// MetaFileNode must render current content on every Read, not serve bytes baked
-// at construction time. go-fuse dedups inodes by StableAttr.Ino, so a stale
+// `.meta` renderFile must render current content on every Read, not serve bytes
+// baked at construction time. go-fuse dedups inodes by StableAttr.Ino, so a stale
 // baked-bytes node would be served for the life of the mount after the first
-// lookup. This test fails if MetaFileNode ever regresses to holding fixed bytes.
+// lookup. This test fails if the render-through property ever regresses.
 func TestMetaFileNodeReadThrough(t *testing.T) {
 	current := "id: X\nupdated: T1\n"
 	mtime := time.Unix(1000, 0)
-	node := &MetaFileNode{render: func() ([]byte, time.Time, time.Time) {
+	node := &renderFile{render: func() ([]byte, time.Time, time.Time) {
 		return []byte(current), mtime, time.Unix(500, 0)
 	}}
 

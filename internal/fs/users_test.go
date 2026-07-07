@@ -68,17 +68,13 @@ func TestUserDirName(t *testing.T) {
 
 func TestUserInfoNode_GenerateContent(t *testing.T) {
 	t.Parallel()
-	node := &UserInfoNode{
-		user: api.User{
-			ID:          "user-123",
-			Name:        "John Smith",
-			Email:       "john@example.com",
-			DisplayName: "jsmith",
-			Active:      true,
-		},
-	}
-
-	content := node.generateContent()
+	content := userMarkdown(api.User{
+		ID:          "user-123",
+		Name:        "John Smith",
+		Email:       "john@example.com",
+		DisplayName: "jsmith",
+		Active:      true,
+	})
 	contentStr := string(content)
 
 	checks := []string{
@@ -99,16 +95,12 @@ func TestUserInfoNode_GenerateContent(t *testing.T) {
 
 func TestUserInfoNode_GenerateContent_Inactive(t *testing.T) {
 	t.Parallel()
-	node := &UserInfoNode{
-		user: api.User{
-			ID:     "user-456",
-			Name:   "Jane Doe",
-			Email:  "jane@example.com",
-			Active: false,
-		},
-	}
-
-	content := node.generateContent()
+	content := userMarkdown(api.User{
+		ID:     "user-456",
+		Name:   "Jane Doe",
+		Email:  "jane@example.com",
+		Active: false,
+	})
 	contentStr := string(content)
 
 	if !strings.Contains(contentStr, "status: inactive") {

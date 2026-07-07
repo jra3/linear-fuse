@@ -119,15 +119,13 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle user.md metadata file
+	// Handle user.md metadata file. api.User carries no created/updated times,
+	// so the file honestly reports zero (unknown) rather than a fabricated now().
 	if name == "user.md" {
-		node := &UserInfoNode{BaseNode: BaseNode{lfs: u.lfs}, user: u.user}
-		content := node.generateContent()
-		out.Attr.Mode = 0444 | syscall.S_IFREG
-		out.Attr.Uid = u.lfs.uid
-		out.Attr.Gid = u.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		user := u.user
+		return u.lookupRenderFile(ctx, out, func() ([]byte, time.Time, time.Time) {
+			return userMarkdown(user), time.Time{}, time.Time{}
+		}, 0, inheritTimeout), 0
 	}
 
 	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)
@@ -148,23 +146,14 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	return nil, syscall.ENOENT
 }
 
-// UserInfoNode is a virtual file containing user metadata
-type UserInfoNode struct {
-	BaseNode
-	user api.User
-}
-
-var _ fs.NodeGetattrer = (*UserInfoNode)(nil)
-var _ fs.NodeOpener = (*UserInfoNode)(nil)
-var _ fs.NodeReader = (*UserInfoNode)(nil)
-
-func (u *UserInfoNode) generateContent() []byte {
+// userMarkdown renders the user.md content for a user.
+func userMarkdown(user api.User) []byte {
 	status := "active"
-	if !u.user.Active {
+	if !user.Active {
 		status = "inactive"
 	}
 
-	content := fmt.Sprintf(`---
+	return []byte(fmt.Sprintf(`---
 id: %s
 name: %s
 email: %s
@@ -178,39 +167,14 @@ status: %s
 - **ID:** %s
 - **Status:** %s
 `,
-		u.user.ID,
-		u.user.Name,
-		u.user.Email,
-		u.user.DisplayName,
+		user.ID,
+		user.Name,
+		user.Email,
+		user.DisplayName,
 		status,
-		u.user.Name,
-		u.user.Email,
-		u.user.ID,
+		user.Name,
+		user.Email,
+		user.ID,
 		status,
-	)
-	return []byte(content)
-}
-
-func (u *UserInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := u.generateContent()
-	out.Mode = 0444 | syscall.S_IFREG
-	u.SetOwner(out)
-	out.Size = uint64(len(content))
-	return 0
-}
-
-func (u *UserInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (u *UserInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := u.generateContent()
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
+	))
 }

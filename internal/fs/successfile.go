@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -142,62 +141,24 @@ func (lfs *LinearFS) renderWriteSuccess(key string) []byte {
 	return out
 }
 
-// lookupSuccessFile mounts the `.last` virtual file for a collection as a child
-// of parent. key is the collectionSuccessKey used with AppendWriteSuccess.
-// Timeouts are zero so the file always reflects the most recent create.
+// lookupSuccessFile mounts the read-only `.last` virtual file for a collection as
+// a child of parent. Reading it returns the YAML list of recent creates (empty if
+// none yet), keyed by the collectionSuccessKey used with AppendWriteSuccess. It
+// is a plain renderFile with zero timeouts, so it always reflects the most recent
+// create; the reported time is the newest recorded create's timestamp.
 func (lfs *LinearFS) lookupSuccessFile(ctx context.Context, parent fs.InodeEmbedder, key string, out *fuse.EntryOut) *fs.Inode {
-	node := &SuccessFileNode{BaseNode: BaseNode{lfs: lfs}, key: key}
-
-	size := uint64(len(lfs.renderWriteSuccess(key)))
-
-	now := time.Now()
-	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-	out.Attr.Uid = lfs.uid
-	out.Attr.Gid = lfs.gid
-	out.Attr.Size = size
-	out.SetAttrTimeout(0)
-	out.SetEntryTimeout(0)
-	out.Attr.SetTimes(&now, &now, &now)
-
-	return parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  successIno(key),
-	})
-}
-
-// SuccessFileNode is the read-only `.last` virtual file shown alongside any
-// writable collection. Reading it returns the YAML list of recent creates (empty
-// if none yet). Keyed by the collection's success key.
-type SuccessFileNode struct {
-	BaseNode
-	key string
-}
-
-var _ fs.NodeGetattrer = (*SuccessFileNode)(nil)
-var _ fs.NodeOpener = (*SuccessFileNode)(nil)
-var _ fs.NodeReader = (*SuccessFileNode)(nil)
-
-func (s *SuccessFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0444 // Read-only
-	s.SetOwner(out)
-	out.Size = uint64(len(s.lfs.renderWriteSuccess(s.key)))
-	return 0
-}
-
-func (s *SuccessFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	// FOPEN_DIRECT_IO: `.last` changes on every create; direct I/O forces a real
-	// READ on each open instead of trusting a possibly-stale cached size.
-	return nil, fuse.FOPEN_DIRECT_IO, 0
-}
-
-func (s *SuccessFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := s.lfs.renderWriteSuccess(s.key)
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
+	render := func() ([]byte, time.Time, time.Time) {
+		content := lfs.renderWriteSuccess(key)
+		if content == nil {
+			return nil, time.Time{}, time.Time{}
+		}
+		var latest time.Time
+		for _, r := range lfs.GetWriteSuccess(key) {
+			if r.Timestamp.After(latest) {
+				latest = r.Timestamp
+			}
+		}
+		return content, latest, latest
 	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
+	return lfs.mountRenderFile(ctx, parent, render, successIno(key), 0, out)
 }
