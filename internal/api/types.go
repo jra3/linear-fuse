@@ -55,6 +55,8 @@ type IssueRelation struct {
 	Type         string       `json:"type"` // blocks, duplicate, related, similar
 	RelatedIssue *ParentIssue `json:"relatedIssue,omitempty"`
 	Issue        *ParentIssue `json:"issue,omitempty"` // For inverse relations
+	CreatedAt    time.Time    `json:"createdAt"`
+	UpdatedAt    time.Time    `json:"updatedAt"`
 }
 
 // IssueCycle is a minimal cycle representation for issue references

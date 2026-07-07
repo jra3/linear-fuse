@@ -1497,6 +1497,8 @@ func (r *SQLiteRepository) GetIssueRelations(ctx context.Context, issueID string
 			RelatedIssue: &api.ParentIssue{
 				ID: rel.RelatedIssueID,
 			},
+			CreatedAt: rel.CreatedAt.Time,
+			UpdatedAt: rel.UpdatedAt.Time,
 		}
 		// Try to get the related issue details
 		if issue, err := r.GetIssueByID(ctx, rel.RelatedIssueID); err == nil && issue != nil {
@@ -1523,6 +1525,8 @@ func (r *SQLiteRepository) GetIssueInverseRelations(ctx context.Context, issueID
 			Issue: &api.ParentIssue{
 				ID: rel.IssueID,
 			},
+			CreatedAt: rel.CreatedAt.Time,
+			UpdatedAt: rel.UpdatedAt.Time,
 		}
 		// Try to get the source issue details
 		if issue, err := r.GetIssueByID(ctx, rel.IssueID); err == nil && issue != nil {
@@ -1549,6 +1553,8 @@ func (r *SQLiteRepository) GetIssueRelationByID(ctx context.Context, id string) 
 		RelatedIssue: &api.ParentIssue{
 			ID: rel.RelatedIssueID,
 		},
+		CreatedAt: rel.CreatedAt.Time,
+		UpdatedAt: rel.UpdatedAt.Time,
 	}
 	// Try to get the related issue details
 	if issue, err := r.GetIssueByID(ctx, rel.RelatedIssueID); err == nil && issue != nil {
