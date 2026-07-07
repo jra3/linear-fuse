@@ -745,7 +745,7 @@ func (r *SQLiteRepository) GetProjectMilestones(ctx context.Context, projectID s
 	if err != nil {
 		return nil, fmt.Errorf("list project milestones: %w", err)
 	}
-	return db.DBMilestonesToAPIProjectMilestones(milestones), nil
+	return db.DBMilestonesToAPIProjectMilestones(milestones)
 }
 
 func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, name string) (*api.ProjectMilestone, error) {
@@ -759,7 +759,10 @@ func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, na
 		}
 		return nil, fmt.Errorf("get milestone by name: %w", err)
 	}
-	result := db.DBMilestoneToAPIProjectMilestone(milestone)
+	result, err := db.DBMilestoneToAPIProjectMilestone(milestone)
+	if err != nil {
+		return nil, fmt.Errorf("convert milestone: %w", err)
+	}
 	return &result, nil
 }
 
@@ -771,7 +774,10 @@ func (r *SQLiteRepository) GetMilestoneByID(ctx context.Context, id string) (*ap
 		}
 		return nil, fmt.Errorf("get milestone by id: %w", err)
 	}
-	result := db.DBMilestoneToAPIProjectMilestone(milestone)
+	result, err := db.DBMilestoneToAPIProjectMilestone(milestone)
+	if err != nil {
+		return nil, fmt.Errorf("convert milestone: %w", err)
+	}
 	return &result, nil
 }
 
@@ -786,18 +792,12 @@ func (r *SQLiteRepository) CreateProjectMilestone(ctx context.Context, projectID
 		return nil, fmt.Errorf("create milestone: %w", err)
 	}
 
-	// Upsert to SQLite for immediate visibility
-	now := time.Now()
-	if err := r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
-		ID:          milestone.ID,
-		ProjectID:   projectID,
-		Name:        milestone.Name,
-		Description: sql.NullString{String: milestone.Description, Valid: milestone.Description != ""},
-		TargetDate:  sql.NullString{String: ptrString(milestone.TargetDate), Valid: milestone.TargetDate != nil},
-		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
-		SyncedAt:    now,
-		Data:        json.RawMessage("{}"),
-	}); err != nil {
+	// Upsert to SQLite for immediate visibility. Route through the forward
+	// converter so the full milestone lands in `data` — a hand-built params with
+	// Data:"{}" would round-trip to a milestone stripped of any JSON-only field.
+	if params, cerr := db.APIProjectMilestoneToDBMilestone(*milestone, projectID); cerr != nil {
+		log.Printf("[repo] convert milestone %s failed: %v", milestone.ID, cerr)
+	} else if err := r.store.Queries().UpsertProjectMilestone(ctx, params); err != nil {
 		log.Printf("[repo] upsert milestone %s failed: %v", milestone.ID, err)
 	}
 
@@ -821,18 +821,11 @@ func (r *SQLiteRepository) UpdateProjectMilestone(ctx context.Context, milestone
 		return nil, fmt.Errorf("update milestone: %w", err)
 	}
 
-	// Upsert to SQLite for immediate visibility
-	now := time.Now()
-	if err := r.store.Queries().UpsertProjectMilestone(ctx, db.UpsertProjectMilestoneParams{
-		ID:          milestone.ID,
-		ProjectID:   existing.ProjectID,
-		Name:        milestone.Name,
-		Description: sql.NullString{String: milestone.Description, Valid: milestone.Description != ""},
-		TargetDate:  sql.NullString{String: ptrString(milestone.TargetDate), Valid: milestone.TargetDate != nil},
-		SortOrder:   sql.NullFloat64{Float64: milestone.SortOrder, Valid: true},
-		SyncedAt:    now,
-		Data:        json.RawMessage("{}"),
-	}); err != nil {
+	// Upsert to SQLite for immediate visibility (see CreateProjectMilestone: the
+	// full milestone must land in `data`, not "{}").
+	if params, cerr := db.APIProjectMilestoneToDBMilestone(*milestone, existing.ProjectID); cerr != nil {
+		log.Printf("[repo] convert milestone %s failed: %v", milestone.ID, cerr)
+	} else if err := r.store.Queries().UpsertProjectMilestone(ctx, params); err != nil {
 		log.Printf("[repo] upsert milestone %s failed: %v", milestone.ID, err)
 	}
 

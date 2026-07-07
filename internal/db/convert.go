@@ -590,24 +590,44 @@ func APIProjectMilestoneToDBMilestone(milestone api.ProjectMilestone, projectID 
 	return params, nil
 }
 
-// DBMilestoneToAPIProjectMilestone converts a db.ProjectMilestone to api.ProjectMilestone
-func DBMilestoneToAPIProjectMilestone(milestone ProjectMilestone) api.ProjectMilestone {
-	return api.ProjectMilestone{
-		ID:          milestone.ID,
-		Name:        milestone.Name,
-		Description: NullStringValue(milestone.Description),
-		TargetDate:  NullStringPtr(milestone.TargetDate),
-		SortOrder:   milestone.SortOrder.Float64,
+// DBMilestoneToAPIProjectMilestone converts a db.ProjectMilestone to
+// api.ProjectMilestone.
+//
+// Like the other JSON-backed entities (issues, comments, projects, …) it
+// hydrates from the full `data` blob first, then overlays the authoritative
+// queryable columns (id/name/description/target_date/sort_order). Reading
+// columns *only* — as this did before — silently dropped any api field that
+// lived in the JSON but not a column, so a field added to api.ProjectMilestone
+// would persist yet vanish on read. The overlay closes that latent loss while
+// staying safe for rows whose `data` is empty or "{}" (a legacy write path):
+// the empty unmarshal leaves a zero struct that the columns then fill, exactly
+// as before.
+func DBMilestoneToAPIProjectMilestone(milestone ProjectMilestone) (api.ProjectMilestone, error) {
+	var m api.ProjectMilestone
+	if len(milestone.Data) > 0 {
+		if err := json.Unmarshal(milestone.Data, &m); err != nil {
+			return api.ProjectMilestone{}, err
+		}
 	}
+	m.ID = milestone.ID
+	m.Name = milestone.Name
+	m.Description = NullStringValue(milestone.Description)
+	m.TargetDate = NullStringPtr(milestone.TargetDate)
+	m.SortOrder = milestone.SortOrder.Float64
+	return m, nil
 }
 
 // DBMilestonesToAPIProjectMilestones converts a slice of db.ProjectMilestone to api.ProjectMilestone
-func DBMilestonesToAPIProjectMilestones(milestones []ProjectMilestone) []api.ProjectMilestone {
+func DBMilestonesToAPIProjectMilestones(milestones []ProjectMilestone) ([]api.ProjectMilestone, error) {
 	result := make([]api.ProjectMilestone, len(milestones))
 	for i, milestone := range milestones {
-		result[i] = DBMilestoneToAPIProjectMilestone(milestone)
+		m, err := DBMilestoneToAPIProjectMilestone(milestone)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = m
 	}
-	return result
+	return result, nil
 }
 
 // =============================================================================
