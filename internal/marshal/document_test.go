@@ -395,3 +395,40 @@ func TestDocumentRoundtrip(t *testing.T) {
 		t.Errorf("Roundtrip produced unexpected changes: %v", update)
 	}
 }
+
+// TestDocumentRoundtripEmptyContent pins the placeholder no-op guard: an
+// empty document renders as a fabricated `# <Title>` heading, and a
+// read-then-save of that render must not push the placeholder back to Linear
+// as real content (it used to — documents had the render without the guard).
+func TestDocumentRoundtripEmptyContent(t *testing.T) {
+	t.Parallel()
+	original := &api.Document{
+		ID:      "doc-empty",
+		Title:   "Empty Doc",
+		Content: "",
+	}
+
+	md, err := DocumentToMarkdown(original)
+	if err != nil {
+		t.Fatalf("DocumentToMarkdown() error: %v", err)
+	}
+
+	update, err := MarkdownToDocumentUpdate(md, original)
+	if err != nil {
+		t.Fatalf("MarkdownToDocumentUpdate() error: %v", err)
+	}
+	if len(update) != 0 {
+		t.Errorf("no-op rewrite of an empty document produced changes: %v", update)
+	}
+
+	// A real edit that happens to *start from* the placeholder still counts:
+	// only the exact fabricated heading is a no-op.
+	edited := []byte(strings.Replace(string(md), "# Empty Doc", "# Empty Doc\n\nNow with content.", 1))
+	update, err = MarkdownToDocumentUpdate(edited, original)
+	if err != nil {
+		t.Fatalf("MarkdownToDocumentUpdate(edited) error: %v", err)
+	}
+	if _, ok := update["content"]; !ok {
+		t.Errorf("a genuine edit was swallowed by the placeholder guard: %v", update)
+	}
+}
