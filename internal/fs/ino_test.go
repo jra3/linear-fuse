@@ -50,6 +50,8 @@ func TestInodeNamespaceDistinct(t *testing.T) {
 		"projectDirIno":           projectDirIno(id),
 		"projectInfoIno":          projectInfoIno(id),
 		"updatesDirIno":           updatesDirIno(id),
+		"projectUpdateIno":        projectUpdateIno(id),
+		"initiativeUpdateIno":     initiativeUpdateIno(id),
 		"milestonesDirIno":        milestonesDirIno(id),
 		"milestoneIno":            milestoneIno(id),
 		"initiativeDirIno":        initiativeDirIno(id),

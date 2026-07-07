@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -560,17 +559,11 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	content := updateToMarkdown(&update)
-	node := &UpdateNode{
-		update:  update,
-		content: content,
+	u := update // captured by the render closure
+	render := func() ([]byte, time.Time, time.Time) {
+		return updateMarkdown(u.ID, u.Health, u.CreatedAt, u.UpdatedAt, u.User, u.Body), u.UpdatedAt, u.CreatedAt
 	}
-	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-	out.Attr.Size = uint64(len(content))
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&update.UpdatedAt, &update.UpdatedAt, &update.CreatedAt)
-	return n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+	return n.lookupRenderFile(ctx, out, render, projectUpdateIno(u.ID), 30*time.Second), 0
 }
 
 func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
@@ -586,41 +579,6 @@ func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mod
 	node := newCreateFile(n.lfs, n.createUpdate)
 	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
 	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
-}
-
-// UpdateNode represents a single project update file (read-only)
-type UpdateNode struct {
-	fs.Inode
-	update  api.ProjectUpdate
-	content []byte
-}
-
-var _ fs.NodeGetattrer = (*UpdateNode)(nil)
-var _ fs.NodeOpener = (*UpdateNode)(nil)
-var _ fs.NodeReader = (*UpdateNode)(nil)
-
-func (n *UpdateNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0444 | syscall.S_IFREG
-	out.Size = uint64(len(n.content))
-	out.SetTimes(&n.update.UpdatedAt, &n.update.UpdatedAt, &n.update.CreatedAt)
-	return 0
-}
-
-func (n *UpdateNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *UpdateNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	if off >= int64(len(n.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(n.content)) {
-		end = int64(len(n.content))
-	}
-
-	return fuse.ReadResultData(n.content[off:end]), 0
 }
 
 // createUpdate is the project-updates create surface's onFlush: parse the
@@ -712,24 +670,4 @@ func parseUpdateContent(content []byte) (body string, health string, err error) 
 			Message: "update body is required: write the update text after the frontmatter"}
 	}
 	return body, health, nil
-}
-
-// updateToMarkdown converts a project update to markdown with YAML frontmatter
-func updateToMarkdown(update *api.ProjectUpdate) []byte {
-	var buf bytes.Buffer
-
-	buf.WriteString("---\n")
-	buf.WriteString(fmt.Sprintf("id: %s\n", update.ID))
-	buf.WriteString(fmt.Sprintf("health: %s\n", update.Health))
-	buf.WriteString(fmt.Sprintf("created: %q\n", update.CreatedAt.Format(time.RFC3339)))
-	buf.WriteString(fmt.Sprintf("updated: %q\n", update.UpdatedAt.Format(time.RFC3339)))
-	if update.User != nil {
-		buf.WriteString(fmt.Sprintf("author: %s\n", update.User.Email))
-		buf.WriteString(fmt.Sprintf("authorName: %s\n", update.User.Name))
-	}
-	buf.WriteString("---\n\n")
-	buf.WriteString(update.Body)
-	buf.WriteString("\n")
-
-	return buf.Bytes()
 }

@@ -55,10 +55,11 @@ func labelIno(labelID string) uint64    { return ino("label", labelID) }
 
 // Projects -----------------------------------------------------------------
 
-func projectsDirIno(teamID string) uint64    { return ino("projects", teamID) }
-func projectDirIno(projectID string) uint64  { return ino("projectdir", projectID) }
-func projectInfoIno(projectID string) uint64 { return ino("project-info", projectID) }
-func updatesDirIno(projectID string) uint64  { return ino("updates", projectID) }
+func projectsDirIno(teamID string) uint64     { return ino("projects", teamID) }
+func projectDirIno(projectID string) uint64   { return ino("projectdir", projectID) }
+func projectInfoIno(projectID string) uint64  { return ino("project-info", projectID) }
+func updatesDirIno(projectID string) uint64   { return ino("updates", projectID) }
+func projectUpdateIno(updateID string) uint64 { return ino("project-update", updateID) }
 
 // Milestones ---------------------------------------------------------------
 
@@ -75,6 +76,7 @@ func initiativeProjectsIno(initiativeID string) uint64 {
 func initiativeUpdatesDirIno(initiativeID string) uint64 {
 	return ino("initiative-updates", initiativeID)
 }
+func initiativeUpdateIno(updateID string) uint64 { return ino("initiative-update", updateID) }
 
 // Team views ---------------------------------------------------------------
 

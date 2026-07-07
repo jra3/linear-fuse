@@ -85,21 +85,11 @@ func (m *dirManifest) subdir(name string, ino uint64, node func() dirChild) {
 	})
 }
 
-// file adds an editable (0644) regular file. build fetches/renders the content
-// (its length sets the reported size) and returns the node, or an errno that is
+// file adds an editable (0644) regular file. build renders the content (its
+// length sets the reported size) and returns the node, or an errno that is
 // surfaced verbatim — a marshal failure returns EIO. Its errno is terminal at
 // the Lookup call site.
 func (m *dirManifest) file(name string, ino uint64, build func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno)) {
-	m.fileWithMode(name, 0644|syscall.S_IFREG, ino, build)
-}
-
-// genFile adds a read-only (0444) generated regular file — the fetch-during-
-// Lookup shape (history.md). Same contract as file(), differing only in mode.
-func (m *dirManifest) genFile(name string, ino uint64, build func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno)) {
-	m.fileWithMode(name, 0444|syscall.S_IFREG, ino, build)
-}
-
-func (m *dirManifest) fileWithMode(name string, mode uint32, ino uint64, build func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno)) {
 	m.children = append(m.children, staticChild{
 		name: name, mode: syscall.S_IFREG,
 		build: func(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -107,8 +97,21 @@ func (m *dirManifest) fileWithMode(name string, mode uint32, ino uint64, build f
 			if errno != 0 {
 				return nil, errno
 			}
-			na := nodeAttr{mode: mode, size: uint64(len(content)), created: m.created, updated: m.updated}
+			na := fileAttr(len(content), m.created, m.updated)
 			return m.parent.newFileInode(ctx, out, node, na, ino, m.timeout), 0
+		},
+	})
+}
+
+// renderFile adds a read-only (0444) generated file backed by a render closure
+// (history.md) — rendered fresh on every read (DIRECT_IO), the read-side twin of
+// the editable file() which bakes its content at Lookup. See the renderFile
+// module.
+func (m *dirManifest) renderFile(name string, ino uint64, render renderFunc) {
+	m.children = append(m.children, staticChild{
+		name: name, mode: syscall.S_IFREG,
+		build: func(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+			return m.parent.lookupRenderFile(ctx, out, render, ino, m.timeout), 0
 		},
 	})
 }

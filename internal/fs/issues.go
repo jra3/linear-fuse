@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -341,22 +340,16 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 		return b, iss.UpdatedAt, iss.CreatedAt
 	})
 
-	// history.md: fetched during Lookup so the size is accurate (the kernel skips
-	// READ when size is 0). Read-only generated file.
-	m.genFile("history.md", historyIno(issue.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
-		entries, err := n.lfs.GetIssueHistory(ctx, issue.ID)
+	// history.md: a read-only generated file, rendered fresh from the issue's
+	// activity history on each read. It reports the issue's own times; a transient
+	// fetch failure renders an empty file rather than making the entry vanish.
+	m.renderFile("history.md", historyIno(issue.ID), func() ([]byte, time.Time, time.Time) {
+		entries, err := lfs.GetIssueHistory(context.Background(), issue.ID)
 		if err != nil {
 			log.Printf("Failed to fetch history for %s: %v", issue.Identifier, err)
-			return nil, nil, syscall.EIO
+			return nil, issue.UpdatedAt, issue.CreatedAt
 		}
-		content := marshal.HistoryToMarkdown(issue.Identifier, entries)
-		return &HistoryFileNode{
-			BaseNode:     BaseNode{lfs: n.lfs},
-			issueID:      issue.ID,
-			identifier:   issue.Identifier,
-			content:      content,
-			contentReady: true,
-		}, content, 0
+		return marshal.HistoryToMarkdown(issue.Identifier, entries), issue.UpdatedAt, issue.CreatedAt
 	})
 
 	m.errorFile(".error")
@@ -644,86 +637,4 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	// Return the new issue as a directory node (Mkdir must return a directory)
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
 	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
-}
-
-// HistoryFileNode represents a history.md file inside /teams/{KEY}/issues/{ID}/
-// It lazily fetches history from the Linear API on first read.
-type HistoryFileNode struct {
-	BaseNode
-	issueID    string
-	identifier string
-
-	// Lazy-loaded content
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-}
-
-var _ fs.NodeGetattrer = (*HistoryFileNode)(nil)
-var _ fs.NodeOpener = (*HistoryFileNode)(nil)
-var _ fs.NodeReader = (*HistoryFileNode)(nil)
-
-// ensureContent fetches and renders history content if not already cached
-func (h *HistoryFileNode) ensureContent(ctx context.Context) error {
-	if h.contentReady {
-		return nil
-	}
-
-	if h.lfs.debug {
-		log.Printf("HistoryFileNode: fetching history for %s (issueID=%s)", h.identifier, h.issueID)
-	}
-
-	// Fetch history via repo (cached in SQLite)
-	entries, err := h.lfs.GetIssueHistory(ctx, h.issueID)
-	if err != nil {
-		log.Printf("Failed to fetch history for %s: %v", h.identifier, err)
-		return err
-	}
-
-	if h.lfs.debug {
-		log.Printf("HistoryFileNode: got %d history entries for %s", len(entries), h.identifier)
-	}
-
-	h.content = marshal.HistoryToMarkdown(h.identifier, entries)
-	h.contentReady = true
-	return nil
-}
-
-func (h *HistoryFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if err := h.ensureContent(ctx); err != nil {
-		return syscall.EIO
-	}
-
-	out.Mode = 0444 // Read-only
-	h.SetOwner(out)
-	out.Size = uint64(len(h.content))
-
-	return 0
-}
-
-func (h *HistoryFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (h *HistoryFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if err := h.ensureContent(ctx); err != nil {
-		return nil, syscall.EIO
-	}
-
-	if off >= int64(len(h.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(h.content)) {
-		end = int64(len(h.content))
-	}
-
-	return fuse.ReadResultData(h.content[off:end]), 0
 }
