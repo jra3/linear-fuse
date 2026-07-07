@@ -32,32 +32,34 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 
 	entries := n.trio().entries()
 
-	// Add embedded files (images, etc.)
-	files, err := n.lfs.GetIssueEmbeddedFiles(ctx, n.issueID)
-	if err == nil {
-		nameCount := make(map[string]int)
-		for _, file := range files {
-			name := deduplicateFilename(file.Filename, nameCount)
-			entries = append(entries, fuse.DirEntry{
-				Name: name,
-				Mode: syscall.S_IFREG,
-			})
-		}
-	}
-
-	// Add external attachments (.link files)
-	attachments, err := n.lfs.GetIssueAttachments(ctx, n.issueID)
-	if err == nil {
-		for _, att := range attachments {
-			name := sanitizeFilename(att.Title) + ".link"
-			entries = append(entries, fuse.DirEntry{
-				Name: name,
-				Mode: syscall.S_IFREG,
-			})
-		}
+	// Listing is best-effort: a failed fetch lists that family as empty
+	// rather than failing the whole directory.
+	listing := n.listing(ctx, nil)
+	for _, e := range listing.entries() {
+		entries = append(entries, fuse.DirEntry{
+			Name: e.name,
+			Mode: syscall.S_IFREG,
+		})
 	}
 
 	return fs.NewListDirStream(entries), 0
+}
+
+// listing fetches both item families and builds the name-derivation module.
+// A failed fetch leaves that family empty; when fetchErr is non-nil it also
+// records the first error there (Lookup distinguishes "not found" from
+// "couldn't look").
+func (n *AttachmentsNode) listing(ctx context.Context, fetchErr *error) attachmentListing {
+	files, ferr := n.lfs.GetIssueEmbeddedFiles(ctx, n.issueID)
+	attachments, aerr := n.lfs.GetIssueAttachments(ctx, n.issueID)
+	if fetchErr != nil {
+		if ferr != nil {
+			*fetchErr = ferr
+		} else if aerr != nil {
+			*fetchErr = aerr
+		}
+	}
+	return attachmentListing{embedded: files, external: attachments}
 }
 
 // trio declares the attachments collection's writable surfaces.
@@ -70,40 +72,20 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 		return inode, 0
 	}
 
-	// Handle .link files (external attachments)
-	if strings.HasSuffix(name, ".link") {
-		attachments, err := n.lfs.GetIssueAttachments(ctx, n.issueID)
-		if err != nil {
+	var fetchErr error
+	entry, ok := n.listing(ctx, &fetchErr).find(name)
+	if !ok {
+		if fetchErr != nil {
 			return nil, syscall.EIO
 		}
-		baseName := strings.TrimSuffix(name, ".link")
-		for _, att := range attachments {
-			if sanitizeFilename(att.Title) == baseName {
-				return n.createExternalAttachmentNode(ctx, att, out)
-			}
-		}
 		return nil, syscall.ENOENT
 	}
 
-	// Handle embedded files
-	files, err := n.lfs.GetIssueEmbeddedFiles(ctx, n.issueID)
-	if err != nil {
-		return nil, syscall.EIO
+	if entry.external != nil {
+		return n.createExternalAttachmentNode(ctx, *entry.external, out)
 	}
 
-	// Build deduplicated name mapping (same logic as Readdir)
-	nameCount := make(map[string]int)
-	fileByDeduplicatedName := make(map[string]api.EmbeddedFile)
-	for _, file := range files {
-		deduped := deduplicateFilename(file.Filename, nameCount)
-		fileByDeduplicatedName[deduped] = file
-	}
-
-	file, ok := fileByDeduplicatedName[name]
-	if !ok {
-		return nil, syscall.ENOENT
-	}
-
+	file := *entry.embedded
 	node := &EmbeddedFileNode{
 		BaseNode: BaseNode{lfs: n.lfs},
 		file:     file,
@@ -190,39 +172,6 @@ func (n *EmbeddedFileNode) Read(ctx context.Context, fh fs.FileHandle, dest []by
 	}
 
 	return fuse.ReadResultData(content[off:end]), 0
-}
-
-// deduplicateFilename returns a unique filename by appending (2), (3), etc. for duplicates.
-// The nameCount map tracks how many times each base name has been seen.
-func deduplicateFilename(name string, nameCount map[string]int) string {
-	nameCount[name]++
-	count := nameCount[name]
-	if count == 1 {
-		return name
-	}
-
-	// Insert counter before extension: image.png -> image (2).png
-	ext := ""
-	base := name
-	if dot := strings.LastIndex(name, "."); dot > 0 {
-		ext = name[dot:]
-		base = name[:dot]
-	}
-	return fmt.Sprintf("%s (%d)%s", base, count, ext)
-}
-
-// sanitizeFilename converts a string to a safe filename by replacing problematic characters
-func sanitizeFilename(s string) string {
-	// Replace path separators and null bytes
-	s = strings.ReplaceAll(s, "/", "-")
-	s = strings.ReplaceAll(s, "\\", "-")
-	s = strings.ReplaceAll(s, "\x00", "")
-	// Trim spaces and dots from ends
-	s = strings.Trim(s, " .")
-	if s == "" {
-		return "untitled"
-	}
-	return s
 }
 
 // ExternalAttachmentNode represents a .link file for an external attachment
@@ -328,7 +277,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 		result: func(a *api.Attachment) WriteResult {
 			return WriteResult{
 				URL:   a.URL,
-				Path:  sanitizeFilename(a.Title) + ".link",
+				Path:  linkName(*a),
 				Title: a.Title,
 			}
 		},
@@ -337,7 +286,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 			return nil
 		},
 		dir:       attachmentsDirIno(n.issueID),
-		entryName: func(a *api.Attachment) string { return sanitizeFilename(a.Title) + ".link" },
+		entryName: func(a *api.Attachment) string { return linkName(*a) },
 	})
 	return errno
 }

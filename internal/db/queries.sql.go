@@ -1758,9 +1758,11 @@ func (q *Queries) ListInitiatives(ctx context.Context) ([]Initiative, error) {
 }
 
 const listIssueAttachments = `-- name: ListIssueAttachments :many
-SELECT id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM attachments WHERE issue_id = ? ORDER BY created_at
+SELECT id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM attachments WHERE issue_id = ? ORDER BY created_at, id
 `
 
+// The id tiebreaker keeps the order deterministic on equal created_at, so
+// attachmentListing dedup suffixes stay stable across calls.
 func (q *Queries) ListIssueAttachments(ctx context.Context, issueID string) ([]Attachment, error) {
 	rows, err := q.db.QueryContext(ctx, listIssueAttachments, issueID)
 	if err != nil {
@@ -1884,9 +1886,11 @@ func (q *Queries) ListIssueDocuments(ctx context.Context, issueID sql.NullString
 }
 
 const listIssueEmbeddedFiles = `-- name: ListIssueEmbeddedFiles :many
-SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE issue_id = ? ORDER BY filename
+SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE issue_id = ? ORDER BY filename, id
 `
 
+// The id tiebreaker keeps the order deterministic on equal filenames (the
+// dedup case), so which duplicate gets the (2) suffix stays stable.
 func (q *Queries) ListIssueEmbeddedFiles(ctx context.Context, issueID string) ([]EmbeddedFile, error) {
 	rows, err := q.db.QueryContext(ctx, listIssueEmbeddedFiles, issueID)
 	if err != nil {
@@ -4027,10 +4031,9 @@ type PruneTeamLabelsParams struct {
 // Prune the team metadata rows the drained (complete) metadata fetch no
 // longer returned: renamed or deleted labels, cycles, and departed members.
 // Same contract as PruneProjectTeams, only safe against a complete fetch with
-// the cutoff taken before the sync upserts. Workspace labels commingle into
-// the labels table under whichever team synced them, but every team fetch
-// re-includes all workspace labels (via issueLabels), so they are always
-// refreshed above the cutoff before this prune runs and are never removed here.
+// the cutoff taken before the sync upserts. A label's team_id follows its own
+// team, so workspace labels are stored team_id=NULL and sit outside this
+// team-scoped prune entirely (only genuine team labels are removed here).
 func (q *Queries) PruneTeamLabels(ctx context.Context, arg PruneTeamLabelsParams) error {
 	_, err := q.db.ExecContext(ctx, pruneTeamLabels, arg.TeamID, arg.SyncedAt)
 	return err

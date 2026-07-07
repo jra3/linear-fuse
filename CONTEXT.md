@@ -392,11 +392,45 @@ decoy), not completeness. `indexedListing` escapes this only because
 comments/updates are name-resolved *nowhere else*, so it can disambiguate freely;
 milestones/labels are resolution keys, pinning the filename to the resolution
 name. True per-file addressability would mean reworking name resolution end-to-
-end — a separate change, not a listing collapse. Attachments are the excluded
-case (two heterogeneous item types in one dir + stateful `deduplicateFilename`),
-the way `EmbeddedFileNode` is excluded from [[render-file]].
+end — a separate change, not a listing collapse. Attachments were originally
+excluded (two heterogeneous item types in one dir + stateful
+`deduplicateFilename`) and later got their own heterogeneous sibling,
+[[attachment-listing]].
 `TestNamedListing*` guards the round-trip, the collision first-wins contract
 (the shadow as a *tested* invariant), order preservation, and totality.
+
+### Attachment listing (`attachmentListing`)
+The **deep module** owning the filenames of the attachments directory — the
+*heterogeneous* sibling of [[named-listing]] and [[indexed-listing]], covering
+the collection those two excluded. The directory mixes two item types:
+embedded files (CDN-backed bytes, named by filename) and external attachments
+(`.link` files, named by sanitized title). `attachmentListing{embedded,
+external}` (`internal/fs/attachmentlisting.go`) exposes `entries()` (Readdir)
+and `find(name)` (Lookup) returning a tagged entry, and owns
+`deduplicateFilename`, `sanitizeFilename`, and `linkName` (the `.link`
+derivation the create surface's `.last` path and kernel-entry name reuse —
+formerly restated at four sites). Before it, Readdir and Lookup each rebuilt
+the dedup map independently, duplicate-titled externals emitted *duplicate
+dirents* (kernel-collapsed shadowing), and the dedup algorithm had zero tests.
+
+**Collisions are deduplicated (`foo (2).link`) — deliberately the opposite of
+[[named-listing]]'s first-match/shadow policy, licensed by that policy's own
+recorded rationale:** disambiguation is forbidden only where the filename is a
+resolution key (labels/milestones); attachment names are resolution keys
+nowhere, the same freedom `indexedListing` uses for comments. One counter
+spans both families in listing order (embedded first, then external), so even
+an embedded file literally named `foo.link` disambiguates against an external
+titled `foo` instead of shadowing. `rm` on a deduplicated name deletes the
+right entity — `find` returns the matched item and the node holds it through
+Unlink. Dedup-suffix stability across calls comes from the repo (ordering is
+the repo's job): the two list queries carry `id` tiebreakers
+(`filename, id` / `created_at, id`), since equal sort keys are exactly the
+dedup case. The caller fetches and passes the slices; Readdir stays
+best-effort (a failed fetch lists that family empty) while Lookup
+distinguishes not-found (`ENOENT`) from couldn't-look (`EIO`) via the
+`listing(ctx, &fetchErr)` seam. Pure of the repo; unit-tested on literal
+slices (`TestAttachmentListing*`: round-trip, cross-family dedup, extension
+edges, linkName), no mount.
 
 ### Entity-directory manifest (`dirManifest`)
 The **deep module** owning the *static* children of an entity directory — the
