@@ -1036,61 +1036,86 @@ var markdownLinkPattern = regexp.MustCompile(`!?\[([^\]]*)\]\((https://uploads\.
 // linearCDNPattern matches bare Linear CDN URLs (fallback when not in markdown syntax)
 var linearCDNPattern = regexp.MustCompile(`https://uploads\.linear\.app/[^\s\)\]"'<>]+`)
 
-// extractAndStoreEmbeddedFiles extracts Linear CDN URLs from content and stores them
-func (w *Worker) extractAndStoreEmbeddedFiles(ctx context.Context, issueID, content, source string) {
-	// First, find all markdown-formatted links to get display names
+// embeddedFileSpec is one embedded file parsed out of content — everything about
+// it that is derivable without I/O: a stable id (from the URL), the display name
+// (markdown link text, else derived from the URL), and its MIME type. The size
+// (a HEAD request) and persistence are the caller's job.
+type embeddedFileSpec struct {
+	ID       string
+	IssueID  string
+	URL      string
+	Filename string
+	MimeType string
+	Source   string
+}
+
+// extractEmbeddedFiles is the pure half of embedded-file sync: it parses content
+// for Linear CDN URLs and returns one spec per URL, associating a markdown link's
+// display text with its URL where present. No HEAD request, no DB — so the
+// tricky parts (name↔URL association, id stability, filename/MIME derivation)
+// are unit-testable on literal strings. One spec per URL occurrence, matching the
+// upsert-per-occurrence the store loop did (the id is stable, so repeats are
+// idempotent).
+func extractEmbeddedFiles(content, issueID, source string) []embeddedFileSpec {
+	// Markdown-formatted links carry display names: [name](url).
 	urlToName := make(map[string]string)
-	mdMatches := markdownLinkPattern.FindAllStringSubmatch(content, -1)
-	for _, match := range mdMatches {
+	for _, match := range markdownLinkPattern.FindAllStringSubmatch(content, -1) {
 		if len(match) >= 3 {
-			displayName := strings.TrimSpace(match[1])
-			url := match[2]
-			if displayName != "" {
-				urlToName[url] = displayName
+			if displayName := strings.TrimSpace(match[1]); displayName != "" {
+				urlToName[match[2]] = displayName
 			}
 		}
 	}
 
-	// Find all URLs (including those not in markdown format)
 	urls := linearCDNPattern.FindAllString(content, -1)
-	if len(urls) == 0 {
-		return
-	}
-
+	specs := make([]embeddedFileSpec, 0, len(urls))
 	for _, url := range urls {
-		// Clean up URL (remove trailing punctuation that might have been captured)
+		// Clean up trailing punctuation that the URL pattern may have captured.
 		url = strings.TrimRight(url, ".,;:!?")
 
-		// Generate stable ID from URL
+		// Stable ID from the URL (first 16 bytes of the SHA-256).
 		hash := sha256.Sum256([]byte(url))
-		id := hex.EncodeToString(hash[:16]) // Use first 16 bytes for shorter ID
+		id := hex.EncodeToString(hash[:16])
 
-		// Use markdown display name if available, otherwise extract from URL
 		filename := urlToName[url]
 		if filename == "" {
 			filename = extractFilename(url)
 		}
 
-		// Detect MIME type from extension
-		mimeType := detectMIMEType(filename)
+		specs = append(specs, embeddedFileSpec{
+			ID:       id,
+			IssueID:  issueID,
+			URL:      url,
+			Filename: filename,
+			MimeType: detectMIMEType(filename),
+			Source:   source,
+		})
+	}
+	return specs
+}
 
-		// Fetch file size via HEAD request (doesn't download the file)
-		fileSize := w.fetchFileSize(ctx, url)
+// extractAndStoreEmbeddedFiles parses content for Linear CDN URLs, fetches each
+// one's size, and upserts it. Parsing is the pure extractEmbeddedFiles; this owns
+// the I/O tail (HEAD + upsert).
+func (w *Worker) extractAndStoreEmbeddedFiles(ctx context.Context, issueID, content, source string) {
+	for _, spec := range extractEmbeddedFiles(content, issueID, source) {
+		// Fetch file size via HEAD request (doesn't download the file).
+		fileSize := w.fetchFileSize(ctx, spec.URL)
 
 		params := db.UpsertEmbeddedFileParams{
-			ID:        id,
-			IssueID:   issueID,
-			Url:       url,
-			Filename:  filename,
-			MimeType:  sql.NullString{String: mimeType, Valid: mimeType != ""},
+			ID:        spec.ID,
+			IssueID:   spec.IssueID,
+			Url:       spec.URL,
+			Filename:  spec.Filename,
+			MimeType:  sql.NullString{String: spec.MimeType, Valid: spec.MimeType != ""},
 			FileSize:  sql.NullInt64{Int64: fileSize, Valid: fileSize > 0},
-			Source:    source,
+			Source:    spec.Source,
 			CreatedAt: db.Now(),
 			SyncedAt:  db.Now(),
 		}
 
 		if err := w.store.Queries().UpsertEmbeddedFile(ctx, params); err != nil {
-			log.Printf("[sync] upsert embedded file %s failed: %v", filename, err)
+			log.Printf("[sync] upsert embedded file %s failed: %v", spec.Filename, err)
 		}
 	}
 }
