@@ -327,21 +327,13 @@ SQLite serves as the persistent cache layer. See `internal/db/schema.sql` for ta
 
 The SQLite driver is configured with `_time_format=sqlite` which returns space-separated timestamps instead of RFC3339's `T` separator. This causes `time.Parse(time.RFC3339, s)` to fail silently.
 
-**Solution**: Use the `parseTime()` helper in `internal/repo/sqlite.go` or `parseSQLiteTime()` in `internal/sync/worker.go`:
-
-```go
-var sqliteTimeFormats = []string{
-    time.RFC3339,
-    time.RFC3339Nano,
-    "2006-01-02 15:04:05.999999999-07:00", // SQLite with timezone
-    "2006-01-02 15:04:05.999999999Z07:00",
-    "2006-01-02 15:04:05-07:00",
-    "2006-01-02 15:04:05Z07:00",
-    "2006-01-02 15:04:05",                 // SQLite without timezone
-}
-```
-
-When parsing times from SQLite queries (especially `MAX()`, `MIN()` aggregates which return `interface{}`), always use these helpers rather than `time.Parse(time.RFC3339, s)` directly.
+**Solution**: Use the canonical helpers in `internal/db/timeparse.go` —
+`db.ParseSQLiteTime(string)` and `db.ParseSQLiteTimeAny(interface{})` (the
+latter for `MAX()`/`MIN()` aggregates, which return `interface{}`). They try
+every layout a timestamp can arrive in (RFC3339 variants plus the
+space-separated SQLite forms). `internal/repo/sqlite.go`'s `parseTime` is a
+thin wrapper over `ParseSQLiteTimeAny`. Never call
+`time.Parse(time.RFC3339, s)` directly on a value read from SQLite.
 
 ### Adding New Tables
 

@@ -874,9 +874,6 @@ DELETE FROM issue_relations WHERE issue_id = ?;
 -- owned by other issues and must never license their deletion.
 DELETE FROM issue_relations WHERE issue_id = ? AND synced_at < ?;
 
--- name: GetIssueRelationsSyncedAt :one
-SELECT MAX(synced_at) FROM issue_relations WHERE issue_id = ?;
-
 -- =============================================================================
 -- Issue History Cache
 -- =============================================================================

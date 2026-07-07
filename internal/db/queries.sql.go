@@ -913,17 +913,6 @@ func (q *Queries) GetIssueRelation(ctx context.Context, id string) (IssueRelatio
 	return i, err
 }
 
-const getIssueRelationsSyncedAt = `-- name: GetIssueRelationsSyncedAt :one
-SELECT MAX(synced_at) FROM issue_relations WHERE issue_id = ?
-`
-
-func (q *Queries) GetIssueRelationsSyncedAt(ctx context.Context, issueID string) (interface{}, error) {
-	row := q.db.QueryRowContext(ctx, getIssueRelationsSyncedAt, issueID)
-	var max interface{}
-	err := row.Scan(&max)
-	return max, err
-}
-
 const getIssueUpdatedAt = `-- name: GetIssueUpdatedAt :one
 
 
