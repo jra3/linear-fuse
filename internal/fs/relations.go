@@ -80,7 +80,7 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 		if rel.RelatedIssue != nil && rel.RelatedIssue.Identifier != "" {
 			expectedName := fmt.Sprintf("%s-%s", rel.Type, rel.RelatedIssue.Identifier)
 			if baseName == expectedName {
-				return n.createRelationFileNode(ctx, rel, false, out)
+				return n.createRelationFileNode(ctx, name, rel, false, out)
 			}
 		}
 	}
@@ -92,7 +92,7 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 			inverseName := inverseRelationType(rel.Type)
 			expectedName := fmt.Sprintf("%s-%s", inverseName, rel.Issue.Identifier)
 			if baseName == expectedName {
-				return n.createRelationFileNode(ctx, rel, true, out)
+				return n.createRelationFileNode(ctx, name, rel, true, out)
 			}
 		}
 	}
@@ -100,7 +100,7 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 	return nil, syscall.ENOENT
 }
 
-func (n *RelationsNode) createRelationFileNode(ctx context.Context, rel api.IssueRelation, isInverse bool, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string, rel api.IssueRelation, isInverse bool, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node := &RelationFileNode{
 		renderFile: renderFile{
 			BaseNode: BaseNode{lfs: n.lfs},
@@ -112,7 +112,7 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, rel api.Issu
 		isInverse: isInverse,
 		issueID:   n.issueID,
 	}
-	return n.newRenderInode(ctx, out, node, relationIno(rel.ID), 30*time.Second), 0
+	return n.newRenderInode(ctx, out, name, node, relationIno(rel.ID), 30*time.Second), 0
 }
 
 // inverseRelationType returns the inverse relation type name
@@ -142,6 +142,19 @@ type RelationFileNode struct {
 
 var _ fs.NodeUnlinker = (*RelationFileNode)(nil)
 
+// refreshFrom adopts a fresh twin's relation and render closure (refresh.go);
+// renderMu doubles as the entity-field lock.
+func (n *RelationFileNode) refreshFrom(fresh fs.InodeEmbedder) {
+	f, ok := fresh.(*RelationFileNode)
+	if !ok {
+		return
+	}
+	n.renderMu.Lock()
+	n.render = f.render
+	n.relation, n.isInverse, n.issueID = f.relation, f.isInverse, f.issueID
+	n.renderMu.Unlock()
+}
+
 // relationContent renders a relation file's YAML body.
 func relationContent(rel api.IssueRelation, isInverse bool) string {
 	var sb strings.Builder
@@ -170,9 +183,15 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 
 	// The file node already holds its entity, so find just hands it over.
 	return commitDelete(ctx, n.lfs, deleteSpec[api.IssueRelation]{
-		op:   `delete relation "` + name + `"`,
-		key:  collectionErrorKey("relations", n.issueID),
-		find: func(context.Context) (*api.IssueRelation, error) { return &n.relation, nil },
+		op:  `delete relation "` + name + `"`,
+		key: collectionErrorKey("relations", n.issueID),
+		find: func(context.Context) (*api.IssueRelation, error) {
+			// Snapshot: a concurrent refresh (refresh.go) may swap the field.
+			n.renderMu.Lock()
+			rel := n.relation
+			n.renderMu.Unlock()
+			return &rel, nil
+		},
 		mutate: func(ctx context.Context, r *api.IssueRelation) error {
 			return n.lfs.mutator().DeleteIssueRelation(ctx, r.ID)
 		},

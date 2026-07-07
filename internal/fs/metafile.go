@@ -32,6 +32,6 @@ import (
 // closure as a child of parent. render is called on demand (Lookup/Read/Getattr)
 // and must return the current meta bytes and times from a live source. Timeouts
 // are zero (like .error/.last) so the file never serves a stale cached size.
-func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, key string, render renderFunc, out *fuse.EntryOut) *fs.Inode {
-	return lfs.mountRenderFile(ctx, parent, render, metaIno(key), 0, out)
+func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, name, key string, render renderFunc, out *fuse.EntryOut) *fs.Inode {
+	return lfs.mountRenderFile(ctx, parent, name, render, metaIno(key), 0, out)
 }

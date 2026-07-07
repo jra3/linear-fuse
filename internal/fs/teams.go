@@ -104,7 +104,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	switch name {
 	case "team.md":
 		team := t.team
-		return t.lookupRenderFile(ctx, out, func(context.Context) ([]byte, time.Time, time.Time) {
+		return t.lookupRenderFile(ctx, out, "team.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return teamMarkdown(team), team.UpdatedAt, team.CreatedAt
 		}, 0, inheritTimeout), 0
 
@@ -113,7 +113,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		// team's times as a stable proxy — never now(). Content is fetched from
 		// SQLite on each read (cheap), so no node-level cache is needed.
 		lfs, team := t.lfs, t.team
-		return t.lookupRenderFile(ctx, out, func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		return t.lookupRenderFile(ctx, out, "states.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			states, err := lfs.GetTeamStates(ctx, team.ID)
 			if err != nil {
 				return []byte("# Error loading states\n"), team.UpdatedAt, team.CreatedAt
@@ -123,7 +123,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	case "labels.md":
 		lfs, team := t.lfs, t.team
-		return t.lookupRenderFile(ctx, out, func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		return t.lookupRenderFile(ctx, out, "labels.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			labels, err := lfs.GetTeamLabels(ctx, team.ID)
 			if err != nil {
 				return []byte("# Error loading labels\n"), team.UpdatedAt, team.CreatedAt
@@ -185,11 +185,11 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	case "docs":
 		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: t.team.ID}
-		return t.newDirInode(ctx, out, node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), docsDirIno(t.team.ID), 0), 0
+		return t.newDirInode(ctx, out, "docs", node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), docsDirIno(t.team.ID), 0), 0
 
 	case "labels":
 		node := &LabelsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: t.team.ID}
-		return t.newDirInode(ctx, out, node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), labelsDirIno(t.team.ID), 0), 0
+		return t.newDirInode(ctx, out, "labels", node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), labelsDirIno(t.team.ID), 0), 0
 	}
 
 	return nil, syscall.ENOENT

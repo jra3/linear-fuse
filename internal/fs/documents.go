@@ -103,7 +103,7 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	if doc, ok := n.listing(docs).find(name); ok {
-		return n.newDocumentInode(ctx, doc, out)
+		return n.newDocumentInode(ctx, name, doc, out)
 	}
 
 	return nil, syscall.ENOENT
@@ -199,7 +199,7 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 
 // newDocumentInode builds the read/write DocumentFileNode inode for an existing
 // document, populated with its current content. Shared by Lookup and Create.
-func (n *DocsNode) newDocumentInode(ctx context.Context, doc api.Document, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+func (n *DocsNode) newDocumentInode(ctx context.Context, name string, doc api.Document, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	content, err := marshal.DocumentToMarkdown(&doc)
 	if err != nil {
 		log.Printf("Failed to marshal document: %v", err)
@@ -215,7 +215,7 @@ func (n *DocsNode) newDocumentInode(ctx context.Context, doc api.Document, out *
 		editBuffer:   editBuffer{content: content},
 	}
 	// Shorter timeout for writable files.
-	return n.newFileInode(ctx, out, node, fileAttr(len(content), doc.CreatedAt, doc.UpdatedAt), documentIno(doc.ID), 5*time.Second), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), doc.CreatedAt, doc.UpdatedAt), documentIno(doc.ID), 5*time.Second), 0
 }
 
 func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
@@ -235,7 +235,7 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 	// unwritable (#137).
 	if docs, err := n.getDocuments(ctx); err == nil {
 		if doc, ok := n.listing(docs).find(name); ok {
-			inode, errno := n.newDocumentInode(ctx, doc, out)
+			inode, errno := n.newDocumentInode(ctx, name, doc, out)
 			if errno != 0 {
 				return nil, nil, 0, errno
 			}
@@ -283,8 +283,25 @@ var _ fs.NodeFsyncer = (*DocumentFileNode)(nil)
 var _ fs.NodeSetattrer = (*DocumentFileNode)(nil)
 
 func (n *DocumentFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	fileAttr(n.size(), n.document.CreatedAt, n.document.UpdatedAt).fill(&out.Attr, &n.BaseNode)
+	// One lock for size + times: a concurrent refresh (refresh.go) swaps
+	// content and entity atomically, so the read must snapshot both together.
+	n.mu.Lock()
+	size := len(n.content)
+	created, updated := n.document.CreatedAt, n.document.UpdatedAt
+	n.mu.Unlock()
+	fileAttr(size, created, updated).fill(&out.Attr, &n.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's document and rendered content unless an
+// edit is in flight — the dirty buffer always wins (refresh.go).
+func (n *DocumentFileNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*DocumentFileNode); ok {
+		n.refresh(f.content, func() {
+			n.document = f.document
+			n.issueID, n.teamID, n.projectID, n.initiativeID = f.issueID, f.teamID, f.projectID, f.initiativeID
+		})
+	}
 }
 
 func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {

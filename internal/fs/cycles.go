@@ -147,7 +147,7 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	// and ctime (preserving the previous sort order), never now().
 	if name == "cycle.md" {
 		team, cycle := c.team, c.cycle
-		return c.lookupRenderFile(ctx, out, func(context.Context) ([]byte, time.Time, time.Time) {
+		return c.lookupRenderFile(ctx, out, "cycle.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return cycleMarkdown(team, cycle), cycle.StartsAt, cycle.StartsAt
 		}, 0, inheritTimeout), 0
 	}

@@ -82,7 +82,7 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		editBuffer: editBuffer{content: content},
 	}
 	// Shorter timeout for writable files.
-	return n.newFileInode(ctx, out, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
 }
 
 func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -152,8 +152,22 @@ var _ fs.NodeFsyncer = (*CommentNode)(nil)
 var _ fs.NodeSetattrer = (*CommentNode)(nil)
 
 func (n *CommentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	fileAttr(n.size(), n.comment.CreatedAt, n.comment.UpdatedAt).fill(&out.Attr, &n.BaseNode)
+	// One lock for size + times: a concurrent refresh (refresh.go) swaps
+	// content and entity atomically, so the read must snapshot both together.
+	n.mu.Lock()
+	size := len(n.content)
+	created, updated := n.comment.CreatedAt, n.comment.UpdatedAt
+	n.mu.Unlock()
+	fileAttr(size, created, updated).fill(&out.Attr, &n.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's comment and rendered content unless an
+// edit is in flight — the dirty buffer always wins (refresh.go).
+func (n *CommentNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*CommentNode); ok {
+		n.refresh(f.content, func() { n.comment, n.issueID = f.comment, f.issueID })
+	}
 }
 
 func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {

@@ -21,6 +21,7 @@ var (
 	mountPoint  string
 	server      *fuse.Server
 	lfs         *fs.LinearFS
+	testStore   *db.Store // fixture mode: the store behind the mount, for tests simulating sync-side writes
 	apiClient   *api.Client
 	testTeamID  string
 	testTeamKey string
@@ -138,6 +139,8 @@ func setupSQLiteFixtures() error {
 		os.RemoveAll(mountPoint)
 		return fmt.Errorf("create linearfs: %w", err)
 	}
+
+	testStore = store
 
 	// Inject the store and create repository (no API client for fetching)
 	if err := lfs.InjectTestStore(store); err != nil {

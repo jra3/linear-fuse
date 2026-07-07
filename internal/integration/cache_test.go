@@ -33,12 +33,11 @@ func TestCacheHitOnReread(t *testing.T) {
 	}
 }
 
-func TestCacheExpiryRefreshesData(t *testing.T) {
-	// This test verifies that external API changes eventually become visible
-	// Note: Due to FUSE inode caching, this may require the inode to be evicted
-	// which happens after the entry timeout (30s by default)
-	t.Skip("Skipped: FUSE inode caching prevents immediate refresh - see filesystem implementation")
-}
+// External-change visibility is guarded by
+// TestRemoteUpdateVisibleAfterKernelRevalidation (staleness_test.go): the old
+// skipped TestCacheExpiryRefreshesData lived here — its skip message ("FUSE
+// inode caching prevents immediate refresh") was the captured-entity staleness
+// bug the nodeRefresher seam (internal/fs/refresh.go) now fixes.
 
 func TestIssueEditInvalidatesTeamCache(t *testing.T) {
 	skipIfNoWriteTests(t)

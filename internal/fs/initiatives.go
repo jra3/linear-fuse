@@ -57,7 +57,7 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	for _, init := range initiatives {
 		if initiativeDirName(init) == name {
 			node := &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiative: init}
-			return i.newDirInode(ctx, out, node, dirAttr(init.CreatedAt, init.UpdatedAt), initiativeDirIno(init.ID), 30*time.Second), 0
+			return i.newDirInode(ctx, out, name, node, dirAttr(init.CreatedAt, init.UpdatedAt), initiativeDirIno(init.ID), 30*time.Second), 0
 		}
 	}
 
@@ -104,8 +104,29 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 // initiative.md, the read-through initiative.meta, the .error sidecar, and the
 // docs/projects/updates subdirs. Initiative children have no dynamic tail and a
 // 0 timeout.
+// entity/setEntity snapshot and swap the directory's initiative under the
+// node's volatile-state lock: setEntity is written by the Rename write-back
+// and the nodeRefresher seam (refresh.go).
+func (i *InitiativeNode) entity() api.Initiative {
+	i.stateMu.Lock()
+	defer i.stateMu.Unlock()
+	return i.initiative
+}
+
+func (i *InitiativeNode) setEntity(init api.Initiative) {
+	i.stateMu.Lock()
+	i.initiative = init
+	i.stateMu.Unlock()
+}
+
+func (i *InitiativeNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*InitiativeNode); ok {
+		i.setEntity(f.initiative)
+	}
+}
+
 func (i *InitiativeNode) manifest() *dirManifest {
-	initiative := i.initiative // snapshot captured by the build closures
+	initiative := i.entity() // snapshot captured by the build closures
 	lfs := i.lfs
 	m := newDirManifest(&i.BaseNode, initiative.ID, initiative.CreatedAt, initiative.UpdatedAt, 0)
 
@@ -149,7 +170,7 @@ func (i *InitiativeNode) manifest() *dirManifest {
 // with a misleading EROFS on the rw mount (#145).
 func (i *InitiativeNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	if i.lfs.debug {
-		log.Printf("Create scratch file in initiative %s: %s", i.initiative.Name, name)
+		log.Printf("Create scratch file in initiative %s: %s", i.entity().Name, name)
 	}
 	return newScratchInode(ctx, &i.BaseNode, i.EmbeddedInode().StableAttr().Ino, name, out)
 }
@@ -158,8 +179,9 @@ func (i *InitiativeNode) Create(ctx context.Context, name string, flags uint32, 
 // initiative.md is written through initiative.md's normal Flush path.
 // initiative.md is the only writable file here, so other targets are rejected.
 func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	initiative := i.entity()
 	if i.lfs.debug {
-		log.Printf("Rename in initiative %s: %s -> %s", i.initiative.Name, name, newName)
+		log.Printf("Rename in initiative %s: %s -> %s", initiative.Name, name, newName)
 	}
 
 	dirIno := i.EmbeddedInode().StableAttr().Ino
@@ -173,21 +195,21 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 	}
 
 	if newName != "initiative.md" {
-		i.lfs.SetWriteError(i.initiative.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only initiative.md is writable in this directory; save your changes onto initiative.md (atomic save-via-rename onto initiative.md is supported).", name, newName))
+		i.lfs.SetWriteError(initiative.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only initiative.md is writable in this directory; save your changes onto initiative.md (atomic save-via-rename onto initiative.md is supported).", name, newName))
 		return syscall.ENOTSUP
 	}
 
 	fileNode := &InitiativeInfoNode{
 		BaseNode:     BaseNode{lfs: i.lfs},
-		initiative:   i.initiative,
-		initiativeID: i.initiative.ID,
+		initiative:   initiative,
+		initiativeID: initiative.ID,
 		editBuffer:   editBuffer{content: content, dirty: true},
 	}
 	errno := fileNode.Flush(ctx, nil)
 
 	if errno == 0 || errno == syscall.EIO {
-		i.initiative = fileNode.initiative
-		i.lfs.InvalidateRenamed(dirIno, name, newName, initiativeInfoIno(i.initiative.ID))
+		i.setEntity(fileNode.initiative)
+		i.lfs.InvalidateRenamed(dirIno, name, newName, initiativeInfoIno(fileNode.initiative.ID))
 	}
 
 	return errno
@@ -242,8 +264,22 @@ func (i *InitiativeInfoNode) metaContent() []byte {
 }
 
 func (i *InitiativeInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	fileAttr(i.size(), i.initiative.CreatedAt, i.initiative.UpdatedAt).fill(&out.Attr, &i.BaseNode)
+	// One lock for size + times: a concurrent refresh (refresh.go) swaps
+	// content and entity atomically, so the read must snapshot both together.
+	i.mu.Lock()
+	size := len(i.content)
+	created, updated := i.initiative.CreatedAt, i.initiative.UpdatedAt
+	i.mu.Unlock()
+	fileAttr(size, created, updated).fill(&out.Attr, &i.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's initiative and rendered content unless an
+// edit is in flight — the dirty buffer always wins (refresh.go).
+func (i *InitiativeInfoNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*InitiativeInfoNode); ok {
+		i.refresh(f.content, func() { i.initiative, i.initiativeID = f.initiative, f.initiativeID })
+	}
 }
 
 func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
@@ -483,7 +519,7 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	return n.lookupUpdateFile(ctx, out, update.ID, update.Health, update.CreatedAt, update.UpdatedAt,
+	return n.lookupUpdateFile(ctx, out, name, update.ID, update.Health, update.CreatedAt, update.UpdatedAt,
 		update.User, update.Body, initiativeUpdateIno(update.ID)), 0
 }
 
