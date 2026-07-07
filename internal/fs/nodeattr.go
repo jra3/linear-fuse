@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,9 +52,18 @@ func fileAttr(size int, created, updated time.Time) nodeAttr {
 // BaseNode. It stores the nodeAttr and provides the default Getattr, so a
 // directory node cannot hand-write a divergent one (the drift that had
 // DocsNode/AttachmentsNode reporting time.Now()).
+//
+// The nodeAttr is mutex-guarded because it is no longer write-once: when
+// go-fuse dedups a Lookup onto an already-known node, newDirInode re-runs
+// setAttr on the OLD node with the freshly-fetched times (the attr half of
+// the nodeRefresher seam — see refresh.go), racing with concurrent Getattrs.
+// stateMu doubles as the volatile-state lock for the embedding entity dir
+// nodes (their entity()/setEntity accessors), so an entity swap and its
+// consumers serialize on one lock.
 type attrNode struct {
 	BaseNode
-	na nodeAttr
+	stateMu sync.Mutex
+	na      nodeAttr
 }
 
 var _ fs.NodeGetattrer = (*attrNode)(nil)
@@ -64,10 +74,20 @@ func (n *attrNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrO
 }
 
 // fillAttr is the one renderer shared by Getattr and newDirInode.
-func (n *attrNode) fillAttr(attr *fuse.Attr) { n.na.fill(attr, &n.BaseNode) }
+func (n *attrNode) fillAttr(attr *fuse.Attr) {
+	n.stateMu.Lock()
+	na := n.na
+	n.stateMu.Unlock()
+	na.fill(attr, &n.BaseNode)
+}
 
-// setAttr stashes the reporting identity; called by newDirInode on the child.
-func (n *attrNode) setAttr(na nodeAttr) { n.na = na }
+// setAttr stashes the reporting identity; called by newDirInode on the child
+// (and re-run on a reused node to refresh its times).
+func (n *attrNode) setAttr(na nodeAttr) {
+	n.stateMu.Lock()
+	n.na = na
+	n.stateMu.Unlock()
+}
 
 // dirChild is a node that embeds attrNode.
 type dirChild interface {
@@ -81,11 +101,20 @@ type dirChild interface {
 // child's own fillAttr — the exact method its Getattr uses — sets the entry
 // timeout, and returns the inode. A Lookup answer and a later stat therefore
 // render identically by construction.
-func (b *BaseNode) newDirInode(ctx context.Context, out *fuse.EntryOut, child dirChild, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
+func (b *BaseNode) newDirInode(ctx context.Context, out *fuse.EntryOut, name string, child dirChild, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
 	child.setAttr(na)
 	child.fillAttr(&out.Attr)
 	out.SetAttrTimeout(timeout)
 	out.SetEntryTimeout(timeout)
+	// The bridge dedups AFTER this handler returns: if it still knows a node
+	// under this name, that one will serve — push the freshly-fetched times
+	// and entity into it (see refresh.go).
+	if existing := b.EmbeddedInode().GetChild(name); existing != nil {
+		if dc, ok := existing.Operations().(dirChild); ok && existing.Operations() != fs.InodeEmbedder(child) {
+			dc.setAttr(na)
+		}
+	}
+	refreshExisting(b, name, child)
 	return b.NewInode(ctx, child, fs.StableAttr{Mode: na.mode & syscall.S_IFMT, Ino: ino})
 }
 
@@ -94,9 +123,12 @@ func (b *BaseNode) newDirInode(ctx context.Context, out *fuse.EntryOut, child di
 // legitimately dynamic edit-buffer value that is meant to diverge from what
 // Lookup first reported — so this installs no inherited Getattr; it only shares
 // the immutable-field construction (mode/uid/gid/times) and the initial size.
-func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, child fs.InodeEmbedder, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
+func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, name string, child fs.InodeEmbedder, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
 	na.fill(&out.Attr, b)
 	out.SetAttrTimeout(timeout)
 	out.SetEntryTimeout(timeout)
+	// The bridge dedups AFTER this handler returns: push fresh content/entity
+	// into the node it will keep (a dirty edit buffer wins — see refresh.go).
+	refreshExisting(b, name, child)
 	return b.NewInode(ctx, child, fs.StableAttr{Mode: na.mode & syscall.S_IFMT, Ino: ino})
 }

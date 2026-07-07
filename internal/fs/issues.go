@@ -136,7 +136,7 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
-	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
+	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }
 
 // looksLikeIdentifier checks if a name looks like a Linear issue identifier
@@ -203,7 +203,7 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	}
 
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
-	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
+	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }
 
 // createIssue is the issues/_create surface's onFlush: writing a full issue
@@ -302,8 +302,30 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 // the read-through issue.meta, the generated history.md, the .error/.last
 // sidecars, and the comments/docs/children/attachments/relations subdirs. Issue
 // children have no dynamic tail and a uniform 30s timeout.
+// entity/setEntity snapshot and swap the directory's issue under the node's
+// volatile-state lock: setEntity is written by the Rename write-back and the
+// nodeRefresher seam (refresh.go), which pushes freshly-fetched state into
+// this node when go-fuse dedups a later Lookup onto it.
+func (n *IssueDirectoryNode) entity() api.Issue {
+	n.stateMu.Lock()
+	defer n.stateMu.Unlock()
+	return n.issue
+}
+
+func (n *IssueDirectoryNode) setEntity(issue api.Issue) {
+	n.stateMu.Lock()
+	n.issue = issue
+	n.stateMu.Unlock()
+}
+
+func (n *IssueDirectoryNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*IssueDirectoryNode); ok {
+		n.setEntity(f.issue)
+	}
+}
+
 func (n *IssueDirectoryNode) manifest() *dirManifest {
-	issue := n.issue // snapshot captured by the build closures
+	issue := n.entity() // snapshot captured by the build closures
 	teamID := ""
 	if issue.Team != nil {
 		teamID = issue.Team.ID
@@ -379,10 +401,11 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 // write path. Without this, go-fuse rejects the temp-file create with a
 // misleading EROFS even though the mount is rw and issue.md is writable (#145).
 func (n *IssueDirectoryNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	issue := n.entity()
 	if n.lfs.debug {
-		log.Printf("Create scratch file in %s: %s", n.issue.Identifier, name)
+		log.Printf("Create scratch file in %s: %s", issue.Identifier, name)
 	}
-	return newScratchInode(ctx, &n.BaseNode, issueDirIno(n.issue.ID), name, out)
+	return newScratchInode(ctx, &n.BaseNode, issueDirIno(issue.ID), name, out)
 }
 
 // Rename persists an editor's atomic save: when a scratch temp file is renamed
@@ -392,8 +415,9 @@ func (n *IssueDirectoryNode) Create(ctx context.Context, name string, flags uint
 // so renames onto any other target — or of the canonical files themselves — are
 // rejected.
 func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	issue := n.entity()
 	if n.lfs.debug {
-		log.Printf("Rename in %s: %s -> %s", n.issue.Identifier, name, newName)
+		log.Printf("Rename in %s: %s -> %s", issue.Identifier, name, newName)
 	}
 
 	// The atomic-save pattern keeps the temp file a sibling of issue.md.
@@ -411,7 +435,7 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 	if newName != "issue.md" {
 		// A scratch file only has somewhere to persist when renamed onto issue.md,
 		// the one editable file in this directory.
-		n.lfs.SetIssueError(n.issue.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only issue.md is writable in this directory; save your changes onto issue.md (atomic save-via-rename onto issue.md is supported).", name, newName))
+		n.lfs.SetIssueError(issue.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only issue.md is writable in this directory; save your changes onto issue.md (atomic save-via-rename onto issue.md is supported).", name, newName))
 		return syscall.ENOTSUP
 	}
 
@@ -421,7 +445,7 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 	// Linear in that case).
 	fileNode := &IssueFileNode{
 		BaseNode:   BaseNode{lfs: n.lfs},
-		issue:      n.issue,
+		issue:      issue,
 		editBuffer: editBuffer{content: content, dirty: true},
 	}
 	errno := fileNode.Flush(ctx, nil)
@@ -431,8 +455,8 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 		// stored content, and drop the kernel caches: go-fuse will MvChild the spent
 		// scratch inode over issue.md, so issue.md must re-Lookup to a fresh
 		// IssueFileNode rather than serve the consumed scratch node.
-		n.issue = fileNode.issue
-		n.lfs.InvalidateRenamed(issueDirIno(n.issue.ID), name, newName, issueIno(n.issue.ID))
+		n.setEntity(fileNode.issue)
+		n.lfs.InvalidateRenamed(issueDirIno(fileNode.issue.ID), name, newName, issueIno(fileNode.issue.ID))
 	}
 
 	return errno
@@ -466,8 +490,22 @@ var _ fs.NodeFsyncer = (*IssueFileNode)(nil)
 var _ fs.NodeSetattrer = (*IssueFileNode)(nil)
 
 func (i *IssueFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	fileAttr(i.size(), i.issue.CreatedAt, i.issue.UpdatedAt).fill(&out.Attr, &i.BaseNode)
+	// One lock for size + times: a concurrent refresh (refresh.go) swaps
+	// content and entity atomically, so the read must snapshot both together.
+	i.mu.Lock()
+	size := len(i.content)
+	created, updated := i.issue.CreatedAt, i.issue.UpdatedAt
+	i.mu.Unlock()
+	fileAttr(size, created, updated).fill(&out.Attr, &i.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's issue and rendered content unless an edit
+// is in flight — the dirty buffer is the user's and always wins (refresh.go).
+func (i *IssueFileNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*IssueFileNode); ok {
+		i.refresh(f.content, func() { i.issue = f.issue })
+	}
 }
 
 func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
@@ -636,5 +674,5 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 
 	// Return the new issue as a directory node (Mkdir must return a directory)
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
-	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
+	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,7 +40,39 @@ type renderFunc func(ctx context.Context) (content []byte, mtime, ctime time.Tim
 // only its extra methods. See CONTEXT.md "Render file".
 type renderFile struct {
 	BaseNode
-	render renderFunc
+	// renderMu guards render: a reused node's closure is swapped for the
+	// fresh one by the nodeRefresher seam (refresh.go) while concurrent
+	// reads snapshot it.
+	renderMu sync.Mutex
+	render   renderFunc
+}
+
+// renderNow snapshots the closure under the lock and runs it outside it (a
+// render may do I/O; holding the lock across it would serialize readers).
+func (r *renderFile) renderNow(ctx context.Context) ([]byte, time.Time, time.Time) {
+	r.renderMu.Lock()
+	render := r.render
+	r.renderMu.Unlock()
+	return render(ctx)
+}
+
+// refreshRender adopts a fresh twin's closure — the renderFile half of a
+// nodeRefresher implementation (the embedding type swaps its own fields).
+func (r *renderFile) refreshRender(fresh *renderFile) {
+	r.renderMu.Lock()
+	r.render = fresh.render
+	r.renderMu.Unlock()
+}
+
+// refreshFrom makes a bare renderFile adopt a fresh twin's closure — a
+// stable-ino render file whose closure captures entity state (a status
+// update's body, history.md's issue times) would otherwise serve the
+// first-Lookup capture forever (refresh.go). Types embedding renderFile with
+// extra fields shadow this with their own implementation.
+func (r *renderFile) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*renderFile); ok {
+		r.refreshRender(f)
+	}
 }
 
 var _ fs.NodeGetattrer = (*renderFile)(nil)
@@ -51,7 +84,7 @@ var _ renderChild = (*renderFile)(nil)
 // Getattr and a Lookup must agree on. Both go through this one path, so — as
 // with attrNode — the two can never disagree.
 func (r *renderFile) renderAttr(ctx context.Context) nodeAttr {
-	content, mtime, ctime := r.render(ctx)
+	content, mtime, ctime := r.renderNow(ctx)
 	return nodeAttr{mode: 0444 | syscall.S_IFREG, size: uint64(len(content)), created: ctime, updated: mtime}
 }
 
@@ -74,7 +107,7 @@ func (r *renderFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 }
 
 func (r *renderFile) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content, _, _ := r.render(ctx)
+	content, _, _ := r.renderNow(ctx)
 	return readWindow(content, dest, off), 0
 }
 
@@ -121,7 +154,10 @@ func fillRenderEntry(ctx context.Context, out *fuse.EntryOut, child renderChild,
 // inode — the render-through file counterpart to newDirInode, called on the
 // parent. Used by the nodes that embed renderFile plus extra methods
 // (RelationFileNode/ExternalAttachmentNode). ino 0 auto-assigns.
-func (b *BaseNode) newRenderInode(ctx context.Context, out *fuse.EntryOut, child renderChild, ino uint64, timeout time.Duration) *fs.Inode {
+func (b *BaseNode) newRenderInode(ctx context.Context, out *fuse.EntryOut, name string, child renderChild, ino uint64, timeout time.Duration) *fs.Inode {
+	// The bridge dedups AFTER this handler returns: push the fresh
+	// closure/entity into the node it will keep (see refresh.go).
+	refreshExisting(b, name, child)
 	fillRenderEntry(ctx, out, child, timeout)
 	return b.NewInode(ctx, child, fs.StableAttr{Mode: syscall.S_IFREG, Ino: ino})
 }
@@ -130,16 +166,19 @@ func (b *BaseNode) newRenderInode(ctx context.Context, out *fuse.EntryOut, child
 // by a render closure as a child of the receiver's node — the one-liner the pure
 // generated-file sites (team.md, states.md, user.md, README.md, …) use in place
 // of a hand-rolled node type.
-func (b *BaseNode) lookupRenderFile(ctx context.Context, out *fuse.EntryOut, render renderFunc, ino uint64, timeout time.Duration) *fs.Inode {
+func (b *BaseNode) lookupRenderFile(ctx context.Context, out *fuse.EntryOut, name string, render renderFunc, ino uint64, timeout time.Duration) *fs.Inode {
 	node := &renderFile{BaseNode: BaseNode{lfs: b.lfs}, render: render}
-	return b.newRenderInode(ctx, out, node, ino, timeout)
+	return b.newRenderInode(ctx, out, name, node, ino, timeout)
 }
 
 // mountRenderFile mounts a bare render file under an arbitrary parent embedder —
 // the variant the .meta/.error/.last helpers use, where the parent is handed in
 // as an fs.InodeEmbedder rather than a *BaseNode.
-func (lfs *LinearFS) mountRenderFile(ctx context.Context, parent fs.InodeEmbedder, render renderFunc, ino uint64, timeout time.Duration, out *fuse.EntryOut) *fs.Inode {
+func (lfs *LinearFS) mountRenderFile(ctx context.Context, parent fs.InodeEmbedder, name string, render renderFunc, ino uint64, timeout time.Duration, out *fuse.EntryOut) *fs.Inode {
 	node := &renderFile{BaseNode: BaseNode{lfs: lfs}, render: render}
+	// The bridge dedups AFTER this handler returns: push the fresh closure
+	// into the node it will keep (see refresh.go).
+	refreshExisting(parent, name, node)
 	fillRenderEntry(ctx, out, node, timeout)
 	return parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG, Ino: ino})
 }

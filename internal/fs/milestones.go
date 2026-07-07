@@ -81,6 +81,9 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	out.SetAttrTimeout(5 * time.Second)
 	out.SetEntryTimeout(5 * time.Second)
 	out.Attr.SetTimes(&now, &now, &now)
+	// The bridge dedups AFTER this handler returns: push the fresh
+	// milestone/content into the node it will keep (see refresh.go).
+	refreshExisting(n, name, node)
 	return n.NewInode(ctx, node, fs.StableAttr{
 		Mode: syscall.S_IFREG,
 		Ino:  milestoneIno(m.ID),
@@ -150,6 +153,14 @@ func (n *MilestoneFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *f
 	now := time.Now()
 	fileAttr(n.size(), now, now).fill(&out.Attr, &n.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's milestone and rendered content unless an
+// edit is in flight — the dirty buffer always wins (refresh.go).
+func (n *MilestoneFileNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*MilestoneFileNode); ok {
+		n.refresh(f.content, func() { n.milestone, n.projectID = f.milestone, f.projectID })
+	}
 }
 
 func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {

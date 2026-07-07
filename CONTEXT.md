@@ -194,6 +194,42 @@ something that doesn't exist -> `ENOENT` at Lookup, never a dangling
 placeholder. Lives in `internal/fs/symlink.go`;
 unit-tested directly, no FUSE mount.
 
+### Node refresh (`nodeRefresher`/`refreshExisting`)
+The **deep module** that closes the captured-entity staleness hole (round 15;
+confirmed live by experiment): go-fuse dedups inodes by StableAttr and keeps
+the FIRST node ever mounted for an ino — `bridge.addNewChild` silently
+discards the freshly-constructed node **after the Lookup handler returns**
+(`NewInode`'s return value is always the fresh struct, so reuse cannot be
+detected from it). Any node that bakes entity state at construction (an
+editBuffer's content, an entity dir's snapshot, a render closure's capture)
+therefore served first-Lookup data for as long as the kernel remembered the
+inode — the sync worker deliberately never notifies the kernel, and the
+timeout-driven re-Lookup that was supposed to bring freshness hit the old
+node. The long-skipped `TestCacheExpiryRefreshesData` ("FUSE inode caching
+prevents immediate refresh") was this bug, filed away.
+
+The seam: construction helpers (`newDirInode`/`newFileInode`/`newRenderInode`/
+`mountRenderFile` and the few raw `NewInode` sites) now take the child's
+**name** and probe `parent.GetChild(name)` *inside* the handler — the inode
+the bridge will keep if it dedups — and push the fresh twin's volatile state
+into it via `refreshFrom(fresh)` (`internal/fs/refresh.go`). A nil child means
+the kernel FORGOT it and the fresh node installs — already fresh. Per-type
+rules: the three entity dir nodes swap their entity under `attrNode.stateMu`
+(which also guards `nodeAttr`, re-stamped by the seam) and expose
+`entity()/setEntity` snapshots; the seven editBuffer file nodes go through
+`editBuffer.refresh` — **a dirty buffer always wins** (a user's in-flight
+edit is never clobbered by background sync) — with Getattr snapshotting
+size+times under one lock; renderFile swaps its closure under `renderMu`
+(embedders with entity fields shadow `refreshFrom` and reuse that lock);
+`EmbeddedFileNode` swaps its file metadata under its own mu. `TeamNode`/
+`UserNode`/cycle dirs are constructed with auto-assigned inos (fresh node per
+Lookup) and don't need the seam — a pre-existing inconsistency with the inode
+namespace that happens to dodge the bug. Guarded end-to-end by
+`TestRemoteUpdateVisibleAfterKernelRevalidation` (remote upsert → pinned
+inode chain so the kernel cannot FORGET → 31s real entry-timeout expiry →
+fresh content and mtime; the pin is what forces the reuse path — without it
+the kernel may forget everything and the test passes vacuously).
+
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are
 constructed — the non-symlink complement to Symlink views (`symlinkNode`), and

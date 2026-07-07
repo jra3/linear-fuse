@@ -60,7 +60,7 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	if label, ok := n.listing(labels).find(name); ok {
-		return n.newLabelInode(ctx, label, out)
+		return n.newLabelInode(ctx, name, label, out)
 	}
 
 	return nil, syscall.ENOENT
@@ -68,7 +68,7 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 
 // newLabelInode builds the read/write LabelFileNode inode for an existing label,
 // populated with its current content. Shared by Lookup and Create.
-func (n *LabelsNode) newLabelInode(ctx context.Context, label api.Label, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+func (n *LabelsNode) newLabelInode(ctx context.Context, name string, label api.Label, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	content := labelToMarkdown(&label)
 	node := &LabelFileNode{
 		BaseNode:   BaseNode{lfs: n.lfs},
@@ -84,6 +84,9 @@ func (n *LabelsNode) newLabelInode(ctx context.Context, label api.Label, out *fu
 	out.Attr.SetTimes(&now, &now, &now)
 	out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
 	out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
+	// The bridge dedups AFTER this handler returns: push the fresh
+	// label/content into the node it will keep (see refresh.go).
+	refreshExisting(n, name, node)
 	return n.NewInode(ctx, node, fs.StableAttr{
 		Mode: syscall.S_IFREG,
 		Ino:  labelIno(label.ID),
@@ -197,7 +200,7 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 	// write-only _create node to the name and corrupting it (#137).
 	if labels, err := n.lfs.GetTeamLabels(ctx, n.teamID); err == nil {
 		if label, ok := n.listing(labels).find(name); ok {
-			inode, errno := n.newLabelInode(ctx, label, out)
+			inode, errno := n.newLabelInode(ctx, name, label, out)
 			if errno != 0 {
 				return nil, nil, 0, errno
 			}
@@ -268,6 +271,14 @@ func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.
 	now := time.Now()
 	fileAttr(n.size(), now, now).fill(&out.Attr, &n.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's label and rendered content unless an edit
+// is in flight — the dirty buffer always wins (refresh.go).
+func (n *LabelFileNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*LabelFileNode); ok {
+		n.refresh(f.content, func() { n.label, n.teamID = f.label, f.teamID })
+	}
 }
 
 func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {

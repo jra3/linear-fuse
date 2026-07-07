@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -82,7 +83,7 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	}
 
 	if entry.external != nil {
-		return n.createExternalAttachmentNode(ctx, *entry.external, out)
+		return n.createExternalAttachmentNode(ctx, name, *entry.external, out)
 	}
 
 	file := *entry.embedded
@@ -103,13 +104,16 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	out.SetAttrTimeout(30 * time.Second)
 	out.SetEntryTimeout(30 * time.Second)
 
+	// The bridge dedups AFTER this handler returns: push the fresh file
+	// metadata into the node it will keep (see refresh.go).
+	refreshExisting(n, name, node)
 	return n.NewInode(ctx, node, fs.StableAttr{
 		Mode: syscall.S_IFREG,
 		Ino:  embeddedFileIno(file.ID),
 	}), 0
 }
 
-func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, att api.Attachment, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, name string, att api.Attachment, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node := &ExternalAttachmentNode{
 		renderFile: renderFile{
 			BaseNode: BaseNode{lfs: n.lfs},
@@ -120,14 +124,31 @@ func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, att 
 		attachment: att,
 		issueID:    n.issueID,
 	}
-	return n.newRenderInode(ctx, out, node, externalAttachmentIno(att.ID), 30*time.Second), 0
+	return n.newRenderInode(ctx, out, name, node, externalAttachmentIno(att.ID), 30*time.Second), 0
 }
 
 // EmbeddedFileNode represents a file in the /attachments/ directory
 // Files are lazily fetched from Linear's CDN on first read
 type EmbeddedFileNode struct {
 	BaseNode
+	mu   sync.Mutex // guards file: swapped by the nodeRefresher seam (refresh.go)
 	file api.EmbeddedFile
+}
+
+// fileSnapshot reads the entity under the lock.
+func (n *EmbeddedFileNode) fileSnapshot() api.EmbeddedFile {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.file
+}
+
+// refreshFrom adopts a fresh twin's file metadata (refresh.go).
+func (n *EmbeddedFileNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*EmbeddedFileNode); ok {
+		n.mu.Lock()
+		n.file = f.file
+		n.mu.Unlock()
+	}
 }
 
 var _ fs.NodeGetattrer = (*EmbeddedFileNode)(nil)
@@ -135,11 +156,12 @@ var _ fs.NodeOpener = (*EmbeddedFileNode)(nil)
 var _ fs.NodeReader = (*EmbeddedFileNode)(nil)
 
 func (n *EmbeddedFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	file := n.fileSnapshot()
 	now := time.Now()
 	out.Mode = 0444 // Read-only
 	n.SetOwner(out)
-	if n.file.FileSize > 0 {
-		out.Size = uint64(n.file.FileSize)
+	if file.FileSize > 0 {
+		out.Size = uint64(file.FileSize)
 	} else {
 		// Report a placeholder size so tools will attempt to read the file.
 		// Lazy-fetch happens during Read(), which will return actual content.
@@ -157,7 +179,7 @@ func (n *EmbeddedFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandl
 
 func (n *EmbeddedFileNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	// Lazy fetch: download file from Linear CDN if not cached
-	content, err := n.lfs.FetchEmbeddedFile(ctx, n.file)
+	content, err := n.lfs.FetchEmbeddedFile(ctx, n.fileSnapshot())
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -185,6 +207,19 @@ type ExternalAttachmentNode struct {
 
 var _ fs.NodeUnlinker = (*ExternalAttachmentNode)(nil)
 
+// refreshFrom adopts a fresh twin's attachment and render closure
+// (refresh.go); renderMu doubles as the entity-field lock.
+func (n *ExternalAttachmentNode) refreshFrom(fresh fs.InodeEmbedder) {
+	f, ok := fresh.(*ExternalAttachmentNode)
+	if !ok {
+		return
+	}
+	n.renderMu.Lock()
+	n.render = f.render
+	n.attachment, n.issueID = f.attachment, f.issueID
+	n.renderMu.Unlock()
+}
+
 // externalAttachmentContent renders a .link file's YAML body.
 func externalAttachmentContent(att api.Attachment) string {
 	var sb strings.Builder
@@ -202,9 +237,15 @@ func externalAttachmentContent(att api.Attachment) string {
 func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// The file node already holds its entity, so find just hands it over.
 	return commitDelete(ctx, n.lfs, deleteSpec[api.Attachment]{
-		op:   `delete attachment "` + name + `"`,
-		key:  collectionErrorKey("attachments", n.issueID),
-		find: func(context.Context) (*api.Attachment, error) { return &n.attachment, nil },
+		op:  `delete attachment "` + name + `"`,
+		key: collectionErrorKey("attachments", n.issueID),
+		find: func(context.Context) (*api.Attachment, error) {
+			// Snapshot: a concurrent refresh (refresh.go) may swap the field.
+			n.renderMu.Lock()
+			att := n.attachment
+			n.renderMu.Unlock()
+			return &att, nil
+		},
 		mutate: func(ctx context.Context, a *api.Attachment) error {
 			return n.lfs.mutator().DeleteAttachment(ctx, a.ID)
 		},

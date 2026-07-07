@@ -44,7 +44,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	case "README.md":
 		// The generated docs have no natural entity time; report zero (unknown).
 		lfs := r.lfs
-		return r.lookupRenderFile(ctx, out, func(context.Context) ([]byte, time.Time, time.Time) {
+		return r.lookupRenderFile(ctx, out, "README.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return []byte(generateReadme(lfs.MountPoint())), time.Time{}, time.Time{}
 		}, 0, inheritTimeout), 0
 

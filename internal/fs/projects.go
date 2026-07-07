@@ -73,7 +73,7 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	for _, project := range projects {
 		if projectDirName(project) == name {
 			node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: p.team, project: project}
-			return p.newDirInode(ctx, out, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
+			return p.newDirInode(ctx, out, name, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
 		}
 	}
 
@@ -114,7 +114,7 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	}
 
 	node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: p.team, project: *project}
-	return p.newDirInode(ctx, out, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
+	return p.newDirInode(ctx, out, projectDirName(*project), node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
 }
 
 // Rmdir archives a project (soft delete)
@@ -182,10 +182,34 @@ var _ fs.NodeCreater = (*ProjectNode)(nil)
 var _ fs.NodeRenamer = (*ProjectNode)(nil)
 var _ fs.NodeUnlinker = (*ProjectNode)(nil)
 
+// entity/setEntity snapshot and swap the directory's project (+team) under
+// the node's volatile-state lock: setEntity is written by the Rename
+// write-back and the nodeRefresher seam (refresh.go).
+func (p *ProjectNode) entity() (api.Team, api.Project) {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return p.team, p.project
+}
+
+func (p *ProjectNode) setEntity(project api.Project) {
+	p.stateMu.Lock()
+	p.project = project
+	p.stateMu.Unlock()
+}
+
+func (p *ProjectNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*ProjectNode); ok {
+		p.stateMu.Lock()
+		p.team, p.project = f.team, f.project
+		p.stateMu.Unlock()
+	}
+}
+
 func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	_, project := p.entity()
 	entries := p.manifest().entries()
 	// Dynamic tail: issue symlinks.
-	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)
+	issues, err := p.lfs.GetProjectIssues(ctx, project.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -201,7 +225,8 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	}
 
 	// Dynamic tail: an issue symlink, resolved only on a static-child miss.
-	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)
+	_, project := p.entity()
+	issues, err := p.lfs.GetProjectIssues(ctx, project.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -220,8 +245,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 // docs/updates/milestones subdirs. The dynamic tail (issue symlinks) is appended
 // by Readdir/Lookup, not the manifest. Project children have a 0 timeout.
 func (p *ProjectNode) manifest() *dirManifest {
-	project := p.project // snapshot captured by the build closures
-	team := p.team
+	team, project := p.entity() // snapshot captured by the build closures
 	lfs := p.lfs
 	m := newDirManifest(&p.BaseNode, project.ID, project.CreatedAt, project.UpdatedAt, 0)
 
@@ -265,7 +289,8 @@ func (p *ProjectNode) manifest() *dirManifest {
 // EROFS on the rw mount (#145).
 func (p *ProjectNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	if p.lfs.debug {
-		log.Printf("Create scratch file in project %s: %s", p.project.Name, name)
+		_, project := p.entity()
+		log.Printf("Create scratch file in project %s: %s", project.Name, name)
 	}
 	return newScratchInode(ctx, &p.BaseNode, p.EmbeddedInode().StableAttr().Ino, name, out)
 }
@@ -274,8 +299,9 @@ func (p *ProjectNode) Create(ctx context.Context, name string, flags uint32, mod
 // project.md is written through project.md's normal Flush path. project.md is the
 // only writable file here, so other rename targets are rejected.
 func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	team, project := p.entity()
 	if p.lfs.debug {
-		log.Printf("Rename in project %s: %s -> %s", p.project.Name, name, newName)
+		log.Printf("Rename in project %s: %s -> %s", project.Name, name, newName)
 	}
 
 	dirIno := p.EmbeddedInode().StableAttr().Ino
@@ -289,21 +315,21 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	}
 
 	if newName != "project.md" {
-		p.lfs.SetWriteError(p.project.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only project.md is writable in this directory; save your changes onto project.md (atomic save-via-rename onto project.md is supported).", name, newName))
+		p.lfs.SetWriteError(project.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only project.md is writable in this directory; save your changes onto project.md (atomic save-via-rename onto project.md is supported).", name, newName))
 		return syscall.ENOTSUP
 	}
 
 	fileNode := &ProjectInfoNode{
 		BaseNode:   BaseNode{lfs: p.lfs},
-		team:       p.team,
-		project:    p.project,
+		team:       team,
+		project:    project,
 		editBuffer: editBuffer{content: content, dirty: true},
 	}
 	errno := fileNode.Flush(ctx, nil)
 
 	if errno == 0 || errno == syscall.EIO {
-		p.project = fileNode.project
-		p.lfs.InvalidateRenamed(dirIno, name, newName, projectInfoIno(p.project.ID))
+		p.setEntity(fileNode.project)
+		p.lfs.InvalidateRenamed(dirIno, name, newName, projectInfoIno(fileNode.project.ID))
 	}
 
 	return errno
@@ -356,8 +382,22 @@ func (p *ProjectInfoNode) metaContent() []byte {
 }
 
 func (p *ProjectInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	fileAttr(p.size(), p.project.CreatedAt, p.project.UpdatedAt).fill(&out.Attr, &p.BaseNode)
+	// One lock for size + times: a concurrent refresh (refresh.go) swaps
+	// content and entity atomically, so the read must snapshot both together.
+	p.mu.Lock()
+	size := len(p.content)
+	created, updated := p.project.CreatedAt, p.project.UpdatedAt
+	p.mu.Unlock()
+	fileAttr(size, created, updated).fill(&out.Attr, &p.BaseNode)
 	return 0
+}
+
+// refreshFrom adopts a fresh twin's project and rendered content unless an
+// edit is in flight — the dirty buffer always wins (refresh.go).
+func (p *ProjectInfoNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*ProjectInfoNode); ok {
+		p.refresh(f.content, func() { p.team, p.project = f.team, f.project })
+	}
 }
 
 func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
@@ -519,7 +559,7 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	return n.lookupUpdateFile(ctx, out, update.ID, update.Health, update.CreatedAt, update.UpdatedAt,
+	return n.lookupUpdateFile(ctx, out, name, update.ID, update.Health, update.CreatedAt, update.UpdatedAt,
 		update.User, update.Body, projectUpdateIno(update.ID)), 0
 }
 

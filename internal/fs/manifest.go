@@ -80,7 +80,7 @@ func (m *dirManifest) subdir(name string, ino uint64, node func() dirChild) {
 	m.children = append(m.children, staticChild{
 		name: name, mode: syscall.S_IFDIR,
 		build: func(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-			return m.parent.newDirInode(ctx, out, node(), dirAttr(m.created, m.updated), ino, m.timeout), 0
+			return m.parent.newDirInode(ctx, out, name, node(), dirAttr(m.created, m.updated), ino, m.timeout), 0
 		},
 	})
 }
@@ -98,7 +98,7 @@ func (m *dirManifest) file(name string, ino uint64, build func(ctx context.Conte
 				return nil, errno
 			}
 			na := fileAttr(len(content), m.created, m.updated)
-			return m.parent.newFileInode(ctx, out, node, na, ino, m.timeout), 0
+			return m.parent.newFileInode(ctx, out, name, node, na, ino, m.timeout), 0
 		},
 	})
 }
@@ -111,7 +111,7 @@ func (m *dirManifest) renderFile(name string, ino uint64, render renderFunc) {
 	m.children = append(m.children, staticChild{
 		name: name, mode: syscall.S_IFREG,
 		build: func(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-			return m.parent.lookupRenderFile(ctx, out, render, ino, m.timeout), 0
+			return m.parent.lookupRenderFile(ctx, out, name, render, ino, m.timeout), 0
 		},
 	})
 }
@@ -122,7 +122,7 @@ func (m *dirManifest) metaFile(name string, render renderFunc) {
 	m.children = append(m.children, staticChild{
 		name: name, mode: syscall.S_IFREG,
 		build: func(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-			return m.parent.lfs.lookupMetaFile(ctx, m.parent, m.id, render, out), 0
+			return m.parent.lfs.lookupMetaFile(ctx, m.parent, name, m.id, render, out), 0
 		},
 	})
 }

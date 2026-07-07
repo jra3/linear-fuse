@@ -33,6 +33,21 @@ func (b *editBuffer) size() int {
 	return len(b.content)
 }
 
+// refresh adopts freshly-rendered content — the editBuffer half of a node's
+// nodeRefresher implementation (see refresh.go) — UNLESS an edit is in
+// flight: a dirty buffer is the user's, and always wins over background
+// sync. entitySwap runs under the same lock iff the refresh proceeds, so the
+// node's entity fields and its content swap atomically.
+func (b *editBuffer) refresh(freshContent []byte, entitySwap func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.dirty {
+		return
+	}
+	b.content = append([]byte(nil), freshContent...)
+	entitySwap()
+}
+
 func (b *editBuffer) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }

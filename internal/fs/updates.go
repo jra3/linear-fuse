@@ -17,11 +17,11 @@ import (
 // carry, so the fields are passed positionally (the two update structs share no
 // interface). Collapses the render-closure + lookupRenderFile pairing the two
 // Lookups hand-rolled identically.
-func (b *BaseNode) lookupUpdateFile(ctx context.Context, out *fuse.EntryOut, id, health string, created, updated time.Time, user *api.User, body string, ino uint64) *fs.Inode {
+func (b *BaseNode) lookupUpdateFile(ctx context.Context, out *fuse.EntryOut, name, id, health string, created, updated time.Time, user *api.User, body string, ino uint64) *fs.Inode {
 	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		return updateMarkdown(id, health, created, updated, user, body), updated, created
 	}
-	return b.lookupRenderFile(ctx, out, render, ino, 30*time.Second)
+	return b.lookupRenderFile(ctx, out, name, render, ino, 30*time.Second)
 }
 
 // updateMarkdown renders a status update (project or initiative) as

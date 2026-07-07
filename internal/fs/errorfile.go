@@ -79,5 +79,5 @@ func (lfs *LinearFS) lookupErrorFile(ctx context.Context, parent fs.InodeEmbedde
 		}
 		return nil, time.Time{}, time.Time{}
 	}
-	return lfs.mountRenderFile(ctx, parent, render, errorIno(entityID), 0, out)
+	return lfs.mountRenderFile(ctx, parent, ".error", render, errorIno(entityID), 0, out)
 }

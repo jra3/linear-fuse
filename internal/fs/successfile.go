@@ -160,5 +160,5 @@ func (lfs *LinearFS) lookupSuccessFile(ctx context.Context, parent fs.InodeEmbed
 		}
 		return content, latest, latest
 	}
-	return lfs.mountRenderFile(ctx, parent, render, successIno(key), 0, out)
+	return lfs.mountRenderFile(ctx, parent, ".last", render, successIno(key), 0, out)
 }
