@@ -868,6 +868,12 @@ DELETE FROM issue_relations WHERE id = ?;
 -- name: DeleteIssueRelations :exec
 DELETE FROM issue_relations WHERE issue_id = ?;
 
+-- name: PruneIssueRelations :exec
+-- Scoped to the OWNING issue (issue_id): only the owning side's drained
+-- fetch is a completeness set for its rows. Inverse upserts refresh rows
+-- owned by other issues and must never license their deletion.
+DELETE FROM issue_relations WHERE issue_id = ? AND synced_at < ?;
+
 -- name: GetIssueRelationsSyncedAt :one
 SELECT MAX(synced_at) FROM issue_relations WHERE issue_id = ?;
 

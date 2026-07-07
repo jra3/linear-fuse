@@ -668,6 +668,28 @@ func DBMilestonesToAPIProjectMilestones(milestones []ProjectMilestone) []api.Pro
 }
 
 // =============================================================================
+// IssueRelation Conversion
+// =============================================================================
+
+// IssueRelationUpsertParams builds the issue_relations row for a fetched
+// relation. issueID is the owning side (the row's issue_id) and
+// relatedIssueID the target: an outgoing fetch passes (thisIssue,
+// rel.RelatedIssue.ID), an inverse fetch passes them the other way around
+// (rel.Issue.ID, thisIssue) — the row is always stored from its owner's
+// perspective, whichever end fetched it.
+func IssueRelationUpsertParams(rel api.IssueRelation, issueID, relatedIssueID string) UpsertIssueRelationParams {
+	return UpsertIssueRelationParams{
+		ID:             rel.ID,
+		IssueID:        issueID,
+		RelatedIssueID: relatedIssueID,
+		Type:           rel.Type,
+		CreatedAt:      sql.NullTime{Time: rel.CreatedAt, Valid: !rel.CreatedAt.IsZero()},
+		UpdatedAt:      sql.NullTime{Time: rel.UpdatedAt, Valid: !rel.UpdatedAt.IsZero()},
+		SyncedAt:       Now(),
+	}
+}
+
+// =============================================================================
 // ProjectUpdate Conversion
 // =============================================================================
 

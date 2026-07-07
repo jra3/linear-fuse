@@ -313,10 +313,10 @@ took them — the gap was above the DB: `api.IssueRelation` gained the two field
 the `CreateIssueRelation` mutation (and the issue fragment) now select
 `createdAt`/`updatedAt`, the create-persist writes the server's times (not
 `now()`), and `GetIssueRelations`/`GetIssueInverseRelations`/`GetIssueRelationByID`
-map them back onto the struct. (Orthogonal pre-existing gap, left alone:
-relations are populated **only** by the local create handler — the sync worker and
-`refreshIssueDetails` don't persist them — so relations made in Linear's own UI
-never appear as `.rel` files.) `EmbeddedFileNode` (the actual `*.png`/`*.pdf`
+map them back onto the struct. (The orthogonal gap noted here at the time —
+relations populated **only** by the local create handler, so UI-made relations
+never appeared as `.rel` files — was closed in round 14: relations are now the
+fourth detail-sync collection, see [[sync-reconcile-tail]].) `EmbeddedFileNode` (the actual `*.png`/`*.pdf`
 bytes) stays out of `renderFile`: it is a lazy CDN byte-streamer, not a
 render-closure file, and `api.EmbeddedFile` has no times either.
 
@@ -583,19 +583,34 @@ deleted). The closure author honors the contract by choosing what to return
 versus swallow.
 
 The **per-issue detail sync** (`syncIssueDetailsBatch` — an issue's comments,
-documents, attachments) reconciles through the same tail, three calls per issue.
-Here completeness is *page*-shaped rather than *drain*-shaped: a full page
-(`len == IssueDetailsPageSize`) may be truncated, so the caller composes a
-`pruneWhenComplete(complete, fn)` policy that passes the real prune only on a
-short (provably complete) page and `nil` otherwise — the module then adds its
-clean guard, so a detail prune fires **iff clean AND complete**. This closed a
-silent-prune bug the hand-rolled version carried: it gated the prune on page
-completeness alone, so a failed comment/doc/attachment upsert (its `synced_at`
-left un-stamped) was deleted as stale on the next complete page. Embedded-file
-extraction from a comment body is the nested best-effort here (its own
-never-pruned `embedded_files` table), analogous to milestones — it runs inside
-the comment `upsert` closure regardless of the upsert result and cannot affect
-cleanliness.
+documents, attachments, relations, and inverse relations) reconciles through
+the same tail, five calls per issue. Here completeness is *page*-shaped rather
+than *drain*-shaped: a full page (`len == IssueDetailsPageSize`, or
+`IssueRelationsPageSize` for the relation connections) may be truncated, so
+the caller composes a `pruneWhenComplete(complete, fn)` policy that passes the
+real prune only on a short (provably complete) page and `nil` otherwise — the
+module then adds its clean guard, so a detail prune fires **iff clean AND
+complete**. This closed a silent-prune bug the hand-rolled version carried: it
+gated the prune on page completeness alone, so a failed
+comment/doc/attachment upsert (its `synced_at` left un-stamped) was deleted as
+stale on the next complete page. Embedded-file extraction from a comment body
+is the nested best-effort here (its own never-pruned `embedded_files` table),
+analogous to milestones — it runs inside the comment `upsert` closure
+regardless of the upsert result and cannot affect cleanliness.
+
+**Relations (round 14) closed the last one-way surface**: previously only the
+FUSE create handler wrote `issue_relations`, so a relation made in Linear's
+own UI never appeared as a `.rel` file and one deleted there lingered as a
+phantom. The details selection (one `IssueDetailsSelection` shared by the
+single and batch queries, so they can't drift) now carries `relations` and
+`inverseRelations`. A row is always stored from its **owner's** perspective
+(`db.IssueRelationUpsertParams(rel, ownerID, relatedID)` — an inverse fetch
+passes the ids swapped), and only the owner's fetch is a completeness set for
+its rows: the outgoing collection prunes via `PruneIssueRelations` (scoped
+`issue_id` + cutoff), the inverse collection is **upsert-only** (its rows are
+owned by the other issue; pruning them here would delete against someone
+else's partial view). `refreshIssueDetails` (the repo's SWR path) persists
+both families best-effort like its siblings.
 
 ### Reverse conversion contract (hydrate-then-overlay)
 Every DB→API reverse conversion in `internal/db/convert.go` **starts from the

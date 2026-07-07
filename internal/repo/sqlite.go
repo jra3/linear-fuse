@@ -962,6 +962,24 @@ func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID stri
 		}
 	}
 
+	for _, rel := range details.Relations {
+		if rel.RelatedIssue == nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, issueID, rel.RelatedIssue.ID)); err != nil {
+			log.Printf("[repo] upsert relation %s failed: %v", rel.ID, err)
+		}
+	}
+
+	for _, rel := range details.InverseRelations {
+		if rel.Issue == nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, rel.Issue.ID, issueID)); err != nil {
+			log.Printf("[repo] upsert inverse relation %s failed: %v", rel.ID, err)
+		}
+	}
+
 	return nil
 }
 

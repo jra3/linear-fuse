@@ -1635,3 +1635,106 @@ https://uploads.linear.app/ws1/i1/design-spec.pdf.`
 		t.Errorf("want no specs for plain content, got %d", len(got))
 	}
 }
+
+// TestDetailsSyncPersistsAndPrunesRelations: relations fetched with an
+// issue's details are persisted (closing the gap where only the FUSE create
+// handler wrote them, so UI-created relations never appeared as .rel files),
+// phantoms owned by the issue are pruned on a clean short page, and inverse
+// rows — owned by the OTHER issue — are upserted from this end but never
+// pruned by this issue's sync (they're outside its completeness set).
+func TestDetailsSyncPersistsAndPrunesRelations(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	now := time.Now()
+	live := api.IssueRelation{ID: "rel-live", Type: "blocks", RelatedIssue: &api.ParentIssue{ID: "issue-2", Identifier: "TST-2"}, CreatedAt: now, UpdatedAt: now}
+	inverse := api.IssueRelation{ID: "rel-inverse", Type: "related", Issue: &api.ParentIssue{ID: "issue-3", Identifier: "TST-3"}, CreatedAt: now, UpdatedAt: now}
+
+	// Seed a phantom owned by issue-1 (its relation was deleted in Linear's
+	// UI) and a stale row owned by a different issue — the prune must eat
+	// only the former.
+	phantom := db.IssueRelationUpsertParams(api.IssueRelation{ID: "rel-phantom", Type: "blocks", CreatedAt: now, UpdatedAt: now}, "issue-1", "issue-9")
+	phantom.SyncedAt = now.Add(-time.Minute)
+	if err := store.Queries().UpsertIssueRelation(ctx, phantom); err != nil {
+		t.Fatalf("seed phantom: %v", err)
+	}
+	other := db.IssueRelationUpsertParams(api.IssueRelation{ID: "rel-other", Type: "blocks", CreatedAt: now, UpdatedAt: now}, "issue-4", "issue-1")
+	other.SyncedAt = now.Add(-time.Minute)
+	if err := store.Queries().UpsertIssueRelation(ctx, other); err != nil {
+		t.Fatalf("seed other-owned row: %v", err)
+	}
+
+	mock := newMockAPIClient()
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{
+		Relations:        []api.IssueRelation{live},
+		InverseRelations: []api.IssueRelation{inverse},
+	}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.syncIssueDetailsBatch(ctx, []struct {
+		ID         string
+		Identifier string
+	}{{ID: "issue-1", Identifier: "TST-1"}})
+
+	// Outgoing: the live relation persisted, the phantom pruned.
+	rels, err := store.Queries().ListIssueRelations(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("list relations: %v", err)
+	}
+	if len(rels) != 1 || rels[0].ID != "rel-live" {
+		ids := []string{}
+		for _, r := range rels {
+			ids = append(ids, r.ID)
+		}
+		t.Errorf("relations of issue-1 = %v, want [rel-live] (phantom pruned)", ids)
+	}
+
+	// Inverse: stored from its owner's perspective (issue_id = the other side).
+	inv, err := store.Queries().GetIssueRelation(ctx, "rel-inverse")
+	if err != nil {
+		t.Fatalf("inverse relation not persisted: %v", err)
+	}
+	if inv.IssueID != "issue-3" || inv.RelatedIssueID != "issue-1" {
+		t.Errorf("inverse row stored as %s->%s, want issue-3->issue-1", inv.IssueID, inv.RelatedIssueID)
+	}
+
+	// The stale row owned by issue-4 is outside issue-1's completeness set.
+	if _, err := store.Queries().GetIssueRelation(ctx, "rel-other"); err != nil {
+		t.Errorf("issue-1's sync pruned a row owned by issue-4: %v", err)
+	}
+}
+
+// TestDetailsSyncRelationUpsertFailureSuppressesPrune: the clean guard — a
+// malformed relation (no relatedIssue) fails its upsert, marking the
+// collection unclean, so the prune is suppressed and a stale row survives
+// rather than being wrongly deleted against a partial write-set.
+func TestDetailsSyncRelationUpsertFailureSuppressesPrune(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	now := time.Now()
+	stale := db.IssueRelationUpsertParams(api.IssueRelation{ID: "rel-stale", Type: "blocks", CreatedAt: now, UpdatedAt: now}, "issue-1", "issue-9")
+	stale.SyncedAt = now.Add(-time.Minute)
+	if err := store.Queries().UpsertIssueRelation(ctx, stale); err != nil {
+		t.Fatalf("seed stale: %v", err)
+	}
+
+	mock := newMockAPIClient()
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{
+		Relations: []api.IssueRelation{{ID: "rel-broken", Type: "blocks", RelatedIssue: nil, CreatedAt: now, UpdatedAt: now}},
+	}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.syncIssueDetailsBatch(ctx, []struct {
+		ID         string
+		Identifier string
+	}{{ID: "issue-1", Identifier: "TST-1"}})
+
+	if _, err := store.Queries().GetIssueRelation(ctx, "rel-stale"); err != nil {
+		t.Errorf("unclean relation sync must suppress the prune, but rel-stale is gone: %v", err)
+	}
+}

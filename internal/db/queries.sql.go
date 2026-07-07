@@ -3988,6 +3988,23 @@ func (q *Queries) PruneIssueDocuments(ctx context.Context, arg PruneIssueDocumen
 	return err
 }
 
+const pruneIssueRelations = `-- name: PruneIssueRelations :exec
+DELETE FROM issue_relations WHERE issue_id = ? AND synced_at < ?
+`
+
+type PruneIssueRelationsParams struct {
+	IssueID  string    `json:"issue_id"`
+	SyncedAt time.Time `json:"synced_at"`
+}
+
+// Scoped to the OWNING issue (issue_id): only the owning side's drained
+// fetch is a completeness set for its rows. Inverse upserts refresh rows
+// owned by other issues and must never license their deletion.
+func (q *Queries) PruneIssueRelations(ctx context.Context, arg PruneIssueRelationsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneIssueRelations, arg.IssueID, arg.SyncedAt)
+	return err
+}
+
 const pruneProjectTeams = `-- name: PruneProjectTeams :exec
 DELETE FROM project_teams WHERE team_id = ? AND synced_at < ?
 `
