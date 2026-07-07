@@ -45,12 +45,10 @@ type LinearFS struct {
 	fileCacheDir string
 	fileCacheMu  gosync.RWMutex
 	fileCache    map[string][]byte // in-memory cache (file ID -> content)
-	// Per-entity write errors (surfaced via .error virtual files)
-	writeErrors   map[string]*WriteError
-	writeErrorsMu gosync.RWMutex
-	// Per-collection create successes (surfaced via .last virtual files)
-	writeSuccesses   map[string][]*WriteResult
-	writeSuccessesMu gosync.RWMutex
+
+	// .error / .last state for every writable surface (see writefeedback.go).
+	// Embedded, so lfs.SetWriteError / lfs.AppendWriteSuccess / … promote.
+	writeFeedback
 }
 
 // BaseNode provides common functionality for all LinearFS nodes.
@@ -99,18 +97,20 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		log.Printf("[linearfs] Warning: failed to create cache dir: %v", err)
 	}
 
-	return &LinearFS{
-		uid:            uid,
-		gid:            gid,
-		client:         client,
-		mutatorImpl:    client,
-		verifierImpl:   client,
-		debug:          debug,
-		fileCacheDir:   cacheDir,
-		fileCache:      make(map[string][]byte),
-		writeErrors:    make(map[string]*WriteError),
-		writeSuccesses: make(map[string][]*WriteResult),
-	}, nil
+	lfs := &LinearFS{
+		uid:          uid,
+		gid:          gid,
+		client:       client,
+		mutatorImpl:  client,
+		verifierImpl: client,
+		debug:        debug,
+		fileCacheDir: cacheDir,
+		fileCache:    make(map[string][]byte),
+	}
+	// Wire the feedback store's kernel-cache seam to this instance. The method
+	// value binds the pointer, so it is safe to set after lfs exists.
+	lfs.writeFeedback = newWriteFeedback(lfs.InvalidateUpdated)
+	return lfs, nil
 }
 
 // Close stops all background operations and releases resources

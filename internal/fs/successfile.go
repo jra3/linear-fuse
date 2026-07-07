@@ -74,30 +74,30 @@ func collectionSuccessKey(kind, parentID string) string {
 // AppendWriteSuccess records a successful create for a collection key, keeping at
 // most maxWriteResults newest entries, and refreshes the `.last` file's cached
 // size so the next read reflects it.
-func (lfs *LinearFS) AppendWriteSuccess(key string, r WriteResult) {
+func (wf *writeFeedback) AppendWriteSuccess(key string, r WriteResult) {
 	if r.Timestamp.IsZero() {
 		r.Timestamp = time.Now()
 	}
-	lfs.writeSuccessesMu.Lock()
-	if lfs.writeSuccesses == nil {
-		lfs.writeSuccesses = make(map[string][]*WriteResult)
+	wf.successesMu.Lock()
+	if wf.successes == nil {
+		wf.successes = make(map[string][]*WriteResult)
 	}
-	list := append(lfs.writeSuccesses[key], &r)
+	list := append(wf.successes[key], &r)
 	if len(list) > maxWriteResults {
 		list = list[len(list)-maxWriteResults:]
 	}
-	lfs.writeSuccesses[key] = list
-	lfs.writeSuccessesMu.Unlock()
-	lfs.InvalidateUpdated(successIno(key))
+	wf.successes[key] = list
+	wf.successesMu.Unlock()
+	wf.invalidate(successIno(key))
 }
 
 // GetWriteSuccess returns a copy of the recorded successes for a collection key
 // (nil if none). A copy — not the internal slice — so a caller can't race a
 // concurrent AppendWriteSuccess that re-slices/appends under the write lock.
-func (lfs *LinearFS) GetWriteSuccess(key string) []*WriteResult {
-	lfs.writeSuccessesMu.RLock()
-	defer lfs.writeSuccessesMu.RUnlock()
-	src := lfs.writeSuccesses[key]
+func (wf *writeFeedback) GetWriteSuccess(key string) []*WriteResult {
+	wf.successesMu.RLock()
+	defer wf.successesMu.RUnlock()
+	src := wf.successes[key]
 	if len(src) == 0 {
 		return nil
 	}
@@ -107,13 +107,13 @@ func (lfs *LinearFS) GetWriteSuccess(key string) []*WriteResult {
 }
 
 // ClearWriteSuccess drops the recorded successes for a collection key (used by tests).
-func (lfs *LinearFS) ClearWriteSuccess(key string) {
-	lfs.writeSuccessesMu.Lock()
-	_, had := lfs.writeSuccesses[key]
-	delete(lfs.writeSuccesses, key)
-	lfs.writeSuccessesMu.Unlock()
+func (wf *writeFeedback) ClearWriteSuccess(key string) {
+	wf.successesMu.Lock()
+	_, had := wf.successes[key]
+	delete(wf.successes, key)
+	wf.successesMu.Unlock()
 	if had {
-		lfs.InvalidateUpdated(successIno(key))
+		wf.invalidate(successIno(key))
 	}
 }
 

@@ -19,42 +19,42 @@ type WriteError struct {
 
 // SetWriteError records the last failed-write message for an entity, keyed by
 // its (globally-unique) Linear ID. Visible at the entity's `.error` file.
-func (lfs *LinearFS) SetWriteError(entityID, message string) {
-	lfs.writeErrorsMu.Lock()
-	lfs.writeErrors[entityID] = &WriteError{
+func (wf *writeFeedback) SetWriteError(entityID, message string) {
+	wf.errorsMu.Lock()
+	wf.errors[entityID] = &WriteError{
 		Message:   message,
 		Timestamp: time.Now(),
 	}
-	lfs.writeErrorsMu.Unlock()
+	wf.errorsMu.Unlock()
 	// Drop the kernel's cached size/content for the .error file so the next
 	// stat/read reflects this error instead of a stale (often empty) value.
-	lfs.InvalidateUpdated(errorIno(entityID))
+	wf.invalidate(errorIno(entityID))
 }
 
 // ClearWriteError removes the error for an entity (called on a successful write).
-func (lfs *LinearFS) ClearWriteError(entityID string) {
-	lfs.writeErrorsMu.Lock()
-	_, had := lfs.writeErrors[entityID]
-	delete(lfs.writeErrors, entityID)
-	lfs.writeErrorsMu.Unlock()
+func (wf *writeFeedback) ClearWriteError(entityID string) {
+	wf.errorsMu.Lock()
+	_, had := wf.errors[entityID]
+	delete(wf.errors, entityID)
+	wf.errorsMu.Unlock()
 	if had {
-		lfs.InvalidateUpdated(errorIno(entityID))
+		wf.invalidate(errorIno(entityID))
 	}
 }
 
 // GetWriteError returns the last failed-write message for an entity, or nil.
-func (lfs *LinearFS) GetWriteError(entityID string) *WriteError {
-	lfs.writeErrorsMu.RLock()
-	defer lfs.writeErrorsMu.RUnlock()
-	return lfs.writeErrors[entityID]
+func (wf *writeFeedback) GetWriteError(entityID string) *WriteError {
+	wf.errorsMu.RLock()
+	defer wf.errorsMu.RUnlock()
+	return wf.errors[entityID]
 }
 
 // SetIssueError / ClearIssueError / GetIssueError are issue-flavored aliases for
 // the generic write-error store, retained so issue write handlers read clearly.
-func (lfs *LinearFS) SetIssueError(issueID, message string) { lfs.SetWriteError(issueID, message) }
-func (lfs *LinearFS) ClearIssueError(issueID string)        { lfs.ClearWriteError(issueID) }
-func (lfs *LinearFS) GetIssueError(issueID string) *WriteError {
-	return lfs.GetWriteError(issueID)
+func (wf *writeFeedback) SetIssueError(issueID, message string) { wf.SetWriteError(issueID, message) }
+func (wf *writeFeedback) ClearIssueError(issueID string)        { wf.ClearWriteError(issueID) }
+func (wf *writeFeedback) GetIssueError(issueID string) *WriteError {
+	return wf.GetWriteError(issueID)
 }
 
 // collectionErrorKey returns the write-error store key for a collection
