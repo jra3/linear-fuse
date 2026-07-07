@@ -42,14 +42,11 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	now := time.Now()
 	switch name {
 	case "README.md":
-		node := &ReadmeNode{BaseNode: BaseNode{lfs: r.lfs}}
-		content := node.generateContent()
-		out.Attr.Mode = 0444 | syscall.S_IFREG
-		out.Attr.Size = uint64(len(content))
-		out.Attr.Uid = r.lfs.uid
-		out.Attr.Gid = r.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		// The generated docs have no natural entity time; report zero (unknown).
+		lfs := r.lfs
+		return r.lookupRenderFile(ctx, out, func() ([]byte, time.Time, time.Time) {
+			return []byte(generateReadme(lfs.MountPoint())), time.Time{}, time.Time{}
+		}, 0, inheritTimeout), 0
 
 	case "teams":
 		node := &TeamsNode{BaseNode: BaseNode{lfs: r.lfs}}
@@ -86,46 +83,6 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	default:
 		return nil, syscall.ENOENT
 	}
-}
-
-// ReadmeNode is a virtual file containing filesystem documentation
-type ReadmeNode struct {
-	BaseNode
-}
-
-var _ fs.NodeGetattrer = (*ReadmeNode)(nil)
-var _ fs.NodeOpener = (*ReadmeNode)(nil)
-var _ fs.NodeReader = (*ReadmeNode)(nil)
-
-func (r *ReadmeNode) generateContent() []byte {
-	mp := r.lfs.MountPoint()
-	return []byte(generateReadme(mp))
-}
-
-func (r *ReadmeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	content := r.generateContent()
-	out.Mode = 0444 | syscall.S_IFREG
-	out.Size = uint64(len(content))
-	r.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (r *ReadmeNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (r *ReadmeNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := r.generateContent()
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
 }
 
 func generateReadme(mountPoint string) string {

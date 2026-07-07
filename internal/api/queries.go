@@ -96,8 +96,8 @@ fragment IssueFields on Issue {
   parent { id identifier title }
   children { nodes { id identifier title createdAt updatedAt } }
   cycle { id name number }
-  relations { nodes { id type relatedIssue { id identifier title } } }
-  inverseRelations { nodes { id type issue { id identifier title } } }
+  relations { nodes { id type relatedIssue { id identifier title } createdAt updatedAt } }
+  inverseRelations { nodes { id type issue { id identifier title } createdAt updatedAt } }
 }
 `
 
@@ -981,6 +981,8 @@ mutation CreateIssueRelation($issueId: String!, $relatedIssueId: String!, $type:
       type
       issue { id identifier title }
       relatedIssue { id identifier title }
+      createdAt
+      updatedAt
     }
   }
 }

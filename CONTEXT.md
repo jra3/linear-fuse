@@ -260,6 +260,66 @@ carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
 [[attr-construction]]). Unit-tested directly (write-expands, in-place,
 truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
 
+### Render file (`renderFile`)
+The **deep module** owning every read-only *generated* file — the render-through
+file complement to `attrNode` (the directory mixin) and the read-side twin of
+`editBuffer` (the editable-file buffer). `renderFile` (`internal/fs/renderfile.go`)
+is `{BaseNode, render func() (content []byte, mtime, ctime time.Time)}` and
+provides the three FUSE ops such a file needs — `Open`/`Read`/`Getattr`, promoted
+into whatever embeds it. Its whole interface is the one render closure. It
+replaced **nine** hand-copied node types (`TeamInfoNode`, `StatesInfoNode`,
+`LabelsInfoNode`, `UserInfoNode`, `CycleFileNode`, `ReadmeNode`, `MetaFileNode`,
+`ErrorFileNode`, `SuccessFileNode`) and reduced two more (`RelationFileNode`,
+`ExternalAttachmentNode`, which embed it and keep only their `Unlink`) — net
+−490-odd lines. The byte-window offset-clamp that all of them hand-rolled (a dozen
+verbatim copies) lives once in `readWindow`.
+
+**It renders on every read (`FOPEN_DIRECT_IO`), uniformly.** go-fuse dedups
+inodes by `StableAttr.Ino` and reuses the first node for a given ino, so baking
+bytes *or times* at Lookup serves stale values for the life of the mount — the
+reasoning the `.meta`/`.error`/`.last` nodes already used. Collapsing the old
+`KEEP_CACHE` nodes onto DIRECT_IO also fixed a latent bug: `states.md`/`labels.md`
+carried a 10-min TTL content cache that was **dead under `KEEP_CACHE`** (the
+kernel served the first read forever); the TTL/`cachedContent` fields are gone —
+each read now fetches from SQLite (cheap) and re-renders. These files are tiny and
+read interactively, so the per-read FUSE round-trip is imperceptible. The attr
+timeout stays a per-construction param (`inheritTimeout` = leave the mount default
+60s/30s, preserving the nodes that set none; `.meta`/`.error`/`.last` keep 0;
+relation/attachment keep 30s).
+
+**The closure returns real times, never `now()`** — the drift this module kills
+(`ls -lt` used to reshuffle those files every call). A zero time reports as an
+unset attr (`nonZeroTime`), i.e. honest "unknown". Sources: `team.md` uses the
+team's times; `cycle.md` uses `StartsAt` (a cycle has no `updatedAt`; its
+former decorative `atime=EndsAt` is dropped); attachment `.link` uses the
+attachment's times; `.error` uses `WriteError.Timestamp`; `.last` uses the newest
+`WriteResult.Timestamp`; `.rel` uses the relation's own times (see below);
+`states.md`/`labels.md` use the **team's** times as a stable proxy (a collection
+has no single mtime); `user.md`/README report **zero** (`api.User` has no time
+fields; README is a generated doc). Construction goes through
+`newRenderInode`/`lookupRenderFile` (parent is a `*BaseNode`) or `mountRenderFile`
+(parent handed in as an `fs.InodeEmbedder`, for the `.meta`/`.error`/`.last`
+helpers), all filling the Lookup `EntryOut` from the same `renderAttr()` the
+`Getattr` uses — so a Lookup answer and a later stat can't disagree, the `attrNode`
+guarantee extended to dynamic-size files. Unit-tested directly on the struct with
+a stub closure (window clamp, write-open→`EACCES`, size/time reporting, zero-time),
+no FUSE mount.
+
+**Precursor — real `.rel` times (`IssueRelation` created/updated).** `.rel` files
+used to fabricate `now()`; making them report real times required carrying the
+relation's `createdAt`/`updatedAt` end-to-end, which nothing did. The
+`issue_relations` table already had the columns and `UpsertIssueRelation` already
+took them — the gap was above the DB: `api.IssueRelation` gained the two fields,
+the `CreateIssueRelation` mutation (and the issue fragment) now select
+`createdAt`/`updatedAt`, the create-persist writes the server's times (not
+`now()`), and `GetIssueRelations`/`GetIssueInverseRelations`/`GetIssueRelationByID`
+map them back onto the struct. (Orthogonal pre-existing gap, left alone:
+relations are populated **only** by the local create handler — the sync worker and
+`refreshIssueDetails` don't persist them — so relations made in Linear's own UI
+never appear as `.rel` files.) `EmbeddedFileNode` (the actual `*.png`/`*.pdf`
+bytes) stays out of `renderFile`: it is a lazy CDN byte-streamer, not a
+render-closure file, and `api.EmbeddedFile` has no times either.
+
 ### Indexed listing (`indexedListing`)
 The **deep module** owning the index-derived filenames of a collection whose
 entries are named `<NNNN>-<date>…md` by creation order — comments and the

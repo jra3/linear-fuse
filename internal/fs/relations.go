@@ -102,24 +102,17 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 
 func (n *RelationsNode) createRelationFileNode(ctx context.Context, rel api.IssueRelation, isInverse bool, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	node := &RelationFileNode{
-		BaseNode:  BaseNode{lfs: n.lfs},
+		renderFile: renderFile{
+			BaseNode: BaseNode{lfs: n.lfs},
+			render: func() ([]byte, time.Time, time.Time) {
+				return []byte(relationContent(rel, isInverse)), rel.UpdatedAt, rel.CreatedAt
+			},
+		},
 		relation:  rel,
 		isInverse: isInverse,
 		issueID:   n.issueID,
 	}
-	now := time.Now()
-	content := node.generateContent()
-	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.Attr.Size = uint64(len(content))
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&now, &now, &now)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  relationIno(rel.ID),
-	}), 0
+	return n.newRenderInode(ctx, out, node, relationIno(rel.ID), 30*time.Second), 0
 }
 
 // inverseRelationType returns the inverse relation type name
@@ -138,62 +131,35 @@ func inverseRelationType(relType string) string {
 	}
 }
 
-// RelationFileNode represents a relation file (read-only info)
+// RelationFileNode represents a relation file (read-only info + rm-to-delete).
+// It embeds renderFile for Open/Read/Getattr and keeps only its Unlink.
 type RelationFileNode struct {
-	BaseNode
+	renderFile
 	relation  api.IssueRelation
 	isInverse bool
 	issueID   string // parent issue (for the relations/ .error key)
 }
 
-var _ fs.NodeGetattrer = (*RelationFileNode)(nil)
-var _ fs.NodeOpener = (*RelationFileNode)(nil)
-var _ fs.NodeReader = (*RelationFileNode)(nil)
 var _ fs.NodeUnlinker = (*RelationFileNode)(nil)
 
-func (n *RelationFileNode) generateContent() string {
+// relationContent renders a relation file's YAML body.
+func relationContent(rel api.IssueRelation, isInverse bool) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("type: %s\n", n.relation.Type))
+	sb.WriteString(fmt.Sprintf("type: %s\n", rel.Type))
 
-	if n.isInverse && n.relation.Issue != nil {
-		sb.WriteString(fmt.Sprintf("from: %s\n", n.relation.Issue.Identifier))
-		if n.relation.Issue.Title != "" {
-			sb.WriteString(fmt.Sprintf("title: %s\n", n.relation.Issue.Title))
+	if isInverse && rel.Issue != nil {
+		sb.WriteString(fmt.Sprintf("from: %s\n", rel.Issue.Identifier))
+		if rel.Issue.Title != "" {
+			sb.WriteString(fmt.Sprintf("title: %s\n", rel.Issue.Title))
 		}
-	} else if n.relation.RelatedIssue != nil {
-		sb.WriteString(fmt.Sprintf("to: %s\n", n.relation.RelatedIssue.Identifier))
-		if n.relation.RelatedIssue.Title != "" {
-			sb.WriteString(fmt.Sprintf("title: %s\n", n.relation.RelatedIssue.Title))
+	} else if rel.RelatedIssue != nil {
+		sb.WriteString(fmt.Sprintf("to: %s\n", rel.RelatedIssue.Identifier))
+		if rel.RelatedIssue.Title != "" {
+			sb.WriteString(fmt.Sprintf("title: %s\n", rel.RelatedIssue.Title))
 		}
 	}
 
 	return sb.String()
-}
-
-func (n *RelationFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := n.generateContent()
-	now := time.Now()
-	out.Mode = 0444 // Read-only
-	n.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *RelationFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *RelationFileNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := []byte(n.generateContent())
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
 }
 
 func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -267,13 +233,23 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 		},
 		persist: func(ctx context.Context, rel *api.IssueRelation) error {
 			now := time.Now()
+			// Prefer the server's authoritative relation times; fall back to now()
+			// if the mutation echoed a zero time.
+			created := rel.CreatedAt
+			if created.IsZero() {
+				created = now
+			}
+			updated := rel.UpdatedAt
+			if updated.IsZero() {
+				updated = now
+			}
 			return n.lfs.store.Queries().UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
 				ID:             rel.ID,
 				IssueID:        n.issueID,
 				RelatedIssueID: relatedID,
 				Type:           relationType,
-				CreatedAt:      sql.NullTime{Time: now, Valid: true},
-				UpdatedAt:      sql.NullTime{Time: now, Valid: true},
+				CreatedAt:      sql.NullTime{Time: created, Valid: true},
+				UpdatedAt:      sql.NullTime{Time: updated, Valid: true},
 				SyncedAt:       now,
 			})
 		},

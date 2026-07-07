@@ -125,20 +125,18 @@ func TestCycleFileNode_GenerateContent(t *testing.T) {
 	startsAt := now.Add(-24 * time.Hour)
 	endsAt := now.Add(24 * time.Hour)
 
-	node := &CycleFileNode{
-		team: api.Team{Key: "ENG"},
-		cycle: api.Cycle{
-			ID:                         "cycle-123",
-			Number:                     5,
-			Name:                       "Sprint 5",
-			StartsAt:                   startsAt,
-			EndsAt:                     endsAt,
-			IssueCountHistory:          []int{10},
-			CompletedIssueCountHistory: []int{3},
-		},
+	team := api.Team{Key: "ENG"}
+	cycle := api.Cycle{
+		ID:                         "cycle-123",
+		Number:                     5,
+		Name:                       "Sprint 5",
+		StartsAt:                   startsAt,
+		EndsAt:                     endsAt,
+		IssueCountHistory:          []int{10},
+		CompletedIssueCountHistory: []int{3},
 	}
 
-	content := node.generateContent()
+	content := cycleMarkdown(team, cycle)
 
 	// Check that content includes expected fields
 	contentStr := string(content)
@@ -165,20 +163,18 @@ func TestCycleFileNode_GenerateContent_EmptyHistory(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 
-	node := &CycleFileNode{
-		team: api.Team{Key: "ENG"},
-		cycle: api.Cycle{
-			ID:       "cycle-456",
-			Number:   1,
-			StartsAt: now.Add(24 * time.Hour),
-			EndsAt:   now.Add(48 * time.Hour),
-			// Empty history arrays
-			IssueCountHistory:          []int{},
-			CompletedIssueCountHistory: []int{},
-		},
+	team := api.Team{Key: "ENG"}
+	cycle := api.Cycle{
+		ID:       "cycle-456",
+		Number:   1,
+		StartsAt: now.Add(24 * time.Hour),
+		EndsAt:   now.Add(48 * time.Hour),
+		// Empty history arrays
+		IssueCountHistory:          []int{},
+		CompletedIssueCountHistory: []int{},
 	}
 
-	content := node.generateContent()
+	content := cycleMarkdown(team, cycle)
 	contentStr := string(content)
 
 	// Should have zero values for progress
