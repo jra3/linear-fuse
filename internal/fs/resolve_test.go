@@ -237,3 +237,22 @@ func TestResolveByName(t *testing.T) {
 		t.Errorf("exact %q resolved to %q, want L2 (exact beats the earlier case-variant)", "bug", got)
 	}
 }
+
+// TestFreshestByID: returns the matching item, else the fallback.
+func TestFreshestByID(t *testing.T) {
+	t.Parallel()
+	type ent struct{ id, v string }
+	idOf := func(e ent) string { return e.id }
+	items := []ent{{"a", "A"}, {"b", "B"}}
+	fallback := ent{"b", "stale"}
+
+	if got := freshestByID(items, "b", idOf, fallback); got.v != "B" {
+		t.Errorf("match returned %+v, want the fresh {b,B}", got)
+	}
+	if got := freshestByID(items, "z", idOf, fallback); got != fallback {
+		t.Errorf("miss returned %+v, want fallback %+v", got, fallback)
+	}
+	if got := freshestByID(nil, "b", idOf, fallback); got != fallback {
+		t.Errorf("empty returned %+v, want fallback", got)
+	}
+}

@@ -43,7 +43,9 @@ type LinearFS struct {
 	kernelNotify
 
 	// Embedded-file bytes (memory→disk→CDN); see embeddedfilecache.go.
-	files *embeddedFileCache
+	// Embedded, so lfs.FetchEmbeddedFile promotes — consistent with the two
+	// sibling sub-modules above.
+	*embeddedFileCache
 
 	// .error / .last state for every writable surface (see writefeedback.go).
 	// Embedded, so lfs.SetWriteError / lfs.AppendWriteSuccess / … promote.
@@ -108,10 +110,14 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	// value binds the pointer, so it is safe to set after lfs exists.
 	lfs.writeFeedback = newWriteFeedback(lfs.InvalidateUpdated)
 	// The embedded-file cache's seams are late-bound: repo is wired later (in
-	// EnableSQLiteCache), so persist reads lfs.repo at call time, not now.
-	lfs.files = newEmbeddedFileCache(cacheDir,
+	// EnableSQLiteCache), so persist reads lfs.repo at call time — and no-ops
+	// while it is still nil (a fetch before the cache is enabled).
+	lfs.embeddedFileCache = newEmbeddedFileCache(cacheDir,
 		func() string { return lfs.client.AuthHeader() },
 		func(ctx context.Context, fileID, path string, size int64) error {
+			if lfs.repo == nil {
+				return nil
+			}
 			return lfs.repo.UpdateEmbeddedFileCache(ctx, fileID, path, size)
 		},
 	)
@@ -857,15 +863,4 @@ func (lfs *LinearFS) verify() verifyReader {
 	lfs.mutatorMu.RLock()
 	defer lfs.mutatorMu.RUnlock()
 	return lfs.verifierImpl
-}
-
-// =============================================================================
-// File Cache for Embedded Files
-// =============================================================================
-
-// FetchEmbeddedFile returns an embedded file's bytes via the embedded-file cache
-// (memory → disk → CDN). Retained as a thin promotion so callers keep reaching
-// it through lfs.
-func (lfs *LinearFS) FetchEmbeddedFile(ctx context.Context, file api.EmbeddedFile) ([]byte, error) {
-	return lfs.files.FetchEmbeddedFile(ctx, file)
 }

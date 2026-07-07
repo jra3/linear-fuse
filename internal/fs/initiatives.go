@@ -122,12 +122,7 @@ func (i *InitiativeNode) manifest() *dirManifest {
 	m.metaFile("initiative.meta", func() ([]byte, time.Time, time.Time) {
 		init := initiative
 		if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
-			for _, it := range inits {
-				if it.ID == initiative.ID {
-					init = it
-					break
-				}
-			}
+			init = freshestByID(inits, initiative.ID, func(i api.Initiative) string { return i.ID }, initiative)
 		}
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
 		return node.metaContent(), init.UpdatedAt, init.CreatedAt
@@ -522,11 +517,8 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	u := update // captured by the render closure
-	render := func() ([]byte, time.Time, time.Time) {
-		return updateMarkdown(u.ID, u.Health, u.CreatedAt, u.UpdatedAt, u.User, u.Body), u.UpdatedAt, u.CreatedAt
-	}
-	return n.lookupRenderFile(ctx, out, render, initiativeUpdateIno(u.ID), 30*time.Second), 0
+	return n.lookupUpdateFile(ctx, out, update.ID, update.Health, update.CreatedAt, update.UpdatedAt,
+		update.User, update.Body, initiativeUpdateIno(update.ID)), 0
 }
 
 func (n *InitiativeUpdatesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

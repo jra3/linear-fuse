@@ -238,12 +238,7 @@ func (p *ProjectNode) manifest() *dirManifest {
 	m.metaFile("project.meta", func() ([]byte, time.Time, time.Time) {
 		proj := project
 		if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
-			for _, pr := range projs {
-				if pr.ID == project.ID {
-					proj = pr
-					break
-				}
-			}
+			proj = freshestByID(projs, project.ID, func(p api.Project) string { return p.ID }, project)
 		}
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
 		return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
@@ -559,11 +554,8 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	u := update // captured by the render closure
-	render := func() ([]byte, time.Time, time.Time) {
-		return updateMarkdown(u.ID, u.Health, u.CreatedAt, u.UpdatedAt, u.User, u.Body), u.UpdatedAt, u.CreatedAt
-	}
-	return n.lookupRenderFile(ctx, out, render, projectUpdateIno(u.ID), 30*time.Second), 0
+	return n.lookupUpdateFile(ctx, out, update.ID, update.Health, update.CreatedAt, update.UpdatedAt,
+		update.User, update.Body, projectUpdateIno(update.ID)), 0
 }
 
 func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

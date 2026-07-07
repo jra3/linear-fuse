@@ -14,6 +14,19 @@ import (
 // milestone, cycle, initiative) each hand-rolled identically; the caller fetches
 // the list and passes the two field accessors. Pure of the repo, so it is
 // unit-tested on literal slices.
+// freshestByID returns the item in items whose id matches, or fallback when none
+// does. The read-through <entity>.meta closures use it to prefer a freshly-
+// fetched entity over the snapshot they captured, falling back to the snapshot
+// when the fetch turned it up empty — the same scan both hand-rolled.
+func freshestByID[T any](items []T, id string, idOf func(T) string, fallback T) T {
+	for _, it := range items {
+		if idOf(it) == id {
+			return it
+		}
+	}
+	return fallback
+}
+
 func resolveByName[T any](items []T, name, label string, nameOf, idOf func(T) string) (string, error) {
 	for _, it := range items {
 		if nameOf(it) == name {
