@@ -220,55 +220,21 @@ var _ fs.NodeFlusher = (*InitiativeInfoNode)(nil)
 var _ fs.NodeFsyncer = (*InitiativeInfoNode)(nil)
 var _ fs.NodeSetattrer = (*InitiativeInfoNode)(nil)
 
-// generateContent renders the editable-only initiative.md: name, linked project
-// slugs, and the description body. Server-managed fields live in initiative.meta
-// (#150) so a successful write never rewrites the bytes the writer wrote.
+// generateContent renders the editable-only initiative.md via
+// marshal.InitiativeToMarkdown; a render failure serves an empty file rather
+// than failing the node.
 func (i *InitiativeInfoNode) generateContent() []byte {
-	fm := map[string]any{"name": i.initiative.Name}
-
-	if len(i.initiative.Projects.Nodes) > 0 {
-		slugs := make([]string, len(i.initiative.Projects.Nodes))
-		for j, p := range i.initiative.Projects.Nodes {
-			slugs[j] = p.Slug
-		}
-		fm["projects"] = slugs
-	}
-
-	out, err := marshal.Render(&marshal.Document{Frontmatter: fm, Body: i.initiative.Description})
+	out, err := marshal.InitiativeToMarkdown(&i.initiative)
 	if err != nil {
 		return []byte{}
 	}
 	return out
 }
 
-// metaContent renders the read-only initiative.meta: server-managed identity,
-// status, owner, appearance, and timestamps as a frontmatter-only block.
+// metaContent renders the read-only initiative.meta via
+// marshal.InitiativeMetaToMarkdown.
 func (i *InitiativeInfoNode) metaContent() []byte {
-	fm := map[string]any{
-		"id":      i.initiative.ID,
-		"slug":    i.initiative.Slug,
-		"url":     i.initiative.URL,
-		"status":  i.initiative.Status,
-		"created": i.initiative.CreatedAt.Format(time.RFC3339),
-		"updated": i.initiative.UpdatedAt.Format(time.RFC3339),
-	}
-	if i.initiative.Color != "" {
-		fm["color"] = i.initiative.Color
-	}
-	if i.initiative.Icon != "" {
-		fm["icon"] = i.initiative.Icon
-	}
-	if i.initiative.Owner != nil {
-		fm["owner"] = map[string]any{
-			"id":    i.initiative.Owner.ID,
-			"name":  i.initiative.Owner.Name,
-			"email": i.initiative.Owner.Email,
-		}
-	}
-	if i.initiative.TargetDate != nil {
-		fm["targetDate"] = *i.initiative.TargetDate
-	}
-	out, err := marshal.Render(&marshal.Document{Frontmatter: fm})
+	out, err := marshal.InitiativeMetaToMarkdown(&i.initiative)
 	if err != nil {
 		return []byte{}
 	}

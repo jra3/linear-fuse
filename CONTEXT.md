@@ -135,6 +135,19 @@ Pure of the FUSE mount, SQLite, and API: unit-tested directly on a parsed
 `marshal.StringSliceFromYAML` — the list coercion the handlers now share for the
 relational front half — were exported from marshal for this.)
 
+### Entity render (`marshal.*ToMarkdown`)
+Every entity's markdown render lives in `internal/marshal`, one seam for
+markdown ↔ entity: Issue/Document/Milestone always did, and round 14 moved
+Project and Initiative (plus their `.meta` renders) out of the fs node methods
+(`ProjectToMarkdown`/`ProjectMetaToMarkdown`, `InitiativeToMarkdown`/
+`InitiativeMetaToMarkdown`) — before that, two of five entities' render policy
+was observable only through a mounted filesystem. The editable-only split
+(server-managed fields live in `.meta`, so a successful write never rewrites
+the writer's bytes) is now pinned by unit tests on the exact frontmatter key
+sets. The fs nodes keep one-line wrappers that degrade a render failure to an
+empty file. The parse side stays with [[scalar-edit]] (name/description) and
+[[link-reconciliation]] (the member lists).
+
 ### Create trigger (`createFileNode`)
 The **deep module** owning the write-only `_create` file (and the named-file
 `Create` paths that share its mechanics): buffer written bytes, and on close hand

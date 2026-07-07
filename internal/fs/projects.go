@@ -334,56 +334,21 @@ var _ fs.NodeFlusher = (*ProjectInfoNode)(nil)
 var _ fs.NodeFsyncer = (*ProjectInfoNode)(nil)
 var _ fs.NodeSetattrer = (*ProjectInfoNode)(nil)
 
-// generateContent renders the editable-only project.md: name, initiatives, and
-// the description body. Server-managed fields live in project.meta (#150), so a
-// successful write never rewrites the bytes the writer wrote.
+// generateContent renders the editable-only project.md via
+// marshal.ProjectToMarkdown; a render failure serves an empty file rather
+// than failing the node.
 func (p *ProjectInfoNode) generateContent() []byte {
-	fm := map[string]any{"name": p.project.Name}
-
-	if p.project.Initiatives != nil && len(p.project.Initiatives.Nodes) > 0 {
-		names := make([]string, len(p.project.Initiatives.Nodes))
-		for i, init := range p.project.Initiatives.Nodes {
-			names[i] = init.Name
-		}
-		fm["initiatives"] = names
-	}
-
-	out, err := marshal.Render(&marshal.Document{Frontmatter: fm, Body: p.project.Description})
+	out, err := marshal.ProjectToMarkdown(&p.project)
 	if err != nil {
 		return []byte{}
 	}
 	return out
 }
 
-// metaContent renders the read-only project.meta: server-managed identity,
-// status, lead, dates, and timestamps as a frontmatter-only block.
+// metaContent renders the read-only project.meta via
+// marshal.ProjectMetaToMarkdown.
 func (p *ProjectInfoNode) metaContent() []byte {
-	status := "unknown"
-	if p.project.Status != nil {
-		status = p.project.Status.Name
-	}
-	fm := map[string]any{
-		"id":      p.project.ID,
-		"slug":    p.project.Slug,
-		"url":     p.project.URL,
-		"status":  status,
-		"created": p.project.CreatedAt.Format(time.RFC3339),
-		"updated": p.project.UpdatedAt.Format(time.RFC3339),
-	}
-	if p.project.Lead != nil {
-		fm["lead"] = map[string]any{
-			"id":    p.project.Lead.ID,
-			"name":  p.project.Lead.Name,
-			"email": p.project.Lead.Email,
-		}
-	}
-	if p.project.StartDate != nil {
-		fm["startDate"] = *p.project.StartDate
-	}
-	if p.project.TargetDate != nil {
-		fm["targetDate"] = *p.project.TargetDate
-	}
-	out, err := marshal.Render(&marshal.Document{Frontmatter: fm})
+	out, err := marshal.ProjectMetaToMarkdown(&p.project)
 	if err != nil {
 		return []byte{}
 	}
