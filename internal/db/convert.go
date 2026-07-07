@@ -593,41 +593,39 @@ func APIProjectMilestoneToDBMilestone(milestone api.ProjectMilestone, projectID 
 // DBMilestoneToAPIProjectMilestone converts a db.ProjectMilestone to
 // api.ProjectMilestone.
 //
-// Like the other JSON-backed entities (issues, comments, projects, …) it
-// hydrates from the full `data` blob first, then overlays the authoritative
-// queryable columns (id/name/description/target_date/sort_order). Reading
-// columns *only* — as this did before — silently dropped any api field that
-// lived in the JSON but not a column, so a field added to api.ProjectMilestone
-// would persist yet vanish on read. The overlay closes that latent loss while
-// staying safe for rows whose `data` is empty or "{}" (a legacy write path):
-// the empty unmarshal leaves a zero struct that the columns then fill, exactly
-// as before.
-func DBMilestoneToAPIProjectMilestone(milestone ProjectMilestone) (api.ProjectMilestone, error) {
+// The queryable columns (id/name/description/target_date/sort_order) are the
+// authoritative source; the `data` blob is a best-effort enrichment that carries
+// any api field without a column. Reading columns *only* — as this did before —
+// silently dropped such a JSON-only field, so a field added to
+// api.ProjectMilestone would persist yet vanish on read. Hydrating from `data`
+// first, then overlaying the columns, closes that latent loss.
+//
+// This is deliberately more defensive than the sibling converters
+// (DBIssueToAPIIssue et al.), which pure-unmarshal and propagate a parse error:
+// a corrupt or empty `data` blob here falls back to the columns rather than
+// failing, so one bad row cannot poison a whole milestone listing (and a legacy
+// "{}" row still reads correctly from its columns).
+func DBMilestoneToAPIProjectMilestone(milestone ProjectMilestone) api.ProjectMilestone {
 	var m api.ProjectMilestone
 	if len(milestone.Data) > 0 {
-		if err := json.Unmarshal(milestone.Data, &m); err != nil {
-			return api.ProjectMilestone{}, err
-		}
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(milestone.Data, &m)
 	}
 	m.ID = milestone.ID
 	m.Name = milestone.Name
 	m.Description = NullStringValue(milestone.Description)
 	m.TargetDate = NullStringPtr(milestone.TargetDate)
 	m.SortOrder = milestone.SortOrder.Float64
-	return m, nil
+	return m
 }
 
 // DBMilestonesToAPIProjectMilestones converts a slice of db.ProjectMilestone to api.ProjectMilestone
-func DBMilestonesToAPIProjectMilestones(milestones []ProjectMilestone) ([]api.ProjectMilestone, error) {
+func DBMilestonesToAPIProjectMilestones(milestones []ProjectMilestone) []api.ProjectMilestone {
 	result := make([]api.ProjectMilestone, len(milestones))
 	for i, milestone := range milestones {
-		m, err := DBMilestoneToAPIProjectMilestone(milestone)
-		if err != nil {
-			return nil, err
-		}
-		result[i] = m
+		result[i] = DBMilestoneToAPIProjectMilestone(milestone)
 	}
-	return result, nil
+	return result
 }
 
 // =============================================================================

@@ -745,7 +745,7 @@ func (r *SQLiteRepository) GetProjectMilestones(ctx context.Context, projectID s
 	if err != nil {
 		return nil, fmt.Errorf("list project milestones: %w", err)
 	}
-	return db.DBMilestonesToAPIProjectMilestones(milestones)
+	return db.DBMilestonesToAPIProjectMilestones(milestones), nil
 }
 
 func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, name string) (*api.ProjectMilestone, error) {
@@ -759,10 +759,7 @@ func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, na
 		}
 		return nil, fmt.Errorf("get milestone by name: %w", err)
 	}
-	result, err := db.DBMilestoneToAPIProjectMilestone(milestone)
-	if err != nil {
-		return nil, fmt.Errorf("convert milestone: %w", err)
-	}
+	result := db.DBMilestoneToAPIProjectMilestone(milestone)
 	return &result, nil
 }
 
@@ -774,10 +771,7 @@ func (r *SQLiteRepository) GetMilestoneByID(ctx context.Context, id string) (*ap
 		}
 		return nil, fmt.Errorf("get milestone by id: %w", err)
 	}
-	result, err := db.DBMilestoneToAPIProjectMilestone(milestone)
-	if err != nil {
-		return nil, fmt.Errorf("convert milestone: %w", err)
-	}
+	result := db.DBMilestoneToAPIProjectMilestone(milestone)
 	return &result, nil
 }
 
@@ -848,14 +842,6 @@ func (r *SQLiteRepository) DeleteProjectMilestone(ctx context.Context, milestone
 	}
 
 	return nil
-}
-
-// ptrString returns the string value or empty if nil
-func ptrString(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }
 
 // =============================================================================

@@ -758,10 +758,7 @@ func TestDBMilestoneToAPIProjectMilestone(t *testing.T) {
 		SortOrder:   sql.NullFloat64{Float64: 2.0, Valid: true},
 	}
 
-	apiMilestone, err := DBMilestoneToAPIProjectMilestone(milestone)
-	if err != nil {
-		t.Fatalf("DBMilestoneToAPIProjectMilestone: %v", err)
-	}
+	apiMilestone := DBMilestoneToAPIProjectMilestone(milestone)
 
 	if apiMilestone.ID != milestone.ID {
 		t.Errorf("ID mismatch")
@@ -778,10 +775,7 @@ func TestDBMilestonesToAPIProjectMilestones(t *testing.T) {
 		{ID: "ms2", Name: "Beta", SortOrder: sql.NullFloat64{Float64: 2.0, Valid: true}},
 	}
 
-	apiMilestones, err := DBMilestonesToAPIProjectMilestones(milestones)
-	if err != nil {
-		t.Fatalf("DBMilestonesToAPIProjectMilestones: %v", err)
-	}
+	apiMilestones := DBMilestonesToAPIProjectMilestones(milestones)
 
 	if len(apiMilestones) != 2 {
 		t.Fatalf("Expected 2 milestones, got %d", len(apiMilestones))
@@ -816,10 +810,7 @@ func TestMilestoneRoundTrip(t *testing.T) {
 		SortOrder:   params.SortOrder,
 		Data:        params.Data,
 	}
-	got, err := DBMilestoneToAPIProjectMilestone(row)
-	if err != nil {
-		t.Fatalf("reverse: %v", err)
-	}
+	got := DBMilestoneToAPIProjectMilestone(row)
 	if !reflect.DeepEqual(got, orig) {
 		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, orig)
 	}
@@ -828,12 +819,16 @@ func TestMilestoneRoundTrip(t *testing.T) {
 	// carry it (the pre-fix behavior stays intact for such rows).
 	legacy := row
 	legacy.Data = []byte("{}")
-	gotLegacy, err := DBMilestoneToAPIProjectMilestone(legacy)
-	if err != nil {
-		t.Fatalf("reverse legacy: %v", err)
-	}
-	if gotLegacy.ID != orig.ID || gotLegacy.Name != orig.Name || gotLegacy.SortOrder != orig.SortOrder {
+	if gotLegacy := DBMilestoneToAPIProjectMilestone(legacy); gotLegacy.ID != orig.ID || gotLegacy.Name != orig.Name || gotLegacy.SortOrder != orig.SortOrder {
 		t.Errorf("legacy {} row lost column data: %+v", gotLegacy)
+	}
+
+	// A *corrupt* data blob must not fail — best-effort falls back to the
+	// authoritative columns, so one bad row can't poison a whole listing.
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if gotCorrupt := DBMilestoneToAPIProjectMilestone(corrupt); gotCorrupt.ID != orig.ID || gotCorrupt.Name != orig.Name {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", gotCorrupt)
 	}
 }
 

@@ -423,21 +423,23 @@ typed constructors cover all 22 arms across the three directories: `subdir(name,
 ino, node)` → `newDirInode(dirAttr(created,updated), ino, timeout)`; `file(name,
 ino, build)` where `build` returns `(node, content, errno)` → `fileAttr`;
 `metaFile(name, render)` → `lookupMetaFile`; `errorFile(name)`/`lastFile(name)` →
-`lookupErrorFile`/`lookupSuccessFile`. The two oddballs fold in with no special
-case: `issue.meta`'s read-through closure is the `render` arg to `metaFile`, and
-`history.md` (fetch-during-lookup) is a `file()` whose build closure fetches and
-returns `errno` — the same shape as `issue.md` returning `EIO` on marshal
-failure.
+`lookupErrorFile`/`lookupSuccessFile`; `renderFile(name, ino, render)` →
+`lookupRenderFile`. The two oddballs fold in with no special case: `issue.meta`'s
+read-through closure is the `render` arg to `metaFile`, and `history.md`
+(fetch-during-lookup) is a `renderFile()` — a read-only generated file rendered
+fresh on each read (see [[render-file]]), whose closure fetches the issue history
+and, on a transient failure, renders an empty file rather than failing the
+lookup.
 
 **find/build split — pure match, effectful build.** `find(name)` returns the
 matched `staticChild` (pure — the anti-drift surface, unit-testable with no
 mount because build closures are captured but not invoked); the caller then runs
 `child.build(ctx, out)`, which touches a live inode. A matched-but-failed build
-(`history.md`/`issue.md` `EIO`) is **terminal** — the caller returns that errno
-and does **not** fall through to the dynamic tail (a broken `history.md` must not
-get re-read as a possible issue identifier). This is why the manifest is
-find/build and not a fused `(inode, ok)` like `lookupCollectionTrio`, whose
-builds never fail.
+(`issue.md`'s `EIO` on a marshal failure) is **terminal** — the caller returns
+that errno and does **not** fall through to the dynamic tail. This is why the
+manifest is find/build and not a fused `(inode, ok)` like `lookupCollectionTrio`,
+whose builds never fail. (`history.md`, being a `renderFile`, never fails the
+lookup at all — it renders empty on a fetch error.)
 
 **The dynamic tail stays outside.** Only `ProjectNode` has one (issue symlinks);
 its `Readdir` appends symlink dirents after `entries()`, its `Lookup` runs the
