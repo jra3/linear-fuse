@@ -3,9 +3,44 @@ package fs
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jra3/linear-fuse/internal/api"
 )
+
+// resolveByName finds the id of the item whose name matches — exact first, then
+// case-insensitive — or errors "unknown <label>: <name>". It is the one copy of
+// the fetch-then-match tail the five single-name resolvers (state, project,
+// milestone, cycle, initiative) each hand-rolled identically; the caller fetches
+// the list and passes the two field accessors. Pure of the repo, so it is
+// unit-tested on literal slices.
+// freshestByID returns the item in items whose id matches, or fallback when none
+// does. The read-through <entity>.meta closures use it to prefer a freshly-
+// fetched entity over the snapshot they captured, falling back to the snapshot
+// when the fetch turned it up empty — the same scan both hand-rolled.
+func freshestByID[T any](items []T, id string, idOf func(T) string, fallback T) T {
+	for _, it := range items {
+		if idOf(it) == id {
+			return it
+		}
+	}
+	return fallback
+}
+
+func resolveByName[T any](items []T, name, label string, nameOf, idOf func(T) string) (string, error) {
+	for _, it := range items {
+		if nameOf(it) == name {
+			return idOf(it), nil
+		}
+	}
+	lower := strings.ToLower(name)
+	for _, it := range items {
+		if strings.ToLower(nameOf(it)) == lower {
+			return idOf(it), nil
+		}
+	}
+	return "", fmt.Errorf("unknown %s: %s", label, name)
+}
 
 // Name→ID resolution for issue edits.
 //

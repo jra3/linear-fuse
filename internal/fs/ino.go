@@ -21,7 +21,7 @@ func ino(kind, id string) uint64 {
 // Issue tree ---------------------------------------------------------------
 
 func issueIno(issueID string) uint64       { return ino("issue", issueID) }
-func issueDirIno(issueID string) uint64    { return ino("dir", issueID) }
+func issueDirIno(issueID string) uint64    { return ino("issuedir", issueID) }
 func issuesDirIno(teamID string) uint64    { return ino("issues", teamID) }
 func childrenDirIno(issueID string) uint64 { return ino("children", issueID) }
 func historyIno(issueID string) uint64     { return ino("history", issueID) }
@@ -55,9 +55,11 @@ func labelIno(labelID string) uint64    { return ino("label", labelID) }
 
 // Projects -----------------------------------------------------------------
 
-func projectsDirIno(teamID string) uint64    { return ino("projects", teamID) }
-func projectInfoIno(projectID string) uint64 { return ino("project-info", projectID) }
-func updatesDirIno(projectID string) uint64  { return ino("updates", projectID) }
+func projectsDirIno(teamID string) uint64     { return ino("projects", teamID) }
+func projectDirIno(projectID string) uint64   { return ino("projectdir", projectID) }
+func projectInfoIno(projectID string) uint64  { return ino("project-info", projectID) }
+func updatesDirIno(projectID string) uint64   { return ino("updates", projectID) }
+func projectUpdateIno(updateID string) uint64 { return ino("project-update", updateID) }
 
 // Milestones ---------------------------------------------------------------
 
@@ -66,6 +68,7 @@ func milestoneIno(milestoneID string) uint64   { return ino("milestone", milesto
 
 // Initiatives --------------------------------------------------------------
 
+func initiativeDirIno(initiativeID string) uint64  { return ino("initiativedir", initiativeID) }
 func initiativeInfoIno(initiativeID string) uint64 { return ino("initiative-info", initiativeID) }
 func initiativeProjectsIno(initiativeID string) uint64 {
 	return ino("initiative-projects", initiativeID)
@@ -73,6 +76,7 @@ func initiativeProjectsIno(initiativeID string) uint64 {
 func initiativeUpdatesDirIno(initiativeID string) uint64 {
 	return ino("initiative-updates", initiativeID)
 }
+func initiativeUpdateIno(updateID string) uint64 { return ino("initiative-update", updateID) }
 
 // Team views ---------------------------------------------------------------
 

@@ -590,15 +590,33 @@ func APIProjectMilestoneToDBMilestone(milestone api.ProjectMilestone, projectID 
 	return params, nil
 }
 
-// DBMilestoneToAPIProjectMilestone converts a db.ProjectMilestone to api.ProjectMilestone
+// DBMilestoneToAPIProjectMilestone converts a db.ProjectMilestone to
+// api.ProjectMilestone.
+//
+// The queryable columns (id/name/description/target_date/sort_order) are the
+// authoritative source; the `data` blob is a best-effort enrichment that carries
+// any api field without a column. Reading columns *only* — as this did before —
+// silently dropped such a JSON-only field, so a field added to
+// api.ProjectMilestone would persist yet vanish on read. Hydrating from `data`
+// first, then overlaying the columns, closes that latent loss.
+//
+// This is deliberately more defensive than the sibling converters
+// (DBIssueToAPIIssue et al.), which pure-unmarshal and propagate a parse error:
+// a corrupt or empty `data` blob here falls back to the columns rather than
+// failing, so one bad row cannot poison a whole milestone listing (and a legacy
+// "{}" row still reads correctly from its columns).
 func DBMilestoneToAPIProjectMilestone(milestone ProjectMilestone) api.ProjectMilestone {
-	return api.ProjectMilestone{
-		ID:          milestone.ID,
-		Name:        milestone.Name,
-		Description: NullStringValue(milestone.Description),
-		TargetDate:  NullStringPtr(milestone.TargetDate),
-		SortOrder:   milestone.SortOrder.Float64,
+	var m api.ProjectMilestone
+	if len(milestone.Data) > 0 {
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(milestone.Data, &m)
 	}
+	m.ID = milestone.ID
+	m.Name = milestone.Name
+	m.Description = NullStringValue(milestone.Description)
+	m.TargetDate = NullStringPtr(milestone.TargetDate)
+	m.SortOrder = milestone.SortOrder.Float64
+	return m
 }
 
 // DBMilestonesToAPIProjectMilestones converts a slice of db.ProjectMilestone to api.ProjectMilestone

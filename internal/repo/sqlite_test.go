@@ -1945,12 +1945,12 @@ func TestSQLiteRepository_EmbeddedFiles(t *testing.T) {
 
 	// Insert test embedded files
 	err := store.Queries().UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
-		ID:       "file-1",
-		IssueID:  issueID,
-		Url:      "https://uploads.linear.app/workspace/file1/screenshot.png",
-		Filename: "screenshot.png",
-		MimeType: sql.NullString{String: "image/png", Valid: true},
-		Source:   "description",
+		ID:        "file-1",
+		IssueID:   issueID,
+		Url:       "https://uploads.linear.app/workspace/file1/screenshot.png",
+		Filename:  "screenshot.png",
+		MimeType:  sql.NullString{String: "image/png", Valid: true},
+		Source:    "description",
 		CreatedAt: time.Now(),
 		SyncedAt:  time.Now(),
 	})
@@ -1959,12 +1959,12 @@ func TestSQLiteRepository_EmbeddedFiles(t *testing.T) {
 	}
 
 	err = store.Queries().UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
-		ID:       "file-2",
-		IssueID:  issueID,
-		Url:      "https://uploads.linear.app/workspace/file2/design.pdf",
-		Filename: "design.pdf",
-		MimeType: sql.NullString{String: "application/pdf", Valid: true},
-		Source:   "comment:abc123",
+		ID:        "file-2",
+		IssueID:   issueID,
+		Url:       "https://uploads.linear.app/workspace/file2/design.pdf",
+		Filename:  "design.pdf",
+		MimeType:  sql.NullString{String: "application/pdf", Valid: true},
+		Source:    "comment:abc123",
 		CreatedAt: time.Now(),
 		SyncedAt:  time.Now(),
 	})
@@ -2018,12 +2018,12 @@ func TestSQLiteRepository_UpdateEmbeddedFileCache(t *testing.T) {
 
 	// Insert test embedded file
 	err := store.Queries().UpsertEmbeddedFile(ctx, db.UpsertEmbeddedFileParams{
-		ID:       fileID,
-		IssueID:  issueID,
-		Url:      "https://uploads.linear.app/workspace/test/image.png",
-		Filename: "image.png",
-		MimeType: sql.NullString{String: "image/png", Valid: true},
-		Source:   "description",
+		ID:        fileID,
+		IssueID:   issueID,
+		Url:       "https://uploads.linear.app/workspace/test/image.png",
+		Filename:  "image.png",
+		MimeType:  sql.NullString{String: "image/png", Valid: true},
+		Source:    "description",
 		CreatedAt: time.Now(),
 		SyncedAt:  time.Now(),
 	})
@@ -2239,7 +2239,7 @@ func TestDeleteOrphanIssue(t *testing.T) {
 	for _, id := range []string{issueID, otherID} {
 		issue := api.Issue{
 			ID: id, Identifier: id, Title: id, Team: &team,
-			State: api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+			State:     api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
 			CreatedAt: now, UpdatedAt: now,
 		}
 		data, _ := db.APIIssueToDBIssue(issue)
@@ -2261,7 +2261,7 @@ func TestDeleteOrphanIssue(t *testing.T) {
 	}))
 	mustExec("document", q.UpsertDocument(ctx, db.UpsertDocumentParams{
 		ID: "d1", SlugID: "d1", Title: "Doc",
-		IssueID: sql.NullString{String: issueID, Valid: true},
+		IssueID:  sql.NullString{String: issueID, Valid: true},
 		SyncedAt: now, Data: []byte("{}"),
 	}))
 	mustExec("attachment", q.UpsertAttachment(ctx, db.UpsertAttachmentParams{
@@ -2308,12 +2308,12 @@ func TestDeleteOrphanIssue(t *testing.T) {
 	if got, _ := q.ListPendingDetailSync(ctx); len(got) != 0 {
 		t.Errorf("orphan pending sync not deleted: %d remain", len(got))
 	}
-	if _, err := q.GetIssueByID(ctx,issueID); err != sql.ErrNoRows {
+	if _, err := q.GetIssueByID(ctx, issueID); err != sql.ErrNoRows {
 		t.Errorf("orphan issue itself not deleted: err=%v", err)
 	}
 
 	// Keeper survives.
-	if _, err := q.GetIssueByID(ctx,otherID); err != nil {
+	if _, err := q.GetIssueByID(ctx, otherID); err != nil {
 		t.Errorf("keeper issue was accidentally deleted: %v", err)
 	}
 	if got, _ := q.ListIssueComments(ctx, otherID); len(got) != 1 {
@@ -2358,7 +2358,7 @@ func TestDeleteOrphanProject(t *testing.T) {
 	mustExec("project-doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
 		ID: "pd1", SlugID: "pd1", Title: "Doc",
 		ProjectID: sql.NullString{String: projectID, Valid: true},
-		SyncedAt: now, Data: []byte("{}"),
+		SyncedAt:  now, Data: []byte("{}"),
 	}))
 	mustExec("project-update", q.UpsertProjectUpdate(ctx, db.UpsertProjectUpdateParams{
 		ID: "pu1", ProjectID: projectID, Body: "ok", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
@@ -2373,7 +2373,7 @@ func TestDeleteOrphanProject(t *testing.T) {
 	mustExec("keeper doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
 		ID: "pd-keep", SlugID: "pd-keep", Title: "Keep",
 		ProjectID: sql.NullString{String: otherID, Valid: true},
-		SyncedAt: now, Data: []byte("{}"),
+		SyncedAt:  now, Data: []byte("{}"),
 	}))
 
 	repo.deleteOrphanProject(ctx, projectID)
@@ -2433,7 +2433,7 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 	mustExec("init-doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
 		ID: "id1", SlugID: "id1", Title: "Doc",
 		InitiativeID: sql.NullString{String: initID, Valid: true},
-		SyncedAt: now, Data: []byte("{}"),
+		SyncedAt:     now, Data: []byte("{}"),
 	}))
 	mustExec("init-update", q.UpsertInitiativeUpdate(ctx, db.UpsertInitiativeUpdateParams{
 		ID: "iu1", InitiativeID: initID, Body: "ok", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
@@ -2588,7 +2588,7 @@ func TestReconcileIssuesForTeam_DeletesOrphans(t *testing.T) {
 	for _, id := range []string{"alive", "gone", "alsogone"} {
 		issue := api.Issue{
 			ID: id, Identifier: id, Title: id, Team: &team,
-			State: api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+			State:     api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
 			CreatedAt: now, UpdatedAt: now,
 		}
 		data, _ := db.APIIssueToDBIssue(issue)
@@ -2704,5 +2704,91 @@ func TestReconcileAgainst_LocalQueryErrorDeletesNothing(t *testing.T) {
 	)
 	if n != 0 || called {
 		t.Errorf("deleted=%d called=%v, want 0 deletes on local-query error", n, called)
+	}
+}
+
+// TestIssueRelationView covers the one converter behind all three relation
+// reads: outgoing fills RelatedIssue from related_issue_id, inverse fills Issue
+// from issue_id, and both enrich the other end with its identifier/title.
+func TestIssueRelationView(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test Team", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	src := api.Issue{ID: "iss-src", Identifier: "ENG-1", Title: "Source", Team: &team, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	dst := api.Issue{ID: "iss-dst", Identifier: "ENG-2", Title: "Target", Team: &team, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	for _, iss := range []api.Issue{src, dst} {
+		data, err := db.APIIssueToDBIssue(iss)
+		if err != nil {
+			t.Fatalf("convert issue %s: %v", iss.ID, err)
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("upsert issue %s: %v", iss.ID, err)
+		}
+	}
+
+	now := time.Now()
+	if err := store.Queries().UpsertIssueRelation(ctx, db.UpsertIssueRelationParams{
+		ID:             "rel-1",
+		IssueID:        src.ID,
+		RelatedIssueID: dst.ID,
+		Type:           "blocks",
+		CreatedAt:      sql.NullTime{Time: now, Valid: true},
+		UpdatedAt:      sql.NullTime{Time: now, Valid: true},
+		SyncedAt:       now,
+	}); err != nil {
+		t.Fatalf("upsert relation: %v", err)
+	}
+
+	// Outgoing: from the source's perspective, RelatedIssue points at the target.
+	out, err := repo.GetIssueRelations(ctx, src.ID)
+	if err != nil {
+		t.Fatalf("GetIssueRelations: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("outgoing relations = %d, want 1", len(out))
+	}
+	if out[0].Issue != nil {
+		t.Error("outgoing relation should not set Issue (the source end)")
+	}
+	if out[0].RelatedIssue == nil || out[0].RelatedIssue.ID != dst.ID {
+		t.Fatalf("outgoing RelatedIssue = %+v, want id %q", out[0].RelatedIssue, dst.ID)
+	}
+	if out[0].RelatedIssue.Identifier != "ENG-2" || out[0].RelatedIssue.Title != "Target" {
+		t.Errorf("outgoing end not enriched: %+v", out[0].RelatedIssue)
+	}
+	if out[0].Type != "blocks" || out[0].CreatedAt.IsZero() {
+		t.Errorf("outgoing scalar fields wrong: type=%q created=%v", out[0].Type, out[0].CreatedAt)
+	}
+
+	// Inverse: from the target's perspective, Issue points back at the source.
+	inv, err := repo.GetIssueInverseRelations(ctx, dst.ID)
+	if err != nil {
+		t.Fatalf("GetIssueInverseRelations: %v", err)
+	}
+	if len(inv) != 1 {
+		t.Fatalf("inverse relations = %d, want 1", len(inv))
+	}
+	if inv[0].RelatedIssue != nil {
+		t.Error("inverse relation should not set RelatedIssue")
+	}
+	if inv[0].Issue == nil || inv[0].Issue.ID != src.ID {
+		t.Fatalf("inverse Issue = %+v, want id %q", inv[0].Issue, src.ID)
+	}
+	if inv[0].Issue.Identifier != "ENG-1" || inv[0].Issue.Title != "Source" {
+		t.Errorf("inverse end not enriched: %+v", inv[0].Issue)
+	}
+
+	// By-id resolves as an outgoing view.
+	byID, err := repo.GetIssueRelationByID(ctx, "rel-1")
+	if err != nil {
+		t.Fatalf("GetIssueRelationByID: %v", err)
+	}
+	if byID == nil || byID.RelatedIssue == nil || byID.RelatedIssue.ID != dst.ID {
+		t.Fatalf("by-id RelatedIssue = %+v, want id %q", byID, dst.ID)
 	}
 }

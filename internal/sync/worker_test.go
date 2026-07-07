@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	gosync "sync"
 	"sync/atomic"
 	"testing"
@@ -1579,5 +1580,58 @@ func TestBudgetExceedsWithNilReporter(t *testing.T) {
 	// Should return false (safe default)
 	if worker.budgetExceeds(50.0) {
 		t.Error("budgetExceeds should return false with nil reporter")
+	}
+}
+
+// TestExtractEmbeddedFiles covers the pure parsing half — no DB, no HEAD: the
+// markdown display-name→URL association, bare-URL filename derivation, trailing
+// punctuation trimming, MIME detection, and a stable URL-derived id. This is the
+// tricky logic that previously could only be exercised through SQLite.
+func TestExtractEmbeddedFiles(t *testing.T) {
+	t.Parallel()
+	content := `A screenshot:
+![bug shot.png](https://uploads.linear.app/ws1/i1/bug-shot.png)
+
+A bare link ending a sentence:
+https://uploads.linear.app/ws1/i1/design-spec.pdf.`
+
+	specs := extractEmbeddedFiles(content, "issue-1", "description")
+	if len(specs) != 2 {
+		t.Fatalf("got %d specs, want 2: %+v", len(specs), specs)
+	}
+
+	// Markdown link: display text becomes the filename.
+	md := specs[0]
+	if md.Filename != "bug shot.png" {
+		t.Errorf("markdown filename = %q, want %q", md.Filename, "bug shot.png")
+	}
+	if md.MimeType != "image/png" {
+		t.Errorf("markdown mime = %q, want image/png", md.MimeType)
+	}
+	if md.IssueID != "issue-1" || md.Source != "description" {
+		t.Errorf("spec carry-through wrong: %+v", md)
+	}
+
+	// Bare URL: trailing '.' trimmed, filename derived from the path.
+	bare := specs[1]
+	if strings.HasSuffix(bare.URL, ".") {
+		t.Errorf("trailing punctuation not trimmed: %q", bare.URL)
+	}
+	if bare.Filename != "design-spec.pdf" {
+		t.Errorf("bare filename = %q, want design-spec.pdf", bare.Filename)
+	}
+	if bare.MimeType != "application/pdf" {
+		t.Errorf("bare mime = %q, want application/pdf", bare.MimeType)
+	}
+
+	// The id is a stable function of the (trimmed) URL.
+	again := extractEmbeddedFiles(bare.URL, "issue-2", "comment")
+	if len(again) != 1 || again[0].ID != bare.ID {
+		t.Errorf("id not stable for the same URL: %v vs %s", again, bare.ID)
+	}
+
+	// No CDN URLs → no specs.
+	if got := extractEmbeddedFiles("just prose, no links", "i", "s"); len(got) != 0 {
+		t.Errorf("want no specs for plain content, got %d", len(got))
 	}
 }

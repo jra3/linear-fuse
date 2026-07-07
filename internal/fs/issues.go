@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -136,20 +135,8 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.ENOENT
 	}
 
-	node := &IssueDirectoryNode{
-		BaseNode: BaseNode{lfs: n.lfs},
-		issue:    *issue,
-	}
-	out.Attr.Mode = 0755 | syscall.S_IFDIR
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-		Ino:  issueDirIno(issue.ID),
-	}), 0
+	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
+	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }
 
 // looksLikeIdentifier checks if a name looks like a Linear issue identifier
@@ -215,20 +202,8 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		return nil, errno
 	}
 
-	node := &IssueDirectoryNode{
-		BaseNode: BaseNode{lfs: n.lfs},
-		issue:    *issue,
-	}
-
-	out.Attr.Mode = 0755 | syscall.S_IFDIR
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-		Ino:  issueDirIno(issue.ID),
-	}), 0
+	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
+	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }
 
 // createIssue is the issues/_create surface's onFlush: writing a full issue
@@ -302,150 +277,101 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 // IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory
 type IssueDirectoryNode struct {
-	BaseNode
+	attrNode
 	issue api.Issue
 }
 
 var _ fs.NodeReaddirer = (*IssueDirectoryNode)(nil)
 var _ fs.NodeLookuper = (*IssueDirectoryNode)(nil)
-var _ fs.NodeGetattrer = (*IssueDirectoryNode)(nil)
 var _ fs.NodeCreater = (*IssueDirectoryNode)(nil)
 var _ fs.NodeRenamer = (*IssueDirectoryNode)(nil)
 var _ fs.NodeUnlinker = (*IssueDirectoryNode)(nil)
 
-func (n *IssueDirectoryNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&n.issue.UpdatedAt, &n.issue.UpdatedAt, &n.issue.CreatedAt)
-	return 0
-}
-
 func (n *IssueDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	entries := []fuse.DirEntry{
-		{Name: "issue.md", Mode: syscall.S_IFREG},
-		{Name: "issue.meta", Mode: syscall.S_IFREG},
-		{Name: "history.md", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: ".last", Mode: syscall.S_IFREG},
-		{Name: "comments", Mode: syscall.S_IFDIR},
-		{Name: "docs", Mode: syscall.S_IFDIR},
-		{Name: "children", Mode: syscall.S_IFDIR},
-		{Name: "attachments", Mode: syscall.S_IFDIR},
-		{Name: "relations", Mode: syscall.S_IFDIR},
-	}
-	return fs.NewListDirStream(entries), 0
+	return fs.NewListDirStream(n.manifest().entries()), 0
 }
 
 func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	switch name {
-	case "issue.md":
-		// issue.md is editable-only; identity/links/relations live in issue.meta.
-		content, err := marshal.IssueToMarkdown(&n.issue)
-		if err != nil {
-			return nil, syscall.EIO
-		}
-		node := &IssueFileNode{
-			BaseNode:   BaseNode{lfs: n.lfs},
-			issue:      n.issue,
-			editBuffer: editBuffer{content: content},
-		}
-		return n.newFileInode(ctx, out, node, fileAttr(len(content), n.issue.CreatedAt, n.issue.UpdatedAt), issueIno(n.issue.ID), 30*time.Second), 0
-
-	case "issue.meta":
-		// Read-only server-managed fields (identity, timestamps, links, relations),
-		// rendered read-through from the freshest issue in the repo so an edit to
-		// issue.md is reflected here (go-fuse reuses this node across lookups).
-		lfs := n.lfs
-		ident := n.issue.Identifier
-		snapshot := n.issue
-		render := func() ([]byte, time.Time, time.Time) {
-			iss := &snapshot
-			if fresh, err := lfs.FetchIssueByIdentifier(context.Background(), ident); err == nil && fresh != nil {
-				iss = fresh
-			}
-			att, _ := lfs.GetIssueAttachments(context.Background(), iss.ID)
-			b, err := marshal.IssueMetaToMarkdown(iss, att...)
-			if err != nil {
-				return nil, iss.UpdatedAt, iss.CreatedAt
-			}
-			return b, iss.UpdatedAt, iss.CreatedAt
-		}
-		return n.lfs.lookupMetaFile(ctx, n, n.issue.ID, render, out), 0
-
-	case "history.md":
-		// Fetch history content during Lookup so we can set the actual size
-		// (kernel won't issue READ if size is 0)
-		entries, err := n.lfs.GetIssueHistory(ctx, n.issue.ID)
-		if err != nil {
-			log.Printf("Failed to fetch history for %s: %v", n.issue.Identifier, err)
-			return nil, syscall.EIO
-		}
-		content := marshal.HistoryToMarkdown(n.issue.Identifier, entries)
-
-		node := &HistoryFileNode{
-			BaseNode:     BaseNode{lfs: n.lfs},
-			issueID:      n.issue.ID,
-			identifier:   n.issue.Identifier,
-			content:      content,
-			contentReady: true,
-		}
-		historyAttr := nodeAttr{mode: 0444 | syscall.S_IFREG, size: uint64(len(content)), created: n.issue.CreatedAt, updated: n.issue.UpdatedAt}
-		return n.newFileInode(ctx, out, node, historyAttr, historyIno(n.issue.ID), 30*time.Second), 0
-
-	case ".error":
-		return n.lfs.lookupErrorFile(ctx, n, n.issue.ID, out), 0
-
-	case ".last":
-		// Successes of sub-issues created under this issue (via children/).
-		return n.lfs.lookupSuccessFile(ctx, n, n.issue.ID, out), 0
-
-	case "comments":
-		teamID := ""
-		if n.issue.Team != nil {
-			teamID = n.issue.Team.ID
-		}
-		node := &CommentsNode{
-			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
-			issueID:  n.issue.ID,
-			teamID:   teamID,
-		}
-		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), commentsDirIno(n.issue.ID), 30*time.Second), 0
-
-	case "docs":
-		node := &DocsNode{
-			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
-			issueID:  n.issue.ID,
-		}
-		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), docsDirIno(n.issue.ID), 30*time.Second), 0
-
-	case "children":
-		node := &ChildrenNode{
-			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
-			issue:    n.issue,
-		}
-		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), childrenDirIno(n.issue.ID), 30*time.Second), 0
-
-	case "attachments":
-		node := &AttachmentsNode{
-			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
-			issueID:  n.issue.ID,
-		}
-		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), attachmentsDirIno(n.issue.ID), 30*time.Second), 0
-
-	case "relations":
-		teamID := ""
-		if n.issue.Team != nil {
-			teamID = n.issue.Team.ID
-		}
-		node := &RelationsNode{
-			attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}},
-			issueID:  n.issue.ID,
-			teamID:   teamID,
-		}
-		return n.newDirInode(ctx, out, node, dirAttr(n.issue.CreatedAt, n.issue.UpdatedAt), relationsDirIno(n.issue.ID), 30*time.Second), 0
+	if child, ok := n.manifest().find(name); ok {
+		return child.build(ctx, out)
 	}
-
 	return nil, syscall.ENOENT
+}
+
+// manifest declares an issue directory's static children: the editable issue.md,
+// the read-through issue.meta, the generated history.md, the .error/.last
+// sidecars, and the comments/docs/children/attachments/relations subdirs. Issue
+// children have no dynamic tail and a uniform 30s timeout.
+func (n *IssueDirectoryNode) manifest() *dirManifest {
+	issue := n.issue // snapshot captured by the build closures
+	teamID := ""
+	if issue.Team != nil {
+		teamID = issue.Team.ID
+	}
+	m := newDirManifest(&n.BaseNode, issue.ID, issue.CreatedAt, issue.UpdatedAt, 30*time.Second)
+
+	// issue.md is editable-only; identity/links/relations live in issue.meta.
+	m.file("issue.md", issueIno(issue.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
+		content, err := marshal.IssueToMarkdown(&issue)
+		if err != nil {
+			return nil, nil, syscall.EIO
+		}
+		return &IssueFileNode{
+			BaseNode:   BaseNode{lfs: n.lfs},
+			issue:      issue,
+			editBuffer: editBuffer{content: content},
+		}, content, 0
+	})
+
+	// issue.meta: read-only server-managed fields, rendered read-through from the
+	// freshest issue so an edit to issue.md is reflected here.
+	lfs := n.lfs
+	ident := issue.Identifier
+	m.metaFile("issue.meta", func() ([]byte, time.Time, time.Time) {
+		iss := &issue
+		if fresh, err := lfs.FetchIssueByIdentifier(context.Background(), ident); err == nil && fresh != nil {
+			iss = fresh
+		}
+		att, _ := lfs.GetIssueAttachments(context.Background(), iss.ID)
+		b, err := marshal.IssueMetaToMarkdown(iss, att...)
+		if err != nil {
+			return nil, iss.UpdatedAt, iss.CreatedAt
+		}
+		return b, iss.UpdatedAt, iss.CreatedAt
+	})
+
+	// history.md: a read-only generated file, rendered fresh from the issue's
+	// activity history on each read. It reports the issue's own times; a transient
+	// fetch failure renders an empty file rather than making the entry vanish.
+	m.renderFile("history.md", historyIno(issue.ID), func() ([]byte, time.Time, time.Time) {
+		entries, err := lfs.GetIssueHistory(context.Background(), issue.ID)
+		if err != nil {
+			log.Printf("Failed to fetch history for %s: %v", issue.Identifier, err)
+			return nil, issue.UpdatedAt, issue.CreatedAt
+		}
+		return marshal.HistoryToMarkdown(issue.Identifier, entries), issue.UpdatedAt, issue.CreatedAt
+	})
+
+	m.errorFile(".error")
+	m.lastFile(".last") // successes of sub-issues created under this issue (via children/)
+
+	m.subdir("comments", commentsDirIno(issue.ID), func() dirChild {
+		return &CommentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issueID: issue.ID, teamID: teamID}
+	})
+	m.subdir("docs", docsDirIno(issue.ID), func() dirChild {
+		return &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issueID: issue.ID}
+	})
+	m.subdir("children", childrenDirIno(issue.ID), func() dirChild {
+		return &ChildrenNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: issue}
+	})
+	m.subdir("attachments", attachmentsDirIno(issue.ID), func() dirChild {
+		return &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issueID: issue.ID}
+	})
+	m.subdir("relations", relationsDirIno(issue.ID), func() dirChild {
+		return &RelationsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issueID: issue.ID, teamID: teamID}
+	})
+
+	return m
 }
 
 // Create accepts an editor's atomic-save temp file (e.g. issue.md.tmp.<pid>.<rand>)
@@ -709,100 +635,6 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	}
 
 	// Return the new issue as a directory node (Mkdir must return a directory)
-	node := &IssueDirectoryNode{
-		BaseNode: BaseNode{lfs: n.lfs},
-		issue:    *issue,
-	}
-
-	out.Attr.Mode = 0755 | syscall.S_IFDIR
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&issue.UpdatedAt, &issue.UpdatedAt, &issue.CreatedAt)
-
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-		Ino:  issueDirIno(issue.ID),
-	}), 0
-}
-
-// HistoryFileNode represents a history.md file inside /teams/{KEY}/issues/{ID}/
-// It lazily fetches history from the Linear API on first read.
-type HistoryFileNode struct {
-	BaseNode
-	issueID    string
-	identifier string
-
-	// Lazy-loaded content
-	mu           sync.Mutex
-	content      []byte
-	contentReady bool
-}
-
-var _ fs.NodeGetattrer = (*HistoryFileNode)(nil)
-var _ fs.NodeOpener = (*HistoryFileNode)(nil)
-var _ fs.NodeReader = (*HistoryFileNode)(nil)
-
-// ensureContent fetches and renders history content if not already cached
-func (h *HistoryFileNode) ensureContent(ctx context.Context) error {
-	if h.contentReady {
-		return nil
-	}
-
-	if h.lfs.debug {
-		log.Printf("HistoryFileNode: fetching history for %s (issueID=%s)", h.identifier, h.issueID)
-	}
-
-	// Fetch history via repo (cached in SQLite)
-	entries, err := h.lfs.GetIssueHistory(ctx, h.issueID)
-	if err != nil {
-		log.Printf("Failed to fetch history for %s: %v", h.identifier, err)
-		return err
-	}
-
-	if h.lfs.debug {
-		log.Printf("HistoryFileNode: got %d history entries for %s", len(entries), h.identifier)
-	}
-
-	h.content = marshal.HistoryToMarkdown(h.identifier, entries)
-	h.contentReady = true
-	return nil
-}
-
-func (h *HistoryFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if err := h.ensureContent(ctx); err != nil {
-		return syscall.EIO
-	}
-
-	out.Mode = 0444 // Read-only
-	h.SetOwner(out)
-	out.Size = uint64(len(h.content))
-
-	return 0
-}
-
-func (h *HistoryFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (h *HistoryFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if err := h.ensureContent(ctx); err != nil {
-		return nil, syscall.EIO
-	}
-
-	if off >= int64(len(h.content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-
-	end := off + int64(len(dest))
-	if end > int64(len(h.content)) {
-		end = int64(len(h.content))
-	}
-
-	return fuse.ReadResultData(h.content[off:end]), 0
+	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
+	return n.newDirInode(ctx, out, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }

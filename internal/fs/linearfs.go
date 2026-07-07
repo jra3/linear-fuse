@@ -3,9 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +31,6 @@ type LinearFS struct {
 	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl (handlers read while tests swap)
 
 	repo       *repo.SQLiteRepository // For all read operations
-	server     *fuse.Server           // FUSE server for kernel cache invalidation
 	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
 	syncWorker *sync.Worker           // Background sync worker
 	debug      bool
@@ -41,16 +38,18 @@ type LinearFS struct {
 	gid        uint32 // Owner GID for files/dirs
 	mountPoint string // Filesystem mount path (for README generation)
 
-	// File cache for embedded files
-	fileCacheDir string
-	fileCacheMu  gosync.RWMutex
-	fileCache    map[string][]byte // in-memory cache (file ID -> content)
-	// Per-entity write errors (surfaced via .error virtual files)
-	writeErrors   map[string]*WriteError
-	writeErrorsMu gosync.RWMutex
-	// Per-collection create successes (surfaced via .last virtual files)
-	writeSuccesses   map[string][]*WriteResult
-	writeSuccessesMu gosync.RWMutex
+	// The one coupling to the FUSE server: kernel-cache invalidation (see
+	// invalidate.go). Embedded, so lfs.SetServer / lfs.InvalidateCreated / … promote.
+	kernelNotify
+
+	// Embedded-file bytes (memory→disk→CDN); see embeddedfilecache.go.
+	// Embedded, so lfs.FetchEmbeddedFile promotes — consistent with the two
+	// sibling sub-modules above.
+	*embeddedFileCache
+
+	// .error / .last state for every writable surface (see writefeedback.go).
+	// Embedded, so lfs.SetWriteError / lfs.AppendWriteSuccess / … promote.
+	writeFeedback
 }
 
 // BaseNode provides common functionality for all LinearFS nodes.
@@ -99,18 +98,30 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		log.Printf("[linearfs] Warning: failed to create cache dir: %v", err)
 	}
 
-	return &LinearFS{
-		uid:            uid,
-		gid:            gid,
-		client:         client,
-		mutatorImpl:    client,
-		verifierImpl:   client,
-		debug:          debug,
-		fileCacheDir:   cacheDir,
-		fileCache:      make(map[string][]byte),
-		writeErrors:    make(map[string]*WriteError),
-		writeSuccesses: make(map[string][]*WriteResult),
-	}, nil
+	lfs := &LinearFS{
+		uid:          uid,
+		gid:          gid,
+		client:       client,
+		mutatorImpl:  client,
+		verifierImpl: client,
+		debug:        debug,
+	}
+	// Wire the feedback store's kernel-cache seam to this instance. The method
+	// value binds the pointer, so it is safe to set after lfs exists.
+	lfs.writeFeedback = newWriteFeedback(lfs.InvalidateUpdated)
+	// The embedded-file cache's seams are late-bound: repo is wired later (in
+	// EnableSQLiteCache), so persist reads lfs.repo at call time — and no-ops
+	// while it is still nil (a fetch before the cache is enabled).
+	lfs.embeddedFileCache = newEmbeddedFileCache(cacheDir,
+		func() string { return lfs.client.AuthHeader() },
+		func(ctx context.Context, fileID, path string, size int64) error {
+			if lfs.repo == nil {
+				return nil
+			}
+			return lfs.repo.UpdateEmbeddedFileCache(ctx, fileID, path, size)
+		},
+	)
+	return lfs, nil
 }
 
 // Close stops all background operations and releases resources
@@ -234,54 +245,12 @@ func (lfs *LinearFS) GetIssueHistory(ctx context.Context, issueID string) ([]api
 	return lfs.repo.GetIssueHistory(ctx, issueID)
 }
 
-// SetServer sets the FUSE server reference for kernel cache invalidation
-func (lfs *LinearFS) SetServer(server *fuse.Server) {
-	lfs.server = server
-}
-
 // MountPoint returns the filesystem mount path
 func (lfs *LinearFS) MountPoint() string {
 	if lfs.mountPoint == "" {
 		return os.Getenv("HOME") + "/linear" // fallback for tests
 	}
 	return lfs.mountPoint
-}
-
-// InvalidateKernelInode tells the kernel to drop cached data for an inode
-func (lfs *LinearFS) InvalidateKernelInode(ino uint64) {
-	if lfs.server != nil {
-		lfs.server.InodeNotify(ino, 0, -1) // -1 = entire file
-	}
-}
-
-// InvalidateKernelEntry tells the kernel to drop a cached directory entry
-func (lfs *LinearFS) InvalidateKernelEntry(parent uint64, name string) {
-	if lfs.server != nil {
-		lfs.server.EntryNotify(parent, name)
-	}
-}
-
-// InvalidateCreated keeps the kernel coherent after a child is created in a
-// directory. See invalidateCreated for the policy. name may be "".
-func (lfs *LinearFS) InvalidateCreated(dirIno uint64, name string) {
-	invalidateCreated(lfs, dirIno, name)
-}
-
-// InvalidateDeleted keeps the kernel coherent after a child is removed from a
-// directory. See invalidateDeleted for the policy.
-func (lfs *LinearFS) InvalidateDeleted(dirIno uint64, name string) {
-	invalidateDeleted(lfs, dirIno, name)
-}
-
-// InvalidateUpdated keeps the kernel coherent after a file's content changes.
-func (lfs *LinearFS) InvalidateUpdated(fileIno uint64) {
-	invalidateUpdated(lfs, fileIno)
-}
-
-// InvalidateRenamed keeps the kernel coherent after a file is renamed within a
-// directory. See invalidateRenamed for the policy. fileIno may be 0.
-func (lfs *LinearFS) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
-	invalidateRenamed(lfs, dirIno, oldName, newName, fileIno)
 }
 
 // UpsertIssue inserts or updates an issue in SQLite.
@@ -660,23 +629,8 @@ func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateNam
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, state := range states {
-		if state.Name == stateName {
-			return state.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(stateName)
-	for _, state := range states {
-		if strings.ToLower(state.Name) == lowerName {
-			return state.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown state: %s", stateName)
+	return resolveByName(states, stateName, "state",
+		func(s api.State) string { return s.Name }, func(s api.State) string { return s.ID })
 }
 
 // ResolveLabelIDs converts label names to their IDs for a given team
@@ -713,23 +667,8 @@ func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projec
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, project := range projects {
-		if project.Name == projectName {
-			return project.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(projectName)
-	for _, project := range projects {
-		if strings.ToLower(project.Name) == lowerName {
-			return project.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown project: %s", projectName)
+	return resolveByName(projects, projectName, "project",
+		func(p api.Project) string { return p.Name }, func(p api.Project) string { return p.ID })
 }
 
 // ResolveProjectSlugToID converts a project slug to its ID by searching all teams.
@@ -767,23 +706,8 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, milestone := range milestones {
-		if milestone.Name == milestoneName {
-			return milestone.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(milestoneName)
-	for _, milestone := range milestones {
-		if strings.ToLower(milestone.Name) == lowerName {
-			return milestone.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown milestone: %s", milestoneName)
+	return resolveByName(milestones, milestoneName, "milestone",
+		func(m api.ProjectMilestone) string { return m.Name }, func(m api.ProjectMilestone) string { return m.ID })
 }
 
 // UpdateProjectMilestone updates an existing milestone via the mutation seam,
@@ -812,23 +736,8 @@ func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleNam
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, cycle := range cycles {
-		if cycle.Name == cycleName {
-			return cycle.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(cycleName)
-	for _, cycle := range cycles {
-		if strings.ToLower(cycle.Name) == lowerName {
-			return cycle.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown cycle: %s", cycleName)
+	return resolveByName(cycles, cycleName, "cycle",
+		func(c api.Cycle) string { return c.Name }, func(c api.Cycle) string { return c.ID })
 }
 
 // GetProjectUpdates fetches status updates for a project
@@ -847,23 +756,8 @@ func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName str
 	if err != nil {
 		return "", err
 	}
-
-	// Try exact match first
-	for _, initiative := range initiatives {
-		if initiative.Name == initiativeName {
-			return initiative.ID, nil
-		}
-	}
-
-	// Try case-insensitive match
-	lowerName := strings.ToLower(initiativeName)
-	for _, initiative := range initiatives {
-		if strings.ToLower(initiative.Name) == lowerName {
-			return initiative.ID, nil
-		}
-	}
-
-	return "", fmt.Errorf("unknown initiative: %s", initiativeName)
+	return resolveByName(initiatives, initiativeName, "initiative",
+		func(i api.Initiative) string { return i.Name }, func(i api.Initiative) string { return i.ID })
 }
 
 // UpdateLabel updates a label
@@ -969,80 +863,4 @@ func (lfs *LinearFS) verify() verifyReader {
 	lfs.mutatorMu.RLock()
 	defer lfs.mutatorMu.RUnlock()
 	return lfs.verifierImpl
-}
-
-// =============================================================================
-// File Cache for Embedded Files
-// =============================================================================
-
-// FetchEmbeddedFile downloads an embedded file from Linear's CDN, caching it locally.
-// Returns the file content. Files are cached both in memory and on disk.
-func (lfs *LinearFS) FetchEmbeddedFile(ctx context.Context, file api.EmbeddedFile) ([]byte, error) {
-	// Check in-memory cache first
-	lfs.fileCacheMu.RLock()
-	if content, ok := lfs.fileCache[file.ID]; ok {
-		lfs.fileCacheMu.RUnlock()
-		return content, nil
-	}
-	lfs.fileCacheMu.RUnlock()
-
-	// Check disk cache
-	diskPath := filepath.Join(lfs.fileCacheDir, file.ID)
-	if file.CachePath != "" {
-		diskPath = file.CachePath
-	}
-
-	if content, err := os.ReadFile(diskPath); err == nil {
-		// Found on disk, add to in-memory cache
-		lfs.fileCacheMu.Lock()
-		lfs.fileCache[file.ID] = content
-		lfs.fileCacheMu.Unlock()
-		return content, nil
-	}
-
-	// Download from Linear CDN
-	content, err := lfs.downloadFile(ctx, file.URL)
-	if err != nil {
-		return nil, fmt.Errorf("download file: %w", err)
-	}
-
-	// Cache to disk
-	if err := os.WriteFile(diskPath, content, 0644); err != nil {
-		log.Printf("[cache] Warning: failed to cache file %s: %v", file.Filename, err)
-	} else {
-		// Update database with cache path
-		if err := lfs.repo.UpdateEmbeddedFileCache(ctx, file.ID, diskPath, int64(len(content))); err != nil {
-			log.Printf("[cache] Warning: failed to update cache path: %v", err)
-		}
-	}
-
-	// Cache in memory
-	lfs.fileCacheMu.Lock()
-	lfs.fileCache[file.ID] = content
-	lfs.fileCacheMu.Unlock()
-
-	return content, nil
-}
-
-// downloadFile fetches a file from Linear's CDN
-func (lfs *LinearFS) downloadFile(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Linear CDN requires authentication for private files
-	req.Header.Set("Authorization", lfs.client.AuthHeader())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
-	}
-
-	return io.ReadAll(resp.Body)
 }

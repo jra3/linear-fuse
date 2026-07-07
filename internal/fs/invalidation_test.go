@@ -13,14 +13,14 @@ import (
 
 func TestInvalidateKernelInode_NilServer(t *testing.T) {
 	t.Parallel()
-	lfs := &LinearFS{server: nil}
+	lfs := &LinearFS{}
 	// Should be a no-op with nil server (not panic)
 	lfs.InvalidateKernelInode(12345)
 }
 
 func TestInvalidateKernelEntry_NilServer(t *testing.T) {
 	t.Parallel()
-	lfs := &LinearFS{server: nil}
+	lfs := &LinearFS{}
 	// Should be a no-op with nil server (not panic)
 	lfs.InvalidateKernelEntry(12345, "test-entry")
 }
@@ -50,7 +50,7 @@ func TestSetServer(t *testing.T) {
 
 func TestInvalidateKernelInode_CalledMultipleTimes(t *testing.T) {
 	t.Parallel()
-	lfs := &LinearFS{server: nil}
+	lfs := &LinearFS{}
 
 	// Should handle multiple calls without issue
 	for i := 0; i < 100; i++ {
@@ -60,7 +60,7 @@ func TestInvalidateKernelInode_CalledMultipleTimes(t *testing.T) {
 
 func TestInvalidateKernelEntry_CalledMultipleTimes(t *testing.T) {
 	t.Parallel()
-	lfs := &LinearFS{server: nil}
+	lfs := &LinearFS{}
 
 	// Should handle multiple calls without issue
 	for i := 0; i < 100; i++ {
@@ -70,14 +70,14 @@ func TestInvalidateKernelEntry_CalledMultipleTimes(t *testing.T) {
 
 func TestInvalidateKernelEntry_EmptyName(t *testing.T) {
 	t.Parallel()
-	lfs := &LinearFS{server: nil}
+	lfs := &LinearFS{}
 	// Should handle empty name without panic
 	lfs.InvalidateKernelEntry(12345, "")
 }
 
 func TestInvalidateKernelInode_ZeroInode(t *testing.T) {
 	t.Parallel()
-	lfs := &LinearFS{server: nil}
+	lfs := &LinearFS{}
 	// Should handle zero inode without panic
 	lfs.InvalidateKernelInode(0)
 }

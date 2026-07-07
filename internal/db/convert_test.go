@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -778,6 +779,56 @@ func TestDBMilestonesToAPIProjectMilestones(t *testing.T) {
 
 	if len(apiMilestones) != 2 {
 		t.Fatalf("Expected 2 milestones, got %d", len(apiMilestones))
+	}
+}
+
+// TestMilestoneRoundTrip is the symmetry guard: forward then reverse must return
+// the milestone unchanged. It also proves the reverse now hydrates from the
+// `data` blob (not columns only) — the fix for the latent read-time loss — while
+// staying safe for a legacy row whose data is "{}".
+func TestMilestoneRoundTrip(t *testing.T) {
+	t.Parallel()
+	orig := api.ProjectMilestone{
+		ID:          "ms-rt",
+		Name:        "Release",
+		Description: "The big one",
+		TargetDate:  strPtr("2025-01-15"),
+		SortOrder:   3.5,
+	}
+
+	params, err := APIProjectMilestoneToDBMilestone(orig, "project-1")
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+
+	// Reconstruct the stored row (the columns + data the upsert writes).
+	row := ProjectMilestone{
+		ID:          params.ID,
+		Name:        params.Name,
+		Description: params.Description,
+		TargetDate:  params.TargetDate,
+		SortOrder:   params.SortOrder,
+		Data:        params.Data,
+	}
+	got := DBMilestoneToAPIProjectMilestone(row)
+	if !reflect.DeepEqual(got, orig) {
+		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, orig)
+	}
+
+	// A legacy "{}" data blob must not blank the milestone — the columns still
+	// carry it (the pre-fix behavior stays intact for such rows).
+	legacy := row
+	legacy.Data = []byte("{}")
+	if gotLegacy := DBMilestoneToAPIProjectMilestone(legacy); gotLegacy.ID != orig.ID || gotLegacy.Name != orig.Name || gotLegacy.SortOrder != orig.SortOrder {
+		t.Errorf("legacy {} row lost column data: %+v", gotLegacy)
+	}
+
+	// A *corrupt* data blob must not fail — best-effort falls back to the
+	// authoritative columns, so one bad row can't poison a whole listing.
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if gotCorrupt := DBMilestoneToAPIProjectMilestone(corrupt); gotCorrupt.ID != orig.ID || gotCorrupt.Name != orig.Name {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", gotCorrupt)
 	}
 }
 

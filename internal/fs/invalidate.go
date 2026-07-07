@@ -1,5 +1,49 @@
 package fs
 
+import "github.com/hanwen/go-fuse/v2/fuse"
+
+// kernelNotify owns the filesystem's one coupling to the FUSE server: the two
+// raw kernel-cache primitives (InodeNotify / EntryNotify) and the intent
+// wrappers built on the coherence policy below. It was a loose *fuse.Server
+// field plus seven methods on the LinearFS god-object; gathering them localizes
+// the server dependency. LinearFS embeds one, so lfs.InvalidateCreated /
+// lfs.InvalidateUpdated / … keep working by promotion, and it satisfies
+// kernelNotifier itself.
+type kernelNotify struct {
+	server *fuse.Server
+}
+
+// SetServer wires the FUSE server (known only after mount).
+func (k *kernelNotify) SetServer(server *fuse.Server) { k.server = server }
+
+// InvalidateKernelInode tells the kernel to drop cached data for an inode.
+func (k *kernelNotify) InvalidateKernelInode(ino uint64) {
+	if k.server != nil {
+		k.server.InodeNotify(ino, 0, -1) // -1 = entire file
+	}
+}
+
+// InvalidateKernelEntry tells the kernel to drop a cached directory entry.
+func (k *kernelNotify) InvalidateKernelEntry(parent uint64, name string) {
+	if k.server != nil {
+		k.server.EntryNotify(parent, name)
+	}
+}
+
+// InvalidateCreated / Deleted / Updated / Renamed name what happened; the
+// coherence policy (below) picks the correct notifies. fileIno/name may be zero
+// where the policy allows.
+func (k *kernelNotify) InvalidateCreated(dirIno uint64, name string) {
+	invalidateCreated(k, dirIno, name)
+}
+func (k *kernelNotify) InvalidateDeleted(dirIno uint64, name string) {
+	invalidateDeleted(k, dirIno, name)
+}
+func (k *kernelNotify) InvalidateUpdated(fileIno uint64) { invalidateUpdated(k, fileIno) }
+func (k *kernelNotify) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
+	invalidateRenamed(k, dirIno, oldName, newName, fileIno)
+}
+
 // Kernel-cache coherence policy.
 //
 // After a mutation the kernel still holds the old directory listing and cached

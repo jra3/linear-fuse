@@ -190,3 +190,69 @@ func TestResolveIssueUpdate_MilestoneUsesNewProject(t *testing.T) {
 		t.Errorf("got projectId=%v milestone=%v, want proj-1 / ms-1", updates["projectId"], updates["projectMilestoneId"])
 	}
 }
+
+// TestResolveByName covers the shared fetch-then-match tail: exact match wins,
+// case-insensitive is the fallback (and exact is preferred over a differing-case
+// entry), and an unknown name errors with the label.
+func TestResolveByName(t *testing.T) {
+	t.Parallel()
+	type ent struct{ name, id string }
+	nameOf := func(e ent) string { return e.name }
+	idOf := func(e ent) string { return e.id }
+	items := []ent{{"Backlog", "s1"}, {"In Progress", "s2"}, {"done", "s3"}}
+
+	cases := []struct {
+		name, query, wantID string
+		wantErr             bool
+	}{
+		{"exact", "In Progress", "s2", false},
+		{"case-insensitive", "in progress", "s2", false},
+		{"exact-preferred-over-ci", "done", "s3", false}, // exact "done" over any CI collision
+		{"unknown", "Nope", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveByName(items, tc.query, "state", nameOf, idOf)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want error for %q, got id %q", tc.query, got)
+				}
+				if got := err.Error(); got != "unknown state: "+tc.query {
+					t.Errorf("error = %q, want unknown state: %s", got, tc.query)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveByName(%q): %v", tc.query, err)
+			}
+			if got != tc.wantID {
+				t.Errorf("id = %q, want %q", got, tc.wantID)
+			}
+		})
+	}
+
+	// Exact match must win even when an earlier entry differs only by case.
+	shadow := []ent{{"Bug", "L1"}, {"bug", "L2"}}
+	if got, _ := resolveByName(shadow, "bug", "label", nameOf, idOf); got != "L2" {
+		t.Errorf("exact %q resolved to %q, want L2 (exact beats the earlier case-variant)", "bug", got)
+	}
+}
+
+// TestFreshestByID: returns the matching item, else the fallback.
+func TestFreshestByID(t *testing.T) {
+	t.Parallel()
+	type ent struct{ id, v string }
+	idOf := func(e ent) string { return e.id }
+	items := []ent{{"a", "A"}, {"b", "B"}}
+	fallback := ent{"b", "stale"}
+
+	if got := freshestByID(items, "b", idOf, fallback); got.v != "B" {
+		t.Errorf("match returned %+v, want the fresh {b,B}", got)
+	}
+	if got := freshestByID(items, "z", idOf, fallback); got != fallback {
+		t.Errorf("miss returned %+v, want fallback %+v", got, fallback)
+	}
+	if got := freshestByID(nil, "b", idOf, fallback); got != fallback {
+		t.Errorf("empty returned %+v, want fallback", got)
+	}
+}

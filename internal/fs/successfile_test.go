@@ -8,7 +8,9 @@ import (
 )
 
 func newSuccessTestFS() *LinearFS {
-	return &LinearFS{writeSuccesses: make(map[string][]*WriteResult)}
+	lfs := &LinearFS{}
+	lfs.writeFeedback = newWriteFeedback(lfs.InvalidateUpdated)
+	return lfs
 }
 
 // TestAppendWriteSuccessCapAndOrder guards the .last append log: entries append

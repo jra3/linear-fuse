@@ -243,7 +243,7 @@ func TestUpdateToMarkdown(t *testing.T) {
 		},
 	}
 
-	content := updateToMarkdown(update)
+	content := updateMarkdown(update.ID, update.Health, update.CreatedAt, update.UpdatedAt, update.User, update.Body)
 	contentStr := string(content)
 
 	checks := []string{
@@ -257,7 +257,7 @@ func TestUpdateToMarkdown(t *testing.T) {
 
 	for _, check := range checks {
 		if !strings.Contains(contentStr, check) {
-			t.Errorf("updateToMarkdown() missing %q in:\n%s", check, contentStr)
+			t.Errorf("updateMarkdown() missing %q in:\n%s", check, contentStr)
 		}
 	}
 }
@@ -274,14 +274,14 @@ func TestUpdateToMarkdown_NoUser(t *testing.T) {
 		User:      nil,
 	}
 
-	content := updateToMarkdown(update)
+	content := updateMarkdown(update.ID, update.Health, update.CreatedAt, update.UpdatedAt, update.User, update.Body)
 	contentStr := string(content)
 
 	// Should not have author fields when user is nil
 	if strings.Contains(contentStr, "author:") {
-		t.Error("updateToMarkdown() should not include author when user is nil")
+		t.Error("updateMarkdown() should not include author when user is nil")
 	}
 	if strings.Contains(contentStr, "authorName:") {
-		t.Error("updateToMarkdown() should not include authorName when user is nil")
+		t.Error("updateMarkdown() should not include authorName when user is nil")
 	}
 }
