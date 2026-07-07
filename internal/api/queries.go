@@ -761,22 +761,32 @@ mutation ArchiveIssue($id: String!) {
 // real rows.
 const IssueDetailsPageSize = 100
 
-// queryIssueDetails fetches comments, documents, and attachments for an issue in one query
+// IssueRelationsPageSize caps the relations/inverseRelations connections in
+// the details queries. Linear caps a connection without `first:` at 50
+// anyway; a short page (len < IssueRelationsPageSize) is provably complete,
+// which is what licenses the relations prune.
+const IssueRelationsPageSize = 50
+
+// IssueDetailsSelection is the per-issue selection body shared by the
+// single-issue details query and every alias of the batch query, so the two
+// can never drift. The relation selections mirror the IssueFields fragment's
+// (the row needs only the ids; identifier/title ride along for parity).
+var IssueDetailsSelection = fmt.Sprintf(`comments(first: %d) { nodes { ...CommentFields } }
+    documents(first: %d) { nodes { ...DocumentFields } }
+    attachments(first: %d) { nodes { ...AttachmentFields } }
+    relations(first: %d) { nodes { id type relatedIssue { id identifier title } createdAt updatedAt } }
+    inverseRelations(first: %d) { nodes { id type issue { id identifier title } createdAt updatedAt } }`,
+	IssueDetailsPageSize, IssueDetailsPageSize, IssueDetailsPageSize, IssueRelationsPageSize, IssueRelationsPageSize)
+
+// queryIssueDetails fetches comments, documents, attachments, and relations
+// for an issue in one query
 var queryIssueDetails = fmt.Sprintf(`
 query IssueDetails($issueId: String!) {
   issue(id: $issueId) {
-    comments(first: %d) {
-      nodes { ...CommentFields }
-    }
-    documents(first: %d) {
-      nodes { ...DocumentFields }
-    }
-    attachments(first: %d) {
-      nodes { ...AttachmentFields }
-    }
+    %s
   }
 }
-`, IssueDetailsPageSize, IssueDetailsPageSize, IssueDetailsPageSize) +
+`, IssueDetailsSelection) +
 	CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment
 
 // queryIssueAttachments fetches only attachments for an issue

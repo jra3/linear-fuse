@@ -954,6 +954,42 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 				return w.store.Queries().PruneIssueAttachments(ctx, db.PruneIssueAttachmentsParams{IssueID: issueID, SyncedAt: pruneCutoff})
 			}),
 		})
+
+		// Relations: the outgoing rows this issue owns (issue_id = issueID).
+		// Before this, relations were persisted ONLY by the FUSE create
+		// handler, so a relation made in Linear's own UI never appeared as a
+		// .rel file and one deleted there lingered as a phantom.
+		syncCollection(ctx, syncCollectionSpec[api.IssueRelation]{
+			label: "relation " + issueID,
+			items: details.Relations,
+			upsert: func(ctx context.Context, rel api.IssueRelation) error {
+				if rel.RelatedIssue == nil {
+					return fmt.Errorf("relation %s has no relatedIssue", rel.ID)
+				}
+				return w.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, issueID, rel.RelatedIssue.ID))
+			},
+			prune: pruneWhenComplete(len(details.Relations) < api.IssueRelationsPageSize, func(ctx context.Context) error {
+				return w.store.Queries().PruneIssueRelations(ctx, db.PruneIssueRelationsParams{IssueID: issueID, SyncedAt: pruneCutoff})
+			}),
+		})
+
+		// Inverse relations are rows OWNED BY THE OTHER issue (issue_id =
+		// the other side). Upserting them makes a UI-created relation
+		// visible from this end before the owning issue's own detail sync
+		// runs — but they are outside this fetch's completeness set (only
+		// the owning issue's drained fetch may license their deletion), so
+		// this collection is upsert-only, like states.
+		syncCollection(ctx, syncCollectionSpec[api.IssueRelation]{
+			label: "inverse relation " + issueID,
+			items: details.InverseRelations,
+			upsert: func(ctx context.Context, rel api.IssueRelation) error {
+				if rel.Issue == nil {
+					return fmt.Errorf("inverse relation %s has no issue", rel.ID)
+				}
+				return w.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, rel.Issue.ID, issueID))
+			},
+			prune: nil,
+		})
 	}
 
 	// Touch synced_at for all fetched issues so the FS layer doesn't immediately

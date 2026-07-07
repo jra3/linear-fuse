@@ -761,7 +761,9 @@ SELECT MAX(synced_at) FROM initiative_updates WHERE initiative_id = ?;
 SELECT * FROM attachments WHERE id = ?;
 
 -- name: ListIssueAttachments :many
-SELECT * FROM attachments WHERE issue_id = ? ORDER BY created_at;
+-- The id tiebreaker keeps the order deterministic on equal created_at, so
+-- attachmentListing dedup suffixes stay stable across calls.
+SELECT * FROM attachments WHERE issue_id = ? ORDER BY created_at, id;
 
 -- name: UpsertAttachment :exec
 INSERT INTO attachments (id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data)
@@ -804,7 +806,9 @@ SELECT * FROM embedded_files WHERE id = ?;
 SELECT * FROM embedded_files WHERE url = ?;
 
 -- name: ListIssueEmbeddedFiles :many
-SELECT * FROM embedded_files WHERE issue_id = ? ORDER BY filename;
+-- The id tiebreaker keeps the order deterministic on equal filenames (the
+-- dedup case), so which duplicate gets the (2) suffix stays stable.
+SELECT * FROM embedded_files WHERE issue_id = ? ORDER BY filename, id;
 
 -- name: UpsertEmbeddedFile :exec
 INSERT INTO embedded_files (id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at)
@@ -863,6 +867,12 @@ DELETE FROM issue_relations WHERE id = ?;
 
 -- name: DeleteIssueRelations :exec
 DELETE FROM issue_relations WHERE issue_id = ?;
+
+-- name: PruneIssueRelations :exec
+-- Scoped to the OWNING issue (issue_id): only the owning side's drained
+-- fetch is a completeness set for its rows. Inverse upserts refresh rows
+-- owned by other issues and must never license their deletion.
+DELETE FROM issue_relations WHERE issue_id = ? AND synced_at < ?;
 
 -- name: GetIssueRelationsSyncedAt :one
 SELECT MAX(synced_at) FROM issue_relations WHERE issue_id = ?;

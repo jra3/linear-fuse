@@ -25,9 +25,18 @@ const defaultStalenessThreshold = 5 * time.Minute
 // suppressed for this window to bound API cost.
 const reconcileCooldown = 6 * time.Hour
 
-// SQLiteRepository implements Repository using SQLite as the data store.
-// It reads from SQLite and optionally falls back to the API client
-// for data that hasn't been synced yet.
+// SQLiteRepository is the read path: it reads from SQLite and optionally
+// falls back to the API client for data that hasn't been synced yet.
+//
+// It is deliberately a concrete type with no interface in front of it. A
+// Repository interface (with an in-memory mock) existed for the project's
+// whole life without ever gaining a consumer — one adapter means a
+// hypothetical seam — so it was deleted (round 14). If a real second
+// adapter appears (a read-through cache, an alternate store), re-extract
+// the interface from this type mechanically. Testing strategy for fs code
+// is pure-projection extraction (dirManifest.find, the listing modules),
+// not repo mocking; fs write handlers touch *db.Store directly anyway, so
+// a mock repo could never unit-test them.
 //
 // For on-demand data (comments, documents, updates), it implements
 // stale-while-revalidate: returns cached data immediately and triggers
@@ -62,11 +71,6 @@ type SQLiteRepository struct {
 	lastReconcileAt  time.Time
 	reconcilePending atomic.Bool
 }
-
-// Compile-time interface compliance: without this, a method added to
-// Repository but forgotten here would still build (nothing else consumes
-// the interface with this implementation).
-var _ Repository = (*SQLiteRepository)(nil)
 
 // NewSQLiteRepository creates a new SQLite-backed repository.
 // If client is nil, the repository will only serve data from SQLite.
@@ -348,15 +352,9 @@ func (r *SQLiteRepository) GetTeams(ctx context.Context) ([]api.Team, error) {
 }
 
 func (r *SQLiteRepository) GetTeamByKey(ctx context.Context, key string) (*api.Team, error) {
-	team, err := r.store.Queries().GetTeamByKey(ctx, key)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get team by key: %w", err)
-	}
-	result := db.DBTeamToAPITeam(team)
-	return &result, nil
+	return queryOne("get team by key",
+		func() (db.Team, error) { return r.store.Queries().GetTeamByKey(ctx, key) },
+		pure(db.DBTeamToAPITeam))
 }
 
 // =============================================================================
@@ -372,33 +370,15 @@ func (r *SQLiteRepository) GetTeamIssues(ctx context.Context, teamID string) ([]
 }
 
 func (r *SQLiteRepository) GetIssueByIdentifier(ctx context.Context, identifier string) (*api.Issue, error) {
-	issue, err := r.store.Queries().GetIssueByIdentifier(ctx, identifier)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get issue by identifier: %w", err)
-	}
-	result, err := db.DBIssueToAPIIssue(issue)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get issue by identifier",
+		func() (db.Issue, error) { return r.store.Queries().GetIssueByIdentifier(ctx, identifier) },
+		db.DBIssueToAPIIssue)
 }
 
 func (r *SQLiteRepository) GetIssueByID(ctx context.Context, id string) (*api.Issue, error) {
-	issue, err := r.store.Queries().GetIssueByID(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get issue by id: %w", err)
-	}
-	result, err := db.DBIssueToAPIIssue(issue)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get issue by id",
+		func() (db.Issue, error) { return r.store.Queries().GetIssueByID(ctx, id) },
+		db.DBIssueToAPIIssue)
 }
 
 func (r *SQLiteRepository) GetIssueChildren(ctx context.Context, parentID string) ([]api.Issue, error) {
@@ -560,18 +540,11 @@ func (r *SQLiteRepository) GetTeamStates(ctx context.Context, teamID string) ([]
 }
 
 func (r *SQLiteRepository) GetStateByName(ctx context.Context, teamID, name string) (*api.State, error) {
-	state, err := r.store.Queries().GetStateByName(ctx, db.GetStateByNameParams{
-		TeamID: teamID,
-		Name:   name,
-	})
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get state by name: %w", err)
-	}
-	result := db.DBStateToAPIState(state)
-	return &result, nil
+	return queryOne("get state by name",
+		func() (db.State, error) {
+			return r.store.Queries().GetStateByName(ctx, db.GetStateByNameParams{TeamID: teamID, Name: name})
+		},
+		pure(db.DBStateToAPIState))
 }
 
 // =============================================================================
@@ -587,18 +560,14 @@ func (r *SQLiteRepository) GetTeamLabels(ctx context.Context, teamID string) ([]
 }
 
 func (r *SQLiteRepository) GetLabelByName(ctx context.Context, teamID, name string) (*api.Label, error) {
-	label, err := r.store.Queries().GetLabelByName(ctx, db.GetLabelByNameParams{
-		TeamID: sql.NullString{String: teamID, Valid: true},
-		Name:   name,
-	})
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get label by name: %w", err)
-	}
-	result := db.DBLabelToAPILabel(label)
-	return &result, nil
+	return queryOne("get label by name",
+		func() (db.Label, error) {
+			return r.store.Queries().GetLabelByName(ctx, db.GetLabelByNameParams{
+				TeamID: sql.NullString{String: teamID, Valid: true},
+				Name:   name,
+			})
+		},
+		pure(db.DBLabelToAPILabel))
 }
 
 // =============================================================================
@@ -614,27 +583,15 @@ func (r *SQLiteRepository) GetUsers(ctx context.Context) ([]api.User, error) {
 }
 
 func (r *SQLiteRepository) GetUserByID(ctx context.Context, id string) (*api.User, error) {
-	user, err := r.store.Queries().GetUser(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get user by id: %w", err)
-	}
-	result := db.DBUserToAPIUser(user)
-	return &result, nil
+	return queryOne("get user by id",
+		func() (db.User, error) { return r.store.Queries().GetUser(ctx, id) },
+		pure(db.DBUserToAPIUser))
 }
 
 func (r *SQLiteRepository) GetUserByEmail(ctx context.Context, email string) (*api.User, error) {
-	user, err := r.store.Queries().GetUserByEmail(ctx, email)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get user by email: %w", err)
-	}
-	result := db.DBUserToAPIUser(user)
-	return &result, nil
+	return queryOne("get user by email",
+		func() (db.User, error) { return r.store.Queries().GetUserByEmail(ctx, email) },
+		pure(db.DBUserToAPIUser))
 }
 
 func (r *SQLiteRepository) GetCurrentUser(ctx context.Context) (*api.User, error) {
@@ -669,18 +626,14 @@ func (r *SQLiteRepository) GetTeamCycles(ctx context.Context, teamID string) ([]
 }
 
 func (r *SQLiteRepository) GetCycleByName(ctx context.Context, teamID, name string) (*api.Cycle, error) {
-	cycle, err := r.store.Queries().GetCycleByName(ctx, db.GetCycleByNameParams{
-		TeamID: teamID,
-		Name:   sql.NullString{String: name, Valid: true},
-	})
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get cycle by name: %w", err)
-	}
-	result := db.DBCycleToAPICycle(cycle)
-	return &result, nil
+	return queryOne("get cycle by name",
+		func() (db.Cycle, error) {
+			return r.store.Queries().GetCycleByName(ctx, db.GetCycleByNameParams{
+				TeamID: teamID,
+				Name:   sql.NullString{String: name, Valid: true},
+			})
+		},
+		pure(db.DBCycleToAPICycle))
 }
 
 // =============================================================================
@@ -696,33 +649,15 @@ func (r *SQLiteRepository) GetTeamProjects(ctx context.Context, teamID string) (
 }
 
 func (r *SQLiteRepository) GetProjectBySlug(ctx context.Context, slug string) (*api.Project, error) {
-	project, err := r.store.Queries().GetProjectBySlug(ctx, slug)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get project by slug: %w", err)
-	}
-	result, err := db.DBProjectToAPIProject(project)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get project by slug",
+		func() (db.Project, error) { return r.store.Queries().GetProjectBySlug(ctx, slug) },
+		db.DBProjectToAPIProject)
 }
 
 func (r *SQLiteRepository) GetProjectByID(ctx context.Context, id string) (*api.Project, error) {
-	project, err := r.store.Queries().GetProject(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get project by id: %w", err)
-	}
-	result, err := db.DBProjectToAPIProject(project)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get project by id",
+		func() (db.Project, error) { return r.store.Queries().GetProject(ctx, id) },
+		db.DBProjectToAPIProject)
 }
 
 func (r *SQLiteRepository) GetProjectPrimaryTeamKey(ctx context.Context, projectID string) (string, error) {
@@ -749,30 +684,17 @@ func (r *SQLiteRepository) GetProjectMilestones(ctx context.Context, projectID s
 }
 
 func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, name string) (*api.ProjectMilestone, error) {
-	milestone, err := r.store.Queries().GetMilestoneByName(ctx, db.GetMilestoneByNameParams{
-		ProjectID: projectID,
-		Name:      name,
-	})
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get milestone by name: %w", err)
-	}
-	result := db.DBMilestoneToAPIProjectMilestone(milestone)
-	return &result, nil
+	return queryOne("get milestone by name",
+		func() (db.ProjectMilestone, error) {
+			return r.store.Queries().GetMilestoneByName(ctx, db.GetMilestoneByNameParams{ProjectID: projectID, Name: name})
+		},
+		pure(db.DBMilestoneToAPIProjectMilestone))
 }
 
 func (r *SQLiteRepository) GetMilestoneByID(ctx context.Context, id string) (*api.ProjectMilestone, error) {
-	milestone, err := r.store.Queries().GetProjectMilestone(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get milestone by id: %w", err)
-	}
-	result := db.DBMilestoneToAPIProjectMilestone(milestone)
-	return &result, nil
+	return queryOne("get milestone by id",
+		func() (db.ProjectMilestone, error) { return r.store.Queries().GetProjectMilestone(ctx, id) },
+		pure(db.DBMilestoneToAPIProjectMilestone))
 }
 
 func (r *SQLiteRepository) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
@@ -1040,6 +962,24 @@ func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID stri
 		}
 	}
 
+	for _, rel := range details.Relations {
+		if rel.RelatedIssue == nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, issueID, rel.RelatedIssue.ID)); err != nil {
+			log.Printf("[repo] upsert relation %s failed: %v", rel.ID, err)
+		}
+	}
+
+	for _, rel := range details.InverseRelations {
+		if rel.Issue == nil {
+			continue
+		}
+		if err := r.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, rel.Issue.ID, issueID)); err != nil {
+			log.Printf("[repo] upsert inverse relation %s failed: %v", rel.ID, err)
+		}
+	}
+
 	return nil
 }
 
@@ -1050,18 +990,9 @@ func parseTime(v interface{}) time.Time {
 }
 
 func (r *SQLiteRepository) GetCommentByID(ctx context.Context, id string) (*api.Comment, error) {
-	comment, err := r.store.Queries().GetComment(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get comment by id: %w", err)
-	}
-	result, err := db.DBCommentToAPIComment(comment)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get comment by id",
+		func() (db.Comment, error) { return r.store.Queries().GetComment(ctx, id) },
+		db.DBCommentToAPIComment)
 }
 
 // =============================================================================
@@ -1177,18 +1108,9 @@ func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initi
 }
 
 func (r *SQLiteRepository) GetDocumentBySlug(ctx context.Context, slug string) (*api.Document, error) {
-	doc, err := r.store.Queries().GetDocumentBySlug(ctx, slug)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get document by slug: %w", err)
-	}
-	result, err := db.DBDocumentToAPIDocument(doc)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get document by slug",
+		func() (db.Document, error) { return r.store.Queries().GetDocumentBySlug(ctx, slug) },
+		db.DBDocumentToAPIDocument)
 }
 
 // =============================================================================
@@ -1204,18 +1126,9 @@ func (r *SQLiteRepository) GetInitiatives(ctx context.Context) ([]api.Initiative
 }
 
 func (r *SQLiteRepository) GetInitiativeBySlug(ctx context.Context, slug string) (*api.Initiative, error) {
-	initiative, err := r.store.Queries().GetInitiativeBySlug(ctx, slug)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get initiative by slug: %w", err)
-	}
-	result, err := db.DBInitiativeToAPIInitiative(initiative)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return queryOne("get initiative by slug",
+		func() (db.Initiative, error) { return r.store.Queries().GetInitiativeBySlug(ctx, slug) },
+		db.DBInitiativeToAPIInitiative)
 }
 
 func (r *SQLiteRepository) GetInitiativeProjects(ctx context.Context, initiativeID string) ([]api.Project, error) {
@@ -1349,18 +1262,9 @@ func (r *SQLiteRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cach
 
 // GetAttachmentByID returns an attachment by ID
 func (r *SQLiteRepository) GetAttachmentByID(ctx context.Context, id string) (*api.Attachment, error) {
-	att, err := r.store.Queries().GetAttachment(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get attachment: %w", err)
-	}
-	result, err := db.DBAttachmentToAPIAttachment(att)
-	if err != nil {
-		return nil, fmt.Errorf("convert attachment: %w", err)
-	}
-	return &result, nil
+	return queryOne("get attachment",
+		func() (db.Attachment, error) { return r.store.Queries().GetAttachment(ctx, id) },
+		db.DBAttachmentToAPIAttachment)
 }
 
 // =============================================================================
@@ -1528,13 +1432,7 @@ func (r *SQLiteRepository) GetIssueInverseRelations(ctx context.Context, issueID
 
 // GetIssueRelationByID returns a relation by ID
 func (r *SQLiteRepository) GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error) {
-	rel, err := r.store.Queries().GetIssueRelation(ctx, id)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("get issue relation: %w", err)
-	}
-	view := r.relationView(ctx, rel, relOutgoing)
-	return &view, nil
+	return queryOne("get issue relation",
+		func() (db.IssueRelation, error) { return r.store.Queries().GetIssueRelation(ctx, id) },
+		pure(func(rel db.IssueRelation) api.IssueRelation { return r.relationView(ctx, rel, relOutgoing) }))
 }

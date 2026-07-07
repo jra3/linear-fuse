@@ -94,7 +94,7 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 	// Body is just the description
 	body := issue.Description
 	if body == "" {
-		body = fmt.Sprintf("# %s\n", issue.Title)
+		body = placeholderBody(issue.Title)
 	}
 
 	doc := &Document{
@@ -353,8 +353,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	// Description (body). IssueToMarkdown renders a `# <Title>` placeholder for an
 	// empty description; a no-op rewrite of such an issue must not push that
 	// placeholder back as a real description (the byte-stable-write contract).
-	if doc.Body != original.Description &&
-		!(original.Description == "" && doc.Body == fmt.Sprintf("# %s\n", original.Title)) {
+	if doc.Body != original.Description && !isPlaceholderNoop(doc.Body, original.Description, original.Title) {
 		update["description"] = doc.Body
 	}
 

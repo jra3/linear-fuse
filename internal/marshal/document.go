@@ -37,7 +37,7 @@ func DocumentToMarkdown(doc *api.Document) ([]byte, error) {
 	// Body is the document content
 	body := doc.Content
 	if body == "" {
-		body = "# " + doc.Title + "\n"
+		body = placeholderBody(doc.Title)
 	}
 
 	mdDoc := &Document{
@@ -62,8 +62,10 @@ func MarkdownToDocumentUpdate(content []byte, original *api.Document) (map[strin
 		update["title"] = title
 	}
 
-	// Check content (body)
-	if doc.Body != original.Content {
+	// Check content (body). DocumentToMarkdown renders a `# <Title>` placeholder
+	// for empty content; a no-op rewrite of such a document must not push that
+	// placeholder back as real content (the byte-stable-write contract).
+	if doc.Body != original.Content && !isPlaceholderNoop(doc.Body, original.Content, original.Title) {
 		update["content"] = doc.Body
 	}
 

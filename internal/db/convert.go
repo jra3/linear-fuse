@@ -188,13 +188,19 @@ func APIStateToDBState(state api.State, teamID string) (UpsertStateParams, error
 	}, nil
 }
 
-// DBStateToAPIState converts a db.State to api.State
+// DBStateToAPIState converts a db.State to api.State.
+// Hydrate-then-overlay: see the reverse-conversion contract at
+// DBMilestoneToAPIProjectMilestone.
 func DBStateToAPIState(state State) api.State {
-	return api.State{
-		ID:   state.ID,
-		Name: state.Name,
-		Type: state.Type,
+	var s api.State
+	if len(state.Data) > 0 {
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(state.Data, &s)
 	}
+	s.ID = state.ID
+	s.Name = state.Name
+	s.Type = state.Type
+	return s
 }
 
 // DBStatesToAPIStates converts a slice of db.State to api.State
@@ -236,14 +242,27 @@ func APILabelToDBLabel(label api.Label) (UpsertLabelParams, error) {
 	}, nil
 }
 
-// DBLabelToAPILabel converts a db.Label to api.Label
+// DBLabelToAPILabel converts a db.Label to api.Label.
+// Hydrate-then-overlay: see the reverse-conversion contract at
+// DBMilestoneToAPIProjectMilestone. Team comes from the team_id column — the
+// authoritative source (see APILabelToDBLabel) — never from the blob's copy,
+// so a NULL column reads as a workspace label even if the blob disagrees.
 func DBLabelToAPILabel(label Label) api.Label {
-	return api.Label{
-		ID:          label.ID,
-		Name:        label.Name,
-		Color:       NullStringValue(label.Color),
-		Description: NullStringValue(label.Description),
+	var l api.Label
+	if len(label.Data) > 0 {
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(label.Data, &l)
 	}
+	l.ID = label.ID
+	l.Name = label.Name
+	l.Color = NullStringValue(label.Color)
+	l.Description = NullStringValue(label.Description)
+	if label.TeamID.Valid {
+		l.Team = &api.Team{ID: label.TeamID.String}
+	} else {
+		l.Team = nil
+	}
+	return l
 }
 
 // DBLabelsToAPILabels converts a slice of db.Label to api.Label
@@ -280,15 +299,21 @@ func APIUserToDBUser(user api.User) (UpsertUserParams, error) {
 	}, nil
 }
 
-// DBUserToAPIUser converts a db.User to api.User
+// DBUserToAPIUser converts a db.User to api.User.
+// Hydrate-then-overlay: see the reverse-conversion contract at
+// DBMilestoneToAPIProjectMilestone.
 func DBUserToAPIUser(user User) api.User {
-	return api.User{
-		ID:          user.ID,
-		Name:        user.Name,
-		Email:       user.Email,
-		DisplayName: NullStringValue(user.DisplayName),
-		Active:      user.Active == 1,
+	var u api.User
+	if len(user.Data) > 0 {
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(user.Data, &u)
 	}
+	u.ID = user.ID
+	u.Name = user.Name
+	u.Email = user.Email
+	u.DisplayName = NullStringValue(user.DisplayName)
+	u.Active = user.Active == 1
+	return u
 }
 
 // DBUsersToAPIUsers converts a slice of db.User to api.User
@@ -322,15 +347,23 @@ func APICycleToDBCycle(cycle api.Cycle, teamID string) (UpsertCycleParams, error
 	}, nil
 }
 
-// DBCycleToAPICycle converts a db.Cycle to api.Cycle
+// DBCycleToAPICycle converts a db.Cycle to api.Cycle.
+// Hydrate-then-overlay: see the reverse-conversion contract at
+// DBMilestoneToAPIProjectMilestone. Reading columns only — as this did before —
+// dropped the JSON-only history arrays, so cycle.md rendered its progress
+// figures (the last elements of those arrays) as a permanent 0/0.
 func DBCycleToAPICycle(cycle Cycle) api.Cycle {
-	return api.Cycle{
-		ID:       cycle.ID,
-		Number:   int(cycle.Number),
-		Name:     NullStringValue(cycle.Name),
-		StartsAt: cycle.StartsAt.Time,
-		EndsAt:   cycle.EndsAt.Time,
+	var c api.Cycle
+	if len(cycle.Data) > 0 {
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(cycle.Data, &c)
 	}
+	c.ID = cycle.ID
+	c.Number = int(cycle.Number)
+	c.Name = NullStringValue(cycle.Name)
+	c.StartsAt = cycle.StartsAt.Time
+	c.EndsAt = cycle.EndsAt.Time
+	return c
 }
 
 // DBCyclesToAPICycles converts a slice of db.Cycle to api.Cycle
@@ -593,17 +626,23 @@ func APIProjectMilestoneToDBMilestone(milestone api.ProjectMilestone, projectID 
 // DBMilestoneToAPIProjectMilestone converts a db.ProjectMilestone to
 // api.ProjectMilestone.
 //
-// The queryable columns (id/name/description/target_date/sort_order) are the
-// authoritative source; the `data` blob is a best-effort enrichment that carries
-// any api field without a column. Reading columns *only* — as this did before —
-// silently dropped such a JSON-only field, so a field added to
-// api.ProjectMilestone would persist yet vanish on read. Hydrating from `data`
-// first, then overlaying the columns, closes that latent loss.
+// THE REVERSE-CONVERSION CONTRACT (this comment is the canonical statement;
+// State/Label/User/Cycle reference it): a reverse conversion starts from the
+// `data` blob and overlays its queryable columns. The columns are the
+// authoritative source; the blob is a best-effort enrichment that carries any
+// api field without a column. Reading columns *only* silently drops such a
+// JSON-only field, so a field added to the api struct would persist yet vanish
+// on read (for Cycle this was a live bug — see DBCycleToAPICycle). Hydrating
+// from `data` first, then overlaying the columns, closes that loss: a new api
+// field flows through with zero converter edits. The entities whose blob IS
+// the whole row (Issue, Project, Comment, …) pure-unmarshal and trivially
+// satisfy the contract; EmbeddedFile is the excluded case (its table has no
+// blob). Each converter is pinned by a Test*RoundTrip in convert_test.go.
 //
-// This is deliberately more defensive than the sibling converters
-// (DBIssueToAPIIssue et al.), which pure-unmarshal and propagate a parse error:
-// a corrupt or empty `data` blob here falls back to the columns rather than
-// failing, so one bad row cannot poison a whole milestone listing (and a legacy
+// The overlay converters are deliberately more defensive than the
+// pure-unmarshal ones (DBIssueToAPIIssue et al.), which propagate a parse
+// error: a corrupt or empty `data` blob here falls back to the columns rather
+// than failing, so one bad row cannot poison a whole listing (and a legacy
 // "{}" row still reads correctly from its columns).
 func DBMilestoneToAPIProjectMilestone(milestone ProjectMilestone) api.ProjectMilestone {
 	var m api.ProjectMilestone
@@ -626,6 +665,28 @@ func DBMilestonesToAPIProjectMilestones(milestones []ProjectMilestone) []api.Pro
 		result[i] = DBMilestoneToAPIProjectMilestone(milestone)
 	}
 	return result
+}
+
+// =============================================================================
+// IssueRelation Conversion
+// =============================================================================
+
+// IssueRelationUpsertParams builds the issue_relations row for a fetched
+// relation. issueID is the owning side (the row's issue_id) and
+// relatedIssueID the target: an outgoing fetch passes (thisIssue,
+// rel.RelatedIssue.ID), an inverse fetch passes them the other way around
+// (rel.Issue.ID, thisIssue) — the row is always stored from its owner's
+// perspective, whichever end fetched it.
+func IssueRelationUpsertParams(rel api.IssueRelation, issueID, relatedIssueID string) UpsertIssueRelationParams {
+	return UpsertIssueRelationParams{
+		ID:             rel.ID,
+		IssueID:        issueID,
+		RelatedIssueID: relatedIssueID,
+		Type:           rel.Type,
+		CreatedAt:      sql.NullTime{Time: rel.CreatedAt, Valid: !rel.CreatedAt.IsZero()},
+		UpdatedAt:      sql.NullTime{Time: rel.UpdatedAt, Valid: !rel.UpdatedAt.IsZero()},
+		SyncedAt:       Now(),
+	}
 }
 
 // =============================================================================

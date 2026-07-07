@@ -135,6 +135,19 @@ Pure of the FUSE mount, SQLite, and API: unit-tested directly on a parsed
 `marshal.StringSliceFromYAML` — the list coercion the handlers now share for the
 relational front half — were exported from marshal for this.)
 
+### Entity render (`marshal.*ToMarkdown`)
+Every entity's markdown render lives in `internal/marshal`, one seam for
+markdown ↔ entity: Issue/Document/Milestone always did, and round 14 moved
+Project and Initiative (plus their `.meta` renders) out of the fs node methods
+(`ProjectToMarkdown`/`ProjectMetaToMarkdown`, `InitiativeToMarkdown`/
+`InitiativeMetaToMarkdown`) — before that, two of five entities' render policy
+was observable only through a mounted filesystem. The editable-only split
+(server-managed fields live in `.meta`, so a successful write never rewrites
+the writer's bytes) is now pinned by unit tests on the exact frontmatter key
+sets. The fs nodes keep one-line wrappers that degrade a render failure to an
+empty file. The parse side stays with [[scalar-edit]] (name/description) and
+[[link-reconciliation]] (the member lists).
+
 ### Create trigger (`createFileNode`)
 The **deep module** owning the write-only `_create` file (and the named-file
 `Create` paths that share its mechanics): buffer written bytes, and on close hand
@@ -313,10 +326,10 @@ took them — the gap was above the DB: `api.IssueRelation` gained the two field
 the `CreateIssueRelation` mutation (and the issue fragment) now select
 `createdAt`/`updatedAt`, the create-persist writes the server's times (not
 `now()`), and `GetIssueRelations`/`GetIssueInverseRelations`/`GetIssueRelationByID`
-map them back onto the struct. (Orthogonal pre-existing gap, left alone:
-relations are populated **only** by the local create handler — the sync worker and
-`refreshIssueDetails` don't persist them — so relations made in Linear's own UI
-never appear as `.rel` files.) `EmbeddedFileNode` (the actual `*.png`/`*.pdf`
+map them back onto the struct. (The orthogonal gap noted here at the time —
+relations populated **only** by the local create handler, so UI-made relations
+never appeared as `.rel` files — was closed in round 14: relations are now the
+fourth detail-sync collection, see [[sync-reconcile-tail]].) `EmbeddedFileNode` (the actual `*.png`/`*.pdf`
 bytes) stays out of `renderFile`: it is a lazy CDN byte-streamer, not a
 render-closure file, and `api.EmbeddedFile` has no times either.
 
@@ -392,11 +405,45 @@ decoy), not completeness. `indexedListing` escapes this only because
 comments/updates are name-resolved *nowhere else*, so it can disambiguate freely;
 milestones/labels are resolution keys, pinning the filename to the resolution
 name. True per-file addressability would mean reworking name resolution end-to-
-end — a separate change, not a listing collapse. Attachments are the excluded
-case (two heterogeneous item types in one dir + stateful `deduplicateFilename`),
-the way `EmbeddedFileNode` is excluded from [[render-file]].
+end — a separate change, not a listing collapse. Attachments were originally
+excluded (two heterogeneous item types in one dir + stateful
+`deduplicateFilename`) and later got their own heterogeneous sibling,
+[[attachment-listing]].
 `TestNamedListing*` guards the round-trip, the collision first-wins contract
 (the shadow as a *tested* invariant), order preservation, and totality.
+
+### Attachment listing (`attachmentListing`)
+The **deep module** owning the filenames of the attachments directory — the
+*heterogeneous* sibling of [[named-listing]] and [[indexed-listing]], covering
+the collection those two excluded. The directory mixes two item types:
+embedded files (CDN-backed bytes, named by filename) and external attachments
+(`.link` files, named by sanitized title). `attachmentListing{embedded,
+external}` (`internal/fs/attachmentlisting.go`) exposes `entries()` (Readdir)
+and `find(name)` (Lookup) returning a tagged entry, and owns
+`deduplicateFilename`, `sanitizeFilename`, and `linkName` (the `.link`
+derivation the create surface's `.last` path and kernel-entry name reuse —
+formerly restated at four sites). Before it, Readdir and Lookup each rebuilt
+the dedup map independently, duplicate-titled externals emitted *duplicate
+dirents* (kernel-collapsed shadowing), and the dedup algorithm had zero tests.
+
+**Collisions are deduplicated (`foo (2).link`) — deliberately the opposite of
+[[named-listing]]'s first-match/shadow policy, licensed by that policy's own
+recorded rationale:** disambiguation is forbidden only where the filename is a
+resolution key (labels/milestones); attachment names are resolution keys
+nowhere, the same freedom `indexedListing` uses for comments. One counter
+spans both families in listing order (embedded first, then external), so even
+an embedded file literally named `foo.link` disambiguates against an external
+titled `foo` instead of shadowing. `rm` on a deduplicated name deletes the
+right entity — `find` returns the matched item and the node holds it through
+Unlink. Dedup-suffix stability across calls comes from the repo (ordering is
+the repo's job): the two list queries carry `id` tiebreakers
+(`filename, id` / `created_at, id`), since equal sort keys are exactly the
+dedup case. The caller fetches and passes the slices; Readdir stays
+best-effort (a failed fetch lists that family empty) while Lookup
+distinguishes not-found (`ENOENT`) from couldn't-look (`EIO`) via the
+`listing(ctx, &fetchErr)` seam. Pure of the repo; unit-tested on literal
+slices (`TestAttachmentListing*`: round-trip, cross-family dedup, extension
+edges, linkName), no mount.
 
 ### Entity-directory manifest (`dirManifest`)
 The **deep module** owning the *static* children of an entity directory — the
@@ -549,19 +596,52 @@ deleted). The closure author honors the contract by choosing what to return
 versus swallow.
 
 The **per-issue detail sync** (`syncIssueDetailsBatch` — an issue's comments,
-documents, attachments) reconciles through the same tail, three calls per issue.
-Here completeness is *page*-shaped rather than *drain*-shaped: a full page
-(`len == IssueDetailsPageSize`) may be truncated, so the caller composes a
-`pruneWhenComplete(complete, fn)` policy that passes the real prune only on a
-short (provably complete) page and `nil` otherwise — the module then adds its
-clean guard, so a detail prune fires **iff clean AND complete**. This closed a
-silent-prune bug the hand-rolled version carried: it gated the prune on page
-completeness alone, so a failed comment/doc/attachment upsert (its `synced_at`
-left un-stamped) was deleted as stale on the next complete page. Embedded-file
-extraction from a comment body is the nested best-effort here (its own
-never-pruned `embedded_files` table), analogous to milestones — it runs inside
-the comment `upsert` closure regardless of the upsert result and cannot affect
-cleanliness.
+documents, attachments, relations, and inverse relations) reconciles through
+the same tail, five calls per issue. Here completeness is *page*-shaped rather
+than *drain*-shaped: a full page (`len == IssueDetailsPageSize`, or
+`IssueRelationsPageSize` for the relation connections) may be truncated, so
+the caller composes a `pruneWhenComplete(complete, fn)` policy that passes the
+real prune only on a short (provably complete) page and `nil` otherwise — the
+module then adds its clean guard, so a detail prune fires **iff clean AND
+complete**. This closed a silent-prune bug the hand-rolled version carried: it
+gated the prune on page completeness alone, so a failed
+comment/doc/attachment upsert (its `synced_at` left un-stamped) was deleted as
+stale on the next complete page. Embedded-file extraction from a comment body
+is the nested best-effort here (its own never-pruned `embedded_files` table),
+analogous to milestones — it runs inside the comment `upsert` closure
+regardless of the upsert result and cannot affect cleanliness.
+
+**Relations (round 14) closed the last one-way surface**: previously only the
+FUSE create handler wrote `issue_relations`, so a relation made in Linear's
+own UI never appeared as a `.rel` file and one deleted there lingered as a
+phantom. The details selection (one `IssueDetailsSelection` shared by the
+single and batch queries, so they can't drift) now carries `relations` and
+`inverseRelations`. A row is always stored from its **owner's** perspective
+(`db.IssueRelationUpsertParams(rel, ownerID, relatedID)` — an inverse fetch
+passes the ids swapped), and only the owner's fetch is a completeness set for
+its rows: the outgoing collection prunes via `PruneIssueRelations` (scoped
+`issue_id` + cutoff), the inverse collection is **upsert-only** (its rows are
+owned by the other issue; pruning them here would delete against someone
+else's partial view). `refreshIssueDetails` (the repo's SWR path) persists
+both families best-effort like its siblings.
+
+### Reverse conversion contract (hydrate-then-overlay)
+Every DB→API reverse conversion in `internal/db/convert.go` **starts from the
+`data` blob and overlays its queryable columns** (canonical statement at
+`DBMilestoneToAPIProjectMilestone`). The columns are the authoritative source;
+the blob carries any api field without a column, so a field added to an api
+struct flows through with zero converter edits. Reading columns *only* — the
+pre-contract shape of the State/Label/User/Cycle converters — silently dropped
+JSON-only fields; for Cycle this was a **live bug**: the history arrays that
+`cycle.md` renders its progress from were fetched, stored, and then zeroed on
+every read (progress permanently 0/0). Overlay converters are best-effort on a
+corrupt/legacy blob (fall back to columns — one bad row must not poison a
+listing); pure-unmarshal converters (Issue, Project, …, whose blob is the whole
+row) trivially satisfy the contract; `EmbeddedFile` is the excluded case (its
+table has no blob). Label's `Team` overlays from the `team_id` column — the
+authoritative source per the workspace-label churn fix — never from the blob's
+copy. Each overlay converter is pinned by a `Test*RoundTrip` in
+`convert_test.go` (forward → reverse == identity, plus corrupt-blob fallback).
 
 ### Rate budget (`rateBudget`)
 The **deep module** governing Linear's hourly rate limits
@@ -616,6 +696,25 @@ before starting sync (interruptible by ctx/Stop); any other probe failure
 logs and proceeds. Probe sequencing and the delay path are unit-tested in
 `worker_test.go` (`TestProbe*`); the client-level seed-then-defer wiring in
 `client_test.go` (`TestViewerProbeSeedsBudget`).
+
+### Repository read path (deliberately concrete — no interface)
+The read path is the concrete `*repo.SQLiteRepository`; there is **no
+Repository interface in front of it, on purpose** (round 14 decision — a
+future review must not re-suggest one "for testability"). A 59-method
+interface plus an in-memory mock existed for the project's whole life without
+ever gaining a consumer: `LinearFS.repo` was always the concrete type, the
+sync worker has its own narrow `APIClient` seam, and the mock's sole caller
+was its own fixture's test — one adapter means a hypothetical seam, so both
+were deleted (~900 lines). Two reasons a mock repo can't buy fs testability
+here: fs write handlers hit `lfs.store.Queries()` directly (24 sites), so
+write tests need real SQLite regardless; and node `Lookup`/`Readdir` need a
+live inode tree (round-7 finding), which is why this codebase's testing
+strategy is **pure-projection extraction** (`dirManifest.find`, the listing
+modules) rather than mocking under node methods. If a real second adapter
+ever appears (read-through cache, alternate store), re-extract the interface
+from `SQLiteRepository` mechanically. The SQLite fixture helpers
+(`fixtures.PopulateTestData` et al.) are the surviving, genuinely-used part
+of the old scaffolding.
 
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for

@@ -862,27 +862,52 @@ func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue,
 	return execMutation[Issue](ctx, c, mutationCreateIssue, map[string]any{"input": input}, "issueCreate", "issue")
 }
 
-// IssueDetails contains comments, documents, and attachments for an issue
+// IssueDetails contains comments, documents, attachments, and relations for
+// an issue. Relations are the outgoing rows this issue owns; InverseRelations
+// are incoming rows owned by the other issue (their `Issue` field is set).
 type IssueDetails struct {
-	Comments    []Comment
-	Documents   []Document
-	Attachments []Attachment
+	Comments         []Comment
+	Documents        []Document
+	Attachments      []Attachment
+	Relations        []IssueRelation
+	InverseRelations []IssueRelation
 }
 
-// GetIssueDetails fetches comments, documents, and attachments for an issue in a single query
+// issueDetailsPayload is the wire shape of one issue's IssueDetailsSelection,
+// shared by the single-issue query and each alias of the batch query.
+type issueDetailsPayload struct {
+	Comments struct {
+		Nodes []Comment `json:"nodes"`
+	} `json:"comments"`
+	Documents struct {
+		Nodes []Document `json:"nodes"`
+	} `json:"documents"`
+	Attachments struct {
+		Nodes []Attachment `json:"nodes"`
+	} `json:"attachments"`
+	Relations struct {
+		Nodes []IssueRelation `json:"nodes"`
+	} `json:"relations"`
+	InverseRelations struct {
+		Nodes []IssueRelation `json:"nodes"`
+	} `json:"inverseRelations"`
+}
+
+func (p issueDetailsPayload) toDetails() *IssueDetails {
+	return &IssueDetails{
+		Comments:         p.Comments.Nodes,
+		Documents:        p.Documents.Nodes,
+		Attachments:      p.Attachments.Nodes,
+		Relations:        p.Relations.Nodes,
+		InverseRelations: p.InverseRelations.Nodes,
+	}
+}
+
+// GetIssueDetails fetches comments, documents, attachments, and relations for
+// an issue in a single query
 func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDetails, error) {
 	var result struct {
-		Issue struct {
-			Comments struct {
-				Nodes []Comment `json:"nodes"`
-			} `json:"comments"`
-			Documents struct {
-				Nodes []Document `json:"nodes"`
-			} `json:"documents"`
-			Attachments struct {
-				Nodes []Attachment `json:"nodes"`
-			} `json:"attachments"`
-		} `json:"issue"`
+		Issue issueDetailsPayload `json:"issue"`
 	}
 
 	vars := map[string]any{
@@ -894,11 +919,7 @@ func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDet
 		return nil, err
 	}
 
-	return &IssueDetails{
-		Comments:    result.Issue.Comments.Nodes,
-		Documents:   result.Issue.Documents.Nodes,
-		Attachments: result.Issue.Attachments.Nodes,
-	}, nil
+	return result.Issue.toDetails(), nil
 }
 
 // GetIssueDetailsBatch fetches comments, documents, and attachments for multiple issues in a single query.
@@ -916,11 +937,8 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 	for i, id := range issueIDs {
 		alias := fmt.Sprintf("i%d", i)
 		varName := fmt.Sprintf("id%d", i)
-		queryParts = append(queryParts, fmt.Sprintf(`%s: issue(id: $%s) {
-			comments(first: %d) { nodes { ...CommentFields } }
-			documents(first: %d) { nodes { ...DocumentFields } }
-			attachments(first: %d) { nodes { ...AttachmentFields } }
-		}`, alias, varName, IssueDetailsPageSize, IssueDetailsPageSize, IssueDetailsPageSize))
+		queryParts = append(queryParts, fmt.Sprintf(`%s: issue(id: $%s) { %s }`,
+			alias, varName, IssueDetailsSelection))
 		vars[varName] = id
 	}
 
@@ -954,26 +972,12 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 			continue
 		}
 
-		var issueData struct {
-			Comments struct {
-				Nodes []Comment `json:"nodes"`
-			} `json:"comments"`
-			Documents struct {
-				Nodes []Document `json:"nodes"`
-			} `json:"documents"`
-			Attachments struct {
-				Nodes []Attachment `json:"nodes"`
-			} `json:"attachments"`
-		}
+		var issueData issueDetailsPayload
 		if err := json.Unmarshal(raw, &issueData); err != nil {
 			continue
 		}
 
-		result[id] = &IssueDetails{
-			Comments:    issueData.Comments.Nodes,
-			Documents:   issueData.Documents.Nodes,
-			Attachments: issueData.Attachments.Nodes,
-		}
+		result[id] = issueData.toDetails()
 	}
 
 	return result, nil
