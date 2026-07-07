@@ -31,13 +31,16 @@ type LinearFS struct {
 	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl (handlers read while tests swap)
 
 	repo       *repo.SQLiteRepository // For all read operations
-	server     *fuse.Server           // FUSE server for kernel cache invalidation
 	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
 	syncWorker *sync.Worker           // Background sync worker
 	debug      bool
 	uid        uint32 // Owner UID for files/dirs
 	gid        uint32 // Owner GID for files/dirs
 	mountPoint string // Filesystem mount path (for README generation)
+
+	// The one coupling to the FUSE server: kernel-cache invalidation (see
+	// invalidate.go). Embedded, so lfs.SetServer / lfs.InvalidateCreated / … promote.
+	kernelNotify
 
 	// Embedded-file bytes (memory→disk→CDN); see embeddedfilecache.go.
 	files *embeddedFileCache
@@ -236,54 +239,12 @@ func (lfs *LinearFS) GetIssueHistory(ctx context.Context, issueID string) ([]api
 	return lfs.repo.GetIssueHistory(ctx, issueID)
 }
 
-// SetServer sets the FUSE server reference for kernel cache invalidation
-func (lfs *LinearFS) SetServer(server *fuse.Server) {
-	lfs.server = server
-}
-
 // MountPoint returns the filesystem mount path
 func (lfs *LinearFS) MountPoint() string {
 	if lfs.mountPoint == "" {
 		return os.Getenv("HOME") + "/linear" // fallback for tests
 	}
 	return lfs.mountPoint
-}
-
-// InvalidateKernelInode tells the kernel to drop cached data for an inode
-func (lfs *LinearFS) InvalidateKernelInode(ino uint64) {
-	if lfs.server != nil {
-		lfs.server.InodeNotify(ino, 0, -1) // -1 = entire file
-	}
-}
-
-// InvalidateKernelEntry tells the kernel to drop a cached directory entry
-func (lfs *LinearFS) InvalidateKernelEntry(parent uint64, name string) {
-	if lfs.server != nil {
-		lfs.server.EntryNotify(parent, name)
-	}
-}
-
-// InvalidateCreated keeps the kernel coherent after a child is created in a
-// directory. See invalidateCreated for the policy. name may be "".
-func (lfs *LinearFS) InvalidateCreated(dirIno uint64, name string) {
-	invalidateCreated(lfs, dirIno, name)
-}
-
-// InvalidateDeleted keeps the kernel coherent after a child is removed from a
-// directory. See invalidateDeleted for the policy.
-func (lfs *LinearFS) InvalidateDeleted(dirIno uint64, name string) {
-	invalidateDeleted(lfs, dirIno, name)
-}
-
-// InvalidateUpdated keeps the kernel coherent after a file's content changes.
-func (lfs *LinearFS) InvalidateUpdated(fileIno uint64) {
-	invalidateUpdated(lfs, fileIno)
-}
-
-// InvalidateRenamed keeps the kernel coherent after a file is renamed within a
-// directory. See invalidateRenamed for the policy. fileIno may be 0.
-func (lfs *LinearFS) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
-	invalidateRenamed(lfs, dirIno, oldName, newName, fileIno)
 }
 
 // UpsertIssue inserts or updates an issue in SQLite.
