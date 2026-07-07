@@ -103,34 +103,19 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	now := time.Now()
 	switch name {
 	case "team.md":
-		node := &TeamInfoNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		content := node.generateContent()
-		out.Attr.Mode = 0444 | syscall.S_IFREG
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.Attr.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		render := teamRender(t.team)
+		node := &renderFileNode{BaseNode: BaseNode{lfs: t.lfs}, render: render}
+		return t.lfs.newRenderInode(ctx, t, node, render, teamMetaIno(t.team.ID), out), 0
 
 	case "states.md":
-		node := &StatesInfoNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		content := node.getContent(ctx)
-		out.Attr.Mode = 0444 | syscall.S_IFREG
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.Attr.SetTimes(&now, &now, &now)
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		render := t.lfs.statesRender(t.team)
+		node := &renderFileNode{BaseNode: BaseNode{lfs: t.lfs}, render: render}
+		return t.lfs.newRenderInode(ctx, t, node, render, statesMetaIno(t.team.ID), out), 0
 
 	case "labels.md":
-		node := &LabelsInfoNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		content := node.getContent(ctx)
-		out.Attr.Mode = 0444 | syscall.S_IFREG
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.Attr.SetTimes(&now, &now, &now)
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		render := t.lfs.labelsRender(t.team)
+		node := &renderFileNode{BaseNode: BaseNode{lfs: t.lfs}, render: render}
+		return t.lfs.newRenderInode(ctx, t, node, render, labelsMetaIno(t.team.ID), out), 0
 
 	case "by":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR
@@ -196,18 +181,21 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	return nil, syscall.ENOENT
 }
 
-// TeamInfoNode is a virtual file containing team metadata
-type TeamInfoNode struct {
-	BaseNode
-	team api.Team
+// team.md / states.md / labels.md are read-only rendered files (renderfile.go).
+// team.md renders from data already held (entity times); states.md and labels.md
+// read the repo on demand (no node-level cache — the repo owns the TTL/SWR policy,
+// and DIRECT_IO means a second layer would only reintroduce staleness) and report
+// now() (aggregates carry no single entity timestamp — the timestamp-less
+// exception, same class as labelfile/milestonefile).
+
+func teamRender(team api.Team) renderFn {
+	return func(context.Context) ([]byte, time.Time, time.Time) {
+		return teamMarkdown(team), team.UpdatedAt, team.CreatedAt
+	}
 }
 
-var _ fs.NodeGetattrer = (*TeamInfoNode)(nil)
-var _ fs.NodeOpener = (*TeamInfoNode)(nil)
-var _ fs.NodeReader = (*TeamInfoNode)(nil)
-
-func (t *TeamInfoNode) generateContent() []byte {
-	content := fmt.Sprintf(`---
+func teamMarkdown(team api.Team) []byte {
+	return []byte(fmt.Sprintf(`---
 id: %s
 key: %s
 name: %q
@@ -221,83 +209,42 @@ updated: %q
 - **Key:** %s
 - **ID:** %s
 `,
-		t.team.ID,
-		t.team.Key,
-		t.team.Name,
-		t.team.Icon,
-		t.team.CreatedAt.Format(time.RFC3339),
-		t.team.UpdatedAt.Format(time.RFC3339),
-		t.team.Name,
-		t.team.Key,
-		t.team.ID,
-	)
-	return []byte(content)
+		team.ID,
+		team.Key,
+		team.Name,
+		team.Icon,
+		team.CreatedAt.Format(time.RFC3339),
+		team.UpdatedAt.Format(time.RFC3339),
+		team.Name,
+		team.Key,
+		team.ID,
+	))
 }
 
-func (t *TeamInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := t.generateContent()
-	out.Mode = 0444 | syscall.S_IFREG
-	t.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.Attr.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
-	return 0
-}
-
-func (t *TeamInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (t *TeamInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := t.generateContent()
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
+func (lfs *LinearFS) statesRender(team api.Team) renderFn {
+	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		now := time.Now()
+		states, err := lfs.GetTeamStates(ctx, team.ID)
+		if err != nil {
+			return []byte("# Error loading states\n"), now, now
+		}
+		return statesMarkdown(states, team.Key), now, now
 	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
 }
 
-// StatesInfoNode is a virtual file containing workflow states metadata
-type StatesInfoNode struct {
-	BaseNode
-	team          api.Team
-	cachedContent []byte
-	cachedAt      time.Time
-}
-
-var _ fs.NodeGetattrer = (*StatesInfoNode)(nil)
-var _ fs.NodeOpener = (*StatesInfoNode)(nil)
-var _ fs.NodeReader = (*StatesInfoNode)(nil)
-
-const metadataCacheTTL = 10 * time.Minute // Match state/label cache TTL
-
-func (s *StatesInfoNode) getContent(ctx context.Context) []byte {
-	// Return cached content if still valid
-	if s.cachedContent != nil && time.Since(s.cachedAt) < metadataCacheTTL {
-		return s.cachedContent
-	}
-
-	states, err := s.lfs.GetTeamStates(ctx, s.team.ID)
-	if err != nil {
-		return []byte("# Error loading states\n")
-	}
-
-	// Build YAML frontmatter
+func statesMarkdown(states []api.State, teamKey string) []byte {
 	var statesYAML string
 	for _, state := range states {
 		statesYAML += fmt.Sprintf("  - id: %s\n    name: %s\n    type: %s\n",
 			state.ID, state.Name, state.Type)
 	}
 
-	// Build markdown table
 	var table string
 	for _, state := range states {
 		table += fmt.Sprintf("| %s | %s | %s |\n", state.Name, state.Type, state.ID)
 	}
 
-	content := []byte(fmt.Sprintf(`---
+	return []byte(fmt.Sprintf(`---
 team: %s
 states:
 %s---
@@ -307,67 +254,25 @@ states:
 | Name | Type | ID |
 |------|------|-----|
 %s`,
-		s.team.Key,
+		teamKey,
 		statesYAML,
-		s.team.Key,
+		teamKey,
 		table,
 	))
-
-	s.cachedContent = content
-	s.cachedAt = time.Now()
-	return content
 }
 
-func (s *StatesInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	content := s.getContent(ctx)
-	out.Mode = 0444 | syscall.S_IFREG
-	s.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (s *StatesInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (s *StatesInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := s.getContent(ctx)
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
+func (lfs *LinearFS) labelsRender(team api.Team) renderFn {
+	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		now := time.Now()
+		labels, err := lfs.GetTeamLabels(ctx, team.ID)
+		if err != nil {
+			return []byte("# Error loading labels\n"), now, now
+		}
+		return labelsMarkdown(labels, team.Key), now, now
 	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
 }
 
-// LabelsInfoNode is a virtual file containing labels metadata
-type LabelsInfoNode struct {
-	BaseNode
-	team          api.Team
-	cachedContent []byte
-	cachedAt      time.Time
-}
-
-var _ fs.NodeGetattrer = (*LabelsInfoNode)(nil)
-var _ fs.NodeOpener = (*LabelsInfoNode)(nil)
-var _ fs.NodeReader = (*LabelsInfoNode)(nil)
-
-func (l *LabelsInfoNode) getContent(ctx context.Context) []byte {
-	// Return cached content if still valid
-	if l.cachedContent != nil && time.Since(l.cachedAt) < metadataCacheTTL {
-		return l.cachedContent
-	}
-
-	labels, err := l.lfs.GetTeamLabels(ctx, l.team.ID)
-	if err != nil {
-		return []byte("# Error loading labels\n")
-	}
-
-	// Build YAML frontmatter
+func labelsMarkdown(labels []api.Label, teamKey string) []byte {
 	var labelsYAML string
 	for _, label := range labels {
 		labelsYAML += fmt.Sprintf("  - id: %s\n    name: %s\n    color: %q\n",
@@ -377,13 +282,12 @@ func (l *LabelsInfoNode) getContent(ctx context.Context) []byte {
 		}
 	}
 
-	// Build markdown table
 	var table string
 	for _, label := range labels {
 		table += fmt.Sprintf("| %s | %s | %s |\n", label.Name, label.Color, label.ID)
 	}
 
-	content := []byte(fmt.Sprintf(`---
+	return []byte(fmt.Sprintf(`---
 team: %s
 labels:
 %s---
@@ -393,39 +297,9 @@ labels:
 | Name | Color | ID |
 |------|-------|-----|
 %s`,
-		l.team.Key,
+		teamKey,
 		labelsYAML,
-		l.team.Key,
+		teamKey,
 		table,
 	))
-
-	l.cachedContent = content
-	l.cachedAt = time.Now()
-	return content
-}
-
-func (l *LabelsInfoNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	content := l.getContent(ctx)
-	out.Mode = 0444 | syscall.S_IFREG
-	l.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (l *LabelsInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (l *LabelsInfoNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := l.getContent(ctx)
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
 }

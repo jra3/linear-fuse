@@ -3,6 +3,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,59 @@ func TestIssueSubdirsReportIssueTimes(t *testing.T) {
 				t.Errorf("%s mtime = %v, want issue's %v (subdir must report the issue's times, not time.Now())", name, got, want)
 			}
 		})
+	}
+}
+
+// TestRenderFileServesFreshContent is the mounted, kernel-level proof of the
+// renderFileNode volatility contract on cycle.md — the file whose FOPEN_KEEP_CACHE
+// staleness bug motivated the module. It reads through the real kernel READ path
+// (DIRECT_IO) and asserts the content is present and the times are sensible
+// (non-zero, deterministic across stats). The unit tests cover the read-through
+// mechanism; this proves it survives the kernel round-trip.
+func TestRenderFileServesFreshContent(t *testing.T) {
+	// Find the cycle directory (the non-"current" entry under cycles/).
+	entries, err := os.ReadDir(cyclesPath(testTeamKey))
+	if err != nil {
+		t.Fatalf("read cycles dir: %v", err)
+	}
+	var cycleDir string
+	for _, e := range entries {
+		if e.Name() != "current" {
+			cycleDir = e.Name()
+			break
+		}
+	}
+	if cycleDir == "" {
+		t.Skip("no cycle in fixture")
+	}
+	path := filepath.Join(cyclesPath(testTeamKey), cycleDir, "cycle.md")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read cycle.md: %v", err)
+	}
+	// Fresh render must carry the frontmatter and a wall-clock-derived status.
+	for _, want := range []string{"id: cycle-1", "status:", "progress:"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("cycle.md missing %q in:\n%s", want, data)
+		}
+	}
+
+	// Times: non-zero and deterministic across two stats (the DIRECT_IO/zero-timeout
+	// policy must not fabricate a fresh time.Now() per stat).
+	first, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat cycle.md (1): %v", err)
+	}
+	second, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat cycle.md (2): %v", err)
+	}
+	if first.ModTime().IsZero() {
+		t.Error("cycle.md mtime is zero — render node reported no time")
+	}
+	if !first.ModTime().Equal(second.ModTime()) {
+		t.Errorf("cycle.md mtime not stable across stats: %v vs %v", first.ModTime(), second.ModTime())
 	}
 }
 

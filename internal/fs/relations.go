@@ -101,25 +101,14 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 }
 
 func (n *RelationsNode) createRelationFileNode(ctx context.Context, rel api.IssueRelation, isInverse bool, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	render := relationRender(rel, isInverse)
 	node := &RelationFileNode{
-		BaseNode:  BaseNode{lfs: n.lfs},
-		relation:  rel,
-		isInverse: isInverse,
-		issueID:   n.issueID,
+		renderFileNode: renderFileNode{BaseNode: BaseNode{lfs: n.lfs}, render: render},
+		relation:       rel,
+		isInverse:      isInverse,
+		issueID:        n.issueID,
 	}
-	now := time.Now()
-	content := node.generateContent()
-	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.Attr.Size = uint64(len(content))
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&now, &now, &now)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  relationIno(rel.ID),
-	}), 0
+	return n.lfs.newRenderInode(ctx, n, node, render, relationIno(rel.ID), out), 0
 }
 
 // inverseRelationType returns the inverse relation type name
@@ -138,62 +127,43 @@ func inverseRelationType(relType string) string {
 	}
 }
 
-// RelationFileNode represents a relation file (read-only info)
+// RelationFileNode is a read-only rendered file (renderfile.go) that also deletes:
+// it embeds renderFileNode for the read surface and adds Unlink. api.IssueRelation
+// carries no timestamps, so relationRender reports now() (the timestamp-less
+// exception).
 type RelationFileNode struct {
-	BaseNode
+	renderFileNode
 	relation  api.IssueRelation
 	isInverse bool
 	issueID   string // parent issue (for the relations/ .error key)
 }
 
-var _ fs.NodeGetattrer = (*RelationFileNode)(nil)
-var _ fs.NodeOpener = (*RelationFileNode)(nil)
-var _ fs.NodeReader = (*RelationFileNode)(nil)
 var _ fs.NodeUnlinker = (*RelationFileNode)(nil)
 
-func (n *RelationFileNode) generateContent() string {
+func relationRender(rel api.IssueRelation, isInverse bool) renderFn {
+	return func(context.Context) ([]byte, time.Time, time.Time) {
+		now := time.Now()
+		return relationMarkdown(rel, isInverse), now, now
+	}
+}
+
+func relationMarkdown(rel api.IssueRelation, isInverse bool) []byte {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("type: %s\n", n.relation.Type))
+	sb.WriteString(fmt.Sprintf("type: %s\n", rel.Type))
 
-	if n.isInverse && n.relation.Issue != nil {
-		sb.WriteString(fmt.Sprintf("from: %s\n", n.relation.Issue.Identifier))
-		if n.relation.Issue.Title != "" {
-			sb.WriteString(fmt.Sprintf("title: %s\n", n.relation.Issue.Title))
+	if isInverse && rel.Issue != nil {
+		sb.WriteString(fmt.Sprintf("from: %s\n", rel.Issue.Identifier))
+		if rel.Issue.Title != "" {
+			sb.WriteString(fmt.Sprintf("title: %s\n", rel.Issue.Title))
 		}
-	} else if n.relation.RelatedIssue != nil {
-		sb.WriteString(fmt.Sprintf("to: %s\n", n.relation.RelatedIssue.Identifier))
-		if n.relation.RelatedIssue.Title != "" {
-			sb.WriteString(fmt.Sprintf("title: %s\n", n.relation.RelatedIssue.Title))
+	} else if rel.RelatedIssue != nil {
+		sb.WriteString(fmt.Sprintf("to: %s\n", rel.RelatedIssue.Identifier))
+		if rel.RelatedIssue.Title != "" {
+			sb.WriteString(fmt.Sprintf("title: %s\n", rel.RelatedIssue.Title))
 		}
 	}
 
-	return sb.String()
-}
-
-func (n *RelationFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := n.generateContent()
-	now := time.Now()
-	out.Mode = 0444 // Read-only
-	n.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *RelationFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *RelationFileNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := []byte(n.generateContent())
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
+	return []byte(sb.String())
 }
 
 func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errno {

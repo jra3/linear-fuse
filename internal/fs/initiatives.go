@@ -126,9 +126,9 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		// reflected here (go-fuse reuses this node across lookups).
 		lfs := i.lfs
 		snapshot := i.initiative
-		render := func() ([]byte, time.Time, time.Time) {
+		render := func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			init := snapshot
-			if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
+			if inits, err := lfs.GetInitiatives(ctx); err == nil {
 				for _, it := range inits {
 					if it.ID == snapshot.ID {
 						init = it

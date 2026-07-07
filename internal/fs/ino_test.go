@@ -57,6 +57,12 @@ func TestInodeNamespaceDistinct(t *testing.T) {
 		"recentDirIno":            recentDirIno(id),
 		"metaIno":                 metaIno(id),
 		"successIno":              successIno(id),
+		"teamMetaIno":             teamMetaIno(id),
+		"statesMetaIno":           statesMetaIno(id),
+		"labelsMetaIno":           labelsMetaIno(id),
+		"userInfoIno":             userInfoIno(id),
+		"cycleFileIno":            cycleFileIno(id),
+		"readmeIno":               readmeIno(),
 	}
 
 	seen := make(map[uint64]string, len(namespace))

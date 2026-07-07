@@ -235,7 +235,9 @@ shape than `kind:id`.
 
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file
-node — the edit-side twin of `createFileNode`'s buffer. `editBuffer`
+node — the edit-side twin of `createFileNode`'s buffer (and the writable
+counterpart to [[render-file]], which owns the read-only rendered files).
+`editBuffer`
 (`internal/fs/editbuffer.go`) is `{mu, content, dirty}` and provides the FUSE
 buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into the
 node** the way `attrNode` promotes `Getattr`. Each of the seven editable file
@@ -259,6 +261,58 @@ regenerate on first Read — a live double-compute this fix removed by seeding.
 carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
 [[attr-construction]]). Unit-tested directly (write-expands, in-place,
 truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
+
+### Render file (`renderFileNode`)
+The **deep module** owning every **read-only** virtual file that renders text on
+demand — the read-only twin of [[edit-buffer]] (which owns the *editable* files'
+buffer). `renderFileNode` (`internal/fs/renderfile.go`) is `{BaseNode, render}`
+and provides the FUSE surface (`Getattr`/`Open`/`Read`), **promoted into the
+node** the way `editBuffer` promotes its buffer ops. Its whole interface is one
+closure: `render func(ctx) (content []byte, mtime, ctime time.Time)` — takes a
+`ctx` (some renders read the repo; most ignore it) and is **total** (a failed
+render returns an error-marker body like `# Error loading states`, never an
+error, so the surface never branches on an errno and size is always
+`len(content)`). Nine files flow through it: the three `.meta` sidecars (folding
+in the old `MetaFileNode`), `cycle.md`, `team.md`/`states.md`/`labels.md`,
+`user.md`, the root `README.md`, the `{type}-{ID}.rel` relation files, and the
+`*.link` external-attachment files. The two deletable ones (relation, external
+attachment) **embed** it and add `Unlink`; the rest are constructed as a bare
+`*renderFileNode`. `EmbeddedFileNode` (binary CDN bytes, placeholder size, lazy
+HTTP, own no-cache policy) is deliberately **not** here — a different contract
+left hand-rolled (see [[attachments-future-work]]).
+
+**Render-through, never baked** (the load-bearing rule inherited from the old
+`MetaFileNode`): go-fuse dedups inodes by `StableAttr.Ino`, so a second Lookup
+returns the *original* node and discards a freshly-built one — baking bytes (or
+times) at Lookup would serve stale content for the life of the mount. The node
+holds the closure and calls it inside every `Read`/`Getattr`.
+
+**Volatility policy, chosen once.** `Open` returns `FOPEN_DIRECT_IO` (never
+`FOPEN_KEEP_CACHE`) and the single construction helper `newRenderInode` sets zero
+attr/entry timeouts, so the kernel re-reads and re-stats on every access. This
+made "pick the wrong cache flag" **unrepresentable** — and fixed a live bug: the
+old `CycleFileNode` used `FOPEN_KEEP_CACHE` on wall-clock-dependent content
+(`status:` flips upcoming/current/completed), so the kernel served a frozen
+status for the mount's life. `newRenderInode` is also the one place a rendered
+file's Lookup `EntryOut` is filled, ending the per-parent attr fabrication
+[[attr-construction]] fought at the directory level.
+
+**Times.** The closure returns `(mtime, ctime)`; **`atime` is collapsed to
+mtime**. Only mtime (=updatedAt, drives `ls -lt`) and ctime (=createdAt,
+repurposed) are read by any documented op — atime is decorative here (the old
+`cycle.md` hid the cycle end-date in atime, which nothing reads; the
+never-fabricated-truth version of that idea is deferred as [[atime-last-read-tracking]]).
+Closures return **entity times where the API type carries them** (issue/project/
+initiative `.meta`, `team`, `cycle`, and — newly, an upgrade from `now()` — the
+external attachment via `Attachment.Created/UpdatedAt`) and **`now()`** where it
+genuinely doesn't (`user`, `states`, `labels`, `README`, `relation` — the
+timestamp-less exception, same class as `labelfile`/`milestonefile`; this also
+fixed `user.md`, which set *no* times and reported zero-value epoch). The old
+`states.md`/`labels.md` node-level 10-min caches were **dropped** — the repo
+already owns the TTL/SWR policy, and under DIRECT_IO a second cache would only
+reintroduce staleness. Unit-tested directly (read-through, volatility ⇒
+DIRECT_IO, byte-clamping, write-reject), plus a mounted `cycle.md` smoke, no per-
+node duplication.
 
 ### Indexed listing (`indexedListing`)
 The **deep module** owning the index-derived filenames of a collection whose

@@ -82,3 +82,16 @@ func recentDirIno(teamID string) uint64 { return ino("recentdir", teamID) }
 
 func metaIno(key string) uint64    { return ino("meta", key) }
 func successIno(key string) uint64 { return ino("last", key) }
+
+// Rendered read-only files (renderfile.go) --------------------------------
+//
+// One stable ino per read-only rendered file. Distinct kinds from the sibling
+// directory inos (e.g. states.md's statesMetaIno vs the labels/ dir's
+// labelsDirIno) so a file and a same-id directory never collide.
+
+func teamMetaIno(teamID string) uint64   { return ino("team-md", teamID) }
+func statesMetaIno(teamID string) uint64 { return ino("states-md", teamID) }
+func labelsMetaIno(teamID string) uint64 { return ino("labels-md", teamID) }
+func userInfoIno(userID string) uint64   { return ino("user-md", userID) }
+func cycleFileIno(cycleID string) uint64 { return ino("cycle-md", cycleID) }
+func readmeIno() uint64                  { return ino("readme", "") }

@@ -128,24 +128,13 @@ func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 }
 
 func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, att api.Attachment, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	render := attachmentLinkRender(att)
 	node := &ExternalAttachmentNode{
-		BaseNode:   BaseNode{lfs: n.lfs},
-		attachment: att,
-		issueID:    n.issueID,
+		renderFileNode: renderFileNode{BaseNode: BaseNode{lfs: n.lfs}, render: render},
+		attachment:     att,
+		issueID:        n.issueID,
 	}
-	content := node.generateContent()
-	now := time.Now()
-	out.Attr.Mode = 0444 | syscall.S_IFREG // Read-only
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.Attr.Size = uint64(len(content))
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-	out.Attr.SetTimes(&now, &now, &now)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  externalAttachmentIno(att.ID),
-	}), 0
+	return n.lfs.newRenderInode(ctx, n, node, render, externalAttachmentIno(att.ID), out), 0
 }
 
 // EmbeddedFileNode represents a file in the /attachments/ directory
@@ -232,55 +221,35 @@ func sanitizeFilename(s string) string {
 	return s
 }
 
-// ExternalAttachmentNode represents a .link file for an external attachment (GitHub PR, URL, etc.)
+// ExternalAttachmentNode is the `.link` file for an external attachment (GitHub PR,
+// URL, etc.). A read-only rendered file (renderfile.go) that also deletes: it embeds
+// renderFileNode for the read surface and adds Unlink. api.Attachment carries
+// createdAt/updatedAt, so it reports real entity times (not now()).
 type ExternalAttachmentNode struct {
-	BaseNode
+	renderFileNode
 	attachment api.Attachment
 	issueID    string
 }
 
-var _ fs.NodeGetattrer = (*ExternalAttachmentNode)(nil)
-var _ fs.NodeOpener = (*ExternalAttachmentNode)(nil)
-var _ fs.NodeReader = (*ExternalAttachmentNode)(nil)
 var _ fs.NodeUnlinker = (*ExternalAttachmentNode)(nil)
 
-func (n *ExternalAttachmentNode) generateContent() string {
+func attachmentLinkRender(att api.Attachment) renderFn {
+	return func(context.Context) ([]byte, time.Time, time.Time) {
+		return attachmentLinkMarkdown(att), att.UpdatedAt, att.CreatedAt
+	}
+}
+
+func attachmentLinkMarkdown(att api.Attachment) []byte {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("title: %s\n", n.attachment.Title))
-	sb.WriteString(fmt.Sprintf("url: %s\n", n.attachment.URL))
-	if n.attachment.Subtitle != "" {
-		sb.WriteString(fmt.Sprintf("subtitle: %s\n", n.attachment.Subtitle))
+	sb.WriteString(fmt.Sprintf("title: %s\n", att.Title))
+	sb.WriteString(fmt.Sprintf("url: %s\n", att.URL))
+	if att.Subtitle != "" {
+		sb.WriteString(fmt.Sprintf("subtitle: %s\n", att.Subtitle))
 	}
-	if n.attachment.SourceType != "" {
-		sb.WriteString(fmt.Sprintf("source: %s\n", n.attachment.SourceType))
+	if att.SourceType != "" {
+		sb.WriteString(fmt.Sprintf("source: %s\n", att.SourceType))
 	}
-	return sb.String()
-}
-
-func (n *ExternalAttachmentNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := n.generateContent()
-	now := time.Now()
-	out.Mode = 0444 // Read-only
-	n.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
-
-func (n *ExternalAttachmentNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (n *ExternalAttachmentNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := []byte(n.generateContent())
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
+	return []byte(sb.String())
 }
 
 func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {

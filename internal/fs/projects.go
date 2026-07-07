@@ -260,9 +260,9 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		lfs := p.lfs
 		team := p.team
 		snapshot := p.project
-		render := func() ([]byte, time.Time, time.Time) {
+		render := func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			proj := snapshot
-			if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
+			if projs, err := lfs.GetTeamProjects(ctx, team.ID); err == nil {
 				for _, pr := range projs {
 					if pr.ID == snapshot.ID {
 						proj = pr

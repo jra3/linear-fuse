@@ -145,14 +145,9 @@ func (c *CycleDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Handle cycle.md
 	if name == "cycle.md" {
-		node := &CycleFileNode{BaseNode: BaseNode{lfs: c.lfs}, team: c.team, cycle: c.cycle}
-		content := node.generateContent()
-		out.Attr.Mode = 0444 | syscall.S_IFREG
-		out.Attr.Uid = c.lfs.uid
-		out.Attr.Gid = c.lfs.gid
-		out.Attr.Size = uint64(len(content))
-		out.Attr.SetTimes(&c.cycle.EndsAt, &c.cycle.StartsAt, &c.cycle.StartsAt)
-		return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), 0
+		render := cycleRender(c.team, c.cycle)
+		node := &renderFileNode{BaseNode: BaseNode{lfs: c.lfs}, render: render}
+		return c.lfs.newRenderInode(ctx, c, node, render, cycleFileIno(c.cycle.ID), out), 0
 	}
 
 	// Handle issue symlinks (e.g., "ENG-123")
@@ -172,28 +167,30 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	return nil, syscall.ENOENT
 }
 
-// CycleFileNode represents the cycle.md file inside a cycle directory
-type CycleFileNode struct {
-	BaseNode
-	team  api.Team
-	cycle api.Cycle
+// cycle.md is a read-only rendered file (renderfile.go). Its content is
+// wall-clock dependent — `status` flips upcoming/current/completed and progress
+// re-derives on each render — which is exactly why it needs DIRECT_IO (the old
+// CycleFileNode's FOPEN_KEEP_CACHE served a frozen status). ctime/mtime report
+// the cycle's start; atime is collapsed to mtime (the old node reported
+// atime=EndsAt, a decorative field no operation reads — see renderfile.go).
+
+func cycleRender(team api.Team, cycle api.Cycle) renderFn {
+	return func(context.Context) ([]byte, time.Time, time.Time) {
+		return cycleMarkdown(team, cycle), cycle.StartsAt, cycle.StartsAt
+	}
 }
 
-var _ fs.NodeGetattrer = (*CycleFileNode)(nil)
-var _ fs.NodeOpener = (*CycleFileNode)(nil)
-var _ fs.NodeReader = (*CycleFileNode)(nil)
-
-func (c *CycleFileNode) generateContent() []byte {
+func cycleMarkdown(team api.Team, cycle api.Cycle) []byte {
 	now := time.Now()
-	isCurrent := now.After(c.cycle.StartsAt) && now.Before(c.cycle.EndsAt)
+	isCurrent := now.After(cycle.StartsAt) && now.Before(cycle.EndsAt)
 
 	// Calculate progress from history arrays
 	var completed, total int
-	if len(c.cycle.CompletedIssueCountHistory) > 0 {
-		completed = c.cycle.CompletedIssueCountHistory[len(c.cycle.CompletedIssueCountHistory)-1]
+	if len(cycle.CompletedIssueCountHistory) > 0 {
+		completed = cycle.CompletedIssueCountHistory[len(cycle.CompletedIssueCountHistory)-1]
 	}
-	if len(c.cycle.IssueCountHistory) > 0 {
-		total = c.cycle.IssueCountHistory[len(c.cycle.IssueCountHistory)-1]
+	if len(cycle.IssueCountHistory) > 0 {
+		total = cycle.IssueCountHistory[len(cycle.IssueCountHistory)-1]
 	}
 
 	var percentage float64
@@ -204,16 +201,16 @@ func (c *CycleFileNode) generateContent() []byte {
 	status := "upcoming"
 	if isCurrent {
 		status = "current"
-	} else if now.After(c.cycle.EndsAt) {
+	} else if now.After(cycle.EndsAt) {
 		status = "completed"
 	}
 
-	cycleName := c.cycle.Name
+	cycleName := cycle.Name
 	if cycleName == "" {
-		cycleName = fmt.Sprintf("Cycle %d", c.cycle.Number)
+		cycleName = fmt.Sprintf("Cycle %d", cycle.Number)
 	}
 
-	content := fmt.Sprintf(`---
+	return []byte(fmt.Sprintf(`---
 id: %s
 number: %d
 name: %s
@@ -233,50 +230,24 @@ progress:
 - **Progress:** %d/%d issues (%.1f%%)
 - **Status:** %s
 `,
-		c.cycle.ID,
-		c.cycle.Number,
+		cycle.ID,
+		cycle.Number,
 		cycleName,
-		c.team.Key,
-		c.cycle.StartsAt.Format(time.RFC3339),
-		c.cycle.EndsAt.Format(time.RFC3339),
+		team.Key,
+		cycle.StartsAt.Format(time.RFC3339),
+		cycle.EndsAt.Format(time.RFC3339),
 		status,
 		completed,
 		total,
 		percentage,
 		cycleName,
-		c.cycle.StartsAt.Format("Jan 2, 2006"),
-		c.cycle.EndsAt.Format("Jan 2, 2006"),
+		cycle.StartsAt.Format("Jan 2, 2006"),
+		cycle.EndsAt.Format("Jan 2, 2006"),
 		completed,
 		total,
 		percentage,
 		status,
-	)
-	return []byte(content)
-}
-
-func (c *CycleFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	content := c.generateContent()
-	out.Mode = 0444 | syscall.S_IFREG
-	c.SetOwner(out)
-	out.Size = uint64(len(content))
-	out.Attr.SetTimes(&c.cycle.EndsAt, &c.cycle.StartsAt, &c.cycle.StartsAt)
-	return 0
-}
-
-func (c *CycleFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
-}
-
-func (c *CycleFileNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	content := c.generateContent()
-	if off >= int64(len(content)) {
-		return fuse.ReadResultData(nil), 0
-	}
-	end := off + int64(len(dest))
-	if end > int64(len(content)) {
-		end = int64(len(content))
-	}
-	return fuse.ReadResultData(content[off:end]), 0
+	))
 }
 
 // isCurrent checks if a cycle is the current active cycle

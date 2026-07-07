@@ -358,12 +358,12 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		lfs := n.lfs
 		ident := n.issue.Identifier
 		snapshot := n.issue
-		render := func() ([]byte, time.Time, time.Time) {
+		render := func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			iss := &snapshot
-			if fresh, err := lfs.FetchIssueByIdentifier(context.Background(), ident); err == nil && fresh != nil {
+			if fresh, err := lfs.FetchIssueByIdentifier(ctx, ident); err == nil && fresh != nil {
 				iss = fresh
 			}
-			att, _ := lfs.GetIssueAttachments(context.Background(), iss.ID)
+			att, _ := lfs.GetIssueAttachments(ctx, iss.ID)
 			b, err := marshal.IssueMetaToMarkdown(iss, att...)
 			if err != nil {
 				return nil, iss.UpdatedAt, iss.CreatedAt
