@@ -398,6 +398,74 @@ the way `EmbeddedFileNode` is excluded from [[render-file]].
 `TestNamedListing*` guards the round-trip, the collision first-wins contract
 (the shadow as a *tested* invariant), order preservation, and totality.
 
+### Entity-directory manifest (`dirManifest`)
+The **deep module** owning the *static* children of an entity directory — the
+`issue.md`/`issue.meta`/`.error`/`.last`/`history.md` files and the
+`comments`/`docs`/`children`/`attachments`/`relations` subdirs of an issue, and
+the equivalents for a project/initiative. Where [[named-listing]] and
+[[indexed-listing]] own a collection's *dynamic* (entity-derived) children, this
+owns the *fixed framework* children — the static twin. Before it, each of the
+three entity directories (`IssueDirectoryNode`, `ProjectNode`, `InitiativeNode`)
+declared its children **twice**: once as a hardcoded `Readdir` `[]DirEntry`, once
+as a `Lookup` `switch`/`if` chain — two hand-kept lists that could drift into a
+file you can `ls` but not `open`. `dirManifest` (`internal/fs/manifest.go`) is
+the single source: `entries()` (Readdir) and `find(name)` (Lookup) are both pure
+projections of one `children []staticChild`, so they cannot disagree — the
+listed⇔openable guarantee the listing modules already give dynamic children,
+lifted one tier up to the skeleton.
+
+**Self-describing, like the directory nodes `attrNode` forced.** The manifest is
+a builder carrying the facts *every* child shares — `parent *BaseNode`, the
+entity `id` (scopes `.error`/`.last`/`.meta` keys), the entity `created`/`updated`
+times, and the child `timeout` (uniform within a directory: issue children 30s,
+project/initiative children 0) — so each child declares only its difference. Five
+typed constructors cover all 22 arms across the three directories: `subdir(name,
+ino, node)` → `newDirInode(dirAttr(created,updated), ino, timeout)`; `file(name,
+ino, build)` where `build` returns `(node, content, errno)` → `fileAttr`;
+`metaFile(name, render)` → `lookupMetaFile`; `errorFile(name)`/`lastFile(name)` →
+`lookupErrorFile`/`lookupSuccessFile`. The two oddballs fold in with no special
+case: `issue.meta`'s read-through closure is the `render` arg to `metaFile`, and
+`history.md` (fetch-during-lookup) is a `file()` whose build closure fetches and
+returns `errno` — the same shape as `issue.md` returning `EIO` on marshal
+failure.
+
+**find/build split — pure match, effectful build.** `find(name)` returns the
+matched `staticChild` (pure — the anti-drift surface, unit-testable with no
+mount because build closures are captured but not invoked); the caller then runs
+`child.build(ctx, out)`, which touches a live inode. A matched-but-failed build
+(`history.md`/`issue.md` `EIO`) is **terminal** — the caller returns that errno
+and does **not** fall through to the dynamic tail (a broken `history.md` must not
+get re-read as a possible issue identifier). This is why the manifest is
+find/build and not a fused `(inode, ok)` like `lookupCollectionTrio`, whose
+builds never fail.
+
+**The dynamic tail stays outside.** Only `ProjectNode` has one (issue symlinks);
+its `Readdir` appends symlink dirents after `entries()`, its `Lookup` runs the
+symlink loop only on a `find` miss. Issue and initiative directories have no
+dynamic tail.
+
+**Folds the three hand-rolled dir `Getattr`s onto [[attr-construction]].** The
+three entity dir nodes bypassed `newDirInode` — hand-building the Lookup
+`EntryOut` at their six construction sites *and* hand-rolling a separate
+`Getattr`, two attr copies per directory that had to agree. Embedding `attrNode`
+and routing all six sites through `newDirInode(dirAttr(...), <dirIno>, 30s)`
+deletes both and makes Lookup==Getattr by construction. It also normalized three
+latent inconsistencies: the initiative dir was constructed with `Ino: 0`
+(auto-assigned — now a stable `initiativeDirIno`), the issue-dir sites disagreed
+on setting `Uid`/`Gid`, and the initiative dir set no entry timeout (mount
+default) while its sibling entity dirs used 30s — **standardized to a uniform 30s
+entity-dir tier** (a deliberate, recorded behavior change, not preservation:
+initiative's unset read as an oversight, not a considered 0). The three dir-ino
+wrappers use symmetric `issuedir`/`projectdir`/`initiativedir` prefixes,
+registered in `TestInodeNamespaceDistinct`.
+
+`TestDirManifestRoundTrip` (`internal/fs/manifest_test.go`) is the primary guard:
+built in-memory from each dir node's `manifest()`, it asserts every `entries()`
+name resolves via `find`, no duplicates, modes agree, and the exact child-name
+set per directory (issue 10 / project 6 / initiative 6) as a change-detector. The
+`nodeattr` anti-drift equality test gains the three entity-dir kinds; the
+effectful `build` path stays covered by existing integration tests.
+
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
 the read-side counterpart to `execMutation`. Linear silently caps a

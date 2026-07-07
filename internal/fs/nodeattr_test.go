@@ -102,6 +102,10 @@ func TestDirNodeLookupGetattrAgree(t *testing.T) {
 		"labels":              &LabelsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
 		"initiative-updates":  &InitiativeUpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
 		"initiative-projects": &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		// The three entity directories, folded onto attrNode by the dir manifest.
+		"issue-dir":      &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"project-dir":    &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"initiative-dir": &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
 	}
 
 	for name, node := range nodes {

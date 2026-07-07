@@ -57,12 +57,8 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 
 	for _, init := range initiatives {
 		if initiativeDirName(init) == name {
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = i.lfs.uid
-			out.Attr.Gid = i.lfs.gid
-			out.Attr.SetTimes(&init.UpdatedAt, &init.UpdatedAt, &init.CreatedAt)
-			node := &InitiativeNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: init}
-			return i.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			node := &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiative: init}
+			return i.newDirInode(ctx, out, node, dirAttr(init.CreatedAt, init.UpdatedAt), initiativeDirIno(init.ID), 30*time.Second), 0
 		}
 	}
 
@@ -84,80 +80,73 @@ func initiativeDirName(init api.Initiative) string {
 
 // InitiativeNode represents a single initiative directory
 type InitiativeNode struct {
-	BaseNode
+	attrNode
 	initiative api.Initiative
 }
 
 var _ fs.NodeReaddirer = (*InitiativeNode)(nil)
 var _ fs.NodeLookuper = (*InitiativeNode)(nil)
-var _ fs.NodeGetattrer = (*InitiativeNode)(nil)
 var _ fs.NodeCreater = (*InitiativeNode)(nil)
 var _ fs.NodeRenamer = (*InitiativeNode)(nil)
 var _ fs.NodeUnlinker = (*InitiativeNode)(nil)
 
-func (i *InitiativeNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	i.SetOwner(out)
-	out.SetTimes(&i.initiative.UpdatedAt, &i.initiative.UpdatedAt, &i.initiative.CreatedAt)
-	return 0
-}
-
 func (i *InitiativeNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	entries := []fuse.DirEntry{
-		{Name: "initiative.md", Mode: syscall.S_IFREG},
-		{Name: "initiative.meta", Mode: syscall.S_IFREG},
-		{Name: ".error", Mode: syscall.S_IFREG},
-		{Name: "docs", Mode: syscall.S_IFDIR},
-		{Name: "projects", Mode: syscall.S_IFDIR},
-		{Name: "updates", Mode: syscall.S_IFDIR},
-	}
-	return fs.NewListDirStream(entries), 0
+	return fs.NewListDirStream(i.manifest().entries()), 0
 }
 
 func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	switch name {
-	case "initiative.md":
-		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: i.lfs}, initiative: i.initiative, initiativeID: i.initiative.ID}
-		node.content = node.generateContent() // seed once; Lookup needs the size anyway
-		return i.newFileInode(ctx, out, node, fileAttr(node.size(), i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeInfoIno(i.initiative.ID), 0), 0
+	if child, ok := i.manifest().find(name); ok {
+		return child.build(ctx, out)
+	}
+	return nil, syscall.ENOENT
+}
 
-	case "initiative.meta":
-		// Read-through from the freshest initiative so an edit to initiative.md is
-		// reflected here (go-fuse reuses this node across lookups).
-		lfs := i.lfs
-		snapshot := i.initiative
-		render := func() ([]byte, time.Time, time.Time) {
-			init := snapshot
-			if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
-				for _, it := range inits {
-					if it.ID == snapshot.ID {
-						init = it
-						break
-					}
+// manifest declares an initiative directory's static children: the editable
+// initiative.md, the read-through initiative.meta, the .error sidecar, and the
+// docs/projects/updates subdirs. Initiative children have no dynamic tail and a
+// 0 timeout.
+func (i *InitiativeNode) manifest() *dirManifest {
+	initiative := i.initiative // snapshot captured by the build closures
+	lfs := i.lfs
+	m := newDirManifest(&i.BaseNode, initiative.ID, initiative.CreatedAt, initiative.UpdatedAt, 0)
+
+	// initiative.md is editable-only; identity/status/owner live in initiative.meta.
+	m.file("initiative.md", initiativeInfoIno(initiative.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
+		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID}
+		content := node.generateContent()
+		node.content = content
+		return node, content, 0
+	})
+
+	// initiative.meta: read-through from the freshest initiative so an edit to
+	// initiative.md is reflected here.
+	m.metaFile("initiative.meta", func() ([]byte, time.Time, time.Time) {
+		init := initiative
+		if inits, err := lfs.GetInitiatives(context.Background()); err == nil {
+			for _, it := range inits {
+				if it.ID == initiative.ID {
+					init = it
+					break
 				}
 			}
-			node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
-			return node.metaContent(), init.UpdatedAt, init.CreatedAt
 		}
-		return i.lfs.lookupMetaFile(ctx, i, i.initiative.ID, render, out), 0
+		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
+		return node.metaContent(), init.UpdatedAt, init.CreatedAt
+	})
 
-	case ".error":
-		return i.lfs.lookupErrorFile(ctx, i, i.initiative.ID, out), 0
+	m.errorFile(".error")
 
-	case "docs":
-		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiativeID: i.initiative.ID}
-		return i.newDirInode(ctx, out, node, dirAttr(i.initiative.CreatedAt, i.initiative.UpdatedAt), docsDirIno(i.initiative.ID), 0), 0
+	m.subdir("docs", docsDirIno(initiative.ID), func() dirChild {
+		return &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, initiativeID: initiative.ID}
+	})
+	m.subdir("projects", initiativeProjectsIno(initiative.ID), func() dirChild {
+		return &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, initiative: initiative}
+	})
+	m.subdir("updates", initiativeUpdatesDirIno(initiative.ID), func() dirChild {
+		return &InitiativeUpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, initiativeID: initiative.ID}
+	})
 
-	case "projects":
-		node := &InitiativeProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiative: i.initiative}
-		return i.newDirInode(ctx, out, node, dirAttr(i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeProjectsIno(i.initiative.ID), 0), 0
-
-	case "updates":
-		node := &InitiativeUpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiativeID: i.initiative.ID}
-		return i.newDirInode(ctx, out, node, dirAttr(i.initiative.CreatedAt, i.initiative.UpdatedAt), initiativeUpdatesDirIno(i.initiative.ID), 0), 0
-	}
-
-	return nil, syscall.ENOENT
+	return m
 }
 
 // Create accepts an editor's atomic-save temp file (e.g. initiative.md.tmp.<pid>.<rand>)

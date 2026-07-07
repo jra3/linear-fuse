@@ -73,12 +73,8 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 	for _, project := range projects {
 		if projectDirName(project) == name {
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = p.lfs.uid
-			out.Attr.Gid = p.lfs.gid
-			out.Attr.SetTimes(&project.UpdatedAt, &project.UpdatedAt, &project.CreatedAt)
-			node := &ProjectNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: project}
-			return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: p.team, project: project}
+			return p.newDirInode(ctx, out, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
 		}
 	}
 
@@ -118,17 +114,8 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 		return nil, errno
 	}
 
-	node := &ProjectNode{
-		BaseNode: BaseNode{lfs: p.lfs},
-		team:     p.team,
-		project:  *project,
-	}
-
-	out.Attr.Mode = 0755 | syscall.S_IFDIR
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
-
-	return p.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: p.team, project: *project}
+	return p.newDirInode(ctx, out, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
 }
 
 // Rmdir archives a project (soft delete)
@@ -185,125 +172,40 @@ func projectDirName(project api.Project) string {
 
 // ProjectNode represents a single project directory
 type ProjectNode struct {
-	BaseNode
+	attrNode
 	team    api.Team
 	project api.Project
 }
 
 var _ fs.NodeReaddirer = (*ProjectNode)(nil)
 var _ fs.NodeLookuper = (*ProjectNode)(nil)
-var _ fs.NodeGetattrer = (*ProjectNode)(nil)
 var _ fs.NodeCreater = (*ProjectNode)(nil)
 var _ fs.NodeRenamer = (*ProjectNode)(nil)
 var _ fs.NodeUnlinker = (*ProjectNode)(nil)
 
-func (p *ProjectNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	p.SetOwner(out)
-	out.SetTimes(&p.project.UpdatedAt, &p.project.UpdatedAt, &p.project.CreatedAt)
-	return 0
-}
-
 func (p *ProjectNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	entries := p.manifest().entries()
+	// Dynamic tail: issue symlinks.
 	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
-
-	// +6 for project.md, project.meta, .error, docs/, updates/, and milestones/
-	entries := make([]fuse.DirEntry, len(issues)+6)
-	entries[0] = fuse.DirEntry{
-		Name: "project.md",
-		Mode: syscall.S_IFREG,
+	for _, issue := range issues {
+		entries = append(entries, fuse.DirEntry{Name: issue.Identifier, Mode: syscall.S_IFLNK})
 	}
-	entries[1] = fuse.DirEntry{
-		Name: "project.meta",
-		Mode: syscall.S_IFREG,
-	}
-	entries[2] = fuse.DirEntry{
-		Name: ".error",
-		Mode: syscall.S_IFREG,
-	}
-	entries[3] = fuse.DirEntry{
-		Name: "docs",
-		Mode: syscall.S_IFDIR,
-	}
-	entries[4] = fuse.DirEntry{
-		Name: "updates",
-		Mode: syscall.S_IFDIR,
-	}
-	entries[5] = fuse.DirEntry{
-		Name: "milestones",
-		Mode: syscall.S_IFDIR,
-	}
-	for i, issue := range issues {
-		entries[i+6] = fuse.DirEntry{
-			Name: issue.Identifier,
-			Mode: syscall.S_IFLNK, // Symlink to issue directory
-		}
-	}
-
 	return fs.NewListDirStream(entries), 0
 }
 
 func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	// Handle project.md metadata file
-	if name == "project.md" {
-		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: p.lfs}, team: p.team, project: p.project}
-		node.content = node.generateContent() // seed once; Lookup needs the size anyway
-		return p.newFileInode(ctx, out, node, fileAttr(node.size(), p.project.CreatedAt, p.project.UpdatedAt), projectInfoIno(p.project.ID), 0), 0
+	if child, ok := p.manifest().find(name); ok {
+		return child.build(ctx, out)
 	}
 
-	// Handle project.meta (read-only server-managed fields), rendered read-through
-	// from the freshest project so an edit to project.md is reflected here.
-	if name == "project.meta" {
-		lfs := p.lfs
-		team := p.team
-		snapshot := p.project
-		render := func() ([]byte, time.Time, time.Time) {
-			proj := snapshot
-			if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
-				for _, pr := range projs {
-					if pr.ID == snapshot.ID {
-						proj = pr
-						break
-					}
-				}
-			}
-			node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
-			return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
-		}
-		return p.lfs.lookupMetaFile(ctx, p, p.project.ID, render, out), 0
-	}
-
-	// Handle .error feedback file (last failed write to project.md)
-	if name == ".error" {
-		return p.lfs.lookupErrorFile(ctx, p, p.project.ID, out), 0
-	}
-
-	// Handle docs/ directory
-	if name == "docs" {
-		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, projectID: p.project.ID}
-		return p.newDirInode(ctx, out, node, dirAttr(p.project.CreatedAt, p.project.UpdatedAt), docsDirIno(p.project.ID), 0), 0
-	}
-
-	// Handle updates/ directory
-	if name == "updates" {
-		node := &UpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, projectID: p.project.ID}
-		return p.newDirInode(ctx, out, node, dirAttr(p.project.CreatedAt, p.project.UpdatedAt), updatesDirIno(p.project.ID), 0), 0
-	}
-
-	// Handle milestones/ directory
-	if name == "milestones" {
-		node := &MilestonesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, projectID: p.project.ID}
-		return p.newDirInode(ctx, out, node, dirAttr(p.project.CreatedAt, p.project.UpdatedAt), milestonesDirIno(p.project.ID), 0), 0
-	}
-
+	// Dynamic tail: an issue symlink, resolved only on a static-child miss.
 	issues, err := p.lfs.GetProjectIssues(ctx, p.project.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
-
 	for _, issue := range issues {
 		if issue.Identifier == name {
 			target := fmt.Sprintf("../../issues/%s", issue.Identifier)
@@ -312,6 +214,55 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	}
 
 	return nil, syscall.ENOENT
+}
+
+// manifest declares a project directory's static children: the editable
+// project.md, the read-through project.meta, the .error sidecar, and the
+// docs/updates/milestones subdirs. The dynamic tail (issue symlinks) is appended
+// by Readdir/Lookup, not the manifest. Project children have a 0 timeout.
+func (p *ProjectNode) manifest() *dirManifest {
+	project := p.project // snapshot captured by the build closures
+	team := p.team
+	lfs := p.lfs
+	m := newDirManifest(&p.BaseNode, project.ID, project.CreatedAt, project.UpdatedAt, 0)
+
+	// project.md is editable-only; identity/status/dates live in project.meta.
+	m.file("project.md", projectInfoIno(project.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
+		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project}
+		content := node.generateContent()
+		node.content = content
+		return node, content, 0
+	})
+
+	// project.meta: read-through from the freshest project so an edit to
+	// project.md is reflected here.
+	m.metaFile("project.meta", func() ([]byte, time.Time, time.Time) {
+		proj := project
+		if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
+			for _, pr := range projs {
+				if pr.ID == project.ID {
+					proj = pr
+					break
+				}
+			}
+		}
+		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
+		return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
+	})
+
+	m.errorFile(".error")
+
+	m.subdir("docs", docsDirIno(project.ID), func() dirChild {
+		return &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: project.ID}
+	})
+	m.subdir("updates", updatesDirIno(project.ID), func() dirChild {
+		return &UpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: project.ID}
+	})
+	m.subdir("milestones", milestonesDirIno(project.ID), func() dirChild {
+		return &MilestonesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: project.ID}
+	})
+
+	return m
 }
 
 // Create accepts an editor's atomic-save temp file (e.g. project.md.tmp.<pid>.<rand>)
