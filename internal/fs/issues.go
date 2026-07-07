@@ -327,12 +327,12 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 	// freshest issue so an edit to issue.md is reflected here.
 	lfs := n.lfs
 	ident := issue.Identifier
-	m.metaFile("issue.meta", func() ([]byte, time.Time, time.Time) {
+	m.metaFile("issue.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		iss := &issue
-		if fresh, err := lfs.FetchIssueByIdentifier(context.Background(), ident); err == nil && fresh != nil {
+		if fresh, err := lfs.FetchIssueByIdentifier(ctx, ident); err == nil && fresh != nil {
 			iss = fresh
 		}
-		att, _ := lfs.GetIssueAttachments(context.Background(), iss.ID)
+		att, _ := lfs.GetIssueAttachments(ctx, iss.ID)
 		b, err := marshal.IssueMetaToMarkdown(iss, att...)
 		if err != nil {
 			return nil, iss.UpdatedAt, iss.CreatedAt
@@ -343,8 +343,8 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 	// history.md: a read-only generated file, rendered fresh from the issue's
 	// activity history on each read. It reports the issue's own times; a transient
 	// fetch failure renders an empty file rather than making the entry vanish.
-	m.renderFile("history.md", historyIno(issue.ID), func() ([]byte, time.Time, time.Time) {
-		entries, err := lfs.GetIssueHistory(context.Background(), issue.ID)
+	m.renderFile("history.md", historyIno(issue.ID), func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		entries, err := lfs.GetIssueHistory(ctx, issue.ID)
 		if err != nil {
 			log.Printf("Failed to fetch history for %s: %v", issue.Identifier, err)
 			return nil, issue.UpdatedAt, issue.CreatedAt

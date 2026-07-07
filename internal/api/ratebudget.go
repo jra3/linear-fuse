@@ -156,10 +156,15 @@ type interactiveCtxKey struct{}
 // mutation. Background sync must NOT use this.
 //
 // ADOPTION NOTE (PR1): this is the mechanism only. On-demand FS read call
-// sites do not pass it yet — every read currently runs at its base tier,
-// which is the old behavior or better. Threading WithInteractive through
-// the FS-triggered read paths (repo staleness refreshes etc.) is a
-// follow-up.
+// The FS layer threads it at its synchronous, user-blocking API call sites
+// (GetTeamDocuments; the attachment-create authoritative re-check) — most
+// read paths never need it because they are SQLite-first with *background*
+// refresh, and background work must stay at base tier.
+//
+// RULE: apply WithInteractive at the moment of the synchronous call, never
+// store a promoted ctx or hand it to a goroutine that outlives the FUSE
+// request — a leaked promotion would let background work drain the
+// interactive reserve the promotion exists to protect.
 func WithInteractive(ctx context.Context) context.Context {
 	return context.WithValue(ctx, interactiveCtxKey{}, true)
 }

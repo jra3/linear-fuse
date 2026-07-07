@@ -18,7 +18,7 @@ import (
 // interface). Collapses the render-closure + lookupRenderFile pairing the two
 // Lookups hand-rolled identically.
 func (b *BaseNode) lookupUpdateFile(ctx context.Context, out *fuse.EntryOut, id, health string, created, updated time.Time, user *api.User, body string, ino uint64) *fs.Inode {
-	render := func() ([]byte, time.Time, time.Time) {
+	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		return updateMarkdown(id, health, created, updated, user, body), updated, created
 	}
 	return b.lookupRenderFile(ctx, out, render, ino, 30*time.Second)

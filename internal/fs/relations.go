@@ -104,7 +104,7 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, rel api.Issu
 	node := &RelationFileNode{
 		renderFile: renderFile{
 			BaseNode: BaseNode{lfs: n.lfs},
-			render: func() ([]byte, time.Time, time.Time) {
+			render: func(context.Context) ([]byte, time.Time, time.Time) {
 				return []byte(relationContent(rel, isInverse)), rel.UpdatedAt, rel.CreatedAt
 			},
 		},

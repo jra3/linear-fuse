@@ -123,7 +123,7 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	// so the file honestly reports zero (unknown) rather than a fabricated now().
 	if name == "user.md" {
 		user := u.user
-		return u.lookupRenderFile(ctx, out, func() ([]byte, time.Time, time.Time) {
+		return u.lookupRenderFile(ctx, out, func(context.Context) ([]byte, time.Time, time.Time) {
 			return userMarkdown(user), time.Time{}, time.Time{}
 		}, 0, inheritTimeout), 0
 	}

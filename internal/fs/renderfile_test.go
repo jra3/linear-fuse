@@ -39,7 +39,7 @@ func TestReadWindowClampsAtEOF(t *testing.T) {
 }
 
 func TestRenderFileOpenRejectsWrites(t *testing.T) {
-	r := &renderFile{render: func() ([]byte, time.Time, time.Time) {
+	r := &renderFile{render: func(context.Context) ([]byte, time.Time, time.Time) {
 		return []byte("x"), time.Time{}, time.Time{}
 	}}
 	if _, _, errno := r.Open(context.Background(), syscall.O_RDONLY); errno != 0 {
@@ -56,7 +56,7 @@ func TestRenderFileGetattrReportsRenderedSizeAndTimes(t *testing.T) {
 	mtime := time.Unix(2000, 0)
 	ctime := time.Unix(1000, 0)
 	body := []byte("id: X\n")
-	r := &renderFile{render: func() ([]byte, time.Time, time.Time) {
+	r := &renderFile{render: func(context.Context) ([]byte, time.Time, time.Time) {
 		return body, mtime, ctime
 	}}
 
@@ -81,7 +81,7 @@ func TestRenderFileGetattrReportsRenderedSizeAndTimes(t *testing.T) {
 // A zero time reports as an unset attr (nonZeroTime), never a fabricated now()
 // or a wrapped garbage timestamp — the drift this module exists to kill.
 func TestRenderFileZeroTimeReportsUnset(t *testing.T) {
-	r := &renderFile{render: func() ([]byte, time.Time, time.Time) {
+	r := &renderFile{render: func(context.Context) ([]byte, time.Time, time.Time) {
 		return []byte("no times"), time.Time{}, time.Time{}
 	}}
 	var out fuse.AttrOut
@@ -90,5 +90,39 @@ func TestRenderFileZeroTimeReportsUnset(t *testing.T) {
 	}
 	if out.Mtime != 0 || out.Ctime != 0 {
 		t.Errorf("zero times reported as mtime=%d ctime=%d, want 0/0", out.Mtime, out.Ctime)
+	}
+}
+
+// TestRenderFileThreadsContext pins the ctx contract: the FUSE handler's ctx
+// reaches the render closure on every path (Read, Getattr, and the Lookup-time
+// renderAttr), so a closure that promotes it with api.WithInteractive actually
+// affects the request — a context.Background() substitution anywhere in the
+// chain would silently strip the promotion (the pre-fix behavior).
+func TestRenderFileThreadsContext(t *testing.T) {
+	type ctxKey struct{}
+	want := context.WithValue(context.Background(), ctxKey{}, "marker")
+
+	var got []any
+	r := &renderFile{render: func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		got = append(got, ctx.Value(ctxKey{}))
+		return []byte("x"), time.Time{}, time.Time{}
+	}}
+
+	if _, errno := r.Read(want, nil, make([]byte, 8), 0); errno != 0 {
+		t.Fatalf("Read errno=%v", errno)
+	}
+	var out fuse.AttrOut
+	if errno := r.Getattr(want, nil, &out); errno != 0 {
+		t.Fatalf("Getattr errno=%v", errno)
+	}
+	r.renderAttr(want)
+
+	if len(got) != 3 {
+		t.Fatalf("render called %d times, want 3", len(got))
+	}
+	for i, v := range got {
+		if v != "marker" {
+			t.Errorf("call %d: render did not receive the handler ctx (got %v)", i, v)
+		}
 	}
 }

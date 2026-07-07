@@ -147,7 +147,7 @@ func (lfs *LinearFS) renderWriteSuccess(key string) []byte {
 // is a plain renderFile with zero timeouts, so it always reflects the most recent
 // create; the reported time is the newest recorded create's timestamp.
 func (lfs *LinearFS) lookupSuccessFile(ctx context.Context, parent fs.InodeEmbedder, key string, out *fuse.EntryOut) *fs.Inode {
-	render := func() ([]byte, time.Time, time.Time) {
+	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		content := lfs.renderWriteSuccess(key)
 		if content == nil {
 			return nil, time.Time{}, time.Time{}

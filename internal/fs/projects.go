@@ -235,9 +235,9 @@ func (p *ProjectNode) manifest() *dirManifest {
 
 	// project.meta: read-through from the freshest project so an edit to
 	// project.md is reflected here.
-	m.metaFile("project.meta", func() ([]byte, time.Time, time.Time) {
+	m.metaFile("project.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		proj := project
-		if projs, err := lfs.GetTeamProjects(context.Background(), team.ID); err == nil {
+		if projs, err := lfs.GetTeamProjects(ctx, team.ID); err == nil {
 			proj = freshestByID(projs, project.ID, func(p api.Project) string { return p.ID }, project)
 		}
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
