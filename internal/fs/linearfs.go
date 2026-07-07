@@ -3,9 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,10 +39,8 @@ type LinearFS struct {
 	gid        uint32 // Owner GID for files/dirs
 	mountPoint string // Filesystem mount path (for README generation)
 
-	// File cache for embedded files
-	fileCacheDir string
-	fileCacheMu  gosync.RWMutex
-	fileCache    map[string][]byte // in-memory cache (file ID -> content)
+	// Embedded-file bytes (memory→disk→CDN); see embeddedfilecache.go.
+	files *embeddedFileCache
 
 	// .error / .last state for every writable surface (see writefeedback.go).
 	// Embedded, so lfs.SetWriteError / lfs.AppendWriteSuccess / … promote.
@@ -104,12 +100,18 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		mutatorImpl:  client,
 		verifierImpl: client,
 		debug:        debug,
-		fileCacheDir: cacheDir,
-		fileCache:    make(map[string][]byte),
 	}
 	// Wire the feedback store's kernel-cache seam to this instance. The method
 	// value binds the pointer, so it is safe to set after lfs exists.
 	lfs.writeFeedback = newWriteFeedback(lfs.InvalidateUpdated)
+	// The embedded-file cache's seams are late-bound: repo is wired later (in
+	// EnableSQLiteCache), so persist reads lfs.repo at call time, not now.
+	lfs.files = newEmbeddedFileCache(cacheDir,
+		func() string { return lfs.client.AuthHeader() },
+		func(ctx context.Context, fileID, path string, size int64) error {
+			return lfs.repo.UpdateEmbeddedFileCache(ctx, fileID, path, size)
+		},
+	)
 	return lfs, nil
 }
 
@@ -975,74 +977,9 @@ func (lfs *LinearFS) verify() verifyReader {
 // File Cache for Embedded Files
 // =============================================================================
 
-// FetchEmbeddedFile downloads an embedded file from Linear's CDN, caching it locally.
-// Returns the file content. Files are cached both in memory and on disk.
+// FetchEmbeddedFile returns an embedded file's bytes via the embedded-file cache
+// (memory → disk → CDN). Retained as a thin promotion so callers keep reaching
+// it through lfs.
 func (lfs *LinearFS) FetchEmbeddedFile(ctx context.Context, file api.EmbeddedFile) ([]byte, error) {
-	// Check in-memory cache first
-	lfs.fileCacheMu.RLock()
-	if content, ok := lfs.fileCache[file.ID]; ok {
-		lfs.fileCacheMu.RUnlock()
-		return content, nil
-	}
-	lfs.fileCacheMu.RUnlock()
-
-	// Check disk cache
-	diskPath := filepath.Join(lfs.fileCacheDir, file.ID)
-	if file.CachePath != "" {
-		diskPath = file.CachePath
-	}
-
-	if content, err := os.ReadFile(diskPath); err == nil {
-		// Found on disk, add to in-memory cache
-		lfs.fileCacheMu.Lock()
-		lfs.fileCache[file.ID] = content
-		lfs.fileCacheMu.Unlock()
-		return content, nil
-	}
-
-	// Download from Linear CDN
-	content, err := lfs.downloadFile(ctx, file.URL)
-	if err != nil {
-		return nil, fmt.Errorf("download file: %w", err)
-	}
-
-	// Cache to disk
-	if err := os.WriteFile(diskPath, content, 0644); err != nil {
-		log.Printf("[cache] Warning: failed to cache file %s: %v", file.Filename, err)
-	} else {
-		// Update database with cache path
-		if err := lfs.repo.UpdateEmbeddedFileCache(ctx, file.ID, diskPath, int64(len(content))); err != nil {
-			log.Printf("[cache] Warning: failed to update cache path: %v", err)
-		}
-	}
-
-	// Cache in memory
-	lfs.fileCacheMu.Lock()
-	lfs.fileCache[file.ID] = content
-	lfs.fileCacheMu.Unlock()
-
-	return content, nil
-}
-
-// downloadFile fetches a file from Linear's CDN
-func (lfs *LinearFS) downloadFile(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Linear CDN requires authentication for private files
-	req.Header.Set("Authorization", lfs.client.AuthHeader())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
-	}
-
-	return io.ReadAll(resp.Body)
+	return lfs.files.FetchEmbeddedFile(ctx, file)
 }
