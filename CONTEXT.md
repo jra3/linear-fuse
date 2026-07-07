@@ -563,6 +563,24 @@ never-pruned `embedded_files` table), analogous to milestones — it runs inside
 the comment `upsert` closure regardless of the upsert result and cannot affect
 cleanliness.
 
+### Reverse conversion contract (hydrate-then-overlay)
+Every DB→API reverse conversion in `internal/db/convert.go` **starts from the
+`data` blob and overlays its queryable columns** (canonical statement at
+`DBMilestoneToAPIProjectMilestone`). The columns are the authoritative source;
+the blob carries any api field without a column, so a field added to an api
+struct flows through with zero converter edits. Reading columns *only* — the
+pre-contract shape of the State/Label/User/Cycle converters — silently dropped
+JSON-only fields; for Cycle this was a **live bug**: the history arrays that
+`cycle.md` renders its progress from were fetched, stored, and then zeroed on
+every read (progress permanently 0/0). Overlay converters are best-effort on a
+corrupt/legacy blob (fall back to columns — one bad row must not poison a
+listing); pure-unmarshal converters (Issue, Project, …, whose blob is the whole
+row) trivially satisfy the contract; `EmbeddedFile` is the excluded case (its
+table has no blob). Label's `Team` overlays from the `team_id` column — the
+authoritative source per the workspace-label churn fix — never from the blob's
+copy. Each overlay converter is pinned by a `Test*RoundTrip` in
+`convert_test.go` (forward → reverse == identity, plus corrupt-blob fallback).
+
 ### Rate budget (`rateBudget`)
 The **deep module** governing Linear's hourly rate limits
 (`internal/api/ratebudget.go`). Linear meters every key on TWO axes —

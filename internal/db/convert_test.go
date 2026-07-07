@@ -832,6 +832,139 @@ func TestMilestoneRoundTrip(t *testing.T) {
 	}
 }
 
+// TestStateRoundTrip pins the reverse-conversion contract (hydrate from data,
+// overlay columns — see DBMilestoneToAPIProjectMilestone) for states: a future
+// api.State field flows through the blob with zero converter edits, and a
+// corrupt blob falls back to the columns.
+func TestStateRoundTrip(t *testing.T) {
+	t.Parallel()
+	orig := api.State{ID: "state-rt", Name: "In Progress", Type: "started"}
+
+	params, err := APIStateToDBState(orig, "team-1")
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	row := State{ID: params.ID, TeamID: params.TeamID, Name: params.Name, Type: params.Type, Data: params.Data}
+	if got := DBStateToAPIState(row); !reflect.DeepEqual(got, orig) {
+		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, orig)
+	}
+
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if got := DBStateToAPIState(corrupt); got.ID != orig.ID || got.Name != orig.Name || got.Type != orig.Type {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", got)
+	}
+}
+
+// TestLabelRoundTrip pins the contract for labels, including the two Team
+// invariants: Team survives the round-trip via the team_id column, and the
+// column stays authoritative over the blob's copy (a NULL column reads as a
+// workspace label even if the blob carries a team).
+func TestLabelRoundTrip(t *testing.T) {
+	t.Parallel()
+	orig := api.Label{
+		ID:          "label-rt",
+		Name:        "Bug",
+		Color:       "#ff0000",
+		Description: "Something broke",
+		Team:        &api.Team{ID: "team-1"},
+	}
+
+	params, err := APILabelToDBLabel(orig)
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	row := Label{ID: params.ID, TeamID: params.TeamID, Name: params.Name, Color: params.Color, Description: params.Description, Data: params.Data}
+	if got := DBLabelToAPILabel(row); !reflect.DeepEqual(got, orig) {
+		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, orig)
+	}
+
+	// A workspace label (nil Team) stays nil through the round-trip.
+	ws := orig
+	ws.Team = nil
+	wsParams, err := APILabelToDBLabel(ws)
+	if err != nil {
+		t.Fatalf("forward (workspace): %v", err)
+	}
+	wsRow := Label{ID: wsParams.ID, TeamID: wsParams.TeamID, Name: wsParams.Name, Color: wsParams.Color, Description: wsParams.Description, Data: wsParams.Data}
+	if got := DBLabelToAPILabel(wsRow); got.Team != nil {
+		t.Errorf("workspace label came back with a team: %+v", got.Team)
+	}
+
+	// The team_id column is authoritative: a NULL column must read as a
+	// workspace label even when the blob's Team disagrees.
+	disagree := row
+	disagree.TeamID = sql.NullString{}
+	if got := DBLabelToAPILabel(disagree); got.Team != nil {
+		t.Errorf("NULL team_id column did not override the blob's team: %+v", got.Team)
+	}
+
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if got := DBLabelToAPILabel(corrupt); got.ID != orig.ID || got.Name != orig.Name || got.Team == nil || got.Team.ID != "team-1" {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", got)
+	}
+}
+
+// TestUserRoundTrip pins the contract for users.
+func TestUserRoundTrip(t *testing.T) {
+	t.Parallel()
+	orig := api.User{
+		ID:          "user-rt",
+		Name:        "Ada Lovelace",
+		Email:       "ada@example.com",
+		DisplayName: "ada",
+		Active:      true,
+	}
+
+	params, err := APIUserToDBUser(orig)
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	row := User{ID: params.ID, Email: params.Email, Name: params.Name, DisplayName: params.DisplayName, Active: params.Active, Data: params.Data}
+	if got := DBUserToAPIUser(row); !reflect.DeepEqual(got, orig) {
+		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, orig)
+	}
+
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if got := DBUserToAPIUser(corrupt); got.ID != orig.ID || got.Email != orig.Email || !got.Active {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", got)
+	}
+}
+
+// TestCycleRoundTrip pins the contract for cycles. The history arrays are the
+// live case: they exist only in the blob (no columns), and dropping them made
+// cycle.md render its progress as a permanent 0/0.
+func TestCycleRoundTrip(t *testing.T) {
+	t.Parallel()
+	orig := api.Cycle{
+		ID:                         "cycle-rt",
+		Number:                     42,
+		Name:                       "Sprint 42",
+		StartsAt:                   time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		EndsAt:                     time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC),
+		CompletedIssueCountHistory: []int{0, 2, 5},
+		IssueCountHistory:          []int{8, 9, 9},
+	}
+
+	params, err := APICycleToDBCycle(orig, "team-1")
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	row := Cycle{ID: params.ID, TeamID: params.TeamID, Number: params.Number, Name: params.Name, StartsAt: params.StartsAt, EndsAt: params.EndsAt, Data: params.Data}
+	got := DBCycleToAPICycle(row)
+	if !reflect.DeepEqual(got, orig) {
+		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, orig)
+	}
+
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if got := DBCycleToAPICycle(corrupt); got.ID != orig.ID || got.Number != orig.Number || !got.StartsAt.Equal(orig.StartsAt) {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", got)
+	}
+}
+
 func TestAPIProjectUpdateToDBUpdate(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
