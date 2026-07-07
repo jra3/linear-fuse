@@ -75,15 +75,7 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	entries := n.trio().entries()
-
-	for _, doc := range docs {
-		entries = append(entries, fuse.DirEntry{
-			Name: documentFilename(doc),
-			Mode: syscall.S_IFREG,
-		})
-	}
-
+	entries := append(n.trio().entries(), n.listing(docs).entries()...)
 	return fs.NewListDirStream(entries), 0
 }
 
@@ -91,6 +83,13 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 // has no user-chosen filename, so the title must come from the content.
 func (n *DocsNode) trio() collectionTrio {
 	return collectionTrio{kind: "docs", parentID: n.parentID(), onFlush: n.createDocument("")}
+}
+
+// listing declares the docs collection's item files: one per document, named by
+// documentFilename. Backs Readdir/Lookup/Unlink/Rename/Create-overwrite so they
+// derive and match names through one place. See namedListing.
+func (n *DocsNode) listing(docs []api.Document) namedListing[api.Document] {
+	return namedListing[api.Document]{items: docs, nameOf: documentFilename}
 }
 
 func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -103,11 +102,8 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.EIO
 	}
 
-	// Match by filename
-	for _, doc := range docs {
-		if documentFilename(doc) == name {
-			return n.newDocumentInode(ctx, doc, out)
-		}
+	if doc, ok := n.listing(docs).find(name); ok {
+		return n.newDocumentInode(ctx, doc, out)
 	}
 
 	return nil, syscall.ENOENT
@@ -131,10 +127,8 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			if err != nil {
 				return nil, err
 			}
-			for _, doc := range docs {
-				if documentFilename(doc) == name {
-					return &doc, nil
-				}
+			if doc, ok := n.listing(docs).find(name); ok {
+				return &doc, nil
 			}
 			return nil, nil
 		},
@@ -179,30 +173,28 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		return syscall.EIO
 	}
 
-	// Find the document by old filename
-	for _, doc := range docs {
-		if documentFilename(doc) == name {
-			// Update document title
-			updatedDoc, err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
-			if err != nil {
-				log.Printf("Failed to rename document: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: rename document "+name+" -> "+newName+"\nError: "+err.Error())
-				return syscall.EIO
-			}
-			// Upsert to SQLite so it's immediately visible
-			if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
-				log.Printf("Warning: failed to upsert document to SQLite: %v", err)
-			}
-			if n.lfs.debug {
-				log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
-			}
-			// Invalidate kernel cache for old and new names
-			n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), name, newName, 0)
-			return 0
-		}
+	doc, ok := n.listing(docs).find(name)
+	if !ok {
+		return syscall.ENOENT
 	}
 
-	return syscall.ENOENT
+	// Update document title
+	updatedDoc, err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
+	if err != nil {
+		log.Printf("Failed to rename document: %v", err)
+		n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: rename document "+name+" -> "+newName+"\nError: "+err.Error())
+		return syscall.EIO
+	}
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
+		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
+	}
+	if n.lfs.debug {
+		log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
+	}
+	// Invalidate kernel cache for old and new names
+	n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), name, newName, 0)
+	return 0
 }
 
 // newDocumentInode builds the read/write DocumentFileNode inode for an existing
@@ -242,14 +234,12 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 	// write-only _create node to the name, leaving the file unreadable and
 	// unwritable (#137).
 	if docs, err := n.getDocuments(ctx); err == nil {
-		for _, doc := range docs {
-			if documentFilename(doc) == name {
-				inode, errno := n.newDocumentInode(ctx, doc, out)
-				if errno != 0 {
-					return nil, nil, 0, errno
-				}
-				return inode, nil, 0, 0
+		if doc, ok := n.listing(docs).find(name); ok {
+			inode, errno := n.newDocumentInode(ctx, doc, out)
+			if errno != 0 {
+				return nil, nil, 0, errno
 			}
+			return inode, nil, 0, 0
 		}
 	}
 

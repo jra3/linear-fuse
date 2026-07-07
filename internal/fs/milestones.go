@@ -31,20 +31,20 @@ func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	entries := n.trio().entries()
-	for _, m := range milestones {
-		entries = append(entries, fuse.DirEntry{
-			Name: milestoneFilename(m),
-			Mode: syscall.S_IFREG,
-		})
-	}
-
+	entries := append(n.trio().entries(), n.listing(milestones).entries()...)
 	return fs.NewListDirStream(entries), 0
 }
 
 // trio declares the milestones collection's writable surfaces.
 func (n *MilestonesNode) trio() collectionTrio {
 	return collectionTrio{kind: "milestones", parentID: n.projectID, onFlush: n.createMilestone}
+}
+
+// listing declares the milestones collection's item files: one per milestone,
+// named by milestoneFilename. Backs Readdir/Lookup/Unlink so they derive and
+// match names through one place. See namedListing.
+func (n *MilestonesNode) listing(ms []api.ProjectMilestone) namedListing[api.ProjectMilestone] {
+	return namedListing[api.ProjectMilestone]{items: ms, nameOf: milestoneFilename}
 }
 
 func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -57,36 +57,34 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return nil, syscall.EIO
 	}
 
-	// Match by filename
-	for _, m := range milestones {
-		if milestoneFilename(m) == name {
-			content, err := marshal.MilestoneToMarkdown(&m)
-			if err != nil {
-				log.Printf("Failed to marshal milestone: %v", err)
-				return nil, syscall.EIO
-			}
-			node := &MilestoneFileNode{
-				BaseNode:   BaseNode{lfs: n.lfs},
-				milestone:  m,
-				projectID:  n.projectID,
-				editBuffer: editBuffer{content: content},
-			}
-			now := time.Now()
-			out.Attr.Mode = 0644 | syscall.S_IFREG
-			out.Attr.Uid = n.lfs.uid
-			out.Attr.Gid = n.lfs.gid
-			out.Attr.Size = uint64(len(content))
-			out.SetAttrTimeout(5 * time.Second)
-			out.SetEntryTimeout(5 * time.Second)
-			out.Attr.SetTimes(&now, &now, &now)
-			return n.NewInode(ctx, node, fs.StableAttr{
-				Mode: syscall.S_IFREG,
-				Ino:  milestoneIno(m.ID),
-			}), 0
-		}
+	m, ok := n.listing(milestones).find(name)
+	if !ok {
+		return nil, syscall.ENOENT
 	}
 
-	return nil, syscall.ENOENT
+	content, err := marshal.MilestoneToMarkdown(&m)
+	if err != nil {
+		log.Printf("Failed to marshal milestone: %v", err)
+		return nil, syscall.EIO
+	}
+	node := &MilestoneFileNode{
+		BaseNode:   BaseNode{lfs: n.lfs},
+		milestone:  m,
+		projectID:  n.projectID,
+		editBuffer: editBuffer{content: content},
+	}
+	now := time.Now()
+	out.Attr.Mode = 0644 | syscall.S_IFREG
+	out.Attr.Uid = n.lfs.uid
+	out.Attr.Gid = n.lfs.gid
+	out.Attr.Size = uint64(len(content))
+	out.SetAttrTimeout(5 * time.Second)
+	out.SetEntryTimeout(5 * time.Second)
+	out.Attr.SetTimes(&now, &now, &now)
+	return n.NewInode(ctx, node, fs.StableAttr{
+		Mode: syscall.S_IFREG,
+		Ino:  milestoneIno(m.ID),
+	}), 0
 }
 
 func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -107,10 +105,8 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 			if err != nil {
 				return nil, err
 			}
-			for _, m := range milestones {
-				if milestoneFilename(m) == name {
-					return &m, nil
-				}
+			if m, ok := n.listing(milestones).find(name); ok {
+				return &m, nil
 			}
 			return nil, nil
 		},
