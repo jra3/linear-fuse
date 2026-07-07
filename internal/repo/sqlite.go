@@ -1482,29 +1482,54 @@ func (r *SQLiteRepository) TouchIssueSubResources(ctx context.Context, issueID s
 // =============================================================================
 
 // GetIssueRelations returns all relations for an issue (outgoing)
+// relationDir picks which end of a stored relation is the "other" issue — the
+// one placed in the view and enriched. Outgoing relations (this issue → target)
+// fill RelatedIssue from related_issue_id; incoming/inverse relations
+// (source → this issue) fill Issue from issue_id.
+type relationDir int
+
+const (
+	relOutgoing relationDir = iota
+	relIncoming
+)
+
+// relationView maps one stored db.IssueRelation to an api.IssueRelation, placing
+// the other end in the field the direction dictates and enriching it with the
+// issue's identifier/title. It is the one converter behind all three relation
+// reads (outgoing, inverse, by-id), which were byte-identical but for this
+// direction — so a field added to the mapping now lives in exactly one place.
+func (r *SQLiteRepository) relationView(ctx context.Context, rel db.IssueRelation, dir relationDir) api.IssueRelation {
+	view := api.IssueRelation{
+		ID:        rel.ID,
+		Type:      rel.Type,
+		CreatedAt: rel.CreatedAt.Time,
+		UpdatedAt: rel.UpdatedAt.Time,
+	}
+	otherID := rel.RelatedIssueID
+	if dir == relIncoming {
+		otherID = rel.IssueID
+	}
+	end := &api.ParentIssue{ID: otherID}
+	if issue, err := r.GetIssueByID(ctx, otherID); err == nil && issue != nil {
+		end.Identifier = issue.Identifier
+		end.Title = issue.Title
+	}
+	if dir == relIncoming {
+		view.Issue = end
+	} else {
+		view.RelatedIssue = end
+	}
+	return view
+}
+
 func (r *SQLiteRepository) GetIssueRelations(ctx context.Context, issueID string) ([]api.IssueRelation, error) {
 	relations, err := r.store.Queries().ListIssueRelations(ctx, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue relations: %w", err)
 	}
-
-	// Convert DB relations to API relations
 	result := make([]api.IssueRelation, len(relations))
 	for i, rel := range relations {
-		result[i] = api.IssueRelation{
-			ID:   rel.ID,
-			Type: rel.Type,
-			RelatedIssue: &api.ParentIssue{
-				ID: rel.RelatedIssueID,
-			},
-			CreatedAt: rel.CreatedAt.Time,
-			UpdatedAt: rel.UpdatedAt.Time,
-		}
-		// Try to get the related issue details
-		if issue, err := r.GetIssueByID(ctx, rel.RelatedIssueID); err == nil && issue != nil {
-			result[i].RelatedIssue.Identifier = issue.Identifier
-			result[i].RelatedIssue.Title = issue.Title
-		}
+		result[i] = r.relationView(ctx, rel, relOutgoing)
 	}
 	return result, nil
 }
@@ -1515,24 +1540,9 @@ func (r *SQLiteRepository) GetIssueInverseRelations(ctx context.Context, issueID
 	if err != nil {
 		return nil, fmt.Errorf("list issue inverse relations: %w", err)
 	}
-
-	// Convert DB relations to API relations (for inverse, the "issue" field points to the source)
 	result := make([]api.IssueRelation, len(relations))
 	for i, rel := range relations {
-		result[i] = api.IssueRelation{
-			ID:   rel.ID,
-			Type: rel.Type,
-			Issue: &api.ParentIssue{
-				ID: rel.IssueID,
-			},
-			CreatedAt: rel.CreatedAt.Time,
-			UpdatedAt: rel.UpdatedAt.Time,
-		}
-		// Try to get the source issue details
-		if issue, err := r.GetIssueByID(ctx, rel.IssueID); err == nil && issue != nil {
-			result[i].Issue.Identifier = issue.Identifier
-			result[i].Issue.Title = issue.Title
-		}
+		result[i] = r.relationView(ctx, rel, relIncoming)
 	}
 	return result, nil
 }
@@ -1546,20 +1556,6 @@ func (r *SQLiteRepository) GetIssueRelationByID(ctx context.Context, id string) 
 		}
 		return nil, fmt.Errorf("get issue relation: %w", err)
 	}
-
-	result := api.IssueRelation{
-		ID:   rel.ID,
-		Type: rel.Type,
-		RelatedIssue: &api.ParentIssue{
-			ID: rel.RelatedIssueID,
-		},
-		CreatedAt: rel.CreatedAt.Time,
-		UpdatedAt: rel.UpdatedAt.Time,
-	}
-	// Try to get the related issue details
-	if issue, err := r.GetIssueByID(ctx, rel.RelatedIssueID); err == nil && issue != nil {
-		result.RelatedIssue.Identifier = issue.Identifier
-		result.RelatedIssue.Title = issue.Title
-	}
-	return &result, nil
+	view := r.relationView(ctx, rel, relOutgoing)
+	return &view, nil
 }
