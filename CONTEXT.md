@@ -279,7 +279,64 @@ formatter (their `<NNNN>-<date>-<health>.md` convention is identical), while
 comments own a per-minute timestamp format with no health. `TestIndexedListing-
 RoundTrip` guards the invariant: every name `entries()` emits resolves back
 through `find`, and same-second items still get distinct names via the 1-based
-index.
+index. Its un-indexed twin is [[named-listing]].
+
+### Named listing (`namedListing`)
+The **deep module** owning the *entity-derived* filenames of a collection — the
+un-indexed sibling of [[indexed-listing]]. Where that module derives a name from
+an item's **position** in a sorted order, this one derives it from the item's
+**identity**, so there is no `lessKey` and no sort. `namedListing[T]{items,
+nameOf}` (`internal/fs/namedlisting.go`) exposes `entries()` (Readdir) and
+`find(name)` (Lookup/Unlink/Rename/Create-overwrite), and each of the three
+collections declares its listing via a `listing(items)` method (mirroring
+`trio()`) that reuses the existing `documentFilename`/`labelFilename`/
+`milestoneFilename` by value. It absorbed **13 hand-copied name-matching sites**
+across `documents.go`/`labels.go`/`milestones.go` (5+5+3): every surface that
+mapped a name to an entity re-derived and re-matched independently, so a
+`sanitizeFilename` tweak in one could strand a file (listed but un-openable). The
+caller fetches and passes the slice; the module is pure of the repo, so it is
+unit-tested on literal slices, no mount.
+
+**Ordering is the repo's job, never this module's.** The SQLite list queries
+carry the `ORDER BY` (labels by name, documents by title, milestones by
+`sort_order` — a *meaningful manual order*), so `namedListing` preserves the
+`items` slice as given. A filename sort here would clobber milestones'
+`sort_order` into alphabetical — a regression — so the module stays neutral to
+order and owns only name derivation and matching.
+
+**Collisions are first-match, emit-once — deliberately NOT dedup (the
+load-bearing decision, settled on live evidence; a future review must not
+re-suggest disambiguation).** `find` returns the first match and `entries()`
+emits each derived name once (first wins), yielding a well-formed readdir
+consistent with `find` by construction — and fixing the pre-existing sloppiness
+where the hand-rolled loops emitted a *duplicate dirent* and leaned on the kernel
+to collapse it. Why not disambiguate the second (`Bug (2).md`)? Because the mount
+is a name-addressed projection of a source that *permits* duplicate names, and
+the whole name→entity stack is already assume-first:
+
+- **Documents** can't collide: `slug_id` is `UNIQUE NOT NULL` and
+  `documentFilename` uses the slug first — the slug is their index.
+- **Milestones** can't collide on name: Linear *enforces* per-project milestone-
+  name uniqueness (verified in the product UI). The only residual is
+  `sanitizeFilename` mangling an exotic name — narrow.
+- **Labels** *can* collide: a workspace label (`team_id IS NULL`) and a team
+  label share a directory (`WHERE team_id = ? OR team_id IS NULL`) and can share
+  a name — but they **shadow each other in Linear's own product too**, so
+  first-match faithfully mirrors the source (verified: two `testy-one` labels →
+  one file in the mount).
+
+A disambiguated `Bug (2).md` would be strictly worse than a shadow: it resolves
+**nowhere**, because `ResolveMilestoneID` and `GetLabelByName` match the raw
+entity `Name`, not the filename — an addressable file you can't assign to (a
+decoy), not completeness. `indexedListing` escapes this only because
+comments/updates are name-resolved *nowhere else*, so it can disambiguate freely;
+milestones/labels are resolution keys, pinning the filename to the resolution
+name. True per-file addressability would mean reworking name resolution end-to-
+end — a separate change, not a listing collapse. Attachments are the excluded
+case (two heterogeneous item types in one dir + stateful `deduplicateFilename`),
+the way `EmbeddedFileNode` is excluded from [[render-file]].
+`TestNamedListing*` guards the round-trip, the collision first-wins contract
+(the shadow as a *tested* invariant), order preservation, and totality.
 
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —

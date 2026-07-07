@@ -33,20 +33,20 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	entries := n.trio().entries()
-	for _, label := range labels {
-		entries = append(entries, fuse.DirEntry{
-			Name: labelFilename(label),
-			Mode: syscall.S_IFREG,
-		})
-	}
-
+	entries := append(n.trio().entries(), n.listing(labels).entries()...)
 	return fs.NewListDirStream(entries), 0
 }
 
 // trio declares the labels collection's writable surfaces.
 func (n *LabelsNode) trio() collectionTrio {
 	return collectionTrio{kind: "labels", parentID: n.teamID, onFlush: n.createLabel}
+}
+
+// listing declares the labels collection's item files: one per label, named by
+// labelFilename. Backs Readdir/Lookup/Unlink/Rename/Create-overwrite so they
+// derive and match names through one place. See namedListing.
+func (n *LabelsNode) listing(labels []api.Label) namedListing[api.Label] {
+	return namedListing[api.Label]{items: labels, nameOf: labelFilename}
 }
 
 func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -59,11 +59,8 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.EIO
 	}
 
-	// Match by filename
-	for _, label := range labels {
-		if labelFilename(label) == name {
-			return n.newLabelInode(ctx, label, out)
-		}
+	if label, ok := n.listing(labels).find(name); ok {
+		return n.newLabelInode(ctx, label, out)
 	}
 
 	return nil, syscall.ENOENT
@@ -111,10 +108,8 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 			if err != nil {
 				return nil, err
 			}
-			for _, label := range labels {
-				if labelFilename(label) == name {
-					return &label, nil
-				}
+			if label, ok := n.listing(labels).find(name); ok {
+				return &label, nil
 			}
 			return nil, nil
 		},
@@ -163,30 +158,28 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		return syscall.EIO
 	}
 
-	// Find the label by old filename
-	for _, label := range labels {
-		if labelFilename(label) == name {
-			// Update label name
-			updatedLabel, err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
-			if err != nil {
-				log.Printf("Failed to rename label: %v", err)
-				n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: rename label "+name+" -> "+newName+"\nError: "+err.Error())
-				return syscall.EIO
-			}
-			// Upsert to SQLite so it's immediately visible
-			if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
-				log.Printf("Warning: failed to upsert label to SQLite: %v", err)
-			}
-			if n.lfs.debug {
-				log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
-			}
-			// Invalidate kernel cache for old and new names
-			n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), name, newName, 0)
-			return 0
-		}
+	label, ok := n.listing(labels).find(name)
+	if !ok {
+		return syscall.ENOENT
 	}
 
-	return syscall.ENOENT
+	// Update label name
+	updatedLabel, err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
+	if err != nil {
+		log.Printf("Failed to rename label: %v", err)
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: rename label "+name+" -> "+newName+"\nError: "+err.Error())
+		return syscall.EIO
+	}
+	// Upsert to SQLite so it's immediately visible
+	if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
+		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
+	}
+	if n.lfs.debug {
+		log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
+	}
+	// Invalidate kernel cache for old and new names
+	n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), name, newName, 0)
+	return 0
 }
 
 func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
@@ -203,14 +196,12 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 	// overwrite (mv/cp/editor save-over) updates it in place instead of binding a
 	// write-only _create node to the name and corrupting it (#137).
 	if labels, err := n.lfs.GetTeamLabels(ctx, n.teamID); err == nil {
-		for _, label := range labels {
-			if labelFilename(label) == name {
-				inode, errno := n.newLabelInode(ctx, label, out)
-				if errno != 0 {
-					return nil, nil, 0, errno
-				}
-				return inode, nil, 0, 0
+		if label, ok := n.listing(labels).find(name); ok {
+			inode, errno := n.newLabelInode(ctx, label, out)
+			if errno != 0 {
+				return nil, nil, 0, errno
 			}
+			return inode, nil, 0, 0
 		}
 	}
 
