@@ -724,9 +724,9 @@ versus swallow.
 
 The **per-issue detail sync** (an issue's comments, documents, attachments,
 relations, and inverse relations) reconciles through the same tail, five calls
-per issue — written once as `reconcile.PersistIssueDetails`, which
-`syncIssueDetailsBatch` calls per issue (its `clean` return is ignored until
-the detail-outcome step consumes it). Here completeness is *page*-shaped
+per issue — written once as `reconcile.PersistIssueDetails`, which the
+worker's `syncDetails` calls per issue (its `clean` return gates that issue's
+touch/dequeue — see the detail-outcome entry below). Here completeness is *page*-shaped
 rather than *drain*-shaped: a full page (`len == IssueDetailsPageSize`, or
 `IssueRelationsPageSize` for the relation connections) may be truncated, so
 `PersistIssueDetails` composes a `pruneWhenComplete(complete, fn)` policy that
@@ -753,6 +753,28 @@ its rows: the outgoing collection prunes via `PruneIssueRelations` (scoped
 owned by the other issue; pruning them here would delete against someone
 else's partial view). `refreshIssueDetails` (the repo's SWR path) persists
 both families best-effort like its siblings.
+
+### Detail sync outcome (`syncDetails`)
+The single entry point for issue-detail syncing (`internal/sync/worker.go`):
+`syncDetails(ctx, []issueRef) detailOutcome` merged the old
+`deferDetailIssues`/`syncOrDeferDetailBatch`/`syncIssueDetailsBatch` trio so
+**all the gates live in one place** — budget (`budgetDeferDetailPct`),
+rate-limited before the fetch, rate-limited mid-fetch, and any other fetch
+failure (which used to log-and-return, silently dropping the worker-side
+retry for team-sync-sourced issues; now it defers like the rest). A gate
+defers the whole batch to `pending_detail_sync` and returns `gated=true`,
+which the now-thin `drainPendingDetailSync` loop breaks on (re-deferring an
+already-pending issue merely re-stamps its `QueuedAt`). The return is a
+per-issue **ledger** — `{synced, deferred []issueRef, gated bool}`, every
+issue landing in exactly one slice: only an issue whose
+`reconcile.PersistIssueDetails` came back **clean** is touched
+(comments/documents/attachments `synced_at` stamped; relations deliberately
+not) and dequeued from pending; an unclean issue — or one missing from the
+response, a trap for a violation of `GetIssueDetailsBatch`'s documented
+all-or-nothing contract, not expected flow — is re-enqueued, un-touched. The
+hazard class this closes: **an issue silently dropped or partially persisted
+must never be stamped fresh** (a touch would mask its staleness from the SWR
+path until the next real change) **nor lose its retry**.
 
 ### Reverse conversion contract (hydrate-then-overlay)
 Every DB→API reverse conversion in `internal/db/convert.go` **starts from the
