@@ -48,6 +48,18 @@ status updates — updates were the last holdout, hand-rolling the tail with no
 directly, and `persist` is always explicit — no mutation wrapper hides an upsert.
 Unit-tested through the ErrorSink/notifier fakes, no FUSE mount.
 
+The classifier (`classifyMutationErr`) is the single owner of that failure
+model, shared by the create and delete tails **and every edit-mutation site**
+(issue/comment/label/document/milestone flushes and renames, the project/
+initiative scalar+reconcile paths — the flushes/renames used to bypass it with
+a flat `EIO`, violating the README's documented contract). Rate-limit and
+not-found detection are the api package's predicates (`api.IsRateLimited` —
+structural `GraphQLError.Code == "RATELIMITED"` plus message fallbacks, and
+deliberately excluding the client-side "circuit breaker" transient, which
+stays a `retryableCreateErr` concern; `api.IsNotFound` — the "Entity not
+found" rejection), the single owners the client's GraphQL-errors branch, the
+sync worker's backoff, and the repo's orphan defense also delegate to.
+
 For status updates the front half is the shared `parseUpdateContent` (one parser for
 both project and initiative updates): an explicitly-written unknown `health:` is a
 `FieldError` (→ `EINVAL`), never silently coerced to `onTrack`, and frontmatter with

@@ -170,8 +170,9 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	updatedLabel, err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
 	if err != nil {
 		log.Printf("Failed to rename label: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: rename label "+name+" -> "+newName+"\nError: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("rename label "+name+" -> "+newName, err)
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), msg)
+		return errno
 	}
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
@@ -316,8 +317,9 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	updatedLabel, err := n.lfs.UpdateLabel(ctx, n.label.ID, update, n.teamID)
 	if err != nil {
 		log.Printf("Failed to update label: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nError: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("update label "+labelFilename(n.label), err)
+		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), msg)
+		return errno
 	}
 	// Edit-commit tail: persist the label, verify read-your-writes against the
 	// API's echoed response (labels have no single-entity getter), and surface

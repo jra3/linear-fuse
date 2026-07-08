@@ -128,9 +128,13 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 
 // classifyMutationErr maps a mutation failure to its .error message and errno.
 // This is the single owner of the write failure model the generated README
-// documents — shared by the create and delete tails: bad input -> EINVAL,
-// missing reference -> ENOENT, transient -> EAGAIN, backend failure -> EIO —
-// either way the reason lands in .error.
+// documents — shared by the create and delete tails and by every edit-mutation
+// site (issue/comment/label/document/milestone flushes and renames, the
+// project/initiative scalar+reconcile paths): bad input -> EINVAL, missing
+// reference -> ENOENT, transient -> EAGAIN, backend failure -> EIO — either
+// way the reason lands in .error. Rate-limit/not-found detection delegates to
+// the api package's predicates (api.IsRateLimited via retryableCreateErr,
+// api.IsNotFound via the delete tail's remoteAlreadyGone).
 func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {

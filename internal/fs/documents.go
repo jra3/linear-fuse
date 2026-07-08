@@ -182,8 +182,9 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	updatedDoc, err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
 	if err != nil {
 		log.Printf("Failed to rename document: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), "Operation: rename document "+name+" -> "+newName+"\nError: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("rename document "+name+" -> "+newName, err)
+		n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), msg)
+		return errno
 	}
 	// Upsert to SQLite so it's immediately visible
 	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
@@ -341,8 +342,9 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	updatedDoc, err := n.lfs.UpdateDocument(ctx, n.document.ID, update, n.issueID, n.teamID, n.projectID)
 	if err != nil {
 		log.Printf("Failed to update document: %v", err)
-		n.lfs.SetWriteError(docErrKey, "Operation: update document "+documentFilename(n.document)+"\nError: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("update document "+documentFilename(n.document), err)
+		n.lfs.SetWriteError(docErrKey, msg)
+		return errno
 	}
 
 	// Edit-commit tail: verify read-your-writes against the API's echoed response,

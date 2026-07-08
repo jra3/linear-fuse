@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -851,8 +850,9 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 // error, indicating the issue (or other entity) no longer exists upstream.
 // When seen on a refresh, the local row is an orphan and should be deleted —
 // otherwise every FUSE traversal retriggers the same failing refresh forever.
+// Detection is the shared api.IsNotFound predicate.
 func isEntityNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "Entity not found")
+	return api.IsNotFound(err)
 }
 
 // deleteOrphanIssue removes an issue and all its sub-resources from SQLite.

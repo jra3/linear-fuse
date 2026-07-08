@@ -739,15 +739,11 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 // Rate Limit Handling
 // =============================================================================
 
-// isRateLimitError checks if an error indicates a rate limit
+// isRateLimitError checks if an error indicates a rate limit. Detection is
+// the shared api.IsRateLimited predicate (its case-insensitive "rate limit"
+// fallback subsumes the "Rate limit exceeded" phrasing this used to match).
 func isRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "RATELIMITED") ||
-		strings.Contains(errStr, "Rate limit exceeded") ||
-		strings.Contains(errStr, "rate limit")
+	return api.IsRateLimited(err)
 }
 
 // budgetExceeds returns true if the current hourly budget usage exceeds the given threshold.
