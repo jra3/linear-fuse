@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 
 var (
 	mountPoint  string
+	stateDir    string // fixture mode: holds the SQLite db, OUTSIDE the mount (see setupSQLiteFixtures)
 	server      *fuse.Server
 	lfs         *fs.LinearFS
 	testStore   *db.Store // fixture mode: the store behind the mount, for tests simulating sync-side writes
@@ -31,6 +34,15 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Refuse to run over a stale mount from a killed prior run: its dead FUSE
+	// connection makes this run's kernel I/O fail with roaming EIO errors —
+	// the whole-suite flakiness this preflight exists to prevent. Fail loud
+	// with the cleanup command instead.
+	if mounts, err := os.ReadFile("/proc/mounts"); err == nil && strings.Contains(string(mounts), "linearfs-test-") {
+		log.Fatal("stale linearfs-test-* mount detected; clean it first:\n" +
+			"  fusermount3 -uz <mountpoint> && rm -rf <mountpoint>   (see /proc/mounts)")
+	}
+
 	apiKey := os.Getenv("LINEAR_API_KEY")
 	liveAPIMode = os.Getenv("LINEARFS_LIVE_API") == "1" && apiKey != ""
 
@@ -82,6 +94,12 @@ func setupLiveAPI(apiKey string) error {
 		os.RemoveAll(mountPoint)
 		return fmt.Errorf("mount filesystem: %w", err)
 	}
+	// Readiness gate: don't let tests touch the mount before the kernel has it.
+	if err := server.WaitMount(); err != nil {
+		_ = server.Unmount()
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("wait mount: %w", err)
+	}
 
 	// Enable SQLite cache for repository access
 	ctx := context.Background()
@@ -109,11 +127,20 @@ func setupSQLiteFixtures() error {
 		return fmt.Errorf("create mount point: %w", err)
 	}
 
-	// Create temp database
-	dbPath := filepath.Join(mountPoint, "test.db")
+	// The database lives in its OWN temp dir, never inside the mountpoint:
+	// db.Open ran before the mount so SQLite's held fds kept working, but any
+	// post-mount file open (a WAL checkpoint, a journal) would route through
+	// our own FUSE layer and fail — poisoning the suite with roaming EIO.
+	stateDir, err = os.MkdirTemp("", "linearfs-test-state-*")
+	if err != nil {
+		os.RemoveAll(mountPoint)
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	dbPath := filepath.Join(stateDir, "test.db")
 	store, err := db.Open(dbPath)
 	if err != nil {
 		os.RemoveAll(mountPoint)
+		os.RemoveAll(stateDir)
 		return fmt.Errorf("open db: %w", err)
 	}
 
@@ -156,7 +183,13 @@ func setupSQLiteFixtures() error {
 		lfs.Close()
 		store.Close()
 		os.RemoveAll(mountPoint)
+		os.RemoveAll(stateDir)
 		return fmt.Errorf("mount filesystem: %w", err)
+	}
+	// Readiness gate: don't let tests touch the mount before the kernel has it.
+	if err := server.WaitMount(); err != nil {
+		cleanup()
+		return fmt.Errorf("wait mount: %w", err)
 	}
 
 	// Use fixture team
@@ -332,7 +365,34 @@ func discoverTestTeam() error {
 func cleanup() {
 	if server != nil {
 		if err := server.Unmount(); err != nil {
-			log.Printf("Warning: failed to unmount: %v", err)
+			// EBUSY (a straggling fd some test leaked) is the common failure —
+			// and the chronic orphan source: the process exits, the fd closes,
+			// but nothing ever unmounts. Retry once, then LAZY-detach: the
+			// kernel completes the unmount the moment the last fd closes (at
+			// process exit, right after this), so no stale mount survives to
+			// trip the next run's preflight.
+			time.Sleep(200 * time.Millisecond)
+			if err := server.Unmount(); err != nil {
+				// Name the leak: any of our fds still pointing into the mount
+				// is the test that forgot to close a file.
+				if fds, derr := os.ReadDir("/proc/self/fd"); derr == nil {
+					for _, fd := range fds {
+						if target, lerr := os.Readlink("/proc/self/fd/" + fd.Name()); lerr == nil && strings.HasPrefix(target, mountPoint) {
+							log.Printf("Warning: leaked fd %s -> %s held the mount busy", fd.Name(), target)
+						}
+					}
+				}
+				// A plain umount2 is not permitted for unprivileged users on
+				// FUSE; the setuid fusermount3 helper with -z lazy-detaches,
+				// and the kernel completes the unmount when the leaked fd
+				// closes at process exit — no stale mount survives to trip
+				// the next run's preflight.
+				if out, lerr := exec.Command("fusermount3", "-uz", mountPoint).CombinedOutput(); lerr != nil {
+					log.Printf("Warning: unmount %s failed (%v), fusermount3 -uz failed too (%v: %s); clean it manually", mountPoint, err, lerr, out)
+				} else {
+					log.Printf("Note: %s was busy at exit (leaked fd); lazy-detached", mountPoint)
+				}
+			}
 		}
 	}
 	if lfs != nil {
@@ -340,5 +400,8 @@ func cleanup() {
 	}
 	if mountPoint != "" {
 		os.RemoveAll(mountPoint)
+	}
+	if stateDir != "" {
+		os.RemoveAll(stateDir)
 	}
 }
