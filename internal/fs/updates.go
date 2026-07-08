@@ -1,9 +1,7 @@
 package fs
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -29,20 +27,18 @@ func (b *BaseNode) lookupUpdateFile(ctx context.Context, out *fuse.EntryOut, nam
 // — they differ only in the api type they carry — so both pass their fields in
 // here rather than each hand-rolling the identical writer. The read-only update
 // files are served through renderFile with a closure over this. Its naming
-// sibling is updateEntryName (indexedlisting.go).
+// sibling is updateEntryName (indexedlisting.go). Frontmatter goes through
+// renderWithFrontmatter so a hostile author name stays valid YAML.
 func updateMarkdown(id, health string, created, updated time.Time, user *api.User, body string) []byte {
-	var buf bytes.Buffer
-	buf.WriteString("---\n")
-	buf.WriteString(fmt.Sprintf("id: %s\n", id))
-	buf.WriteString(fmt.Sprintf("health: %s\n", health))
-	buf.WriteString(fmt.Sprintf("created: %q\n", created.Format(time.RFC3339)))
-	buf.WriteString(fmt.Sprintf("updated: %q\n", updated.Format(time.RFC3339)))
-	if user != nil {
-		buf.WriteString(fmt.Sprintf("author: %s\n", user.Email))
-		buf.WriteString(fmt.Sprintf("authorName: %s\n", user.Name))
+	fm := map[string]any{
+		"id":      id,
+		"health":  health,
+		"created": created.Format(time.RFC3339),
+		"updated": updated.Format(time.RFC3339),
 	}
-	buf.WriteString("---\n\n")
-	buf.WriteString(body)
-	buf.WriteString("\n")
-	return buf.Bytes()
+	if user != nil {
+		fm["author"] = user.Email
+		fm["authorName"] = user.Name
+	}
+	return renderWithFrontmatter(fm, "\n"+body+"\n")
 }

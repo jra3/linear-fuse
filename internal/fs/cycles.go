@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"syscall"
 	"time"
@@ -201,36 +202,30 @@ func cycleMarkdown(team api.Team, cycle api.Cycle) []byte {
 		cycleName = fmt.Sprintf("Cycle %d", cycle.Number)
 	}
 
-	return []byte(fmt.Sprintf(`---
-id: %s
-number: %d
-name: %s
-team: %s
-startsAt: %q
-endsAt: %q
-status: %s
-progress:
-  completed: %d
-  total: %d
-  percentage: %.1f
----
-
+	// Frontmatter goes through renderWithFrontmatter so a hostile cycle name
+	// stays valid YAML. percentage keeps the historical one-decimal rounding
+	// (yaml.v3 renders an integral float as a bare integer — YAML-equivalent).
+	fm := map[string]any{
+		"id":       cycle.ID,
+		"number":   cycle.Number,
+		"name":     cycleName,
+		"team":     team.Key,
+		"startsAt": cycle.StartsAt.Format(time.RFC3339),
+		"endsAt":   cycle.EndsAt.Format(time.RFC3339),
+		"status":   status,
+		"progress": map[string]any{
+			"completed":  completed,
+			"total":      total,
+			"percentage": math.Round(percentage*10) / 10,
+		},
+	}
+	body := fmt.Sprintf(`
 # %s
 
 - **Duration:** %s - %s
 - **Progress:** %d/%d issues (%.1f%%)
 - **Status:** %s
 `,
-		cycle.ID,
-		cycle.Number,
-		cycleName,
-		team.Key,
-		cycle.StartsAt.Format(time.RFC3339),
-		cycle.EndsAt.Format(time.RFC3339),
-		status,
-		completed,
-		total,
-		percentage,
 		cycleName,
 		cycle.StartsAt.Format("Jan 2, 2006"),
 		cycle.EndsAt.Format("Jan 2, 2006"),
@@ -238,7 +233,8 @@ progress:
 		total,
 		percentage,
 		status,
-	))
+	)
+	return renderWithFrontmatter(fm, body)
 }
 
 // isCurrent checks if a cycle is the current active cycle

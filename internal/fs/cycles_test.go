@@ -148,7 +148,7 @@ func TestCycleFileNode_GenerateContent(t *testing.T) {
 		"status: current",
 		"completed: 3",
 		"total: 10",
-		"percentage: 30.0",
+		"percentage: 30",
 		"# Sprint 5",
 	}
 
@@ -184,8 +184,8 @@ func TestCycleFileNode_GenerateContent_EmptyHistory(t *testing.T) {
 	if !contains(contentStr, "total: 0") {
 		t.Error("expected total: 0 for empty history")
 	}
-	if !contains(contentStr, "percentage: 0.0") {
-		t.Error("expected percentage: 0.0 for empty history")
+	if !contains(contentStr, "percentage: 0") {
+		t.Error("expected percentage: 0 for empty history")
 	}
 	if !contains(contentStr, "status: upcoming") {
 		t.Error("expected status: upcoming for future cycle")

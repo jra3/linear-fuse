@@ -223,32 +223,26 @@ func labelFilename(label api.Label) string {
 	return name + ".md"
 }
 
-// labelToMarkdown converts a label to markdown with YAML frontmatter
+// labelToMarkdown converts a label to markdown with YAML frontmatter, routed
+// through renderWithFrontmatter so hostile names/descriptions stay valid YAML
+// (Go %q quoting was ALMOST YAML — not guaranteed).
 func labelToMarkdown(label *api.Label) []byte {
-	content := fmt.Sprintf(`---
-id: %s
-name: %q
-color: %q
-description: %q
----
-
+	fm := map[string]any{
+		"id":          label.ID,
+		"name":        label.Name,
+		"color":       label.Color,
+		"description": label.Description,
+	}
+	body := fmt.Sprintf(`
 # %s
 
 - **Color:** %s
 - **ID:** %s
-`,
-		label.ID,
-		label.Name,
-		label.Color,
-		label.Description,
-		label.Name,
-		label.Color,
-		label.ID,
-	)
+`, label.Name, label.Color, label.ID)
 	if label.Description != "" {
-		content += fmt.Sprintf("\n%s\n", label.Description)
+		body += fmt.Sprintf("\n%s\n", label.Description)
 	}
-	return []byte(content)
+	return renderWithFrontmatter(fm, body)
 }
 
 // LabelFileNode represents a single label file (read-write)

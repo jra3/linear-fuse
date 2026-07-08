@@ -73,9 +73,9 @@ func TestLabelToMarkdown(t *testing.T) {
 			},
 			wantContain: []string{
 				"id: label-123",
-				`name: "Bug"`,
-				`color: "#FF0000"`,
-				`description: "Something is broken"`,
+				"name: Bug",
+				`color: '#FF0000'`,
+				"description: Something is broken",
 				"# Bug",
 				"**Color:** #FF0000",
 				"**ID:** label-123",
@@ -92,8 +92,8 @@ func TestLabelToMarkdown(t *testing.T) {
 			},
 			wantContain: []string{
 				"id: label-456",
-				`name: "Feature"`,
-				`color: "#00FF00"`,
+				"name: Feature",
+				`color: '#00FF00'`,
 				"# Feature",
 			},
 		},
@@ -105,7 +105,7 @@ func TestLabelToMarkdown(t *testing.T) {
 				Color: "#0000FF",
 			},
 			wantContain: []string{
-				`name: "Bug: Critical"`,
+				`name: 'Bug: Critical'`,
 				"# Bug: Critical",
 			},
 		},

@@ -146,35 +146,27 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	return nil, syscall.ENOENT
 }
 
-// userMarkdown renders the user.md content for a user.
+// userMarkdown renders the user.md content for a user. Frontmatter goes
+// through renderWithFrontmatter so hostile display names stay valid YAML.
 func userMarkdown(user api.User) []byte {
 	status := "active"
 	if !user.Active {
 		status = "inactive"
 	}
 
-	return []byte(fmt.Sprintf(`---
-id: %s
-name: %s
-email: %s
-displayName: %s
-status: %s
----
-
+	fm := map[string]any{
+		"id":          user.ID,
+		"name":        user.Name,
+		"email":       user.Email,
+		"displayName": user.DisplayName,
+		"status":      status,
+	}
+	body := fmt.Sprintf(`
 # %s
 
 - **Email:** %s
 - **ID:** %s
 - **Status:** %s
-`,
-		user.ID,
-		user.Name,
-		user.Email,
-		user.DisplayName,
-		status,
-		user.Name,
-		user.Email,
-		user.ID,
-		status,
-	))
+`, user.Name, user.Email, user.ID, status)
+	return renderWithFrontmatter(fm, body)
 }

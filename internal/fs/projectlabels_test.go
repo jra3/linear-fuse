@@ -3,11 +3,13 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 func testCatalog() []api.ProjectLabel {
@@ -46,7 +48,7 @@ func TestProjectLabelsMarkdown(t *testing.T) {
 		"| Legacy | — | — | retired |",      // retired row flag
 		"At most ONE child from each group", // rules prose lives in-file
 		"a raw label ID is also accepted",   // ID-passthrough documented
-		"description: \"bug work\"",
+		"description: bug work",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("catalog render missing %q:\n%s", want, got)
@@ -55,6 +57,41 @@ func TestProjectLabelsMarkdown(t *testing.T) {
 	// Frontmatter top key matches the labels.md idiom.
 	if !strings.HasPrefix(got, "---\nlabels:\n") {
 		t.Errorf("catalog frontmatter key is off-idiom:\n%s", got[:40])
+	}
+}
+
+// TestProjectLabelsMarkdownHostileNames pins the injection fix: hand-built
+// YAML emitted `name: Q3: Bets` unquoted, which is INVALID YAML — in exactly
+// the file agents machine-parse after a validation .error. The render must
+// stay parseable and recover hostile names byte-exactly.
+func TestProjectLabelsMarkdownHostileNames(t *testing.T) {
+	t.Parallel()
+	hostile := []string{`Q3: Bets`, `He said "no"`, `#urgent`, `[wip] thing`}
+	catalog := make([]api.ProjectLabel, 0, len(hostile))
+	for i, name := range hostile {
+		catalog = append(catalog, api.ProjectLabel{
+			ID:          fmt.Sprintf("id-%d", i),
+			Name:        name,
+			Description: `desc with: colon and "quotes"`,
+		})
+	}
+
+	doc, err := marshal.Parse(projectLabelsMarkdown(catalog))
+	if err != nil {
+		t.Fatalf("catalog render is not parseable YAML frontmatter: %v", err)
+	}
+	entries, ok := doc.Frontmatter["labels"].([]any)
+	if !ok || len(entries) != len(hostile) {
+		t.Fatalf("labels frontmatter = %T with %v entries, want list of %d", doc.Frontmatter["labels"], entries, len(hostile))
+	}
+	for i, want := range hostile {
+		entry, ok := entries[i].(map[string]any)
+		if !ok {
+			t.Fatalf("entry %d = %T, want map", i, entries[i])
+		}
+		if got := entry["name"]; got != want {
+			t.Errorf("entry %d name round-tripped to %v, want %q", i, got, want)
+		}
 	}
 }
 
