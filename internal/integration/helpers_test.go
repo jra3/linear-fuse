@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/marshal"
 	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
-	"gopkg.in/yaml.v3"
 )
 
 // enableMockMutations swaps in the in-memory mutation fake (T0/#155) for the
@@ -273,72 +272,33 @@ func waitForCacheExpiry() {
 	time.Sleep(150 * time.Millisecond) // Cache TTL is 100ms, wait a bit longer
 }
 
-// Frontmatter helpers
+// Frontmatter helpers — thin delegations to the marshal seam. The tests must
+// parse and re-render frontmatter with the SAME implementation the product
+// uses (marshal.Parse/marshal.Render), never a private fork: a fork validates
+// the mount against a stale copy of its own contract, and Sprintf-built YAML
+// is the exact idiom the catalog-render fix killed (a `Q3: Bets` name emitted
+// invalid YAML).
 
-type Document struct {
-	Frontmatter map[string]any
-	Body        string
-}
-
-func parseFrontmatter(content []byte) (*Document, error) {
-	str := string(content)
-
-	if !strings.HasPrefix(str, "---\n") {
-		return &Document{Body: str}, nil
-	}
-
-	end := strings.Index(str[4:], "\n---")
-	if end == -1 {
-		return nil, fmt.Errorf("unterminated frontmatter")
-	}
-
-	yamlContent := str[4 : 4+end]
-	body := strings.TrimPrefix(str[4+end+4:], "\n")
-
-	var frontmatter map[string]any
-	if err := yaml.Unmarshal([]byte(yamlContent), &frontmatter); err != nil {
-		return nil, fmt.Errorf("failed to parse frontmatter: %w", err)
-	}
-
-	return &Document{
-		Frontmatter: frontmatter,
-		Body:        body,
-	}, nil
+func parseFrontmatter(content []byte) (*marshal.Document, error) {
+	return marshal.Parse(content)
 }
 
 func modifyFrontmatter(content []byte, field string, value any) ([]byte, error) {
-	doc, err := parseFrontmatter(content)
+	doc, err := marshal.Parse(content)
 	if err != nil {
 		return nil, err
-	}
-
-	if doc.Frontmatter == nil {
-		doc.Frontmatter = make(map[string]any)
 	}
 	doc.Frontmatter[field] = value
-
-	yamlBytes, err := yaml.Marshal(doc.Frontmatter)
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(fmt.Sprintf("---\n%s---\n%s", string(yamlBytes), doc.Body)), nil
+	return marshal.Render(doc)
 }
 
 func removeFrontmatterField(content []byte, field string) ([]byte, error) {
-	doc, err := parseFrontmatter(content)
+	doc, err := marshal.Parse(content)
 	if err != nil {
 		return nil, err
 	}
-
 	delete(doc.Frontmatter, field)
-
-	yamlBytes, err := yaml.Marshal(doc.Frontmatter)
-	if err != nil {
-		return nil, err
-	}
-
-	return []byte(fmt.Sprintf("---\n%s---\n%s", string(yamlBytes), doc.Body)), nil
+	return marshal.Render(doc)
 }
 
 // Directory listing helpers
