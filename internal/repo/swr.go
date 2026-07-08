@@ -38,8 +38,9 @@ type swrSpec struct {
 	kind refreshKind
 	id   string
 
-	// syncedAt returns the raw synced_at source (typically a MAX() aggregate,
-	// which sqlc types as interface{}); the module applies parseTime.
+	// syncedAt returns the raw last-sync instant (a MAX() aggregate for the
+	// doc/update surfaces, the issues.detail_synced_at stamp for issue
+	// details — nil means never synced); the module applies parseTime.
 	syncedAt func() (interface{}, error)
 
 	// changedAt selects the staleness flavor: nil means TTL (threshold-driven);

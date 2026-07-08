@@ -820,30 +820,43 @@ func (r *SQLiteRepository) GetIssueComments(ctx context.Context, issueID string)
 // attachments/ directories. This avoids triggering API calls when reading
 // issue.md (which calls GetIssueAttachments for the links: frontmatter field).
 func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
+	// Both staleness inputs come from ONE fetch of the issues row:
+	// detail_synced_at (the one per-issue detail-freshness fact, stamped
+	// clean-gated by syncDetails and refreshIssueDetails) and updated_at (the
+	// change event). NULL detail_synced_at → zero → stale, unchanged swrStale
+	// semantics. The old shape — the min of three per-family MAX(synced_at)
+	// aggregates — read every empty family (most issues have zero docs) as
+	// "never synced", so each browse re-triggered a refetch that upserted
+	// nothing: a permanent per-browse API loop.
+	//
+	// The fetch is memoized across the two spec closures (changedAt runs
+	// first, then syncedAt, sequentially in maybeRefreshSWR) and stays lazy so
+	// the module's nil-client check still precedes any query.
+	var fresh db.GetIssueDetailFreshnessRow
+	var freshErr error
+	loaded := false
+	load := func() {
+		if !loaded {
+			fresh, freshErr = r.store.Queries().GetIssueDetailFreshness(context.Background(), issueID)
+			loaded = true
+		}
+	}
 	r.maybeRefreshSWR(swrSpec{
 		kind: kindIssueDetails,
 		id:   issueID,
-		// The oldest of the three sub-resource MAX(synced_at)s — any-stale
-		// triggers, exactly as the three hand-compared booleans behaved: the
-		// min is zero (never synced) iff any family is, and the issue changed
-		// after the min iff it changed after at least one family. Query errors
-		// are deliberately swallowed (nil → zero → stale), as before.
 		syncedAt: func() (interface{}, error) {
-			bg := context.Background()
-			q := r.store.Queries()
-			commentsSyncedAt, _ := q.GetIssueCommentsSyncedAt(bg, issueID)
-			docsSyncedAt, _ := q.GetIssueDocumentsSyncedAt(bg, sql.NullString{String: issueID, Valid: true})
-			attachSyncedAt, _ := q.GetIssueAttachmentsSyncedAt(bg, issueID)
-			oldest := parseTime(commentsSyncedAt)
-			if t := parseTime(docsSyncedAt); t.Before(oldest) {
-				oldest = t
+			load()
+			if freshErr != nil || !fresh.DetailSyncedAt.Valid {
+				return nil, nil // never detail-synced → stale
 			}
-			if t := parseTime(attachSyncedAt); t.Before(oldest) {
-				oldest = t
-			}
-			return oldest, nil
+			return fresh.DetailSyncedAt.Time, nil
 		},
-		changedAt: r.issueChangedAt(issueID),
+		changedAt: func() (time.Time, bool) {
+			load()
+			// ok=false when the issue is not in the DB — discovery belongs to
+			// the sync worker, so no refresh fires (as before).
+			return fresh.UpdatedAt, freshErr == nil
+		},
 		refresh: func(ctx context.Context) error {
 			return r.refreshIssueDetails(ctx, issueID)
 		},
@@ -945,9 +958,9 @@ func (r *SQLiteRepository) deleteOrphanInitiative(ctx context.Context, initiativ
 // — the same five-collection tail the sync worker uses, so the SWR path gets
 // prunes-when-complete, the clean guard, and embedded-file extraction, which
 // the old hand-rolled upsert loops all lacked. The cutoff is taken BEFORE the
-// fetch so rows written mid-flight survive pruning. The clean return is
-// ignored: the SWR path has no freshness stamp to gate (no Touch*/dequeue
-// here — an unclean pass simply stays stale and retriggers).
+// fetch so rows written mid-flight survive pruning. The clean return gates
+// the detail_synced_at stamp (symmetric with the worker's syncDetails): an
+// unclean pass stays unstamped, so it reads stale and retriggers.
 func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID string) error {
 	pruneCutoff := db.Now()
 	details, err := r.client.GetIssueDetails(ctx, issueID)
@@ -959,7 +972,16 @@ func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID stri
 	if r.extractor != nil {
 		deps.Extract = r.extractor.ExtractAndStore
 	}
-	_ = reconcile.PersistIssueDetails(ctx, deps, issueID, details, pruneCutoff)
+	if clean := reconcile.PersistIssueDetails(ctx, deps, issueID, details, pruneCutoff); clean {
+		// db.Now() at stamp time: the stamp only needs to exceed the issue's
+		// updated_at as-of-fetch, and now > pruneCutoff > that.
+		if err := r.store.Queries().StampIssueDetailSynced(ctx, db.StampIssueDetailSyncedParams{
+			DetailSyncedAt: db.ToNullTime(db.Now()),
+			ID:             issueID,
+		}); err != nil {
+			log.Printf("[repo] stamp detail synced %s: %v", issueID, err)
+		}
+	}
 	return nil
 }
 
@@ -1312,17 +1334,6 @@ func (r *SQLiteRepository) upsertHistoryCache(ctx context.Context, issueID strin
 	}); err != nil {
 		log.Printf("[repo] upsert history cache %s failed: %v", issueID, err)
 	}
-}
-
-// TouchIssueSubResources bumps the synced_at timestamp for all sub-resources
-// (comments, documents, attachments, history) to the given time. Used by the
-// sync worker to prevent staleness-based refreshes for unchanged issues.
-func (r *SQLiteRepository) TouchIssueSubResources(ctx context.Context, issueID string, syncedAt time.Time) {
-	q := r.store.Queries()
-	q.TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: syncedAt, IssueID: issueID})
-	q.TouchIssueDocuments(ctx, db.TouchIssueDocumentsParams{SyncedAt: syncedAt, IssueID: sql.NullString{String: issueID, Valid: true}})
-	q.TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: syncedAt, IssueID: issueID})
-	q.TouchIssueHistoryCache(ctx, db.TouchIssueHistoryCacheParams{SyncedAt: syncedAt, IssueID: issueID})
 }
 
 // =============================================================================

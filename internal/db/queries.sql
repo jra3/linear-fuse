@@ -65,6 +65,10 @@ SELECT * FROM issues WHERE project_id = ? ORDER BY updated_at DESC;
 SELECT * FROM issues WHERE cycle_id = ? ORDER BY updated_at DESC;
 
 -- name: UpsertIssue :exec
+-- detail_synced_at is deliberately absent from the column list and the
+-- conflict SET clause: NULL on insert, preserved on every sync upsert. The
+-- stamp is owned by the detail-sync paths (StampIssueDetailSynced), never
+-- by the entity upsert.
 INSERT INTO issues (
     id, identifier, team_id, title, description,
     state_id, state_name, state_type,
@@ -173,17 +177,16 @@ ON CONFLICT(id) DO UPDATE SET
 -- name: GetIssueUpdatedAt :one
 SELECT updated_at FROM issues WHERE id = ?;
 
--- name: TouchIssueComments :exec
-UPDATE comments SET synced_at = ? WHERE issue_id = ?;
+-- name: StampIssueDetailSynced :exec
+-- The one per-issue detail-freshness fact: set clean-gated by syncDetails
+-- (worker) and refreshIssueDetails (repo SWR path) after every detail family
+-- persisted without error.
+UPDATE issues SET detail_synced_at = ? WHERE id = ?;
 
--- name: TouchIssueDocuments :exec
-UPDATE documents SET synced_at = ? WHERE issue_id = ?;
-
--- name: TouchIssueAttachments :exec
-UPDATE attachments SET synced_at = ? WHERE issue_id = ?;
-
--- name: TouchIssueHistoryCache :exec
-UPDATE issue_history_cache SET synced_at = ? WHERE issue_id = ?;
+-- name: GetIssueDetailFreshness :one
+-- Both inputs of the issue-details staleness decision in one fetch:
+-- stale iff detail_synced_at is NULL or updated_at > detail_synced_at.
+SELECT updated_at, detail_synced_at FROM issues WHERE id = ?;
 
 -- name: DeleteIssueHistoryCache :exec
 DELETE FROM issue_history_cache WHERE issue_id = ?;
@@ -570,9 +573,6 @@ DELETE FROM comments WHERE issue_id = ?;
 -- name: PruneIssueComments :exec
 DELETE FROM comments WHERE issue_id = ? AND synced_at < ?;
 
--- name: GetIssueCommentsSyncedAt :one
-SELECT MAX(synced_at) FROM comments WHERE issue_id = ?;
-
 -- =============================================================================
 -- Documents queries
 -- =============================================================================
@@ -620,9 +620,6 @@ DELETE FROM documents WHERE issue_id = ?;
 
 -- name: DeleteProjectDocuments :exec
 DELETE FROM documents WHERE project_id = ?;
-
--- name: GetIssueDocumentsSyncedAt :one
-SELECT MAX(synced_at) FROM documents WHERE issue_id = ?;
 
 -- name: GetProjectDocumentsSyncedAt :one
 SELECT MAX(synced_at) FROM documents WHERE project_id = ?;
@@ -820,9 +817,6 @@ DELETE FROM attachments WHERE issue_id = ? AND synced_at < ?;
 
 -- name: DeleteIssueAttachments :exec
 DELETE FROM attachments WHERE issue_id = ?;
-
--- name: GetIssueAttachmentsSyncedAt :one
-SELECT MAX(synced_at) FROM attachments WHERE issue_id = ?;
 
 -- =============================================================================
 -- Embedded Files queries (images, PDFs from Linear CDN)

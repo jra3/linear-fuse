@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS issues (
     canceled_at DATETIME,
     archived_at DATETIME,
     synced_at DATETIME NOT NULL,
+    -- One freshness stamp per issue for the detail families
+    -- (comments/documents/attachments/relations). NULL = never detail-synced.
+    -- Stamped clean-gated by syncDetails (worker) and refreshIssueDetails
+    -- (repo SWR path); deliberately never written by UpsertIssue.
+    detail_synced_at DATETIME,
     data JSON NOT NULL  -- Full issue JSON for complex fields (labels, children, etc.)
 );
 

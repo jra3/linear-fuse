@@ -11,6 +11,7 @@ import (
 
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/testutil"
 )
 
 func setupTestDB(t *testing.T) (*db.Store, func()) {
@@ -1845,6 +1846,84 @@ func TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient(t *testing.T) {
 	// Should be a no-op - no panic
 	repo.MaybeRefreshIssueDetails("issue-1")
 	repo.MaybeRefreshIssueDetails("issue-2")
+}
+
+// TestMaybeRefreshIssueDetails_EmptyFamiliesNoRefetchLoop: THE regression this
+// change exists to close. An issue with ZERO comments/documents/attachments
+// used to read permanently stale: staleness was inferred from the min of three
+// per-family MAX(synced_at) aggregates, and a refresh whose response was empty
+// upserted no rows — so there was never anything to stamp, the min stayed
+// zero, and EVERY browse of comments/, docs/, or attachments/ fired another
+// background GetIssueDetails. With the detail_synced_at stamp on the issues
+// row, the first browse triggers one fetch, the clean (empty) persist stamps
+// the issue, and the second browse must NOT refetch.
+func TestMaybeRefreshIssueDetails_EmptyFamiliesNoRefetchLoop(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+	// No IssueDetails response configured: the mock returns empty data, which
+	// decodes as an issue with all five detail families empty — exactly the
+	// zero-docs/zero-comments shape that drove the loop.
+
+	client := api.NewClient("test-key")
+	client.SetAPIURL(mock.URL())
+	repo := NewSQLiteRepository(store, client)
+	defer repo.Close()
+
+	// The issue exists locally (the changedAt gate needs it) with no detail
+	// rows at all.
+	issue := &db.IssueData{
+		ID: "issue-1", Identifier: "TST-1", Title: "Empty families", TeamID: "team-1",
+		CreatedAt: db.Now().Add(-2 * time.Hour), UpdatedAt: db.Now().Add(-time.Hour),
+		Data: []byte("{}"),
+	}
+	if err := store.Queries().UpsertIssue(ctx, issue.ToUpsertParams()); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+
+	countDetailsCalls := func() int {
+		n := 0
+		for _, c := range mock.Calls() {
+			if c.Operation == "IssueDetails" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// First browse: never detail-synced (NULL stamp) → one background fetch,
+	// whose clean empty persist stamps detail_synced_at.
+	repo.MaybeRefreshIssueDetails("issue-1")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		fresh, err := store.Queries().GetIssueDetailFreshness(ctx, "issue-1")
+		if err != nil {
+			t.Fatalf("GetIssueDetailFreshness: %v", err)
+		}
+		if fresh.DetailSyncedAt.Valid {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("detail_synced_at never stamped after refresh (IssueDetails calls: %d)", countDetailsCalls())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := countDetailsCalls(); got != 1 {
+		t.Fatalf("IssueDetails calls after first browse = %d, want 1", got)
+	}
+
+	// Second browse: the stamp (now) postdates the issue's updated_at (an
+	// hour ago) → fresh, no refetch. The old min-of-three inference read this
+	// exact state as "never synced" and refetched on every browse.
+	repo.MaybeRefreshIssueDetails("issue-1")
+	time.Sleep(250 * time.Millisecond) // a wrongly-spawned refresh would land here
+	if got := countDetailsCalls(); got != 1 {
+		t.Errorf("IssueDetails calls after second browse = %d, want still 1 — the per-browse refetch loop is back", got)
+	}
 }
 
 // The four Get*Documents/Get*Updates read paths must be safe no-ops in fixture

@@ -1374,47 +1374,42 @@ func TestSyncDetailsSyncsWhenBudgetOK(t *testing.T) {
 	}
 }
 
-// seedFutureComment inserts a comment for issueID whose synced_at is one hour
-// in the FUTURE. It survives any prune (synced_at > any cutoff taken now) and
-// makes touching detectable: TouchIssueComments would drag synced_at back to
-// "now", so synced_at still being in the future proves the issue was NOT
-// touched, and synced_at near now proves it WAS.
-func seedFutureComment(t *testing.T, store *db.Store, issueID, commentID string) time.Time {
+// seedIssueRow inserts a bare issues row so the detail_synced_at stamp (an
+// UPDATE on issues) has a row to land on — in real flow the entity sync
+// upserts the issue before its details ever sync.
+func seedIssueRow(t *testing.T, store *db.Store, issueID, identifier string) {
 	t.Helper()
-	params, err := db.APICommentToDBComment(api.Comment{ID: commentID, Body: "touch sentinel", CreatedAt: time.Now(), UpdatedAt: time.Now()}, issueID)
-	if err != nil {
-		t.Fatalf("convert sentinel comment: %v", err)
+	data := &db.IssueData{
+		ID:         issueID,
+		Identifier: identifier,
+		Title:      identifier,
+		TeamID:     "team-1",
+		CreatedAt:  db.Now(),
+		UpdatedAt:  db.Now(),
+		Data:       []byte("{}"),
 	}
-	// db.Now() (UTC) rather than time.Now(): SQLite compares these as strings,
-	// so a local-zone timestamp would misorder against the store's UTC cutoffs.
-	future := db.Now().Add(time.Hour)
-	params.SyncedAt = future
-	if err := store.Queries().UpsertComment(context.Background(), params); err != nil {
-		t.Fatalf("seed sentinel comment: %v", err)
+	if err := store.Queries().UpsertIssue(context.Background(), data.ToUpsertParams()); err != nil {
+		t.Fatalf("seed issue %s: %v", issueID, err)
 	}
-	return future
 }
 
-// commentSyncedAt reads back a comment's synced_at.
-func commentSyncedAt(t *testing.T, store *db.Store, issueID, commentID string) time.Time {
+// detailSyncedAt reads back an issue's detail_synced_at stamp.
+func detailSyncedAt(t *testing.T, store *db.Store, issueID string) sql.NullTime {
 	t.Helper()
-	comments, err := store.Queries().ListIssueComments(context.Background(), issueID)
+	fresh, err := store.Queries().GetIssueDetailFreshness(context.Background(), issueID)
 	if err != nil {
-		t.Fatalf("list comments: %v", err)
+		t.Fatalf("GetIssueDetailFreshness %s: %v", issueID, err)
 	}
-	for _, c := range comments {
-		if c.ID == commentID {
-			return c.SyncedAt
-		}
-	}
-	t.Fatalf("comment %s not found for %s", commentID, issueID)
-	return time.Time{}
+	return fresh.DetailSyncedAt
 }
 
-// TestSyncDetailsCleanIssueTouchedAndDequeued: the happy half of the ledger —
-// a cleanly persisted issue is touched (synced_at stamped to now), removed
-// from pending_detail_sync, and reported in outcome.synced.
-func TestSyncDetailsCleanIssueTouchedAndDequeued(t *testing.T) {
+// TestSyncDetailsCleanIssueStampedAndDequeued: the happy half of the ledger —
+// a cleanly persisted issue gets its detail_synced_at stamp (the one per-issue
+// detail-freshness fact), is removed from pending_detail_sync, and is reported
+// in outcome.synced. The issue here has ZERO comments/docs/attachments — under
+// the old per-row touches an all-empty issue could never be stamped fresh (an
+// UPDATE cannot stamp rows that do not exist), the root of the refetch loop.
+func TestSyncDetailsCleanIssueStampedAndDequeued(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
@@ -1426,7 +1421,10 @@ func TestSyncDetailsCleanIssueTouchedAndDequeued(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed pending: %v", err)
 	}
-	seedFutureComment(t, store, "issue-1", "comment-sentinel")
+	seedIssueRow(t, store, "issue-1", "TST-1")
+	if got := detailSyncedAt(t, store, "issue-1"); got.Valid {
+		t.Fatalf("detail_synced_at = %v before any detail sync, want NULL", got.Time)
+	}
 
 	mock := newMockAPIClient() // default: empty (clean) details
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
@@ -1443,9 +1441,9 @@ func TestSyncDetailsCleanIssueTouchedAndDequeued(t *testing.T) {
 		t.Errorf("outcome.deferred = %v, want empty", outcome.deferred)
 	}
 
-	// Touched: the sentinel's future synced_at was dragged back to now.
-	if got := commentSyncedAt(t, store, "issue-1", "comment-sentinel"); got.After(time.Now().Add(30 * time.Minute)) {
-		t.Errorf("sentinel synced_at = %v, still in the future — clean issue was not touched", got)
+	// Stamped: detail_synced_at set even though every family is empty.
+	if got := detailSyncedAt(t, store, "issue-1"); !got.Valid {
+		t.Error("detail_synced_at still NULL — clean issue was not stamped")
 	}
 
 	// Dequeued from pending_detail_sync.
@@ -1458,19 +1456,20 @@ func TestSyncDetailsCleanIssueTouchedAndDequeued(t *testing.T) {
 	}
 }
 
-// TestSyncDetailsUncleanIssueDeferredNotTouched: the masked-staleness hazard —
+// TestSyncDetailsUncleanIssueDeferredNotStamped: the masked-staleness hazard —
 // an issue whose persist was unclean (one collection's upsert failed) must NOT
-// be stamped fresh (a touch would hide its stale rows from the SWR path) and
+// be stamped fresh (a stamp would hide its stale rows from the SWR path) and
 // must NOT lose its retry (it stays in pending_detail_sync). The failure is
 // injected as pure data: a relation with RelatedIssue == nil fails the
 // relations collection's upsert closure.
-func TestSyncDetailsUncleanIssueDeferredNotTouched(t *testing.T) {
+func TestSyncDetailsUncleanIssueDeferredNotStamped(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
 
-	future := seedFutureComment(t, store, "issue-1", "comment-sentinel")
+	seedIssueRow(t, store, "issue-1", "TST-1")
+	seedIssueRow(t, store, "issue-2", "TST-2")
 
 	mock := newMockAPIClient()
 	mock.detailsByIssue["issue-1"] = &api.IssueDetails{
@@ -1494,9 +1493,13 @@ func TestSyncDetailsUncleanIssueDeferredNotTouched(t *testing.T) {
 		t.Errorf("outcome.synced = %v, want [issue-2]", outcome.synced)
 	}
 
-	// NOT touched: the sentinel's synced_at is still the future value.
-	if got := commentSyncedAt(t, store, "issue-1", "comment-sentinel"); !got.After(time.Now().Add(30 * time.Minute)) {
-		t.Errorf("sentinel synced_at = %v (seeded %v) — unclean issue was touched, masking staleness", got, future)
+	// NOT stamped: the unclean issue's detail_synced_at stays NULL (stale)...
+	if got := detailSyncedAt(t, store, "issue-1"); got.Valid {
+		t.Errorf("detail_synced_at = %v — unclean issue was stamped, masking staleness", got.Time)
+	}
+	// ...while the clean batchmate IS stamped.
+	if got := detailSyncedAt(t, store, "issue-2"); !got.Valid {
+		t.Error("detail_synced_at still NULL for issue-2 — clean issue was not stamped")
 	}
 
 	// NOT dequeued: the issue keeps its retry.
@@ -1510,6 +1513,68 @@ func TestSyncDetailsUncleanIssueDeferredNotTouched(t *testing.T) {
 			ids = append(ids, p.IssueID)
 		}
 		t.Errorf("pending = %v, want [issue-1] (unclean issue re-enqueued, clean one not)", ids)
+	}
+}
+
+// TestUnchangedSyncDoesNotMaskStaleHistory: the history-staleness mask fix.
+// The deleted touch-on-unchanged block re-stamped an unchanged issue's history
+// cache fresh every sync cycle — but history is never worker-fetched
+// (SWR-only), so a history cached BEFORE the issue's last update was masked
+// fresh forever and history.md served pre-update history indefinitely. A sync
+// pass over an unchanged issue must leave the history cache's synced_at alone
+// so the SWR comparison (updated_at > synced_at) can still see it is stale.
+func TestUnchangedSyncDoesNotMaskStaleHistory(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	teamID := "team-1"
+	issueUpdated := db.Now().Add(-time.Hour)
+
+	// The issue exists locally and is already up to date.
+	data := &db.IssueData{
+		ID: "issue-1", Identifier: "TST-1", Title: "Issue", TeamID: teamID,
+		CreatedAt: issueUpdated.Add(-time.Hour), UpdatedAt: issueUpdated,
+		Data: []byte("{}"),
+	}
+	if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	if err := store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
+		TeamID:             teamID,
+		LastSyncedAt:       db.Now().Add(-10 * time.Minute),
+		LastIssueUpdatedAt: db.ToNullTime(issueUpdated),
+		IssueCount:         db.ToNullInt64(1),
+	}); err != nil {
+		t.Fatalf("seed sync meta: %v", err)
+	}
+
+	// History cached BEFORE the issue's last update — genuinely stale.
+	staleHistorySyncedAt := issueUpdated.Add(-30 * time.Minute)
+	if err := store.Queries().UpsertIssueHistoryCache(ctx, db.UpsertIssueHistoryCacheParams{
+		IssueID: "issue-1", SyncedAt: staleHistorySyncedAt, Data: []byte("[]"),
+	}); err != nil {
+		t.Fatalf("seed history cache: %v", err)
+	}
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: teamID, Key: "TST", Name: "Test"}}
+	mock.issuesByTeam[teamID] = []api.Issue{
+		{ID: "issue-1", Identifier: "TST-1", Title: "Issue", Team: &api.Team{ID: teamID}, UpdatedAt: issueUpdated},
+	}
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	if err := worker.SyncNow(ctx); err != nil {
+		t.Fatalf("SyncNow failed: %v", err)
+	}
+
+	cache, err := store.Queries().GetIssueHistoryCache(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("GetIssueHistoryCache: %v", err)
+	}
+	if !cache.SyncedAt.Equal(staleHistorySyncedAt) {
+		t.Errorf("history cache synced_at = %v, want untouched %v — an unchanged-issue sync pass masked stale history as fresh", cache.SyncedAt, staleHistorySyncedAt)
 	}
 }
 

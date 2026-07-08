@@ -34,8 +34,9 @@ type Deps struct {
 // all-or-nothing batch semantics — a partially-failed response never reaches
 // this function as a short-but-"complete" details struct.
 //
-// The returned clean is true iff all five collections were clean; the caller
-// may gate freshness stamps (Touch*/dequeue) on it, or ignore it.
+// The returned clean is true iff all five collections were clean; both
+// callers gate the issue's detail_synced_at stamp on it (the worker also
+// gates the pending-queue dequeue).
 func PersistIssueDetails(ctx context.Context, deps Deps, issueID string, details *api.IssueDetails, cutoff time.Time) (clean bool) {
 	// Completeness here is *page*-shaped rather than *drain*-shaped: a full
 	// page (len == the query's page size) may be truncated, so pruning against
