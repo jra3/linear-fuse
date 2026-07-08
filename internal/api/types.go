@@ -353,7 +353,8 @@ type EmbeddedFile struct {
 	FileSize  int64     // File size in bytes (0 if unknown)
 	CachePath string    // Local cache path (empty if not cached)
 	Source    string    // Where found: "description" or "comment:{id}"
-	SyncedAt  time.Time // When metadata was synced
+	CreatedAt time.Time // When the row was first extracted (the file's ctime)
+	SyncedAt  time.Time // When metadata was synced (the file's mtime)
 }
 
 // TeamMetadata contains all metadata for a team fetched in a single query.

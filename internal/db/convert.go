@@ -857,6 +857,7 @@ func DBEmbeddedFileToAPIFile(file EmbeddedFile) api.EmbeddedFile {
 		FileSize:  file.FileSize.Int64,
 		CachePath: NullStringValue(file.CachePath),
 		Source:    file.Source,
+		CreatedAt: file.CreatedAt,
 		SyncedAt:  file.SyncedAt,
 	}
 }

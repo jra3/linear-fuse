@@ -948,12 +948,14 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 		varDecls = append(varDecls, fmt.Sprintf("$id%d: String!", i))
 	}
 
-	query := fmt.Sprintf(`query IssueDetailsBatch(%s) { %s } %s %s %s`,
+	query := fmt.Sprintf(`query IssueDetailsBatch(%s) { %s } %s %s %s %s %s`,
 		strings.Join(varDecls, ", "),
 		strings.Join(queryParts, " "),
 		CommentFieldsFragment,
 		DocumentFieldsFragment,
 		AttachmentFieldsFragment,
+		issueRelationFieldsFragment,
+		issueInverseRelationFieldsFragment,
 	)
 
 	// Result will be a map of alias -> issue data

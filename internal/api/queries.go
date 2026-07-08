@@ -33,7 +33,7 @@ var queryIssue = `
 query Issue($id: String!) {
   issue(id: $id) { ...IssueFields }
 }
-` + issueFieldsFragment
+` + issueFieldsFragment + issueRelationFieldsFragment + issueInverseRelationFieldsFragment
 
 // issueFieldsFragmentLite is a lighter fragment for bulk queries (no relations).
 // Use this for fetching many issues at once to avoid GraphQL complexity limits.
@@ -67,6 +67,19 @@ fragment IssueFieldsLite on Issue {
 }
 `
 
+// issueRelationFieldsFragment / issueInverseRelationFieldsFragment project a
+// relation node's fields exactly once — referenced by both the IssueFields
+// fragment and IssueDetailsSelection, so the two selections can never drift
+// (the fragment rule: an inlined copy silently diverges when one gains a
+// field). A query that references them must append them.
+const issueRelationFieldsFragment = `
+fragment IssueRelationFields on IssueRelation { id type relatedIssue { id identifier title } createdAt updatedAt }
+`
+
+const issueInverseRelationFieldsFragment = `
+fragment IssueInverseRelationFields on IssueRelation { id type issue { id identifier title } createdAt updatedAt }
+`
+
 // issueFieldsFragment is a GraphQL fragment containing all fields fetched for an issue.
 // Includes relations - use only for single-issue queries to avoid complexity limits.
 const issueFieldsFragment = `
@@ -96,8 +109,8 @@ fragment IssueFields on Issue {
   parent { id identifier title }
   children { nodes { id identifier title createdAt updatedAt } }
   cycle { id name number }
-  relations { nodes { id type relatedIssue { id identifier title } createdAt updatedAt } }
-  inverseRelations { nodes { id type issue { id identifier title } createdAt updatedAt } }
+  relations { nodes { ...IssueRelationFields } }
+  inverseRelations { nodes { ...IssueInverseRelationFields } }
 }
 `
 
@@ -774,8 +787,8 @@ const IssueRelationsPageSize = 50
 var IssueDetailsSelection = fmt.Sprintf(`comments(first: %d) { nodes { ...CommentFields } }
     documents(first: %d) { nodes { ...DocumentFields } }
     attachments(first: %d) { nodes { ...AttachmentFields } }
-    relations(first: %d) { nodes { id type relatedIssue { id identifier title } createdAt updatedAt } }
-    inverseRelations(first: %d) { nodes { id type issue { id identifier title } createdAt updatedAt } }`,
+    relations(first: %d) { nodes { ...IssueRelationFields } }
+    inverseRelations(first: %d) { nodes { ...IssueInverseRelationFields } }`,
 	IssueDetailsPageSize, IssueDetailsPageSize, IssueDetailsPageSize, IssueRelationsPageSize, IssueRelationsPageSize)
 
 // queryIssueDetails fetches comments, documents, attachments, and relations
@@ -787,7 +800,8 @@ query IssueDetails($issueId: String!) {
   }
 }
 `, IssueDetailsSelection) +
-	CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment
+	CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment +
+	issueRelationFieldsFragment + issueInverseRelationFieldsFragment
 
 // queryIssueAttachments fetches only attachments for an issue
 var queryIssueAttachments = `

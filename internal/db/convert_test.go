@@ -1385,3 +1385,102 @@ func TestDBEmbeddedFilesToAPIFilesEmpty(t *testing.T) {
 		t.Errorf("Expected empty slice, got %d files", len(apiFiles))
 	}
 }
+
+// TestOverlayColumnsWin pins the other half of the reverse-conversion
+// contract: the columns are AUTHORITATIVE, so when the data blob disagrees
+// with a column (which cannot happen through the normal write path, but is
+// exactly what a column added to the sqlc model and FORGOTTEN in the overlay
+// would look like), every column-backed field must read the column's value —
+// never the blob's stale copy. A new column without an overlay assignment and
+// a matching assertion here should fail loudly in review.
+func TestOverlayColumnsWin(t *testing.T) {
+	t.Parallel()
+
+	t.Run("state", func(t *testing.T) {
+		t.Parallel()
+		blob := mustMarshal(api.State{ID: "blob-id", Name: "blob-name", Type: "blob-type"})
+		got := DBStateToAPIState(State{ID: "col-id", Name: "col-name", Type: "col-type", Data: blob})
+		want := api.State{ID: "col-id", Name: "col-name", Type: "col-type"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("blob won over columns:\n got=%+v\nwant=%+v", got, want)
+		}
+	})
+
+	t.Run("label", func(t *testing.T) {
+		t.Parallel()
+		blob := mustMarshal(api.Label{ID: "blob-id", Name: "blob-name", Color: "blob-color", Description: "blob-desc", Team: &api.Team{ID: "blob-team"}})
+		got := DBLabelToAPILabel(Label{
+			ID:          "col-id",
+			Name:        "col-name",
+			Color:       sql.NullString{String: "col-color", Valid: true},
+			Description: sql.NullString{String: "col-desc", Valid: true},
+			TeamID:      sql.NullString{String: "col-team", Valid: true},
+			Data:        blob,
+		})
+		want := api.Label{ID: "col-id", Name: "col-name", Color: "col-color", Description: "col-desc", Team: &api.Team{ID: "col-team"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("blob won over columns:\n got=%+v\nwant=%+v", got, want)
+		}
+	})
+
+	t.Run("user", func(t *testing.T) {
+		t.Parallel()
+		blob := mustMarshal(api.User{ID: "blob-id", Name: "blob-name", Email: "blob@x", DisplayName: "blob-dn", Active: false})
+		got := DBUserToAPIUser(User{
+			ID:          "col-id",
+			Name:        "col-name",
+			Email:       "col@x",
+			DisplayName: sql.NullString{String: "col-dn", Valid: true},
+			Active:      1,
+			Data:        blob,
+		})
+		want := api.User{ID: "col-id", Name: "col-name", Email: "col@x", DisplayName: "col-dn", Active: true}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("blob won over columns:\n got=%+v\nwant=%+v", got, want)
+		}
+	})
+
+	t.Run("cycle", func(t *testing.T) {
+		t.Parallel()
+		colStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		colEnd := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+		blob := mustMarshal(api.Cycle{
+			ID: "blob-id", Number: 1, Name: "blob-name",
+			StartsAt: colStart.AddDate(0, 0, -7), EndsAt: colEnd.AddDate(0, 0, -7),
+			IssueCountHistory: []int{1, 2, 3}, // blob-only field: must survive
+		})
+		got := DBCycleToAPICycle(Cycle{
+			ID:       "col-id",
+			Number:   42,
+			Name:     sql.NullString{String: "col-name", Valid: true},
+			StartsAt: sql.NullTime{Time: colStart, Valid: true},
+			EndsAt:   sql.NullTime{Time: colEnd, Valid: true},
+			Data:     blob,
+		})
+		if got.ID != "col-id" || got.Number != 42 || got.Name != "col-name" ||
+			!got.StartsAt.Equal(colStart) || !got.EndsAt.Equal(colEnd) {
+			t.Errorf("blob won over columns: %+v", got)
+		}
+		// The blob-only field must still flow through — overlay, not replace.
+		if !reflect.DeepEqual(got.IssueCountHistory, []int{1, 2, 3}) {
+			t.Errorf("blob-only history did not survive the overlay: %+v", got.IssueCountHistory)
+		}
+	})
+
+	t.Run("milestone", func(t *testing.T) {
+		t.Parallel()
+		blob := mustMarshal(api.ProjectMilestone{ID: "blob-id", Name: "blob-name", Description: "blob-desc", TargetDate: strPtr("2020-01-01"), SortOrder: 1})
+		got := DBMilestoneToAPIProjectMilestone(ProjectMilestone{
+			ID:          "col-id",
+			Name:        "col-name",
+			Description: sql.NullString{String: "col-desc", Valid: true},
+			TargetDate:  sql.NullString{String: "2026-12-31", Valid: true},
+			SortOrder:   sql.NullFloat64{Float64: 9, Valid: true},
+			Data:        blob,
+		})
+		if got.ID != "col-id" || got.Name != "col-name" || got.Description != "col-desc" ||
+			got.TargetDate == nil || *got.TargetDate != "2026-12-31" || got.SortOrder != 9 {
+			t.Errorf("blob won over columns: %+v", got)
+		}
+	})
+}

@@ -994,6 +994,12 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 
 	// Touch synced_at for all fetched issues so the FS layer doesn't immediately
 	// re-trigger on-demand fetches for the data we just stored.
+	//
+	// Relations are DELIBERATELY not touched, though the loop above syncs five
+	// collections: nothing consults relations staleness (the repo has no
+	// relations SWR path, and the dead GetIssueRelationsSyncedAt query was
+	// deleted in PR #186), so a TouchIssueRelations would be dead machinery —
+	// don't "fix" the symmetry.
 	now := db.Now()
 	for _, issue := range issues {
 		if err := w.store.Queries().TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
