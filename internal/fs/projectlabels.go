@@ -18,30 +18,33 @@ import (
 // projectLabelsMarkdown renders the root project-labels.md catalog. The
 // assignment rules live IN the file — it is what an agent reads after a
 // validation .error — and the render is stable for an empty catalog (never
-// ENOENT; the README promises the file exists).
+// ENOENT; the README promises the file exists). The frontmatter goes through
+// renderWithFrontmatter so hostile names (`Q3: Bets`, quotes) stay valid YAML.
 func projectLabelsMarkdown(labels []api.ProjectLabel) []byte {
-	var yaml, table strings.Builder
+	entries := make([]map[string]any, 0, len(labels))
+	var table strings.Builder
 	for _, l := range labels {
-		yaml.WriteString(fmt.Sprintf("  - id: %s\n    name: %s\n", l.ID, l.Name))
+		entry := map[string]any{"id": l.ID, "name": l.Name}
 		if l.Color != "" {
-			yaml.WriteString(fmt.Sprintf("    color: %q\n", l.Color))
+			entry["color"] = l.Color
 		}
 		if l.Description != "" {
-			yaml.WriteString(fmt.Sprintf("    description: %q\n", l.Description))
+			entry["description"] = l.Description
 		}
 		if l.IsGroup {
-			yaml.WriteString("    group: true\n")
+			entry["group"] = true
 		}
 		if l.Parent != nil {
 			parent := l.Parent.Name
 			if parent == "" {
 				parent = l.Parent.ID
 			}
-			yaml.WriteString(fmt.Sprintf("    parent: %s\n", parent))
+			entry["parent"] = parent
 		}
 		if l.RetiredAt != nil {
-			yaml.WriteString("    retired: true\n")
+			entry["retired"] = true
 		}
+		entries = append(entries, entry)
 
 		group := "—"
 		if l.Parent != nil {
@@ -74,10 +77,7 @@ func projectLabelsMarkdown(labels []api.ProjectLabel) []byte {
 ` + body
 	}
 
-	return []byte(fmt.Sprintf(`---
-labels:
-%s---
-
+	return renderWithFrontmatter(map[string]any{"labels": entries}, fmt.Sprintf(`
 # Project Labels (workspace-wide)
 
 Assign in any project.md frontmatter: `+"`labels: [Platform, Q3-Bet]`"+`
@@ -89,7 +89,7 @@ Rules:
 - At most ONE child from each group may be on a project at a time.
 - Labels marked `+"`retired: true`"+` cannot be newly assigned; existing assignments remain.
 
-%s`, yaml.String(), body))
+%s`, body))
 }
 
 // projectLabelCatalogTimes derives the catalog file's times from the entities

@@ -216,7 +216,13 @@ was observable only through a mounted filesystem. The editable-only split
 the writer's bytes) is now pinned by unit tests on the exact frontmatter key
 sets. The fs nodes keep one-line wrappers that degrade a render failure to an
 empty file. The parse side stays with [[scalar-edit]] (name/description) and
-[[link-reconciliation]] (the member lists).
+[[link-reconciliation]] (the member lists). The read-only catalog renders
+(team.md, states.md, labels.md, project-labels.md, user.md, cycle.md, updates,
+label files) also route their frontmatter through this seam
+(`renderWithFrontmatter`, internal/fs/catalogrender.go) — they used to
+fmt.Sprintf-concatenate YAML, so a name like `Q3: Bets` emitted invalid YAML
+in exactly the files agents machine-parse after a `.error`; the bodies stay
+hand-built prose/tables.
 
 ### Create trigger (`createFileNode`)
 The **deep module** owning the write-only `_create` file (and the named-file

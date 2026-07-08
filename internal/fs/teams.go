@@ -205,93 +205,72 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	return nil, syscall.ENOENT
 }
 
-// teamMarkdown renders the team.md content for a team.
+// teamMarkdown renders the team.md content for a team. Frontmatter goes
+// through renderWithFrontmatter so hostile names stay valid YAML.
 func teamMarkdown(team api.Team) []byte {
-	return []byte(fmt.Sprintf(`---
-id: %s
-key: %s
-name: %q
-icon: %q
-created: %q
-updated: %q
----
-
+	fm := map[string]any{
+		"id":      team.ID,
+		"key":     team.Key,
+		"name":    team.Name,
+		"icon":    team.Icon,
+		"created": team.CreatedAt.Format(time.RFC3339),
+		"updated": team.UpdatedAt.Format(time.RFC3339),
+	}
+	body := fmt.Sprintf(`
 # %s
 
 - **Key:** %s
 - **ID:** %s
-`,
-		team.ID,
-		team.Key,
-		team.Name,
-		team.Icon,
-		team.CreatedAt.Format(time.RFC3339),
-		team.UpdatedAt.Format(time.RFC3339),
-		team.Name,
-		team.Key,
-		team.ID,
-	))
+`, team.Name, team.Key, team.ID)
+	return renderWithFrontmatter(fm, body)
 }
 
 // statesMarkdown renders the states.md content for a team's workflow states.
+// Frontmatter goes through renderWithFrontmatter so a state named with a
+// colon (or any YAML-hostile character) stays machine-parseable.
 func statesMarkdown(team api.Team, states []api.State) []byte {
-	var statesYAML string
-	for _, state := range states {
-		statesYAML += fmt.Sprintf("  - id: %s\n    name: %s\n    type: %s\n",
-			state.ID, state.Name, state.Type)
-	}
-
+	entries := make([]map[string]any, 0, len(states))
 	var table string
 	for _, state := range states {
+		entries = append(entries, map[string]any{
+			"id": state.ID, "name": state.Name, "type": state.Type,
+		})
 		table += fmt.Sprintf("| %s | %s | %s |\n", state.Name, state.Type, state.ID)
 	}
 
-	return []byte(fmt.Sprintf(`---
-team: %s
-states:
-%s---
-
+	fm := map[string]any{"team": team.Key, "states": entries}
+	body := fmt.Sprintf(`
 # Workflow States for %s
 
 | Name | Type | ID |
 |------|------|-----|
-%s`,
-		team.Key,
-		statesYAML,
-		team.Key,
-		table,
-	))
+%s`, team.Key, table)
+	return renderWithFrontmatter(fm, body)
 }
 
 // labelsMarkdown renders the labels.md content for a team's labels.
+// Frontmatter goes through renderWithFrontmatter so a label named with a
+// colon (or any YAML-hostile character) stays machine-parseable.
 func labelsMarkdown(team api.Team, labels []api.Label) []byte {
-	var labelsYAML string
-	for _, label := range labels {
-		labelsYAML += fmt.Sprintf("  - id: %s\n    name: %s\n    color: %q\n",
-			label.ID, label.Name, label.Color)
-		if label.Description != "" {
-			labelsYAML += fmt.Sprintf("    description: %q\n", label.Description)
-		}
-	}
-
+	entries := make([]map[string]any, 0, len(labels))
 	var table string
 	for _, label := range labels {
+		entry := map[string]any{
+			"id": label.ID, "name": label.Name, "color": label.Color,
+		}
+		if label.Description != "" {
+			entry["description"] = label.Description
+		}
+		entries = append(entries, entry)
 		table += fmt.Sprintf("| %s | %s | %s |\n", label.Name, label.Color, label.ID)
 	}
 
-	return []byte(fmt.Sprintf(`---
-team: %s
-labels:
-%s---
-
+	fm := map[string]any{"team": team.Key, "labels": entries}
+	body := fmt.Sprintf(`
 # Labels for %s
 
 | Name | Color | ID |
 |------|-------|-----|
-%s`,
-		team.Key,
-		labelsYAML,
-		team.Key,
-		table,
-	))
+%s`, team.Key, table)
+	return renderWithFrontmatter(fm, body)
 }
