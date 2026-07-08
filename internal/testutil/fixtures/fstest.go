@@ -231,6 +231,21 @@ func PopulateProject(ctx context.Context, store *db.Store, project api.Project, 
 	return nil
 }
 
+// PopulateProjectLabels inserts workspace project labels into the SQLite store.
+func PopulateProjectLabels(ctx context.Context, store *db.Store, labels []api.ProjectLabel) error {
+	q := store.Queries()
+	for _, label := range labels {
+		params, err := db.APIProjectLabelToDBProjectLabel(label)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertProjectLabel(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // PopulateCycle inserts a cycle into the SQLite store.
 func PopulateCycle(ctx context.Context, store *db.Store, cycle api.Cycle, teamID string) error {
 	q := store.Queries()

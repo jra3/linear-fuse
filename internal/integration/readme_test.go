@@ -66,4 +66,25 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	if strings.Contains(readme, "instead surface the result") {
 		t.Error("README carves attachments/relations out of .last, but every create surface reports to .last now")
 	}
+
+	// Project labels (#130): the README must teach the catalog surface and the
+	// assignment rules ("one child" pins group exclusivity; "retired" pins the
+	// lifecycle; the reference-files line must point at the catalog).
+	for _, want := range []string{"project-labels.md", "one child", "retired", "Validated project fields"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q", want)
+		}
+	}
+	// And the documented surface must really exist, read-only, with the
+	// group marker the rules refer to.
+	catalog, err := os.ReadFile(filepath.Join(mountPoint, "project-labels.md"))
+	if err != nil {
+		t.Fatalf("README documents project-labels.md but it is unreadable: %v", err)
+	}
+	if !strings.Contains(string(catalog), "group") {
+		t.Error("project-labels.md does not carry the group marker the README describes")
+	}
+	if info, err := os.Stat(filepath.Join(mountPoint, "project-labels.md")); err == nil && info.Mode().Perm() != 0444 {
+		t.Errorf("project-labels.md mode = %v, want 0444 (README: read-only)", info.Mode().Perm())
+	}
 }
