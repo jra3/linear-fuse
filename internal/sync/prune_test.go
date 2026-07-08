@@ -377,10 +377,7 @@ func TestDeferDetailIssues(t *testing.T) {
 	ctx := context.Background()
 
 	worker := NewWorker(newMockAPIClient(), store, Config{Interval: time.Hour})
-	worker.deferDetailIssues(ctx, []struct {
-		ID         string
-		Identifier string
-	}{
+	worker.deferDetailIssues(ctx, []issueRef{
 		{ID: "issue-1", Identifier: "TST-1"},
 		{ID: "issue-2", Identifier: "TST-2"},
 	})

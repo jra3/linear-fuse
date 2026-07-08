@@ -44,6 +44,7 @@ type mockAPIClient struct {
 	simulateError    error
 	rateLimitResetAt time.Time                    // M-3: configurable reset time for adaptive backoff tests
 	detailsByIssue   map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
+	detailsCalls     int32                        // number of GetIssueDetailsBatch calls (incl. failed ones)
 	onDetailsBatch   func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
 	onTeamMetadata   func()                       // if set, runs inside GetTeamMetadata (simulates writes racing the fetch)
 	onWorkspace      func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
@@ -191,6 +192,7 @@ func (m *mockAPIClient) GetIssueDetails(ctx context.Context, issueID string) (*a
 }
 
 func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error) {
+	atomic.AddInt32(&m.detailsCalls, 1)
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -849,16 +851,16 @@ func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
 	cfg := Config{Interval: time.Hour}
 	worker := NewWorker(mock, store, cfg)
 
-	issues := []struct {
-		ID         string
-		Identifier string
-	}{
+	issues := []issueRef{
 		{ID: "issue-1", Identifier: "TST-1"},
 		{ID: "issue-2", Identifier: "TST-2"},
 	}
 
-	// Call syncIssueDetailsBatch directly; the rate-limit error should queue the issues
-	worker.syncIssueDetailsBatch(ctx, issues)
+	// Call syncDetails directly; the rate-limit error should queue the issues
+	outcome := worker.syncDetails(ctx, issues)
+	if !outcome.gated {
+		t.Error("rate-limit fetch failure should gate the outcome")
+	}
 
 	// Verify both issues landed in the pending queue
 	pending, err := store.Queries().ListPendingDetailSync(ctx)
@@ -917,10 +919,7 @@ func TestDetailsSyncPrunesStaleRows(t *testing.T) {
 	mock.detailsByIssue["issue-1"] = &api.IssueDetails{Comments: []api.Comment{live}}
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
 
-	worker.syncIssueDetailsBatch(ctx, []struct {
-		ID         string
-		Identifier string
-	}{{ID: "issue-1", Identifier: "TST-1"}})
+	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
 	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
 	if err != nil {
@@ -962,10 +961,7 @@ func TestDetailsSyncPruneSparesMidFetchCreates(t *testing.T) {
 	}
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
 
-	worker.syncIssueDetailsBatch(ctx, []struct {
-		ID         string
-		Identifier string
-	}{{ID: "issue-1", Identifier: "TST-1"}})
+	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
 	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
 	if err != nil {
@@ -1003,10 +999,7 @@ func TestDetailsSyncFullPageSkipsPrune(t *testing.T) {
 	mock.detailsByIssue["issue-1"] = &api.IssueDetails{Comments: full}
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
 
-	worker.syncIssueDetailsBatch(ctx, []struct {
-		ID         string
-		Identifier string
-	}{{ID: "issue-1", Identifier: "TST-1"}})
+	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
 	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
 	if err != nil {
@@ -1030,10 +1023,10 @@ func TestDetailsSyncPrunesStaleDocsAndAttachments(t *testing.T) {
 	ctx := context.Background()
 
 	old := time.Now().Add(-time.Minute)
-	issueRef := &api.Issue{ID: "issue-1"} // documents key their issue_id off document.Issue.ID
+	docIssue := &api.Issue{ID: "issue-1"} // documents key their issue_id off document.Issue.ID
 
-	liveDoc := api.Document{ID: "doc-live", SlugID: "slug-live", Title: "Live", Issue: issueRef, CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	staleDoc := api.Document{ID: "doc-stale", SlugID: "slug-stale", Title: "Stale", Issue: issueRef, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	liveDoc := api.Document{ID: "doc-live", SlugID: "slug-live", Title: "Live", Issue: docIssue, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	staleDoc := api.Document{ID: "doc-stale", SlugID: "slug-stale", Title: "Stale", Issue: docIssue, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	for _, d := range []api.Document{liveDoc, staleDoc} {
 		params, err := db.APIDocumentToDBDocument(d)
 		if err != nil {
@@ -1066,10 +1059,7 @@ func TestDetailsSyncPrunesStaleDocsAndAttachments(t *testing.T) {
 	}
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
 
-	worker.syncIssueDetailsBatch(ctx, []struct {
-		ID         string
-		Identifier string
-	}{{ID: "issue-1", Identifier: "TST-1"}})
+	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
 	docs, err := store.Queries().ListIssueDocuments(ctx, sql.NullString{String: "issue-1", Valid: true})
 	if err != nil {
@@ -1310,7 +1300,11 @@ func TestSyncAllTeamsProceedsWhenBudgetOK(t *testing.T) {
 	}
 }
 
-func TestSyncOrDeferDetailBatchDefersWhenBudgetHigh(t *testing.T) {
+// TestSyncDetailsDefersWhenBudgetHigh: the budget gate — above the defer
+// threshold, syncDetails must not spend an API call; the whole batch lands in
+// pending_detail_sync (deferred) and the outcome is gated so a draining loop
+// stops.
+func TestSyncDetailsDefersWhenBudgetHigh(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
@@ -1320,15 +1314,22 @@ func TestSyncOrDeferDetailBatchDefersWhenBudgetHigh(t *testing.T) {
 	worker := NewWorker(mock, store, cfg)
 	worker.SetBudgetReporter(&mockBudgetReporter{count: 1100, pct: 73.0}) // >70%
 
-	issues := []struct {
-		ID         string
-		Identifier string
-	}{
+	issues := []issueRef{
 		{ID: "issue-1", Identifier: "TST-1"},
 		{ID: "issue-2", Identifier: "TST-2"},
 	}
 
-	worker.syncOrDeferDetailBatch(context.Background(), issues)
+	outcome := worker.syncDetails(context.Background(), issues)
+
+	if !outcome.gated {
+		t.Error("budget gate should report gated")
+	}
+	if len(outcome.deferred) != 2 || len(outcome.synced) != 0 {
+		t.Errorf("outcome = %d deferred / %d synced, want 2 / 0", len(outcome.deferred), len(outcome.synced))
+	}
+	if calls := atomic.LoadInt32(&mock.detailsCalls); calls != 0 {
+		t.Errorf("expected 0 GetIssueDetailsBatch calls when budget exceeded, got %d", calls)
+	}
 
 	// Should have been queued to pending_detail_sync, not API-called
 	pending, err := store.Queries().ListPendingDetailSync(context.Background())
@@ -1340,7 +1341,7 @@ func TestSyncOrDeferDetailBatchDefersWhenBudgetHigh(t *testing.T) {
 	}
 }
 
-func TestSyncOrDeferDetailBatchSyncsWhenBudgetOK(t *testing.T) {
+func TestSyncDetailsSyncsWhenBudgetOK(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
@@ -1350,14 +1351,18 @@ func TestSyncOrDeferDetailBatchSyncsWhenBudgetOK(t *testing.T) {
 	worker := NewWorker(mock, store, cfg)
 	worker.SetBudgetReporter(&mockBudgetReporter{count: 300, pct: 20.0}) // <70%
 
-	issues := []struct {
-		ID         string
-		Identifier string
-	}{
+	issues := []issueRef{
 		{ID: "issue-1", Identifier: "TST-1"},
 	}
 
-	worker.syncOrDeferDetailBatch(context.Background(), issues)
+	outcome := worker.syncDetails(context.Background(), issues)
+
+	if outcome.gated {
+		t.Error("a clean sync should not gate")
+	}
+	if len(outcome.synced) != 1 || len(outcome.deferred) != 0 {
+		t.Errorf("outcome = %d synced / %d deferred, want 1 / 0", len(outcome.synced), len(outcome.deferred))
+	}
 
 	// Should NOT be in pending queue (was synced directly)
 	pending, err := store.Queries().ListPendingDetailSync(context.Background())
@@ -1366,6 +1371,224 @@ func TestSyncOrDeferDetailBatchSyncsWhenBudgetOK(t *testing.T) {
 	}
 	if len(pending) != 0 {
 		t.Errorf("expected 0 pending detail syncs (direct sync), got %d", len(pending))
+	}
+}
+
+// seedFutureComment inserts a comment for issueID whose synced_at is one hour
+// in the FUTURE. It survives any prune (synced_at > any cutoff taken now) and
+// makes touching detectable: TouchIssueComments would drag synced_at back to
+// "now", so synced_at still being in the future proves the issue was NOT
+// touched, and synced_at near now proves it WAS.
+func seedFutureComment(t *testing.T, store *db.Store, issueID, commentID string) time.Time {
+	t.Helper()
+	params, err := db.APICommentToDBComment(api.Comment{ID: commentID, Body: "touch sentinel", CreatedAt: time.Now(), UpdatedAt: time.Now()}, issueID)
+	if err != nil {
+		t.Fatalf("convert sentinel comment: %v", err)
+	}
+	// db.Now() (UTC) rather than time.Now(): SQLite compares these as strings,
+	// so a local-zone timestamp would misorder against the store's UTC cutoffs.
+	future := db.Now().Add(time.Hour)
+	params.SyncedAt = future
+	if err := store.Queries().UpsertComment(context.Background(), params); err != nil {
+		t.Fatalf("seed sentinel comment: %v", err)
+	}
+	return future
+}
+
+// commentSyncedAt reads back a comment's synced_at.
+func commentSyncedAt(t *testing.T, store *db.Store, issueID, commentID string) time.Time {
+	t.Helper()
+	comments, err := store.Queries().ListIssueComments(context.Background(), issueID)
+	if err != nil {
+		t.Fatalf("list comments: %v", err)
+	}
+	for _, c := range comments {
+		if c.ID == commentID {
+			return c.SyncedAt
+		}
+	}
+	t.Fatalf("comment %s not found for %s", commentID, issueID)
+	return time.Time{}
+}
+
+// TestSyncDetailsCleanIssueTouchedAndDequeued: the happy half of the ledger —
+// a cleanly persisted issue is touched (synced_at stamped to now), removed
+// from pending_detail_sync, and reported in outcome.synced.
+func TestSyncDetailsCleanIssueTouchedAndDequeued(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// Pre-enqueue the issue so the dequeue is observable.
+	if err := store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+		IssueID: "issue-1", Identifier: "TST-1", QueuedAt: db.Now(),
+	}); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+	seedFutureComment(t, store, "issue-1", "comment-sentinel")
+
+	mock := newMockAPIClient() // default: empty (clean) details
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	outcome := worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
+
+	if outcome.gated {
+		t.Error("clean sync should not gate")
+	}
+	if len(outcome.synced) != 1 || outcome.synced[0].ID != "issue-1" {
+		t.Errorf("outcome.synced = %v, want [issue-1]", outcome.synced)
+	}
+	if len(outcome.deferred) != 0 {
+		t.Errorf("outcome.deferred = %v, want empty", outcome.deferred)
+	}
+
+	// Touched: the sentinel's future synced_at was dragged back to now.
+	if got := commentSyncedAt(t, store, "issue-1", "comment-sentinel"); got.After(time.Now().Add(30 * time.Minute)) {
+		t.Errorf("sentinel synced_at = %v, still in the future — clean issue was not touched", got)
+	}
+
+	// Dequeued from pending_detail_sync.
+	pending, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("expected clean issue dequeued, but %d still pending", len(pending))
+	}
+}
+
+// TestSyncDetailsUncleanIssueDeferredNotTouched: the masked-staleness hazard —
+// an issue whose persist was unclean (one collection's upsert failed) must NOT
+// be stamped fresh (a touch would hide its stale rows from the SWR path) and
+// must NOT lose its retry (it stays in pending_detail_sync). The failure is
+// injected as pure data: a relation with RelatedIssue == nil fails the
+// relations collection's upsert closure.
+func TestSyncDetailsUncleanIssueDeferredNotTouched(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	future := seedFutureComment(t, store, "issue-1", "comment-sentinel")
+
+	mock := newMockAPIClient()
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{
+		Relations: []api.IssueRelation{{ID: "rel-broken", Type: "blocks", RelatedIssue: nil, CreatedAt: time.Now(), UpdatedAt: time.Now()}},
+	}
+	// issue-2 rides in the same batch and is clean — the ledger is per issue.
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	outcome := worker.syncDetails(ctx, []issueRef{
+		{ID: "issue-1", Identifier: "TST-1"},
+		{ID: "issue-2", Identifier: "TST-2"},
+	})
+
+	if outcome.gated {
+		t.Error("a per-issue unclean persist should not gate the batch")
+	}
+	if len(outcome.deferred) != 1 || outcome.deferred[0].ID != "issue-1" {
+		t.Errorf("outcome.deferred = %v, want [issue-1]", outcome.deferred)
+	}
+	if len(outcome.synced) != 1 || outcome.synced[0].ID != "issue-2" {
+		t.Errorf("outcome.synced = %v, want [issue-2]", outcome.synced)
+	}
+
+	// NOT touched: the sentinel's synced_at is still the future value.
+	if got := commentSyncedAt(t, store, "issue-1", "comment-sentinel"); !got.After(time.Now().Add(30 * time.Minute)) {
+		t.Errorf("sentinel synced_at = %v (seeded %v) — unclean issue was touched, masking staleness", got, future)
+	}
+
+	// NOT dequeued: the issue keeps its retry.
+	pending, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync: %v", err)
+	}
+	if len(pending) != 1 || pending[0].IssueID != "issue-1" {
+		ids := []string{}
+		for _, p := range pending {
+			ids = append(ids, p.IssueID)
+		}
+		t.Errorf("pending = %v, want [issue-1] (unclean issue re-enqueued, clean one not)", ids)
+	}
+}
+
+// TestSyncDetailsFetchFailureDefersAll: a non-rate-limit batch fetch failure
+// must defer every issue to pending_detail_sync (the old code logged and
+// returned, silently dropping the worker-side retry for team-sync-sourced
+// issues) and gate the outcome.
+func TestSyncDetailsFetchFailureDefersAll(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.simulateError = errors.New("boom: internal server error")
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	outcome := worker.syncDetails(ctx, []issueRef{
+		{ID: "issue-1", Identifier: "TST-1"},
+		{ID: "issue-2", Identifier: "TST-2"},
+	})
+
+	if !outcome.gated {
+		t.Error("fetch failure should gate the outcome")
+	}
+	if len(outcome.deferred) != 2 || len(outcome.synced) != 0 {
+		t.Errorf("outcome = %d deferred / %d synced, want 2 / 0", len(outcome.deferred), len(outcome.synced))
+	}
+	if worker.isRateLimited() {
+		t.Error("a non-rate-limit failure must not set the rate-limit backoff")
+	}
+
+	pending, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("expected both issues deferred to pending after fetch failure, got %d", len(pending))
+	}
+}
+
+// TestDrainStopsWhenGated: the drain loop must stop at the first gated
+// outcome instead of burning an API call per remaining batch — with more than
+// one batch pending and a persistently failing fetch, exactly one
+// GetIssueDetailsBatch call is made.
+func TestDrainStopsWhenGated(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// Two batches' worth of pending issues.
+	for i := 0; i < detailsBatchSize+1; i++ {
+		if err := store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
+			IssueID:    fmt.Sprintf("issue-%02d", i),
+			Identifier: fmt.Sprintf("TST-%02d", i),
+			QueuedAt:   db.Now(),
+		}); err != nil {
+			t.Fatalf("seed pending: %v", err)
+		}
+	}
+
+	mock := newMockAPIClient()
+	mock.simulateError = errors.New("boom: internal server error") // non-rate-limit → gate 4 every time
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	worker.drainPendingDetailSync(ctx)
+
+	if calls := atomic.LoadInt32(&mock.detailsCalls); calls != 1 {
+		t.Errorf("GetIssueDetailsBatch called %d times, want 1 — drain must stop on a gated outcome", calls)
+	}
+
+	// Nothing was lost: every issue is still pending.
+	pending, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync: %v", err)
+	}
+	if len(pending) != detailsBatchSize+1 {
+		t.Errorf("pending = %d, want %d (gated batches keep their retry)", len(pending), detailsBatchSize+1)
 	}
 }
 
@@ -1422,10 +1645,7 @@ func TestDetailsSyncPersistsAndPrunesRelations(t *testing.T) {
 	}
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
 
-	worker.syncIssueDetailsBatch(ctx, []struct {
-		ID         string
-		Identifier string
-	}{{ID: "issue-1", Identifier: "TST-1"}})
+	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
 	// Outgoing: the live relation persisted, the phantom pruned.
 	rels, err := store.Queries().ListIssueRelations(ctx, "issue-1")
@@ -1478,10 +1698,7 @@ func TestDetailsSyncRelationUpsertFailureSuppressesPrune(t *testing.T) {
 	}
 	worker := NewWorker(mock, store, Config{Interval: time.Hour})
 
-	worker.syncIssueDetailsBatch(ctx, []struct {
-		ID         string
-		Identifier string
-	}{{ID: "issue-1", Identifier: "TST-1"}})
+	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
 	if _, err := store.Queries().GetIssueRelation(ctx, "rel-stale"); err != nil {
 		t.Errorf("unclean relation sync must suppress the prune, but rel-stale is gone: %v", err)

@@ -343,10 +343,7 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 // syncTeamIssues fetches issues ordered by updatedAt DESC and stops when hitting unchanged issues
 func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUpdatedAt time.Time) (added, updated, pages int, err error) {
 	var cursor string
-	var pendingDetailIssues []struct {
-		ID         string
-		Identifier string
-	}
+	var pendingDetailIssues []issueRef
 
 	for {
 		// Check for cancellation
@@ -404,14 +401,13 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 			}
 
 			// Queue for batch details sync
-			pendingDetailIssues = append(pendingDetailIssues, struct {
-				ID         string
-				Identifier string
-			}{ID: issue.ID, Identifier: issue.Identifier})
+			pendingDetailIssues = append(pendingDetailIssues, issueRef{ID: issue.ID, Identifier: issue.Identifier})
 
-			// Sync details in batches (or defer if budget is tight)
+			// Sync details in batches. The outcome is ignored here: any
+			// gated/deferred issue landed in pending_detail_sync, so the next
+			// cycle's drain retries it.
 			if len(pendingDetailIssues) >= detailsBatchSize {
-				w.syncOrDeferDetailBatch(ctx, pendingDetailIssues)
+				w.syncDetails(ctx, pendingDetailIssues)
 				pendingDetailIssues = nil
 			}
 
@@ -442,9 +438,9 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 		cursor = pageInfo.EndCursor
 	}
 
-	// Sync any remaining pending issue details
+	// Sync any remaining pending issue details (outcome ignored, see above)
 	if len(pendingDetailIssues) > 0 {
-		w.syncOrDeferDetailBatch(ctx, pendingDetailIssues)
+		w.syncDetails(ctx, pendingDetailIssues)
 	}
 
 	return added, updated, pages, nil
@@ -843,14 +839,32 @@ func (w *Worker) probeBudget(ctx context.Context) bool {
 // Issue Details Sync (Comments and Documents)
 // =============================================================================
 
-// deferDetailIssues enqueues every issue to pending_detail_sync for a later
-// cycle, stamping one QueuedAt for the batch. Shared by the three defer paths
-// (budget low, rate-limited before the fetch, rate-limited mid-fetch) so the
-// enqueue contract lives in one place and a fourth path cannot drift.
-func (w *Worker) deferDetailIssues(ctx context.Context, issues []struct {
+// issueRef identifies an issue for detail syncing: the ID the API keys on and
+// the identifier used in log lines and the pending queue.
+type issueRef struct {
 	ID         string
 	Identifier string
-}) {
+}
+
+// detailOutcome is syncDetails' per-issue ledger: every issue handed in lands
+// in exactly one of the two slices. synced holds issues whose details
+// persisted cleanly (touched + dequeued); deferred holds everything else
+// (re-enqueued to pending_detail_sync, NOT touched, NOT dequeued).
+// gated=true means conditions preclude further detail syncing this cycle —
+// budget too tight, rate-limited, or a failed fetch — so a batching loop
+// (drainPendingDetailSync) should stop rather than burn more batches.
+type detailOutcome struct {
+	synced   []issueRef
+	deferred []issueRef
+	gated    bool
+}
+
+// deferDetailIssues enqueues every issue to pending_detail_sync for a later
+// cycle, stamping one QueuedAt for the batch. Shared by syncDetails' defer
+// paths (the whole-batch gates and the per-issue unclean/contract-violation
+// cases) so the enqueue contract lives in one place and a new path cannot
+// drift.
+func (w *Worker) deferDetailIssues(ctx context.Context, issues []issueRef) {
 	now := db.Now()
 	for _, issue := range issues {
 		_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
@@ -861,36 +875,37 @@ func (w *Worker) deferDetailIssues(ctx context.Context, issues []struct {
 	}
 }
 
-// syncOrDeferDetailBatch syncs issue details if budget allows, otherwise
-// defers to pending_detail_sync for a later cycle.
-func (w *Worker) syncOrDeferDetailBatch(ctx context.Context, issues []struct {
-	ID         string
-	Identifier string
-}) {
+// syncDetails is the single entry point for issue-detail syncing
+// (comments/documents/attachments/relations). It owns every gate — budget,
+// rate-limited before the fetch, rate-limited mid-fetch, fetch failure —
+// fetches the batch in one API call, persists per issue through
+// reconcile.PersistIssueDetails, and returns a per-issue outcome ledger.
+//
+// Only a CLEAN issue (all five collections persisted without error) is
+// touched (synced_at stamped) and dequeued from pending_detail_sync. ANY
+// failure — a gate, a fetch error, or a single collection's upsert — defers
+// the affected issues to pending_detail_sync instead: an issue that was
+// silently dropped or partially persisted must never be stamped fresh
+// (masking staleness from the SWR path) nor lose its worker-side retry.
+func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutcome {
+	deferAll := func() detailOutcome {
+		w.deferDetailIssues(ctx, issues)
+		return detailOutcome{deferred: issues, gated: true}
+	}
+
+	// Gate 1: budget too tight for detail fetches this cycle.
 	if w.budgetExceeds(budgetDeferDetailPct) {
-		w.deferDetailIssues(ctx, issues)
-		return
+		return deferAll()
 	}
-	w.syncIssueDetailsBatch(ctx, issues)
-}
 
-// syncIssueDetailsBatch fetches and stores comments and documents for multiple issues in a single API call
-func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
-	ID         string
-	Identifier string
-}) {
-	// H-5: If rate limited, persist issues to pending_detail_sync so they survive the backoff
+	// Gate 2 (H-5): already rate limited — defer so the issues survive the backoff.
 	if w.isRateLimited() {
-		w.deferDetailIssues(ctx, issues)
-		return
+		return deferAll()
 	}
 
-	// Extract IDs
 	ids := make([]string, len(issues))
-	idToIdentifier := make(map[string]string, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
-		idToIdentifier[issue.ID] = issue.Identifier
 	}
 
 	// The prune cutoff is taken BEFORE the fetch: any row upserted after this
@@ -903,13 +918,15 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
 	if err != nil {
 		if isRateLimitError(err) {
+			// Gate 3: rate limited mid-fetch.
 			w.setRateLimited()
-			// H-5: Persist the issues we couldn't sync so they survive the backoff
-			w.deferDetailIssues(ctx, issues)
-			return
+			return deferAll()
 		}
-		log.Printf("[sync] batch fetch details failed: %v", err)
-		return
+		// Gate 4: any other fetch failure. Deferring (not just logging) keeps
+		// the worker-side retry for team-sync-sourced issues, which otherwise
+		// exist nowhere but this call's arguments.
+		log.Printf("[sync] batch fetch details failed, deferring %d issues: %v", len(issues), err)
+		return deferAll()
 	}
 
 	// Store each issue's comments/documents/attachments/relations through
@@ -918,32 +935,46 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 	// contributes COMPLETENESS (page-size checks), so a prune fires only when
 	// the fetch was clean AND complete.
 	//
-	// The prunes must run before the Touch* pass below, which re-stamps ALL of
-	// an issue's rows and would exempt phantoms from the cutoff. Completeness
-	// still relies on the API client's all-or-nothing batch semantics — c.query
-	// fails the WHOLE batch on any GraphQL error, so a partially-failed response
-	// never reaches this loop as a short-but-"complete" details struct.
+	// The prunes must run before an issue's Touch* below, which re-stamps ALL
+	// of that issue's rows and would exempt phantoms from the cutoff (prunes
+	// run inside PersistIssueDetails; the touches come after). Completeness
+	// relies on GetIssueDetailsBatch's documented all-or-nothing contract: a
+	// nil error guarantees a non-nil map entry for every requested ID, so a
+	// partially-failed response never reaches this loop as a
+	// short-but-"complete" details struct. The nil branch below is a trap for
+	// a violation of that contract, not expected flow.
 	deps := reconcile.Deps{Q: w.store.Queries(), Extract: w.extractor.ExtractAndStore}
-	for issueID, details := range detailsMap {
-		if details == nil {
-			continue
-		}
-		// The clean return is deliberately ignored for now: the touch/dequeue
-		// loop below still stamps every requested issue (a later step gates it
-		// on cleanliness).
-		_ = reconcile.PersistIssueDetails(ctx, deps, issueID, details, pruneCutoff)
-	}
-
-	// Touch synced_at for all fetched issues so the FS layer doesn't immediately
-	// re-trigger on-demand fetches for the data we just stored.
-	//
-	// Relations are DELIBERATELY not touched, though the loop above syncs five
-	// collections: nothing consults relations staleness (the repo has no
-	// relations SWR path, and the dead GetIssueRelationsSyncedAt query was
-	// deleted in PR #186), so a TouchIssueRelations would be dead machinery —
-	// don't "fix" the symmetry.
+	var outcome detailOutcome
 	now := db.Now()
 	for _, issue := range issues {
+		details := detailsMap[issue.ID]
+		if details == nil {
+			log.Printf("[sync] CONTRACT VIOLATION: GetIssueDetailsBatch returned nil error but no details for %s (%s) — deferring", issue.Identifier, issue.ID)
+			w.deferDetailIssues(ctx, []issueRef{issue})
+			outcome.deferred = append(outcome.deferred, issue)
+			continue
+		}
+
+		clean := reconcile.PersistIssueDetails(ctx, deps, issue.ID, details, pruneCutoff)
+		if !clean {
+			// A collection's convert/upsert failed. The clean guard already
+			// suppressed that collection's prune; here the issue must ALSO
+			// keep its retry (re-enqueue for the next cycle's drain) and must
+			// NOT be stamped fresh — a touch would hide the stale rows from
+			// the SWR path until the next real change.
+			w.deferDetailIssues(ctx, []issueRef{issue})
+			outcome.deferred = append(outcome.deferred, issue)
+			continue
+		}
+
+		// Touch synced_at so the FS layer doesn't immediately re-trigger
+		// on-demand fetches for the data we just stored.
+		//
+		// Relations are DELIBERATELY not touched, though the loop above syncs five
+		// collections: nothing consults relations staleness (the repo has no
+		// relations SWR path, and the dead GetIssueRelationsSyncedAt query was
+		// deleted in PR #186), so a TouchIssueRelations would be dead machinery —
+		// don't "fix" the symmetry.
 		if err := w.store.Queries().TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
 			log.Printf("[sync] touch comments %s: %v", issue.Identifier, err)
 		}
@@ -953,19 +984,21 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		if err := w.store.Queries().TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
 			log.Printf("[sync] touch attachments %s: %v", issue.Identifier, err)
 		}
-		// H-5: Remove successfully synced issues from pending queue
+		// H-5: Remove the cleanly synced issue from the pending queue
 		_ = w.store.Queries().DeletePendingDetailSync(ctx, issue.ID)
+		outcome.synced = append(outcome.synced, issue)
 	}
-	log.Printf("[sync] batch synced details for %d issues", len(detailsMap))
+	log.Printf("[sync] batch synced details: %d clean, %d deferred", len(outcome.synced), len(outcome.deferred))
+	return outcome
 }
 
-// drainPendingDetailSync processes issues that were queued for detail sync but skipped
-// due to rate limiting.  Called at the start of each sync cycle when not rate-limited.
+// drainPendingDetailSync processes issues that were queued for detail sync
+// but skipped due to rate limiting, budget, or an earlier failure. Called at
+// the start of each sync cycle. All the gates live inside syncDetails; this
+// is just a batching loop that stops when an outcome reports gated (nothing
+// more can sync this cycle). A gated syncDetails re-defers its batch, which
+// merely re-stamps the already-pending rows' QueuedAt — harmless.
 func (w *Worker) drainPendingDetailSync(ctx context.Context) {
-	if w.isRateLimited() {
-		return
-	}
-
 	pending, err := w.store.Queries().ListPendingDetailSync(ctx)
 	if err != nil || len(pending) == 0 {
 		return
@@ -973,37 +1006,20 @@ func (w *Worker) drainPendingDetailSync(ctx context.Context) {
 
 	log.Printf("[sync] draining %d pending detail syncs", len(pending))
 
-	// Convert to the same struct used by syncIssueDetailsBatch
-	type issueRef struct {
-		ID         string
-		Identifier string
-	}
 	issues := make([]issueRef, len(pending))
 	for i, row := range pending {
 		issues[i] = issueRef{ID: row.IssueID, Identifier: row.Identifier}
 	}
 
-	// Process in batches
 	for len(issues) > 0 {
-		if w.isRateLimited() || w.budgetExceeds(budgetDeferDetailPct) {
-			break
-		}
 		batch := issues
 		if len(batch) > detailsBatchSize {
 			batch = issues[:detailsBatchSize]
 		}
 		issues = issues[len(batch):]
 
-		batchArg := make([]struct {
-			ID         string
-			Identifier string
-		}, len(batch))
-		for i, ref := range batch {
-			batchArg[i] = struct {
-				ID         string
-				Identifier string
-			}{ID: ref.ID, Identifier: ref.Identifier}
+		if outcome := w.syncDetails(ctx, batch); outcome.gated {
+			break
 		}
-		w.syncIssueDetailsBatch(ctx, batchArg)
 	}
 }
