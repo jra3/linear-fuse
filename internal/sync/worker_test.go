@@ -513,9 +513,15 @@ func TestWorkerContextCancellation(t *testing.T) {
 	worker.Start(ctx)
 	time.Sleep(20 * time.Millisecond)
 
-	// Cancel context should stop worker
+	// Cancel context should stop worker. Poll with a deadline rather than a
+	// fixed grace: the worker only observes cancellation between sync steps,
+	// and on a loaded CI runner the in-flight initial sync can take well over
+	// the old 100ms (observed flaking on the shared runners).
 	cancel()
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(10 * time.Second)
+	for worker.Running() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if worker.Running() {
 		t.Error("Worker should stop when context is cancelled")
