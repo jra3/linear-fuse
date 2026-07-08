@@ -957,8 +957,15 @@ func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDet
 	return result.Issue.toDetails(), nil
 }
 
-// GetIssueDetailsBatch fetches comments, documents, and attachments for multiple issues in a single query.
-// Returns a map of issueID -> IssueDetails. Uses GraphQL aliases to batch requests.
+// GetIssueDetailsBatch fetches comments, documents, attachments, and relations
+// for multiple issues in a single query, using GraphQL aliases to batch requests.
+//
+// The result is all-or-nothing: a nil-error return guarantees the map holds a
+// non-nil entry for every requested issue ID. A missing alias, a null alias,
+// or a payload that fails to decode fails the whole call with an error naming
+// the issue. Callers prune SQLite rows against these details, so a silent gap
+// (or a null decoded as five empty, "complete" collections) would prune a live
+// issue's details.
 func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*IssueDetails, error) {
 	if len(issueIDs) == 0 {
 		return make(map[string]*IssueDetails), nil
@@ -1000,18 +1007,24 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 		return nil, err
 	}
 
-	// Parse each aliased result
+	// Parse each aliased result. Unmarshalling into a pointer distinguishes a
+	// null alias (issue not found) from a present payload — a zero
+	// issueDetailsPayload is indistinguishable from a real issue with no
+	// details.
 	result := make(map[string]*IssueDetails, len(issueIDs))
 	for i, id := range issueIDs {
 		alias := fmt.Sprintf("i%d", i)
 		raw, ok := rawResult[alias]
 		if !ok {
-			continue
+			return nil, fmt.Errorf("issue details batch: alias %s (issue %s) missing from response", alias, id)
 		}
 
-		var issueData issueDetailsPayload
+		var issueData *issueDetailsPayload
 		if err := json.Unmarshal(raw, &issueData); err != nil {
-			continue
+			return nil, fmt.Errorf("issue details batch: alias %s (issue %s): %w", alias, id, err)
+		}
+		if issueData == nil {
+			return nil, fmt.Errorf("issue details batch: alias %s (issue %s) is null", alias, id)
 		}
 
 		result[id] = issueData.toDetails()
