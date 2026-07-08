@@ -120,7 +120,13 @@ set licensing a full-table prune; retired labels are IN the drain, live-verified
 2026-07-08), and a `labels:` names list in project.md that resolves and validates
 in `internal/fs/projectlabels.go` — all **pure functions over a catalog slice**
 (no mount, no interface) — then rides the existing single `UpdateProject` call
-(`ProjectUpdateInput.LabelIds *[]string`, pointer-or-omit full-set write).
+(`ProjectUpdateInput.LabelIds *[]string`, pointer-or-omit full-set write). The
+front-half composition lives in `labelsEdit` (same file, sibling of `scalarEdit`
+in the edit-front-half family): it composes the pure primitives and owns the
+whole label decision — guard timing, the single `changed` computation, `applyTo`
+pointer-or-omit, and the guarded `divergences` compare — so
+`ProjectInfoNode.Flush` makes one call instead of smearing label knowledge
+across three points.
 
 Load-bearing invariant: **render unknown label IDs verbatim; the resolver accepts
 exact-ID passthrough** (catalog IDs and current-member IDs) — a cold or stale
@@ -168,12 +174,15 @@ junction row inline (rather than the old deferred batch a mid-loop failure skipp
 keeps SQLite consistent with whatever the API actually accepted on a partial failure.
 Project labels deliberately do **not** reconcile through this module: `labelIds`
 is one atomic full-set input on the project update (no per-pair link mutation
-exists), so the labels edit is scalar-edit-shaped — see "Project-label selection".
+exists), so the labels edit is scalar-edit-shaped: `labelsEdit` — see
+"Project-label selection".
 
 ### Scalar edit (`scalarEdit`)
 The **deep module** owning the *scalar* front half of a project/initiative edit —
 the counterpart to Link reconciliation, which owns the *relational* (list) front
-half of the same two mirror-image handlers. `project.md` and `initiative.md` each
+half of the same two mirror-image handlers (`labelsEdit` — see "Project-label
+selection" — is the third sibling, owning project.md's full-set labels front
+half). `project.md` and `initiative.md` each
 expose exactly two editable scalars: a **name** (frontmatter) and a
 **description** (body). `scalarEdit` (`internal/fs/scalaredit.go`) is the diff of
 those two — `{name, desc *string, origName, origDesc string}` — and owns the

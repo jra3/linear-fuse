@@ -1,6 +1,8 @@
 package fs
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -270,4 +272,207 @@ func TestProjectLabelCatalogTimes(t *testing.T) {
 	if !mtime.IsZero() || !ctime.IsZero() {
 		t.Errorf("empty catalog times = %v/%v, want zero", mtime, ctime)
 	}
+}
+
+// labelsEditHarness wires newLabelsEdit with a literal catalog and recording
+// closures — no mount, no API. refreshed is what the guard fetch returns;
+// catalogErr forces the cold-catalog degradation.
+type labelsEditHarness struct {
+	catalog      []api.ProjectLabel
+	catalogErr   error
+	catalogCalls int
+	refreshed    []string
+	refreshCalls int
+}
+
+func (h *labelsEditHarness) eval(t *testing.T, raw any, present bool, current []string) (labelsEdit, *FieldError) {
+	t.Helper()
+	return newLabelsEdit(context.Background(), raw, present, current,
+		func(context.Context) ([]api.ProjectLabel, error) {
+			h.catalogCalls++
+			return h.catalog, h.catalogErr
+		},
+		func(context.Context) []string {
+			h.refreshCalls++
+			return h.refreshed
+		})
+}
+
+func TestLabelsEdit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("key absent + current empty = untouched", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, nil, false, nil)
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if e.changed() {
+			t.Error("changed() = true for an untouched label set")
+		}
+		var input api.ProjectUpdateInput
+		e.applyTo(&input)
+		if input.LabelIds != nil {
+			t.Errorf("applyTo set LabelIds = %v, want nil omit", *input.LabelIds)
+		}
+		if h.refreshCalls != 0 {
+			t.Errorf("guard fired %d times on an untouched empty set, want 0", h.refreshCalls)
+		}
+		if h.catalogCalls != 0 {
+			t.Errorf("catalog fetched %d times with nothing to resolve, want 0", h.catalogCalls)
+		}
+	})
+
+	t.Run("key absent + current non-empty = clear", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, nil, false, []string{"id-bug"})
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if !e.changed() {
+			t.Fatal("changed() = false for a delete-the-line clear")
+		}
+		var input api.ProjectUpdateInput
+		e.applyTo(&input)
+		if input.LabelIds == nil || len(*input.LabelIds) != 0 {
+			t.Errorf("applyTo LabelIds = %v, want &[]string{} clear", input.LabelIds)
+		}
+	})
+
+	t.Run("explicit empty list = clear", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, []any{}, true, []string{"id-bug"})
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if !e.changed() {
+			t.Fatal("changed() = false for an explicit empty list")
+		}
+		var input api.ProjectUpdateInput
+		e.applyTo(&input)
+		if input.LabelIds == nil || len(*input.LabelIds) != 0 {
+			t.Errorf("applyTo LabelIds = %v, want &[]string{} clear", input.LabelIds)
+		}
+	})
+
+	t.Run("apply resolves names to IDs", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, []any{"bug"}, true, []string{"id-backend"})
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if !e.changed() {
+			t.Fatal("changed() = false for a real set change")
+		}
+		var input api.ProjectUpdateInput
+		e.applyTo(&input)
+		if input.LabelIds == nil || len(*input.LabelIds) != 1 || (*input.LabelIds)[0] != "id-bug" {
+			t.Errorf("applyTo LabelIds = %v, want [id-bug]", input.LabelIds)
+		}
+		if h.refreshCalls != 0 {
+			t.Errorf("guard fired %d times with a non-empty current set, want 0", h.refreshCalls)
+		}
+	})
+
+	t.Run("reordered list is not a change", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, []any{"Bug", "Backend"}, true, []string{"id-backend", "id-bug"})
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if e.changed() {
+			t.Error("changed() = true for an order-only difference")
+		}
+	})
+
+	t.Run("guard fires only when current empty and applying", func(t *testing.T) {
+		t.Parallel()
+		// The blob reads empty but the project really carries id-bug: the
+		// refreshed set feeds both resolution and the change decision, so
+		// re-saving the same label is NOT a change (no wipe-shaped write).
+		h := &labelsEditHarness{catalog: testCatalog(), refreshed: []string{"id-bug"}}
+		e, ferr := h.eval(t, []any{"Bug"}, true, nil)
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if h.refreshCalls != 1 {
+			t.Fatalf("guard fired %d times, want exactly 1", h.refreshCalls)
+		}
+		if e.changed() {
+			t.Error("changed() = true after refresh proved the set identical")
+		}
+	})
+
+	t.Run("guard silent when clearing", func(t *testing.T) {
+		t.Parallel()
+		// Key absent, current empty: nothing to apply, guard must not fire.
+		h := &labelsEditHarness{catalog: testCatalog(), refreshed: []string{"id-bug"}}
+		if _, ferr := h.eval(t, nil, true, nil); ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if h.refreshCalls != 0 {
+			t.Errorf("guard fired %d times with no labels to apply, want 0", h.refreshCalls)
+		}
+	})
+
+	t.Run("validation error passthrough", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		_, ferr := h.eval(t, []any{"Area"}, true, nil) // group label
+		if ferr == nil {
+			t.Fatal("expected a FieldError for a group-label assignment")
+		}
+		if ferr.Field != "labels" || !strings.Contains(ferr.Message, "label group") {
+			t.Errorf("FieldError = %+v, want labels/group message", ferr)
+		}
+	})
+
+	t.Run("ID passthrough on cold catalog", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalogErr: errors.New("catalog unavailable")}
+		e, ferr := h.eval(t, []any{"id-bug"}, true, []string{"id-bug"})
+		if ferr != nil {
+			t.Fatalf("cold catalog broke the round-trip invariant: %v", ferr.Detail())
+		}
+		if e.changed() {
+			t.Error("changed() = true re-saving the current set via ID passthrough")
+		}
+	})
+
+	t.Run("divergences nil when unchanged", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, nil, false, nil)
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		// A concurrent writer changed labels; an untouched edit must not EIO.
+		if got := e.divergences([]string{"id-frontend"}); got != nil {
+			t.Errorf("divergences = %v for an unchanged set, want nil", got)
+		}
+	})
+
+	t.Run("divergence fatal on set mismatch", func(t *testing.T) {
+		t.Parallel()
+		h := &labelsEditHarness{catalog: testCatalog()}
+		e, ferr := h.eval(t, []any{"Bug"}, true, nil)
+		if ferr != nil {
+			t.Fatalf("unexpected error: %v", ferr.Detail())
+		}
+		if got := e.divergences([]string{"id-bug"}); got != nil {
+			t.Errorf("divergences = %v for a faithful persist, want nil", got)
+		}
+		got := e.divergences([]string{"id-bug", "id-frontend"})
+		if len(got) != 1 || !got[0].fatal {
+			t.Fatalf("divergences = %+v for a set mismatch, want one fatal result", got)
+		}
+		if !strings.Contains(got[0].message, "Field: labels") {
+			t.Errorf("divergence message %q missing Field: labels", got[0].message)
+		}
+	})
 }
