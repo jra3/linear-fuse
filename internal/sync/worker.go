@@ -7,21 +7,16 @@ package sync
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"log"
-	"net/http"
-	"path"
-	"regexp"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/reconcile"
 )
 
 // APIClient defines the interface for API operations needed by the sync worker
@@ -83,17 +78,18 @@ type CatchUpModeToggler interface {
 
 // Worker handles background synchronization of Linear issues to SQLite
 type Worker struct {
-	client   APIClient
-	store    *db.Store
-	interval time.Duration
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	mu       sync.RWMutex
-	running  bool
-	lastSync time.Time
-	budget   BudgetReporter     // optional: for rate limit budget logging
-	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
-	cycle    atomic.Int64       // sync-cycle counter; rotates the team order
+	client    APIClient
+	store     *db.Store
+	extractor *reconcile.Extractor // embedded-file extraction (HEAD + upsert)
+	interval  time.Duration
+	stopCh    chan struct{}
+	doneCh    chan struct{}
+	mu        sync.RWMutex
+	running   bool
+	lastSync  time.Time
+	budget    BudgetReporter     // optional: for rate limit budget logging
+	catchUp   CatchUpModeToggler // optional: controls repo staleness during catch-up
+	cycle     atomic.Int64       // sync-cycle counter; rotates the team order
 
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
@@ -123,11 +119,12 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 		cfg.Interval = 2 * time.Minute
 	}
 	return &Worker{
-		client:   client,
-		store:    store,
-		interval: cfg.Interval,
-		stopCh:   make(chan struct{}),
-		doneCh:   make(chan struct{}),
+		client:    client,
+		store:     store,
+		extractor: &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader},
+		interval:  cfg.Interval,
+		stopCh:    make(chan struct{}),
+		doneCh:    make(chan struct{}),
 	}
 }
 
@@ -403,7 +400,7 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 
 			// Extract embedded files from issue description
 			if issue.Description != "" {
-				w.extractAndStoreEmbeddedFiles(ctx, issue.ID, issue.Description, "description")
+				w.extractor.ExtractAndStore(ctx, issue.ID, issue.Description, "description")
 			}
 
 			// Queue for batch details sync
@@ -538,17 +535,17 @@ func (w *Worker) syncProjectLabels(ctx context.Context, pruneCutoff time.Time) {
 		log.Printf("[sync] project labels fetch failed: %v", err)
 		return
 	}
-	syncCollection(ctx, syncCollectionSpec[api.ProjectLabel]{
-		label: "project-label",
-		items: plabels,
-		upsert: func(ctx context.Context, l api.ProjectLabel) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.ProjectLabel]{
+		Label: "project-label",
+		Items: plabels,
+		Upsert: func(ctx context.Context, l api.ProjectLabel) error {
 			params, err := db.APIProjectLabelToDBProjectLabel(l)
 			if err != nil {
 				return err
 			}
 			return w.store.Queries().UpsertProjectLabel(ctx, params)
 		},
-		prune: func(ctx context.Context) error {
+		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneProjectLabels(ctx, pruneCutoff)
 		},
 	})
@@ -560,19 +557,19 @@ func (w *Worker) syncProjectLabels(ctx context.Context, pruneCutoff time.Time) {
 // The prune only runs after every upsert succeeded — a row that merely
 // failed to refresh must not read as a removal — and initiative.Projects
 // is complete by GetWorkspace's contract, which is what makes pruning
-// against it safe. Reconciles through the shared syncCollection tail.
+// against it safe. Reconciles through the shared reconcile.Collection tail.
 func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Initiative, pruneCutoff time.Time) {
-	syncCollection(ctx, syncCollectionSpec[api.InitiativeProject]{
-		label: "initiative-project",
-		items: initiative.Projects.Nodes,
-		upsert: func(ctx context.Context, project api.InitiativeProject) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.InitiativeProject]{
+		Label: "initiative-project",
+		Items: initiative.Projects.Nodes,
+		Upsert: func(ctx context.Context, project api.InitiativeProject) error {
 			return w.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 				InitiativeID: initiative.ID,
 				ProjectID:    project.ID,
 				SyncedAt:     db.Now(),
 			})
 		},
-		prune: func(ctx context.Context) error {
+		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneInitiativeProjects(ctx, db.PruneInitiativeProjectsParams{
 				InitiativeID: initiative.ID,
 				SyncedAt:     pruneCutoff,
@@ -601,16 +598,16 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 
 	// Each metadata collection reconciles through the same tail — upsert every
 	// item, then prune the rows the (complete) fetch no longer returned, but
-	// only if every upsert succeeded. syncCollection owns that prune-safety
-	// invariant so no site can drop the guard. See CONTEXT.md "Sync reconcile
-	// tail (syncCollection)".
+	// only if every upsert succeeded. reconcile.Collection owns that
+	// prune-safety invariant so no site can drop the guard. See CONTEXT.md
+	// "Sync reconcile tail (syncCollection)".
 
 	// States are workflow-bounded and fetched single-page, so nothing licenses
 	// a prune — upsert-only (nil prune).
-	syncCollection(ctx, syncCollectionSpec[api.State]{
-		label: "state",
-		items: meta.States,
-		upsert: func(ctx context.Context, state api.State) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.State]{
+		Label: "state",
+		Items: meta.States,
+		Upsert: func(ctx context.Context, state api.State) error {
 			params, err := db.APIStateToDBState(state, team.ID)
 			if err != nil {
 				return err
@@ -623,17 +620,17 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// label.Team (fetched via the LabelFields fragment), not team.ID: team.labels
 	// returns workspace labels mixed in, so stamping team.ID here is what churned
 	// workspace labels between teams.
-	syncCollection(ctx, syncCollectionSpec[api.Label]{
-		label: "label",
-		items: meta.Labels,
-		upsert: func(ctx context.Context, label api.Label) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
+		Label: "label",
+		Items: meta.Labels,
+		Upsert: func(ctx context.Context, label api.Label) error {
 			params, err := db.APILabelToDBLabel(label)
 			if err != nil {
 				return err
 			}
 			return w.store.Queries().UpsertLabel(ctx, params)
 		},
-		prune: func(ctx context.Context) error {
+		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneTeamLabels(ctx, db.PruneTeamLabelsParams{
 				TeamID:   sql.NullString{String: team.ID, Valid: true},
 				SyncedAt: pruneCutoff,
@@ -641,17 +638,17 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 		},
 	})
 
-	syncCollection(ctx, syncCollectionSpec[api.Cycle]{
-		label: "cycle",
-		items: meta.Cycles,
-		upsert: func(ctx context.Context, cycle api.Cycle) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Cycle]{
+		Label: "cycle",
+		Items: meta.Cycles,
+		Upsert: func(ctx context.Context, cycle api.Cycle) error {
 			params, err := db.APICycleToDBCycle(cycle, team.ID)
 			if err != nil {
 				return err
 			}
 			return w.store.Queries().UpsertCycle(ctx, params)
 		},
-		prune: func(ctx context.Context) error {
+		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneTeamCycles(ctx, db.PruneTeamCyclesParams{
 				TeamID:   team.ID,
 				SyncedAt: pruneCutoff,
@@ -665,10 +662,10 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// prune. Milestones are a nested best-effort sub-write in a capped,
 	// never-pruned connection — outside that set — so a milestone failure is
 	// logged and swallowed, never suppressing the prune.
-	syncCollection(ctx, syncCollectionSpec[api.Project]{
-		label: "project",
-		items: meta.Projects,
-		upsert: func(ctx context.Context, project api.Project) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Project]{
+		Label: "project",
+		Items: meta.Projects,
+		Upsert: func(ctx context.Context, project api.Project) error {
 			params, err := db.APIProjectToDBProject(project)
 			if err != nil {
 				return err
@@ -697,7 +694,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 			}
 			return junctionErr
 		},
-		prune: func(ctx context.Context) error {
+		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneProjectTeams(ctx, db.PruneProjectTeamsParams{
 				TeamID:   team.ID,
 				SyncedAt: pruneCutoff,
@@ -707,10 +704,10 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 
 	// Members prune the team_members junction (a departed member), not the
 	// workspace-wide users table, which other teams share.
-	syncCollection(ctx, syncCollectionSpec[api.User]{
-		label: "member",
-		items: meta.Members,
-		upsert: func(ctx context.Context, member api.User) error {
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.User]{
+		Label: "member",
+		Items: meta.Members,
+		Upsert: func(ctx context.Context, member api.User) error {
 			params, err := db.APIUserToDBUser(member)
 			if err != nil {
 				return err
@@ -724,7 +721,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 				SyncedAt: db.Now(),
 			})
 		},
-		prune: func(ctx context.Context) error {
+		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneTeamMembers(ctx, db.PruneTeamMembersParams{
 				TeamID:   team.ID,
 				SyncedAt: pruneCutoff,
@@ -915,117 +912,26 @@ func (w *Worker) syncIssueDetailsBatch(ctx context.Context, issues []struct {
 		return
 	}
 
-	// Store each issue's comments/documents/attachments through the shared
-	// syncCollection tail. The module contributes the CLEAN guard (a failed
-	// convert/upsert marks the collection unclean and suppresses its prune —
-	// the fix for the old silent-prune bug, where a failed upsert left a row's
-	// synced_at un-stamped yet the prune still deleted it); the caller
-	// contributes COMPLETENESS via prune-or-nil below. A prune therefore fires
-	// only when the fetch was clean AND complete.
+	// Store each issue's comments/documents/attachments/relations through
+	// reconcile.PersistIssueDetails — five reconcile.Collection calls per
+	// issue. The module contributes the CLEAN guard, PersistIssueDetails
+	// contributes COMPLETENESS (page-size checks), so a prune fires only when
+	// the fetch was clean AND complete.
 	//
 	// The prunes must run before the Touch* pass below, which re-stamps ALL of
 	// an issue's rows and would exempt phantoms from the cutoff. Completeness
 	// still relies on the API client's all-or-nothing batch semantics — c.query
 	// fails the WHOLE batch on any GraphQL error, so a partially-failed response
 	// never reaches this loop as a short-but-"complete" details struct.
-	pruneWhenComplete := func(complete bool, fn func(context.Context) error) func(context.Context) error {
-		if !complete {
-			return nil // a full page may be truncated — pruning against it would delete real rows
-		}
-		return fn
-	}
-
+	deps := reconcile.Deps{Q: w.store.Queries(), Extract: w.extractor.ExtractAndStore}
 	for issueID, details := range detailsMap {
 		if details == nil {
 			continue
 		}
-
-		syncCollection(ctx, syncCollectionSpec[api.Comment]{
-			label: "comment " + issueID,
-			items: details.Comments,
-			upsert: func(ctx context.Context, comment api.Comment) error {
-				params, err := db.APICommentToDBComment(comment, issueID)
-				if err != nil {
-					return err
-				}
-				upsertErr := w.store.Queries().UpsertComment(ctx, params)
-				// Embedded files are a nested best-effort sub-write to a
-				// separate, never-pruned table — outside this prune's
-				// completeness set — so extraction runs regardless of the
-				// upsert result and cannot affect cleanliness.
-				w.extractAndStoreEmbeddedFiles(ctx, issueID, comment.Body, "comment:"+comment.ID)
-				return upsertErr
-			},
-			prune: pruneWhenComplete(len(details.Comments) < api.IssueDetailsPageSize, func(ctx context.Context) error {
-				return w.store.Queries().PruneIssueComments(ctx, db.PruneIssueCommentsParams{IssueID: issueID, SyncedAt: pruneCutoff})
-			}),
-		})
-
-		syncCollection(ctx, syncCollectionSpec[api.Document]{
-			label: "document " + issueID,
-			items: details.Documents,
-			upsert: func(ctx context.Context, doc api.Document) error {
-				params, err := db.APIDocumentToDBDocument(doc)
-				if err != nil {
-					return err
-				}
-				return w.store.Queries().UpsertDocument(ctx, params)
-			},
-			prune: pruneWhenComplete(len(details.Documents) < api.IssueDetailsPageSize, func(ctx context.Context) error {
-				return w.store.Queries().PruneIssueDocuments(ctx, db.PruneIssueDocumentsParams{IssueID: sql.NullString{String: issueID, Valid: true}, SyncedAt: pruneCutoff})
-			}),
-		})
-
-		syncCollection(ctx, syncCollectionSpec[api.Attachment]{
-			label: "attachment " + issueID,
-			items: details.Attachments,
-			upsert: func(ctx context.Context, attachment api.Attachment) error {
-				params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
-				if err != nil {
-					return err
-				}
-				return w.store.Queries().UpsertAttachment(ctx, params)
-			},
-			prune: pruneWhenComplete(len(details.Attachments) < api.IssueDetailsPageSize, func(ctx context.Context) error {
-				return w.store.Queries().PruneIssueAttachments(ctx, db.PruneIssueAttachmentsParams{IssueID: issueID, SyncedAt: pruneCutoff})
-			}),
-		})
-
-		// Relations: the outgoing rows this issue owns (issue_id = issueID).
-		// Before this, relations were persisted ONLY by the FUSE create
-		// handler, so a relation made in Linear's own UI never appeared as a
-		// .rel file and one deleted there lingered as a phantom.
-		syncCollection(ctx, syncCollectionSpec[api.IssueRelation]{
-			label: "relation " + issueID,
-			items: details.Relations,
-			upsert: func(ctx context.Context, rel api.IssueRelation) error {
-				if rel.RelatedIssue == nil {
-					return fmt.Errorf("relation %s has no relatedIssue", rel.ID)
-				}
-				return w.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, issueID, rel.RelatedIssue.ID))
-			},
-			prune: pruneWhenComplete(len(details.Relations) < api.IssueRelationsPageSize, func(ctx context.Context) error {
-				return w.store.Queries().PruneIssueRelations(ctx, db.PruneIssueRelationsParams{IssueID: issueID, SyncedAt: pruneCutoff})
-			}),
-		})
-
-		// Inverse relations are rows OWNED BY THE OTHER issue (issue_id =
-		// the other side). Upserting them makes a UI-created relation
-		// visible from this end before the owning issue's own detail sync
-		// runs — but they are outside this fetch's completeness set (only
-		// the owning issue's drained fetch may license their deletion), so
-		// this collection is upsert-only, like states.
-		syncCollection(ctx, syncCollectionSpec[api.IssueRelation]{
-			label: "inverse relation " + issueID,
-			items: details.InverseRelations,
-			upsert: func(ctx context.Context, rel api.IssueRelation) error {
-				if rel.Issue == nil {
-					return fmt.Errorf("inverse relation %s has no issue", rel.ID)
-				}
-				return w.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, rel.Issue.ID, issueID))
-			},
-			prune: nil,
-		})
+		// The clean return is deliberately ignored for now: the touch/dequeue
+		// loop below still stamps every requested issue (a later step gates it
+		// on cleanliness).
+		_ = reconcile.PersistIssueDetails(ctx, deps, issueID, details, pruneCutoff)
 	}
 
 	// Touch synced_at for all fetched issues so the FS layer doesn't immediately
@@ -1099,199 +1005,5 @@ func (w *Worker) drainPendingDetailSync(ctx context.Context) {
 			}{ID: ref.ID, Identifier: ref.Identifier}
 		}
 		w.syncIssueDetailsBatch(ctx, batchArg)
-	}
-}
-
-// =============================================================================
-// Embedded Files Extraction
-// =============================================================================
-
-// markdownLinkPattern matches markdown links/images with Linear CDN URLs
-// Captures: [1] = display name, [2] = full URL
-// Matches: ![image.png](https://uploads.linear.app/...) or [file.md](https://uploads.linear.app/...)
-var markdownLinkPattern = regexp.MustCompile(`!?\[([^\]]*)\]\((https://uploads\.linear\.app/[^\s\)]+)\)`)
-
-// linearCDNPattern matches bare Linear CDN URLs (fallback when not in markdown syntax)
-var linearCDNPattern = regexp.MustCompile(`https://uploads\.linear\.app/[^\s\)\]"'<>]+`)
-
-// embeddedFileSpec is one embedded file parsed out of content — everything about
-// it that is derivable without I/O: a stable id (from the URL), the display name
-// (markdown link text, else derived from the URL), and its MIME type. The size
-// (a HEAD request) and persistence are the caller's job.
-type embeddedFileSpec struct {
-	ID       string
-	IssueID  string
-	URL      string
-	Filename string
-	MimeType string
-	Source   string
-}
-
-// extractEmbeddedFiles is the pure half of embedded-file sync: it parses content
-// for Linear CDN URLs and returns one spec per URL, associating a markdown link's
-// display text with its URL where present. No HEAD request, no DB — so the
-// tricky parts (name↔URL association, id stability, filename/MIME derivation)
-// are unit-testable on literal strings. One spec per URL occurrence, matching the
-// upsert-per-occurrence the store loop did (the id is stable, so repeats are
-// idempotent).
-func extractEmbeddedFiles(content, issueID, source string) []embeddedFileSpec {
-	// Markdown-formatted links carry display names: [name](url).
-	urlToName := make(map[string]string)
-	for _, match := range markdownLinkPattern.FindAllStringSubmatch(content, -1) {
-		if len(match) >= 3 {
-			if displayName := strings.TrimSpace(match[1]); displayName != "" {
-				urlToName[match[2]] = displayName
-			}
-		}
-	}
-
-	urls := linearCDNPattern.FindAllString(content, -1)
-	specs := make([]embeddedFileSpec, 0, len(urls))
-	for _, url := range urls {
-		// Clean up trailing punctuation that the URL pattern may have captured.
-		url = strings.TrimRight(url, ".,;:!?")
-
-		// Stable ID from the URL (first 16 bytes of the SHA-256).
-		hash := sha256.Sum256([]byte(url))
-		id := hex.EncodeToString(hash[:16])
-
-		filename := urlToName[url]
-		if filename == "" {
-			filename = extractFilename(url)
-		}
-
-		specs = append(specs, embeddedFileSpec{
-			ID:       id,
-			IssueID:  issueID,
-			URL:      url,
-			Filename: filename,
-			MimeType: detectMIMEType(filename),
-			Source:   source,
-		})
-	}
-	return specs
-}
-
-// extractAndStoreEmbeddedFiles parses content for Linear CDN URLs, fetches each
-// one's size, and upserts it. Parsing is the pure extractEmbeddedFiles; this owns
-// the I/O tail (HEAD + upsert).
-func (w *Worker) extractAndStoreEmbeddedFiles(ctx context.Context, issueID, content, source string) {
-	for _, spec := range extractEmbeddedFiles(content, issueID, source) {
-		// Fetch file size via HEAD request (doesn't download the file).
-		fileSize := w.fetchFileSize(ctx, spec.URL)
-
-		params := db.UpsertEmbeddedFileParams{
-			ID:        spec.ID,
-			IssueID:   spec.IssueID,
-			Url:       spec.URL,
-			Filename:  spec.Filename,
-			MimeType:  sql.NullString{String: spec.MimeType, Valid: spec.MimeType != ""},
-			FileSize:  sql.NullInt64{Int64: fileSize, Valid: fileSize > 0},
-			Source:    spec.Source,
-			CreatedAt: db.Now(),
-			SyncedAt:  db.Now(),
-		}
-
-		if err := w.store.Queries().UpsertEmbeddedFile(ctx, params); err != nil {
-			log.Printf("[sync] upsert embedded file %s failed: %v", spec.Filename, err)
-		}
-	}
-}
-
-// fetchFileSize gets the file size via HTTP HEAD request without downloading
-func (w *Worker) fetchFileSize(ctx context.Context, url string) int64 {
-	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
-	if err != nil {
-		return 0
-	}
-	req.Header.Set("Authorization", w.client.AuthHeader())
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0
-	}
-
-	return resp.ContentLength
-}
-
-// extractFilename extracts a clean filename from a Linear CDN URL
-func extractFilename(url string) string {
-	// Linear CDN URLs look like:
-	// https://uploads.linear.app/abc123/def456/filename.png
-	// or with UUID-prefixed filenames
-
-	// Get the last path segment
-	parts := strings.Split(url, "/")
-	if len(parts) == 0 {
-		return "file"
-	}
-	filename := parts[len(parts)-1]
-
-	// Remove query parameters
-	if idx := strings.Index(filename, "?"); idx != -1 {
-		filename = filename[:idx]
-	}
-
-	// If the filename looks like a UUID-prefixed file, try to clean it up
-	// e.g., "abc123-def456-screenshot.png" -> "screenshot.png"
-	// But keep it if it seems intentional
-	if len(filename) > 40 && strings.Count(filename, "-") >= 4 {
-		// This might be a UUID-prefixed filename, extract just the meaningful part
-		lastDash := strings.LastIndex(filename, "-")
-		if lastDash > 0 && lastDash < len(filename)-1 {
-			potentialName := filename[lastDash+1:]
-			if strings.Contains(potentialName, ".") {
-				filename = potentialName
-			}
-		}
-	}
-
-	// Ensure we have at least some filename
-	if filename == "" {
-		filename = "file"
-	}
-
-	return filename
-}
-
-// detectMIMEType detects MIME type from filename extension
-func detectMIMEType(filename string) string {
-	ext := strings.ToLower(path.Ext(filename))
-	switch ext {
-	case ".png":
-		return "image/png"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".gif":
-		return "image/gif"
-	case ".webp":
-		return "image/webp"
-	case ".svg":
-		return "image/svg+xml"
-	case ".pdf":
-		return "application/pdf"
-	case ".doc":
-		return "application/msword"
-	case ".docx":
-		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-	case ".xls":
-		return "application/vnd.ms-excel"
-	case ".xlsx":
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-	case ".zip":
-		return "application/zip"
-	case ".mp4":
-		return "video/mp4"
-	case ".mov":
-		return "video/quicktime"
-	case ".mp3":
-		return "audio/mpeg"
-	default:
-		return "application/octet-stream"
 	}
 }
