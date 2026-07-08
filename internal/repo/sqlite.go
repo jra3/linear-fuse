@@ -12,6 +12,7 @@ import (
 
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/reconcile"
 )
 
 // Default staleness threshold for on-demand data (comments, documents, updates).
@@ -55,6 +56,11 @@ type SQLiteRepository struct {
 	currentUser        *api.User     // Cached current user
 	stalenessThreshold time.Duration // How long before data is considered stale
 
+	// extractor owns embedded-file extraction (HEAD + upsert) for the SWR
+	// issue-details path. Nil in fixture mode (no client) — Deps.Extract nil
+	// skips extraction.
+	extractor *reconcile.Extractor
+
 	// Track in-flight refreshes to avoid duplicate API calls
 	refreshMu      sync.Mutex
 	refreshing     map[string]bool
@@ -75,7 +81,7 @@ type SQLiteRepository struct {
 // If client is nil, the repository will only serve data from SQLite.
 func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &SQLiteRepository{
+	r := &SQLiteRepository{
 		store:              store,
 		client:             client,
 		stalenessThreshold: defaultStalenessThreshold,
@@ -84,6 +90,10 @@ func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository 
 		refreshCancel:      cancel,
 		refreshSem:         make(chan struct{}, maxConcurrentRefreshes),
 	}
+	if client != nil {
+		r.extractor = &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader}
+	}
+	return r
 }
 
 // SetStalenessThreshold sets how long before on-demand data is considered stale
@@ -810,49 +820,35 @@ func (r *SQLiteRepository) GetIssueComments(ctx context.Context, issueID string)
 // attachments/ directories. This avoids triggering API calls when reading
 // issue.md (which calls GetIssueAttachments for the links: frontmatter field).
 func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
-	if r.client == nil {
-		return
-	}
-
-	bgCtx := context.Background()
-
-	// Get issue's updated_at
-	issueUpdatedAt, err := r.store.Queries().GetIssueUpdatedAt(bgCtx, issueID)
-	if err != nil {
-		// Issue not in DB yet — let sync worker handle it
-		return
-	}
-
-	// Get sub-resource synced_at timestamps (MAX across rows, or nil if none)
-	commentsSyncedAt, _ := r.store.Queries().GetIssueCommentsSyncedAt(bgCtx, issueID)
-	docsSyncedAt, _ := r.store.Queries().GetIssueDocumentsSyncedAt(bgCtx, sql.NullString{String: issueID, Valid: true})
-	attachSyncedAt, _ := r.store.Queries().GetIssueAttachmentsSyncedAt(bgCtx, issueID)
-
-	// Parse timestamps (handle SQLite space-separated format + nil for empty tables)
-	issueTime := issueUpdatedAt
-	commentsTime := parseTime(commentsSyncedAt)
-	docsTime := parseTime(docsSyncedAt)
-	attachTime := parseTime(attachSyncedAt)
-
-	// Refresh if issue changed after last sync OR never synced (zero time)
-	commentsStale := commentsTime.IsZero() || issueTime.After(commentsTime)
-	docsStale := docsTime.IsZero() || issueTime.After(docsTime)
-	attachStale := attachTime.IsZero() || issueTime.After(attachTime)
-
-	if commentsStale || docsStale || attachStale {
-		r.triggerBackgroundRefresh("issue-details:"+issueID, func(ctx context.Context) error {
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindIssueDetails,
+		id:   issueID,
+		// The oldest of the three sub-resource MAX(synced_at)s — any-stale
+		// triggers, exactly as the three hand-compared booleans behaved: the
+		// min is zero (never synced) iff any family is, and the issue changed
+		// after the min iff it changed after at least one family. Query errors
+		// are deliberately swallowed (nil → zero → stale), as before.
+		syncedAt: func() (interface{}, error) {
+			bg := context.Background()
+			q := r.store.Queries()
+			commentsSyncedAt, _ := q.GetIssueCommentsSyncedAt(bg, issueID)
+			docsSyncedAt, _ := q.GetIssueDocumentsSyncedAt(bg, sql.NullString{String: issueID, Valid: true})
+			attachSyncedAt, _ := q.GetIssueAttachmentsSyncedAt(bg, issueID)
+			oldest := parseTime(commentsSyncedAt)
+			if t := parseTime(docsSyncedAt); t.Before(oldest) {
+				oldest = t
+			}
+			if t := parseTime(attachSyncedAt); t.Before(oldest) {
+				oldest = t
+			}
+			return oldest, nil
+		},
+		changedAt: r.issueChangedAt(issueID),
+		refresh: func(ctx context.Context) error {
 			return r.refreshIssueDetails(ctx, issueID)
-		})
-	}
-}
-
-// isEntityNotFound reports whether err is Linear's "Entity not found" GraphQL
-// error, indicating the issue (or other entity) no longer exists upstream.
-// When seen on a refresh, the local row is an orphan and should be deleted —
-// otherwise every FUSE traversal retriggers the same failing refresh forever.
-// Detection is the shared api.IsNotFound predicate.
-func isEntityNotFound(err error) bool {
-	return api.IsNotFound(err)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanIssue(ctx, issueID) },
+	})
 }
 
 // deleteOrphanIssue removes an issue and all its sub-resources from SQLite.
@@ -944,65 +940,26 @@ func (r *SQLiteRepository) deleteOrphanInitiative(ctx context.Context, initiativ
 	r.maybeScheduleReconcile()
 }
 
-// refreshIssueDetails fetches comments, documents, and attachments in a single
-// API call and stores them all in SQLite.
+// refreshIssueDetails fetches comments, documents, attachments, and relations
+// in a single API call and persists them through reconcile.PersistIssueDetails
+// — the same five-collection tail the sync worker uses, so the SWR path gets
+// prunes-when-complete, the clean guard, and embedded-file extraction, which
+// the old hand-rolled upsert loops all lacked. The cutoff is taken BEFORE the
+// fetch so rows written mid-flight survive pruning. The clean return is
+// ignored: the SWR path has no freshness stamp to gate (no Touch*/dequeue
+// here — an unclean pass simply stays stale and retriggers).
 func (r *SQLiteRepository) refreshIssueDetails(ctx context.Context, issueID string) error {
+	pruneCutoff := db.Now()
 	details, err := r.client.GetIssueDetails(ctx, issueID)
 	if err != nil {
-		if isEntityNotFound(err) {
-			r.deleteOrphanIssue(ctx, issueID)
-		}
 		return err
 	}
 
-	for _, comment := range details.Comments {
-		params, err := db.APICommentToDBComment(comment, issueID)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertComment(ctx, params); err != nil {
-			log.Printf("[repo] upsert comment %s failed: %v", comment.ID, err)
-		}
+	deps := reconcile.Deps{Q: r.store.Queries()}
+	if r.extractor != nil {
+		deps.Extract = r.extractor.ExtractAndStore
 	}
-
-	for _, doc := range details.Documents {
-		params, err := db.APIDocumentToDBDocument(doc)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertDocument(ctx, params); err != nil {
-			log.Printf("[repo] upsert document %s failed: %v", doc.ID, err)
-		}
-	}
-
-	for _, attachment := range details.Attachments {
-		params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertAttachment(ctx, params); err != nil {
-			log.Printf("[repo] upsert attachment %s failed: %v", attachment.ID, err)
-		}
-	}
-
-	for _, rel := range details.Relations {
-		if rel.RelatedIssue == nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, issueID, rel.RelatedIssue.ID)); err != nil {
-			log.Printf("[repo] upsert relation %s failed: %v", rel.ID, err)
-		}
-	}
-
-	for _, rel := range details.InverseRelations {
-		if rel.Issue == nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, rel.Issue.ID, issueID)); err != nil {
-			log.Printf("[repo] upsert inverse relation %s failed: %v", rel.ID, err)
-		}
-	}
-
+	_ = reconcile.PersistIssueDetails(ctx, deps, issueID, details, pruneCutoff)
 	return nil
 }
 
@@ -1031,65 +988,46 @@ func (r *SQLiteRepository) GetIssueDocuments(ctx context.Context, issueID string
 	return db.DBDocumentsToAPIDocuments(docs)
 }
 
-// staleSince reports whether a cached entity's last-sync instant is older than
-// threshold. A query error or a nil instant (never synced) counts as stale, so
-// the caller refreshes. Pure, so the parseTime/threshold rule — historically a
-// source of timezone-comparison bugs — is unit-tested directly.
-func staleSince(syncedAt interface{}, err error, threshold time.Duration) bool {
-	return err != nil || syncedAt == nil || time.Since(parseTime(syncedAt)) > threshold
-}
-
-// maybeRefresh triggers a deduplicated background refresh when an entity's
-// cached rows are staler than the threshold. syncedAt returns the entity's
-// last-sync instant, key dedups concurrent refreshes, and refresh does the
-// fetch-and-upsert. In fixture mode (nil client) it never fires. The refresh
-// runs in the background so a directory listing (e.g. find) never blocks on
-// the API. This owns the staleness/trigger policy the four Get*Documents and
-// Get*Updates read paths used to each restate.
-func (r *SQLiteRepository) maybeRefresh(key string, syncedAt func() (interface{}, error), refresh func(context.Context) error) {
-	if r.client == nil {
-		return
-	}
-	ts, err := syncedAt()
-	if staleSince(ts, err, r.stalenessThreshold) {
-		r.triggerBackgroundRefresh(key, refresh)
-	}
-}
-
 func (r *SQLiteRepository) GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error) {
 	docs, err := r.store.Queries().ListProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("list project documents: %w", err)
 	}
 
-	r.maybeRefresh("project-docs:"+projectID, func() (interface{}, error) {
-		return r.store.Queries().GetProjectDocumentsSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
-	}, func(ctx context.Context) error {
-		return r.refreshProjectDocuments(ctx, projectID)
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindProjectDocs,
+		id:   projectID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetProjectDocumentsSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshProjectDocuments(ctx, projectID)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanProject(ctx, projectID) },
 	})
 
 	return db.DBDocumentsToAPIDocuments(docs)
 }
 
-// refreshProjectDocuments fetches documents from API and stores in SQLite
+// refreshProjectDocuments fetches documents from API and stores in SQLite.
+// Upsert-only (nil Prune): nothing licenses a prune for this fetch.
 func (r *SQLiteRepository) refreshProjectDocuments(ctx context.Context, projectID string) error {
 	docs, err := r.client.GetProjectDocuments(ctx, projectID)
 	if err != nil {
-		if isEntityNotFound(err) {
-			r.deleteOrphanProject(ctx, projectID)
-		}
 		return err
 	}
 
-	for _, doc := range docs {
-		params, err := db.APIDocumentToDBDocument(doc)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertDocument(ctx, params); err != nil {
-			log.Printf("[repo] upsert document %s failed: %v", doc.ID, err)
-		}
-	}
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Document]{
+		Label: "project document " + projectID,
+		Items: docs,
+		Upsert: func(ctx context.Context, doc api.Document) error {
+			params, err := db.APIDocumentToDBDocument(doc)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertDocument(ctx, params)
+		},
+	})
 	return nil
 }
 
@@ -1099,34 +1037,40 @@ func (r *SQLiteRepository) GetInitiativeDocuments(ctx context.Context, initiativ
 		return nil, fmt.Errorf("list initiative documents: %w", err)
 	}
 
-	r.maybeRefresh("initiative-docs:"+initiativeID, func() (interface{}, error) {
-		return r.store.Queries().GetInitiativeDocumentsSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
-	}, func(ctx context.Context) error {
-		return r.refreshInitiativeDocuments(ctx, initiativeID)
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindInitiativeDocs,
+		id:   initiativeID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetInitiativeDocumentsSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshInitiativeDocuments(ctx, initiativeID)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanInitiative(ctx, initiativeID) },
 	})
 
 	return db.DBDocumentsToAPIDocuments(docs)
 }
 
-// refreshInitiativeDocuments fetches documents from API and stores in SQLite
+// refreshInitiativeDocuments fetches documents from API and stores in SQLite.
+// Upsert-only (nil Prune): nothing licenses a prune for this fetch.
 func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initiativeID string) error {
 	docs, err := r.client.GetInitiativeDocuments(ctx, initiativeID)
 	if err != nil {
-		if isEntityNotFound(err) {
-			r.deleteOrphanInitiative(ctx, initiativeID)
-		}
 		return err
 	}
 
-	for _, doc := range docs {
-		params, err := db.APIDocumentToDBDocument(doc)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertDocument(ctx, params); err != nil {
-			log.Printf("[repo] upsert document %s failed: %v", doc.ID, err)
-		}
-	}
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Document]{
+		Label: "initiative document " + initiativeID,
+		Items: docs,
+		Upsert: func(ctx context.Context, doc api.Document) error {
+			params, err := db.APIDocumentToDBDocument(doc)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertDocument(ctx, params)
+		},
+	})
 	return nil
 }
 
@@ -1172,34 +1116,40 @@ func (r *SQLiteRepository) GetProjectUpdates(ctx context.Context, projectID stri
 		return nil, fmt.Errorf("list project updates: %w", err)
 	}
 
-	r.maybeRefresh("project-updates:"+projectID, func() (interface{}, error) {
-		return r.store.Queries().GetProjectUpdatesSyncedAt(context.Background(), projectID)
-	}, func(ctx context.Context) error {
-		return r.refreshProjectUpdates(ctx, projectID)
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindProjectUpdates,
+		id:   projectID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetProjectUpdatesSyncedAt(context.Background(), projectID)
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshProjectUpdates(ctx, projectID)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanProject(ctx, projectID) },
 	})
 
 	return db.DBProjectUpdatesToAPIUpdates(updates)
 }
 
-// refreshProjectUpdates fetches updates from API and stores in SQLite
+// refreshProjectUpdates fetches updates from API and stores in SQLite.
+// Upsert-only (nil Prune): nothing licenses a prune for this fetch.
 func (r *SQLiteRepository) refreshProjectUpdates(ctx context.Context, projectID string) error {
 	updates, err := r.client.GetProjectUpdates(ctx, projectID)
 	if err != nil {
-		if isEntityNotFound(err) {
-			r.deleteOrphanProject(ctx, projectID)
-		}
 		return err
 	}
 
-	for _, update := range updates {
-		params, err := db.APIProjectUpdateToDBUpdate(update, projectID)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertProjectUpdate(ctx, params); err != nil {
-			log.Printf("[repo] upsert project update %s failed: %v", update.ID, err)
-		}
-	}
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.ProjectUpdate]{
+		Label: "project update " + projectID,
+		Items: updates,
+		Upsert: func(ctx context.Context, update api.ProjectUpdate) error {
+			params, err := db.APIProjectUpdateToDBUpdate(update, projectID)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertProjectUpdate(ctx, params)
+		},
+	})
 	return nil
 }
 
@@ -1209,34 +1159,40 @@ func (r *SQLiteRepository) GetInitiativeUpdates(ctx context.Context, initiativeI
 		return nil, fmt.Errorf("list initiative updates: %w", err)
 	}
 
-	r.maybeRefresh("initiative-updates:"+initiativeID, func() (interface{}, error) {
-		return r.store.Queries().GetInitiativeUpdatesSyncedAt(context.Background(), initiativeID)
-	}, func(ctx context.Context) error {
-		return r.refreshInitiativeUpdates(ctx, initiativeID)
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindInitiativeUpdates,
+		id:   initiativeID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetInitiativeUpdatesSyncedAt(context.Background(), initiativeID)
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshInitiativeUpdates(ctx, initiativeID)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanInitiative(ctx, initiativeID) },
 	})
 
 	return db.DBInitiativeUpdatesToAPIUpdates(updates)
 }
 
-// refreshInitiativeUpdates fetches updates from API and stores in SQLite
+// refreshInitiativeUpdates fetches updates from API and stores in SQLite.
+// Upsert-only (nil Prune): nothing licenses a prune for this fetch.
 func (r *SQLiteRepository) refreshInitiativeUpdates(ctx context.Context, initiativeID string) error {
 	updates, err := r.client.GetInitiativeUpdates(ctx, initiativeID)
 	if err != nil {
-		if isEntityNotFound(err) {
-			r.deleteOrphanInitiative(ctx, initiativeID)
-		}
 		return err
 	}
 
-	for _, update := range updates {
-		params, err := db.APIInitiativeUpdateToDBUpdate(update, initiativeID)
-		if err != nil {
-			continue
-		}
-		if err := r.store.Queries().UpsertInitiativeUpdate(ctx, params); err != nil {
-			log.Printf("[repo] upsert initiative update %s failed: %v", update.ID, err)
-		}
-	}
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.InitiativeUpdate]{
+		Label: "initiative update " + initiativeID,
+		Items: updates,
+		Upsert: func(ctx context.Context, update api.InitiativeUpdate) error {
+			params, err := db.APIInitiativeUpdateToDBUpdate(update, initiativeID)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertInitiativeUpdate(ctx, params)
+		},
+	})
 	return nil
 }
 
@@ -1297,8 +1253,12 @@ func (r *SQLiteRepository) GetAttachmentByID(ctx context.Context, id string) (*a
 func (r *SQLiteRepository) GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error) {
 	cache, err := r.store.Queries().GetIssueHistoryCache(ctx, issueID)
 	if err == nil {
-		// Have cached data — check staleness and maybe refresh in background
-		r.maybeRefreshHistory(issueID, cache.SyncedAt)
+		// Have cached data — event-driven refresh if the issue changed after
+		// the history was cached.
+		spec := r.historySpec(issueID)
+		spec.syncedAt = func() (interface{}, error) { return cache.SyncedAt, nil }
+		spec.changedAt = r.issueChangedAt(issueID)
+		r.maybeRefreshSWR(spec)
 
 		var entries []api.IssueHistoryEntry
 		if err := json.Unmarshal(cache.Data, &entries); err != nil {
@@ -1309,51 +1269,33 @@ func (r *SQLiteRepository) GetIssueHistory(ctx context.Context, issueID string) 
 
 	// No cached data — trigger a background fetch and return empty immediately.
 	// This avoids blocking the FUSE dispatch goroutine on a cold-cache API call.
-	// History will be available on next access once the background fetch completes.
-	if r.client == nil {
-		return nil, nil
-	}
-	r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
-		entries, err := r.client.GetIssueHistory(ctx, issueID)
-		if err != nil {
-			if isEntityNotFound(err) {
-				r.deleteOrphanIssue(ctx, issueID)
-			}
-			return err
-		}
-		r.upsertHistoryCache(ctx, issueID, entries)
-		return nil
-	})
+	// History will be available on next access once the background fetch
+	// completes. syncedAt reporting nil = never synced, so the spec always
+	// reads stale here (no GetIssueUpdatedAt gate: an issue unknown to the DB
+	// still gets its cold fetch, as before).
+	spec := r.historySpec(issueID)
+	spec.syncedAt = func() (interface{}, error) { return nil, nil }
+	r.maybeRefreshSWR(spec)
 	return nil, nil
 }
 
-func (r *SQLiteRepository) maybeRefreshHistory(issueID string, cachedSyncedAt time.Time) {
-	if r.client == nil {
-		return
-	}
-
-	bgCtx := context.Background()
-	issueUpdatedAt, err := r.store.Queries().GetIssueUpdatedAt(bgCtx, issueID)
-	if err != nil {
-		return
-	}
-
-	issueTime := issueUpdatedAt
-	historyTime := cachedSyncedAt
-
-	// Refresh if issue changed after history was cached OR never cached
-	if historyTime.IsZero() || issueTime.After(historyTime) {
-		r.triggerBackgroundRefresh("history:"+issueID, func(ctx context.Context) error {
+// historySpec is the single constructor behind both history refresh call
+// sites in GetIssueHistory — the cold-cache trigger and the warm event-driven
+// check (whose fetch closures used to be pasted verbatim). Callers attach the
+// staleness inputs (syncedAt/changedAt) they own.
+func (r *SQLiteRepository) historySpec(issueID string) swrSpec {
+	return swrSpec{
+		kind: kindHistory,
+		id:   issueID,
+		refresh: func(ctx context.Context) error {
 			entries, err := r.client.GetIssueHistory(ctx, issueID)
 			if err != nil {
-				if isEntityNotFound(err) {
-					r.deleteOrphanIssue(ctx, issueID)
-				}
 				return err
 			}
 			r.upsertHistoryCache(ctx, issueID, entries)
 			return nil
-		})
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanIssue(ctx, issueID) },
 	}
 }
 

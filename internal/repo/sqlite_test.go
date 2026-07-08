@@ -1848,9 +1848,9 @@ func TestSQLiteRepository_MaybeRefreshIssueDetails_NoClient(t *testing.T) {
 }
 
 // The four Get*Documents/Get*Updates read paths must be safe no-ops in fixture
-// mode (nil client): maybeRefresh short-circuits, so the read returns whatever
-// is cached without touching the API. Exercised through the real Get* methods
-// now that the per-entity maybeRefresh* wrappers fold into one helper.
+// mode (nil client): maybeRefreshSWR short-circuits, so the read returns
+// whatever is cached without touching the API. Exercised through the real
+// Get* methods now that the per-entity wrappers fold into the coordinator.
 func TestSQLiteRepository_StaleReadPaths_NoClient(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
@@ -2196,26 +2196,6 @@ func TestSetCatchUpMode(t *testing.T) {
 	repo.SetCatchUpMode(false)
 	if repo.stalenessThreshold != defaultStalenessThreshold {
 		t.Errorf("expected default staleness %v after disabling catch-up, got %v", defaultStalenessThreshold, repo.stalenessThreshold)
-	}
-}
-
-func TestIsEntityNotFound(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil error", nil, false},
-		{"unrelated error", fmt.Errorf("connection refused"), false},
-		{"linear not-found wrapped", fmt.Errorf("GraphQL error: Entity not found: Issue"), true},
-		{"raw not-found", fmt.Errorf("Entity not found"), true},
-		{"rate limit", fmt.Errorf("rate limit wait cancelled: context canceled"), false},
-	}
-	for _, c := range cases {
-		if got := isEntityNotFound(c.err); got != c.want {
-			t.Errorf("%s: isEntityNotFound(%v) = %v, want %v", c.name, c.err, got, c.want)
-		}
 	}
 }
 
@@ -2648,7 +2628,7 @@ func TestReconcileAgainst_DeletesOrphans(t *testing.T) {
 }
 
 // TestStaleSince pins the staleness rule the four Get*Documents/Get*Updates
-// read paths share via maybeRefresh — the parseTime/threshold comparison that
+// read paths share via maybeRefreshSWR — the parseTime/threshold comparison that
 // has historically hidden timezone bugs.
 func TestStaleSince(t *testing.T) {
 	t.Parallel()
@@ -2670,21 +2650,6 @@ func TestStaleSince(t *testing.T) {
 				t.Errorf("staleSince(%v, %v) = %v, want %v", c.syncedAt, c.err, got, c.want)
 			}
 		})
-	}
-}
-
-// TestMaybeRefreshNilClientNoop: in fixture mode (nil client) maybeRefresh must
-// short-circuit before even querying syncedAt — no refresh, no query.
-func TestMaybeRefreshNilClientNoop(t *testing.T) {
-	t.Parallel()
-	repo := &SQLiteRepository{} // nil client
-	queried := false
-	repo.maybeRefresh("k",
-		func() (interface{}, error) { queried = true; return nil, nil },
-		func(_ context.Context) error { return nil },
-	)
-	if queried {
-		t.Error("maybeRefresh queried syncedAt with a nil client; want a no-op")
 	}
 }
 
