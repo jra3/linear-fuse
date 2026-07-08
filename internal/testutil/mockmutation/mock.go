@@ -306,6 +306,9 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 	if input.Description != nil {
 		proj.Description = *input.Description
 	}
+	if input.LabelIds != nil { // full-set write, like the real mutation
+		proj.LabelIds = append([]string(nil), (*input.LabelIds)...)
+	}
 	c.projEdit[projectID] = proj
 	return nil
 }

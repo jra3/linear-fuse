@@ -6,6 +6,8 @@ import (
 	"log"
 	"syscall"
 	"time"
+
+	"github.com/jra3/linear-fuse/internal/api"
 )
 
 // The create-commit tail.
@@ -140,6 +142,19 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	}
 	if retryableCreateErr(err) {
 		return "Operation: " + op + "\nError: the request was rate-limited or timed out before it completed, so the operation did not take effect. Wait a few seconds and retry.", syscall.EAGAIN
+	}
+	// A structured Linear input rejection (userError: true) is the caller's
+	// bad input, not a backend failure: EINVAL, preferring the server's
+	// user-presentable message over its terse internal one (live example:
+	// "The label 'X' is a group and cannot be assigned to projects directly."
+	// vs internal "labelIds contain parent labels").
+	var gqlErr *api.GraphQLError
+	if errors.As(err, &gqlErr) && gqlErr.UserError {
+		msg := gqlErr.UserPresentableMessage
+		if msg == "" {
+			msg = gqlErr.Message
+		}
+		return "Operation: " + op + "\nError: " + msg, syscall.EINVAL
 	}
 	return "Operation: " + op + "\nError: " + err.Error(), syscall.EIO
 }
