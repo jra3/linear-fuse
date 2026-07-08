@@ -677,9 +677,11 @@ sync-side sibling of the write-path tails (`commitCreate`/`commitWriteBack`/
 `paginate`'s completeness licenses. Its shape is `convert → upsert-all →
 prune-if-clean`. It now lives in the shared package **`internal/reconcile`**
 as `reconcile.Collection(ctx, reconcile.CollectionSpec[T])` — extracted from
-`internal/sync` so the repo's SWR refresh path can join as a second caller (a
-later step; neither `sync` nor `repo` imports the other, so the shared policy
-lives between them). The package also hosts `PersistIssueDetails` (the
+`internal/sync` so the repo's SWR refresh path could join as a second caller,
+which it now has (see "SWR refresh coordinator" below: `refreshIssueDetails`
+routes through `PersistIssueDetails`, the four doc/update refresh tails
+through `Collection`; neither `sync` nor `repo` imports the other, so the
+shared policy lives between them). The package also hosts `PersistIssueDetails` (the
 per-issue five-collection persist described below, deps = `{*db.Queries,
 Extract hook}`) and the embedded-file `Extractor` (pure CDN-URL parse + the
 HEAD/upsert I/O tail; nil `HTTPClient` = `http.DefaultClient`, injectable for
@@ -751,8 +753,61 @@ passes the ids swapped), and only the owner's fetch is a completeness set for
 its rows: the outgoing collection prunes via `PruneIssueRelations` (scoped
 `issue_id` + cutoff), the inverse collection is **upsert-only** (its rows are
 owned by the other issue; pruning them here would delete against someone
-else's partial view). `refreshIssueDetails` (the repo's SWR path) persists
-both families best-effort like its siblings.
+else's partial view). `refreshIssueDetails` (the repo's SWR path) now routes
+through `PersistIssueDetails` too, so both families get the same treatment
+there — prunes-when-complete, the clean guard, and embedded-file extraction,
+none of which its old hand-rolled upsert loops carried.
+
+### SWR refresh coordinator (`swrRefresh`)
+The repo's six stale-while-revalidate surfaces — issue details, issue
+history, project/initiative documents, project/initiative updates — route
+through one coordinator, `maybeRefreshSWR(swrSpec)` in
+`internal/repo/swr.go`. Before it, two staleness policies lived in three
+implementations (the TTL `staleSince`/`maybeRefresh` pair; the event-driven
+`issue.updatedAt > synced_at` comparison hand-copied in
+`MaybeRefreshIssueDetails` and `maybeRefreshHistory`), the history fetch
+closure was pasted verbatim at both its call sites, every refresh tail
+restated `isEntityNotFound → deleteOrphan*`, and the dedup keys were bare
+strings built at six sites.
+
+The spec is `swrSpec{kind, id, syncedAt, changedAt, refresh, orphan}`. Dedup
+keys are minted only by `refreshKind.key(id)` over typed kind constants — no
+bare-string keys remain. The staleness decision is the pure `swrStale`
+(`staleSince` stays as its tested TTL core), with the flavor selected by
+`changedAt`: `nil` means **TTL** (threshold-driven), non-nil means
+**event-driven** (stale when never synced — zero/nil/query error — or
+changed-after-synced; `ok=false` from `changedAt` means the entity isn't in
+the DB, which suppresses the refresh — discovery belongs to the sync worker).
+**Catch-up mode (`SetCatchUpMode`, the 30-minute threshold) reaches ONLY the
+TTL flavor — explicit, grilled policy, not an accident**: extending the
+suppression to event-driven surfaces would save duplicate fetches the
+rateBudget ladder already governs, at the cost of silently-empty `comments/`
+listings during big syncs — the worst failure mode for an agent-facing
+filesystem. Flipping later is a one-line change in `swrStale`. Orphan
+classification lives in the module (`orphanOnNotFound` wraps `spec.refresh`;
+on `api.IsNotFound` it calls `spec.orphan`), so refresh tails no longer
+inspect their own errors; the nil-client (fixture mode) check sits at the
+module entry, before any closure is consulted.
+
+Per-surface notes: the issue-details spec derives one `syncedAt` from the
+**min** of the three sub-resource `MAX(synced_at)`s (the issue changed after
+the min iff it changed after at least one family — exactly the old
+any-stale-triggers booleans), with `changedAt` = the issue's `updatedAt`. The
+history fetch exists once as `historySpec`; the cold-cache call site attaches
+an always-`nil` `syncedAt` (never synced ⇒ always stale, preserving the old
+unconditional cold trigger with no issue-in-DB gate) and the warm site
+attaches the cached instant plus `issueChangedAt`. The refresh tails
+reconcile through `internal/reconcile`: `refreshIssueDetails` takes its prune
+cutoff BEFORE the fetch and calls `reconcile.PersistIssueDetails` — giving
+the SWR path prunes-when-complete, the clean guard, and embedded-file
+extraction, three recorded behavior improvements over its old hand-rolled
+upsert loops (the `clean` return is ignored: there is no freshness stamp to
+gate here; an unclean pass simply stays stale and retriggers) — and the four
+doc/update tails run `reconcile.Collection` with nil `Prune` (upsert-only;
+nothing licenses a prune for these fetches — and convert errors now
+log-and-mark-unclean instead of a silent `continue`). The repo constructs its
+`reconcile.Extractor{Q, AuthHeader}` only when it has a client; fixture mode
+leaves `Deps.Extract` nil, which skips extraction.
 
 ### Detail sync outcome (`syncDetails`)
 The single entry point for issue-detail syncing (`internal/sync/worker.go`):
