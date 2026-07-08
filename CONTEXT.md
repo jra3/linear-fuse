@@ -675,7 +675,15 @@ The **deep module** owning the invariant tail of every metadata sync — the
 sync-side sibling of the write-path tails (`commitCreate`/`commitWriteBack`/
 `commitDelete`) and the module that actually **performs the metadata prunes**
 `paginate`'s completeness licenses. Its shape is `convert → upsert-all →
-prune-if-clean`. Seven sites reconcile through it: `states` (upsert-only),
+prune-if-clean`. It now lives in the shared package **`internal/reconcile`**
+as `reconcile.Collection(ctx, reconcile.CollectionSpec[T])` — extracted from
+`internal/sync` so the repo's SWR refresh path can join as a second caller (a
+later step; neither `sync` nor `repo` imports the other, so the shared policy
+lives between them). The package also hosts `PersistIssueDetails` (the
+per-issue five-collection persist described below, deps = `{*db.Queries,
+Extract hook}`) and the embedded-file `Extractor` (pure CDN-URL parse + the
+HEAD/upsert I/O tail; nil `HTTPClient` = `http.DefaultClient`, injectable for
+tests). Seven sites reconcile through it: `states` (upsert-only),
 `labels`, `cycles`, `projects` (entity + `project_teams` junction + nested
 milestones), `members` (entity + `team_members` junction),
 `initiativeProjects` (junction-only), and `projectLabels` (the workspace
@@ -685,17 +693,19 @@ new metadata kind copy-pasted it and a forgotten flag would let a *partial* fetc
 read as removals (silent data loss). `initiativeProjects` even hand-rolled a
 fail-fast variant whose error the caller only logged.
 
-Its interface is closures, no `*db.Store`: `syncCollectionSpec[T]{label, items,
-upsert, prune}`. `upsert(ctx, T)` does whatever the kind needs — convert, entity
-upsert, any junction upsert, nested sub-writes — and `prune(ctx)` runs **once,
-iff every `upsert` returned nil**; a `nil` prune closure means no prune (the
-`states` case). Semantics are uniform **log-and-continue**: a failed `upsert` is
+Its interface is closures, no `*db.Store`: `reconcile.CollectionSpec[T]{Label,
+Items, Upsert, Prune}`. `Upsert(ctx, T)` does whatever the kind needs — convert, entity
+upsert, any junction upsert, nested sub-writes — and `Prune(ctx)` runs **once,
+iff every `Upsert` returned nil**; a `nil` prune closure means no prune (the
+`states` case). Semantics are uniform **log-and-continue**: a failed `Upsert` is
 logged, marks the collection unclean, and does not abort the loop (so
 `initiativeProjects` trades its fail-fast for continue — the observable outcome,
 prune-skipped-on-any-failure, is unchanged and strictly more rows refresh). The
-module returns nothing; sync is best-effort. Pure over closures, so it is
-unit-tested with recording closures asserting *prune runs iff clean* — no real
-store or API.
+module never returns an error — sync is best-effort — but it does return
+`clean bool` (true iff every upsert succeeded; a prune failure doesn't affect
+it) so a caller can gate freshness stamps on it; the worker's metadata sites
+ignore the return today. Pure over closures, so it is unit-tested with
+recording closures asserting *prune runs iff clean* — no real store or API.
 
 **"Clean" is completeness-set membership, not "no error anywhere."** An item is
 unclean **iff a write the prune depends on failed** — a write in the prune's
@@ -712,15 +722,17 @@ correctly suppresses the prune (a stale junction row must never be wrongly
 deleted). The closure author honors the contract by choosing what to return
 versus swallow.
 
-The **per-issue detail sync** (`syncIssueDetailsBatch` — an issue's comments,
-documents, attachments, relations, and inverse relations) reconciles through
-the same tail, five calls per issue. Here completeness is *page*-shaped rather
-than *drain*-shaped: a full page (`len == IssueDetailsPageSize`, or
+The **per-issue detail sync** (an issue's comments, documents, attachments,
+relations, and inverse relations) reconciles through the same tail, five calls
+per issue — written once as `reconcile.PersistIssueDetails`, which
+`syncIssueDetailsBatch` calls per issue (its `clean` return is ignored until
+the detail-outcome step consumes it). Here completeness is *page*-shaped
+rather than *drain*-shaped: a full page (`len == IssueDetailsPageSize`, or
 `IssueRelationsPageSize` for the relation connections) may be truncated, so
-the caller composes a `pruneWhenComplete(complete, fn)` policy that passes the
-real prune only on a short (provably complete) page and `nil` otherwise — the
-module then adds its clean guard, so a detail prune fires **iff clean AND
-complete**. This closed a silent-prune bug the hand-rolled version carried: it
+`PersistIssueDetails` composes a `pruneWhenComplete(complete, fn)` policy that
+passes the real prune only on a short (provably complete) page and `nil`
+otherwise — the module then adds its clean guard, so a detail prune fires
+**iff clean AND complete**. This closed a silent-prune bug the hand-rolled version carried: it
 gated the prune on page completeness alone, so a failed
 comment/doc/attachment upsert (its `synced_at` left un-stamped) was deleted as
 stale on the next complete page. Embedded-file extraction from a comment body
