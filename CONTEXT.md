@@ -728,7 +728,7 @@ The **per-issue detail sync** (an issue's comments, documents, attachments,
 relations, and inverse relations) reconciles through the same tail, five calls
 per issue — written once as `reconcile.PersistIssueDetails`, which the
 worker's `syncDetails` calls per issue (its `clean` return gates that issue's
-touch/dequeue — see the detail-outcome entry below). Here completeness is *page*-shaped
+`detail_synced_at` stamp/dequeue — see the detail-outcome entry below). Here completeness is *page*-shaped
 rather than *drain*-shaped: a full page (`len == IssueDetailsPageSize`, or
 `IssueRelationsPageSize` for the relation connections) may be truncated, so
 `PersistIssueDetails` composes a `pruneWhenComplete(complete, fn)` policy that
@@ -789,10 +789,17 @@ on `api.IsNotFound` it calls `spec.orphan`), so refresh tails no longer
 inspect their own errors; the nil-client (fixture mode) check sits at the
 module entry, before any closure is consulted.
 
-Per-surface notes: the issue-details spec derives one `syncedAt` from the
-**min** of the three sub-resource `MAX(synced_at)`s (the issue changed after
-the min iff it changed after at least one family — exactly the old
-any-stale-triggers booleans), with `changedAt` = the issue's `updatedAt`. The
+Per-surface notes: the issue-details spec reads both staleness inputs from
+ONE fetch of the issues row (`GetIssueDetailFreshness`: `updated_at` +
+`detail_synced_at`, memoized across the two spec closures, lazy so the
+nil-client check still precedes any query). `detail_synced_at` is the one
+per-issue detail-freshness fact — NULL ⇒ never detail-synced ⇒ stale,
+unchanged `swrStale` semantics. It replaced a min-of-three per-family
+`MAX(synced_at)` inference whose empty-family hole was a live budget leak:
+the touch pass was an `UPDATE`, so a family with zero rows (most issues have
+zero docs) could never be stamped — `MAX = NULL` read as "never synced" and
+every browse of `comments/`, `docs/`, or `attachments/` refired a background
+fetch that upserted nothing, a permanent per-browse refetch loop. The
 history fetch exists once as `historySpec`; the cold-cache call site attaches
 an always-`nil` `syncedAt` (never synced ⇒ always stale, preserving the old
 unconditional cold trigger with no issue-in-DB gate) and the warm site
@@ -801,11 +808,12 @@ reconcile through `internal/reconcile`: `refreshIssueDetails` takes its prune
 cutoff BEFORE the fetch and calls `reconcile.PersistIssueDetails` — giving
 the SWR path prunes-when-complete, the clean guard, and embedded-file
 extraction, three recorded behavior improvements over its old hand-rolled
-upsert loops (the `clean` return is ignored: there is no freshness stamp to
-gate here; an unclean pass simply stays stale and retriggers) — and the four
-doc/update tails run `reconcile.Collection` with nil `Prune` (upsert-only;
-nothing licenses a prune for these fetches — and convert errors now
-log-and-mark-unclean instead of a silent `continue`). The repo constructs its
+upsert loops. Its `clean` return gates the `detail_synced_at` stamp
+(symmetric with the worker's `syncDetails`): an unclean pass stays unstamped,
+reads stale, and retriggers. The four doc/update tails run
+`reconcile.Collection` with nil `Prune` (upsert-only; nothing licenses a
+prune for these fetches — and convert errors now log-and-mark-unclean
+instead of a silent `continue`). The repo constructs its
 `reconcile.Extractor{Q, AuthHeader}` only when it has a client; fixture mode
 leaves `Deps.Extract` nil, which skips extraction.
 
@@ -822,14 +830,38 @@ which the now-thin `drainPendingDetailSync` loop breaks on (re-deferring an
 already-pending issue merely re-stamps its `QueuedAt`). The return is a
 per-issue **ledger** — `{synced, deferred []issueRef, gated bool}`, every
 issue landing in exactly one slice: only an issue whose
-`reconcile.PersistIssueDetails` came back **clean** is touched
-(comments/documents/attachments `synced_at` stamped; relations deliberately
-not) and dequeued from pending; an unclean issue — or one missing from the
-response, a trap for a violation of `GetIssueDetailsBatch`'s documented
-all-or-nothing contract, not expected flow — is re-enqueued, un-touched. The
-hazard class this closes: **an issue silently dropped or partially persisted
-must never be stamped fresh** (a touch would mask its staleness from the SWR
-path until the next real change) **nor lose its retry**.
+`reconcile.PersistIssueDetails` came back **clean** is stamped
+(`StampIssueDetailSynced` sets `issues.detail_synced_at`, one stamp covering
+all detail families uniformly — it replaced three per-row `Touch*` UPDATEs
+that could never stamp an empty family) and dequeued from pending; an
+unclean issue — or one missing from the response, a trap for a violation of
+`GetIssueDetailsBatch`'s documented all-or-nothing contract, not expected
+flow — is re-enqueued, un-stamped. The hazard class this closes: **an issue
+silently dropped or partially persisted must never be stamped fresh** (a
+stamp would mask its staleness from the SWR path until the next real change)
+**nor lose its retry**.
+
+The stamp's arrival also deleted `syncTeamIssues`' touch-on-unchanged block —
+under event-driven staleness an unchanged issue is fresh by definition
+(stamp > `updatedAt`) and a never-detail-synced one SHOULD read stale — and
+that deletion FIXED a live bug: the block re-stamped ALL four sub-resource
+families every cycle, including the history cache, and history is never
+worker-fetched (SWR-only), so an issue whose history was cached before its
+last update had the stale cache masked fresh forever — `history.md` served
+pre-update history indefinitely. `detail_synced_at` is deliberately absent
+from `UpsertIssue`'s column list and conflict SET clause (NULL on insert,
+preserved on every entity upsert; locally-created issues stay NULL, one
+harmless fetch on first browse). The column also set the project's
+**bootstrap-ALTER migration precedent** (`migrateSchema` in
+`internal/db/store.go`, the first migration ever needed): after schema init,
+probe `PRAGMA table_info`, `ALTER TABLE ADD COLUMN` if missing — idempotent,
+~15 lines plus a test. A numbered `user_version` framework was deliberately
+rejected as framework-building for one column; extract one when full
+columnization needs it. One trap the migration carries: ALTER appends the
+column at the table's END while `schema.sql` declares it before `data`, so
+raw `SELECT *` positional scans would misalign on one layout — every issue
+scan uses an explicit column list (sqlc expands `*` itself;
+`ListIssuesByLabel` was made explicit by hand).
 
 ### Reverse conversion contract (hydrate-then-overlay)
 Every DB→API reverse conversion in `internal/db/convert.go` **starts from the

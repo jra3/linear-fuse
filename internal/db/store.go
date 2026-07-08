@@ -80,10 +80,63 @@ func openDB(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("initialize schema: %w", err)
 	}
 
+	// Migrate pre-existing databases (CREATE TABLE IF NOT EXISTS leaves an
+	// old table untouched, so new columns need an explicit ALTER).
+	if err := migrateSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
+
 	return &Store{
 		db:      db,
 		queries: New(db),
 	}, nil
+}
+
+// migrateSchema applies idempotent bootstrap-ALTER migrations to a database
+// created by an older schema.sql. This is the project's first migration and
+// the precedent for the next one: probe the column via PRAGMA table_info,
+// ALTER TABLE ADD COLUMN if missing. A numbered user_version framework was
+// deliberately rejected as framework-building for one column — extract one
+// when full columnization needs it.
+func migrateSchema(db *sql.DB) error {
+	hasColumn, err := tableHasColumn(db, "issues", "detail_synced_at")
+	if err != nil {
+		return err
+	}
+	if !hasColumn {
+		if _, err := db.Exec("ALTER TABLE issues ADD COLUMN detail_synced_at DATETIME"); err != nil {
+			return fmt.Errorf("add issues.detail_synced_at: %w", err)
+		}
+	}
+	return nil
+}
+
+// tableHasColumn reports whether table already has the named column.
+func tableHasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close closes the database connection
@@ -118,9 +171,20 @@ func (s *Store) WithTx(ctx context.Context, fn func(*Queries) error) error {
 
 // ListIssuesByLabel returns issues that have a specific label
 // Labels are stored in the JSON data column as {"labels": {"nodes": [...]}}
+// The column list is explicit (not SELECT *) because a migrated database has
+// detail_synced_at appended at the END of the table (ALTER TABLE ADD COLUMN),
+// while a fresh one has it in schema.sql order — positional scanning over *
+// would misalign on one of them.
 func (s *Store) ListIssuesByLabel(ctx context.Context, teamID, labelName string) ([]Issue, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT * FROM issues
+		SELECT id, identifier, team_id, title, description,
+			state_id, state_name, state_type,
+			assignee_id, assignee_email, creator_id, creator_email, priority,
+			project_id, project_name, cycle_id, cycle_name,
+			parent_id, due_date, estimate, url, branch_name,
+			created_at, updated_at, started_at, completed_at, canceled_at, archived_at,
+			synced_at, detail_synced_at, data
+		FROM issues
 		WHERE team_id = ?
 		AND EXISTS (
 			SELECT 1 FROM json_each(json_extract(data, '$.labels.nodes'))
@@ -148,7 +212,7 @@ func scanIssues(rows *sql.Rows) ([]Issue, error) {
 			&i.ProjectID, &i.ProjectName, &i.CycleID, &i.CycleName,
 			&i.ParentID, &i.DueDate, &i.Estimate, &i.Url, &i.BranchName,
 			&i.CreatedAt, &i.UpdatedAt, &i.StartedAt, &i.CompletedAt, &i.CanceledAt, &i.ArchivedAt,
-			&i.SyncedAt, &i.Data,
+			&i.SyncedAt, &i.DetailSyncedAt, &i.Data,
 		); err != nil {
 			return nil, err
 		}

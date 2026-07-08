@@ -369,12 +369,12 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 		for _, issue := range issues {
 			// Check if this issue is unchanged (updatedAt <= lastSyncedUpdatedAt)
 			if !lastSyncedUpdatedAt.IsZero() && !issue.UpdatedAt.After(lastSyncedUpdatedAt) {
-				// Bump sub-resource synced_at to avoid triggering background refresh
-				now := db.Now()
-				w.store.Queries().TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: now, IssueID: issue.ID})
-				w.store.Queries().TouchIssueDocuments(ctx, db.TouchIssueDocumentsParams{SyncedAt: now, IssueID: sql.NullString{String: issue.ID, Valid: true}})
-				w.store.Queries().TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: now, IssueID: issue.ID})
-				w.store.Queries().TouchIssueHistoryCache(ctx, db.TouchIssueHistoryCacheParams{SyncedAt: now, IssueID: issue.ID})
+				// Nothing to stamp: under event-driven staleness an unchanged
+				// issue is fresh by definition (detail_synced_at > updatedAt)
+				// and a never-detail-synced one SHOULD read stale. The old
+				// touch-on-unchanged block here also re-stamped the history
+				// cache fresh every cycle — history is never worker-fetched,
+				// so a stale history.md served pre-update history forever.
 				unchangedCount++
 				continue
 			}
@@ -848,8 +848,9 @@ type issueRef struct {
 
 // detailOutcome is syncDetails' per-issue ledger: every issue handed in lands
 // in exactly one of the two slices. synced holds issues whose details
-// persisted cleanly (touched + dequeued); deferred holds everything else
-// (re-enqueued to pending_detail_sync, NOT touched, NOT dequeued).
+// persisted cleanly (detail_synced_at stamped + dequeued); deferred holds
+// everything else (re-enqueued to pending_detail_sync, NOT stamped, NOT
+// dequeued).
 // gated=true means conditions preclude further detail syncing this cycle —
 // budget too tight, rate-limited, or a failed fetch — so a batching loop
 // (drainPendingDetailSync) should stop rather than burn more batches.
@@ -882,11 +883,12 @@ func (w *Worker) deferDetailIssues(ctx context.Context, issues []issueRef) {
 // reconcile.PersistIssueDetails, and returns a per-issue outcome ledger.
 //
 // Only a CLEAN issue (all five collections persisted without error) is
-// touched (synced_at stamped) and dequeued from pending_detail_sync. ANY
-// failure — a gate, a fetch error, or a single collection's upsert — defers
-// the affected issues to pending_detail_sync instead: an issue that was
-// silently dropped or partially persisted must never be stamped fresh
-// (masking staleness from the SWR path) nor lose its worker-side retry.
+// stamped (detail_synced_at, the one per-issue detail-freshness fact) and
+// dequeued from pending_detail_sync. ANY failure — a gate, a fetch error, or
+// a single collection's upsert — defers the affected issues to
+// pending_detail_sync instead: an issue that was silently dropped or
+// partially persisted must never be stamped fresh (masking staleness from
+// the SWR path) nor lose its worker-side retry.
 func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutcome {
 	deferAll := func() detailOutcome {
 		w.deferDetailIssues(ctx, issues)
@@ -935,12 +937,9 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 	// contributes COMPLETENESS (page-size checks), so a prune fires only when
 	// the fetch was clean AND complete.
 	//
-	// The prunes must run before an issue's Touch* below, which re-stamps ALL
-	// of that issue's rows and would exempt phantoms from the cutoff (prunes
-	// run inside PersistIssueDetails; the touches come after). Completeness
-	// relies on GetIssueDetailsBatch's documented all-or-nothing contract: a
-	// nil error guarantees a non-nil map entry for every requested ID, so a
-	// partially-failed response never reaches this loop as a
+	// Completeness relies on GetIssueDetailsBatch's documented all-or-nothing
+	// contract: a nil error guarantees a non-nil map entry for every requested
+	// ID, so a partially-failed response never reaches this loop as a
 	// short-but-"complete" details struct. The nil branch below is a trap for
 	// a violation of that contract, not expected flow.
 	deps := reconcile.Deps{Q: w.store.Queries(), Extract: w.extractor.ExtractAndStore}
@@ -960,29 +959,22 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 			// A collection's convert/upsert failed. The clean guard already
 			// suppressed that collection's prune; here the issue must ALSO
 			// keep its retry (re-enqueue for the next cycle's drain) and must
-			// NOT be stamped fresh — a touch would hide the stale rows from
+			// NOT be stamped fresh — a stamp would hide the stale rows from
 			// the SWR path until the next real change.
 			w.deferDetailIssues(ctx, []issueRef{issue})
 			outcome.deferred = append(outcome.deferred, issue)
 			continue
 		}
 
-		// Touch synced_at so the FS layer doesn't immediately re-trigger
-		// on-demand fetches for the data we just stored.
-		//
-		// Relations are DELIBERATELY not touched, though the loop above syncs five
-		// collections: nothing consults relations staleness (the repo has no
-		// relations SWR path, and the dead GetIssueRelationsSyncedAt query was
-		// deleted in PR #186), so a TouchIssueRelations would be dead machinery —
-		// don't "fix" the symmetry.
-		if err := w.store.Queries().TouchIssueComments(ctx, db.TouchIssueCommentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
-			log.Printf("[sync] touch comments %s: %v", issue.Identifier, err)
-		}
-		if err := w.store.Queries().TouchIssueDocuments(ctx, db.TouchIssueDocumentsParams{SyncedAt: now, IssueID: sql.NullString{String: issue.ID, Valid: true}}); err != nil {
-			log.Printf("[sync] touch documents %s: %v", issue.Identifier, err)
-		}
-		if err := w.store.Queries().TouchIssueAttachments(ctx, db.TouchIssueAttachmentsParams{SyncedAt: now, IssueID: issue.ID}); err != nil {
-			log.Printf("[sync] touch attachments %s: %v", issue.Identifier, err)
+		// Stamp detail_synced_at — the one per-issue freshness fact the SWR
+		// path consults — so the FS layer doesn't immediately re-trigger
+		// on-demand fetches for the data we just stored. The stamp covers all
+		// detail families uniformly (comments/documents/attachments/relations):
+		// it lives on the issues row, so an empty family can no longer read as
+		// "never synced" (the old per-row touches could not stamp rows that
+		// did not exist).
+		if err := w.store.Queries().StampIssueDetailSynced(ctx, db.StampIssueDetailSyncedParams{DetailSyncedAt: db.ToNullTime(now), ID: issue.ID}); err != nil {
+			log.Printf("[sync] stamp detail synced %s: %v", issue.Identifier, err)
 		}
 		// H-5: Remove the cleanly synced issue from the pending queue
 		_ = w.store.Queries().DeletePendingDetailSync(ctx, issue.ID)

@@ -794,6 +794,172 @@ func TestGetTeamIssueCount(t *testing.T) {
 	}
 }
 
+// TestMigrateAddsDetailSyncedAt: the bootstrap-ALTER migration. A database
+// created BEFORE issues.detail_synced_at existed must open cleanly (CREATE
+// TABLE IF NOT EXISTS leaves the old table untouched, so Open's migrateSchema
+// has to ALTER it in), gain the column, and keep its rows readable — including
+// through sqlc's explicit-column scans, which expect the new column. Also
+// proves idempotence: reopening the migrated database must not fail on a
+// duplicate ALTER.
+func TestMigrateAddsDetailSyncedAt(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "old.db")
+
+	// Build the pre-migration database by hand: the issues table WITHOUT
+	// detail_synced_at, plus one row.
+	raw, err := sql.Open("sqlite", "file:"+dbPath+"?_time_format=sqlite")
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE issues (
+		id TEXT PRIMARY KEY,
+		identifier TEXT UNIQUE NOT NULL,
+		team_id TEXT NOT NULL,
+		title TEXT NOT NULL,
+		description TEXT,
+		state_id TEXT,
+		state_name TEXT,
+		state_type TEXT,
+		assignee_id TEXT,
+		assignee_email TEXT,
+		creator_id TEXT,
+		creator_email TEXT,
+		priority INTEGER DEFAULT 0,
+		project_id TEXT,
+		project_name TEXT,
+		cycle_id TEXT,
+		cycle_name TEXT,
+		parent_id TEXT,
+		due_date TEXT,
+		estimate REAL,
+		url TEXT,
+		branch_name TEXT,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		started_at DATETIME,
+		completed_at DATETIME,
+		canceled_at DATETIME,
+		archived_at DATETIME,
+		synced_at DATETIME NOT NULL,
+		data JSON NOT NULL
+	)`); err != nil {
+		t.Fatalf("create old issues table: %v", err)
+	}
+	if _, err := raw.Exec(`INSERT INTO issues (id, identifier, team_id, title, created_at, updated_at, synced_at, data)
+		VALUES ('issue-old', 'TST-OLD', 'team-1', 'Pre-migration issue', ?, ?, ?, ?)`,
+		Now(), Now(), Now(), []byte("{}")); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	// Open through the Store — schema init no-ops on the existing table,
+	// migrateSchema must add the column.
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open on pre-migration db failed: %v", err)
+	}
+	defer store.Close()
+
+	has, err := tableHasColumn(store.DB(), "issues", "detail_synced_at")
+	if err != nil {
+		t.Fatalf("tableHasColumn: %v", err)
+	}
+	if !has {
+		t.Fatal("issues.detail_synced_at missing after Open — migration did not run")
+	}
+
+	ctx := context.Background()
+
+	// The pre-existing row reads back with a NULL stamp. Note the ALTER
+	// appends the column at the END of the table (schema.sql declares it
+	// before data) — this exercises the explicit-column scans that make the
+	// two layouts equivalent.
+	got, err := store.Queries().GetIssueByID(ctx, "issue-old")
+	if err != nil {
+		t.Fatalf("GetIssueByID on migrated db: %v", err)
+	}
+	if got.DetailSyncedAt.Valid {
+		t.Errorf("pre-migration row detail_synced_at = %v, want NULL", got.DetailSyncedAt.Time)
+	}
+	if got.Title != "Pre-migration issue" {
+		t.Errorf("pre-migration row title = %q — column scan misaligned", got.Title)
+	}
+
+	// The stamp works on the migrated table.
+	if err := store.Queries().StampIssueDetailSynced(ctx, StampIssueDetailSyncedParams{
+		DetailSyncedAt: ToNullTime(Now()), ID: "issue-old",
+	}); err != nil {
+		t.Fatalf("StampIssueDetailSynced on migrated db: %v", err)
+	}
+	fresh, err := store.Queries().GetIssueDetailFreshness(ctx, "issue-old")
+	if err != nil {
+		t.Fatalf("GetIssueDetailFreshness: %v", err)
+	}
+	if !fresh.DetailSyncedAt.Valid {
+		t.Error("detail_synced_at still NULL after stamp on migrated db")
+	}
+	store.Close()
+
+	// Idempotent: reopening the already-migrated database succeeds.
+	again, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated db failed: %v", err)
+	}
+	again.Close()
+}
+
+// TestUpsertIssuePreservesDetailSyncedAt: UpsertIssue deliberately omits
+// detail_synced_at from its INSERT list and conflict SET clause — the stamp is
+// owned by the detail-sync paths, so an entity sync upsert must neither set it
+// (fresh insert stays NULL) nor clobber it (conflict update preserves it).
+func TestUpsertIssuePreservesDetailSyncedAt(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	data := &IssueData{
+		ID: "issue-1", Identifier: "TST-1", Title: "Issue", TeamID: "team-1",
+		CreatedAt: Now(), UpdatedAt: Now(), Data: []byte("{}"),
+	}
+	if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	fresh, err := store.Queries().GetIssueDetailFreshness(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("GetIssueDetailFreshness: %v", err)
+	}
+	if fresh.DetailSyncedAt.Valid {
+		t.Errorf("detail_synced_at = %v after insert, want NULL", fresh.DetailSyncedAt.Time)
+	}
+
+	stamp := Now()
+	if err := store.Queries().StampIssueDetailSynced(ctx, StampIssueDetailSyncedParams{
+		DetailSyncedAt: ToNullTime(stamp), ID: "issue-1",
+	}); err != nil {
+		t.Fatalf("stamp: %v", err)
+	}
+
+	// A subsequent entity upsert (the sync worker refreshing the issue row)
+	// must preserve the stamp.
+	data.Title = "Issue updated"
+	if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+		t.Fatalf("conflict upsert: %v", err)
+	}
+	fresh, err = store.Queries().GetIssueDetailFreshness(ctx, "issue-1")
+	if err != nil {
+		t.Fatalf("GetIssueDetailFreshness after upsert: %v", err)
+	}
+	if !fresh.DetailSyncedAt.Valid {
+		t.Fatal("detail_synced_at cleared by UpsertIssue — the upsert must preserve the stamp")
+	}
+	if !fresh.DetailSyncedAt.Time.Equal(stamp) {
+		t.Errorf("detail_synced_at = %v after upsert, want preserved %v", fresh.DetailSyncedAt.Time, stamp)
+	}
+}
+
 // Helpers
 
 func openTestStore(t *testing.T) *Store {
