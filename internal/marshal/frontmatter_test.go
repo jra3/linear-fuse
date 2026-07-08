@@ -8,23 +8,23 @@ import (
 func TestParse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name           string
-		content        string
+		name            string
+		content         string
 		wantFrontmatter map[string]any
-		wantBody       string
-		wantErr        bool
+		wantBody        string
+		wantErr         bool
 	}{
 		{
-			name:           "empty content",
-			content:        "",
+			name:            "empty content",
+			content:         "",
 			wantFrontmatter: map[string]any{},
-			wantBody:       "",
+			wantBody:        "",
 		},
 		{
-			name:           "body only - no frontmatter",
-			content:        "Just a regular markdown document.\n\nWith multiple paragraphs.",
+			name:            "body only - no frontmatter",
+			content:         "Just a regular markdown document.\n\nWith multiple paragraphs.",
 			wantFrontmatter: map[string]any{},
-			wantBody:       "Just a regular markdown document.\n\nWith multiple paragraphs.",
+			wantBody:        "Just a regular markdown document.\n\nWith multiple paragraphs.",
 		},
 		{
 			name:    "valid frontmatter with body",
@@ -53,10 +53,10 @@ func TestParse(t *testing.T) {
 			wantBody: "Description",
 		},
 		{
-			name:           "empty frontmatter",
-			content:        "---\n---\nBody after empty frontmatter",
+			name:            "empty frontmatter",
+			content:         "---\n---\nBody after empty frontmatter",
 			wantFrontmatter: map[string]any{},
-			wantBody:       "Body after empty frontmatter",
+			wantBody:        "Body after empty frontmatter",
 		},
 		{
 			name:    "unclosed frontmatter",
