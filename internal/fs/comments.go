@@ -209,8 +209,9 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	updatedComment, err := n.lfs.UpdateComment(ctx, n.issueID, n.comment.ID, body)
 	if err != nil {
 		log.Printf("Failed to update comment: %v", err)
-		n.lfs.SetWriteError(commentErrKey, "Operation: update comment\nError: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("update comment", err)
+		n.lfs.SetWriteError(commentErrKey, msg)
+		return errno
 	}
 
 	// Edit-commit tail: verify read-your-writes against the API's echoed response,

@@ -208,8 +208,9 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	updated, err := n.lfs.UpdateProjectMilestone(ctx, n.milestone.ID, input)
 	if err != nil {
 		log.Printf("Failed to update milestone: %v", err)
-		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nError: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("update milestone "+milestoneFilename(n.milestone), err)
+		n.lfs.SetWriteError(milestoneErrKey, msg)
+		return errno
 	}
 	// Edit-commit tail. LinearFS.UpdateProjectMilestone already upserted to SQLite
 	// (after routing through the mutation seam), so persist is nil; verify

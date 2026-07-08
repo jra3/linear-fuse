@@ -299,7 +299,7 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
-- Rate-limited or timed out (nothing was created; retry shortly) -> EAGAIN
+- Rate-limited or timed out (the write did not take effect; retry shortly) -> EAGAIN
 - Backend/API failure -> EIO
 - Whatever the errno, the reason lands in .error; success clears it.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.

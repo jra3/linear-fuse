@@ -178,8 +178,10 @@ func retryableCreateErr(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "rate limit") || strings.Contains(msg, "circuit breaker")
+	// Rate-limit detection is the shared predicate's job; the circuit breaker
+	// stays here — it is a client-side connectivity transient (worth retrying),
+	// not the server rate limiting us, so api.IsRateLimited excludes it.
+	return api.IsRateLimited(err) || strings.Contains(err.Error(), "circuit breaker")
 }
 
 // Mkdir creates a new issue from a directory name
@@ -552,8 +554,9 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// Call Linear API to update
 	if err := i.lfs.mutator().UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
-		i.lfs.SetIssueError(i.issue.ID, "API error: "+err.Error())
-		return syscall.EIO
+		msg, errno := classifyMutationErr("update issue", err)
+		i.lfs.SetIssueError(i.issue.ID, msg)
+		return errno
 	}
 
 	if i.lfs.debug {

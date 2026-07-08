@@ -303,7 +303,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 			UserError:              first.Extensions.UserError,
 			UserPresentableMessage: first.Extensions.UserPresentableMessage,
 		}
-		if strings.Contains(errMsg, "RATELIMITED") || strings.Contains(strings.ToLower(errMsg), "rate limit") {
+		if IsRateLimited(queryErr) {
 			adm.rateLimited(resp.Header)
 			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, errMsg)
 		} else {

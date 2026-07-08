@@ -3,9 +3,10 @@ package fs
 import (
 	"context"
 	"log"
-	"strings"
 	"syscall"
 	"time"
+
+	"github.com/jra3/linear-fuse/internal/api"
 )
 
 // The delete-commit tail.
@@ -140,9 +141,8 @@ func forgetWithRetry[T any](ctx context.Context, forget func(ctx context.Context
 }
 
 // remoteAlreadyGone reports whether a delete mutation failed because Linear no
-// longer has the entity ("Entity not found" is Linear's standard phrasing —
-// the same detection the repo layer uses for reads). For a delete that is
-// success, not failure.
+// longer has the entity — the shared predicate the repo layer's orphan defense
+// uses too. For a delete that is success, not failure.
 func remoteAlreadyGone(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "Entity not found")
+	return api.IsNotFound(err)
 }
