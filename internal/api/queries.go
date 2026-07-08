@@ -403,6 +403,47 @@ query TeamCycles($teamId: String!) {
 }
 `
 
+// ProjectFields is the shared projection for a project — the team-projects
+// page, the single-project fetch (the WriteBack verify read), and the create
+// mutation's echo all project through it, per the fragment rule: an inlined
+// copy silently drifts when one site gains a field (the create echo had
+// already drifted, omitting startDate/targetDate/lead/status/initiatives/
+// milestones/labelIds). References ProjectMilestoneFields; queries appending
+// this fragment get that one with it.
+const projectFieldsFragment = `
+fragment ProjectFields on Project {
+  id
+  name
+  slugId
+  description
+  url
+  state
+  startDate
+  targetDate
+  createdAt
+  updatedAt
+  labelIds
+  lead {
+    id
+    name
+    email
+  }
+  status {
+    id
+    name
+  }
+  initiatives {
+    nodes {
+      id
+      name
+    }
+  }
+  projectMilestones {
+    nodes { ...ProjectMilestoneFields }
+  }
+}
+` + projectMilestoneFieldsFragment
+
 // queryTeamProjects pages at 50: the nested initiatives/projectMilestones
 // selections cost ~187 complexity points per project node, so 50 is the
 // largest page that fits Linear's 10k complexity budget (measured live:
@@ -412,77 +453,17 @@ query TeamProjects($teamId: String!, $after: String) {
   team(id: $teamId) {
     projects(first: 50, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-        slugId
-        description
-        url
-        state
-        startDate
-        targetDate
-        createdAt
-        updatedAt
-        labelIds
-        lead {
-          id
-          name
-          email
-        }
-        status {
-          id
-          name
-        }
-        initiatives {
-          nodes {
-            id
-            name
-          }
-        }
-        projectMilestones {
-          nodes { ...ProjectMilestoneFields }
-        }
-      }
+      nodes { ...ProjectFields }
     }
   }
 }
-` + projectMilestoneFieldsFragment
+` + projectFieldsFragment
 
 var queryProject = `
 query Project($id: String!) {
-  project(id: $id) {
-    id
-    name
-    slugId
-    description
-    url
-    state
-    startDate
-    targetDate
-    createdAt
-    updatedAt
-    labelIds
-    lead {
-      id
-      name
-      email
-    }
-    status {
-      id
-      name
-    }
-    initiatives {
-      nodes {
-        id
-        name
-      }
-    }
-    projectMilestones {
-      nodes { ...ProjectMilestoneFields }
-    }
-  }
+  project(id: $id) { ...ProjectFields }
 }
-` + projectMilestoneFieldsFragment
+` + projectFieldsFragment
 
 var queryProjectMilestones = `
 query ProjectMilestones($projectId: String!) {
@@ -578,24 +559,14 @@ mutation CreateInitiativeUpdate($initiativeId: String!, $body: String!, $health:
 }
 ` + initiativeUpdateFieldsFragment
 
-const mutationCreateProject = `
+var mutationCreateProject = `
 mutation CreateProject($input: ProjectCreateInput!) {
   projectCreate(input: $input) {
     success
-    project {
-      id
-      name
-      slugId
-      description
-      url
-      state
-      createdAt
-      updatedAt
-      labelIds
-    }
+    project { ...ProjectFields }
   }
 }
-`
+` + projectFieldsFragment
 
 const mutationArchiveProject = `
 mutation ArchiveProject($id: String!) {
