@@ -53,6 +53,10 @@ func relationIno(relationID string) uint64  { return ino("relation", relationID)
 func labelsDirIno(teamID string) uint64 { return ino("labels", teamID) }
 func labelIno(labelID string) uint64    { return ino("label", labelID) }
 
+// projectLabelsCatalogIno is the root project-labels.md catalog file — a
+// workspace singleton, so the id is a constant.
+func projectLabelsCatalogIno() uint64 { return ino("project-labels-catalog", "workspace") }
+
 // Projects -----------------------------------------------------------------
 
 func projectsDirIno(teamID string) uint64     { return ino("projects", teamID) }

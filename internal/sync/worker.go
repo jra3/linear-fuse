@@ -36,6 +36,10 @@ type APIClient interface {
 	// Consolidated workspace data (users + initiatives in one call)
 	GetWorkspace(ctx context.Context) (*api.WorkspaceData, error)
 
+	// Workspace project-label catalog (complete drain, retired included —
+	// completeness licenses the prune in syncProjectLabels)
+	GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error)
+
 	// Issue details (comments, documents, attachments)
 	GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error)
 	GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error)
@@ -509,10 +513,46 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 	}
 	log.Printf("[sync] synced %d initiatives", len(data.Initiatives))
 
+	// Project-label catalog (workspace-scoped; see CONTEXT.md "Project-label
+	// selection"). Isolated log-and-continue: a catalog failure must not block
+	// users/initiatives, and vice versa. Reuses pruneCutoff: taken before ANY
+	// fetch this pass, so it is strictly conservative for the synced_at <
+	// cutoff prune (the converter stamps SyncedAt at upsert time, after it).
+	// The drain includes retired labels (live-verified), so retirement never
+	// reads as removal — only true deletion/archival does.
+	w.syncProjectLabels(ctx, pruneCutoff)
+
 	if len(errs) > 0 {
 		return fmt.Errorf("workspace sync errors: %v", errs)
 	}
 	return nil
+}
+
+// syncProjectLabels reconciles the workspace project-label catalog. The
+// complete GetProjectLabels drain is the completeness set that licenses the
+// full-table prune; a fetch failure skips the pass entirely (no prune without
+// a complete drain).
+func (w *Worker) syncProjectLabels(ctx context.Context, pruneCutoff time.Time) {
+	plabels, err := w.client.GetProjectLabels(ctx)
+	if err != nil {
+		log.Printf("[sync] project labels fetch failed: %v", err)
+		return
+	}
+	syncCollection(ctx, syncCollectionSpec[api.ProjectLabel]{
+		label: "project-label",
+		items: plabels,
+		upsert: func(ctx context.Context, l api.ProjectLabel) error {
+			params, err := db.APIProjectLabelToDBProjectLabel(l)
+			if err != nil {
+				return err
+			}
+			return w.store.Queries().UpsertProjectLabel(ctx, params)
+		},
+		prune: func(ctx context.Context) error {
+			return w.store.Queries().PruneProjectLabels(ctx, pruneCutoff)
+		},
+	})
+	log.Printf("[sync] synced %d project labels", len(plabels))
 }
 
 // syncInitiativeProjects upserts an initiative's junction rows and prunes

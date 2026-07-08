@@ -37,6 +37,8 @@ type mockAPIClient struct {
 	membersByTeam    map[string][]api.User    // teamID -> members
 	users            []api.User
 	initiatives      []api.Initiative
+	projectLabels    []api.ProjectLabel
+	projectLabelsErr error // if set, GetProjectLabels fails with this (catalog isolation tests)
 	pageSize         int
 	getTeamsCalls    int32
 	getIssuesCalls   int32
@@ -164,6 +166,17 @@ func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, e
 		Users:       m.users,
 		Initiatives: m.initiatives,
 	}, nil
+}
+
+func (m *mockAPIClient) GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error) {
+	m.recordOp("GetProjectLabels")
+	if m.projectLabelsErr != nil {
+		return nil, m.projectLabelsErr
+	}
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	return m.projectLabels, nil
 }
 
 // GetProjectMilestones removed — milestones now come inline from GetTeamProjects

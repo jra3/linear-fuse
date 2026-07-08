@@ -275,6 +275,93 @@ func DBLabelsToAPILabels(labels []Label) []api.Label {
 }
 
 // =============================================================================
+// ProjectLabel Conversion (workspace-scoped catalog; see CONTEXT.md
+// "Project-label selection")
+// =============================================================================
+
+func boolToInt64(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// APIProjectLabelToDBProjectLabel converts an api.ProjectLabel to
+// UpsertProjectLabelParams. parent_id comes from the label's own Parent edge
+// (only the ID is fetched; names stitch locally at the repo read).
+func APIProjectLabelToDBProjectLabel(label api.ProjectLabel) (UpsertProjectLabelParams, error) {
+	data, err := json.Marshal(label)
+	if err != nil {
+		return UpsertProjectLabelParams{}, err
+	}
+	params := UpsertProjectLabelParams{
+		ID:          label.ID,
+		Name:        label.Name,
+		Color:       sql.NullString{String: label.Color, Valid: label.Color != ""},
+		Description: sql.NullString{String: label.Description, Valid: label.Description != ""},
+		IsGroup:     boolToInt64(label.IsGroup),
+		CreatedAt:   sql.NullTime{Time: label.CreatedAt, Valid: !label.CreatedAt.IsZero()},
+		UpdatedAt:   sql.NullTime{Time: label.UpdatedAt, Valid: !label.UpdatedAt.IsZero()},
+		SyncedAt:    Now(),
+		Data:        data,
+	}
+	if label.Parent != nil {
+		params.ParentID = sql.NullString{String: label.Parent.ID, Valid: label.Parent.ID != ""}
+	}
+	if label.RetiredAt != nil {
+		params.RetiredAt = sql.NullTime{Time: *label.RetiredAt, Valid: true}
+	}
+	return params, nil
+}
+
+// DBProjectLabelToAPIProjectLabel converts a db.ProjectLabel to
+// api.ProjectLabel. Hydrate-then-overlay: see the reverse-conversion contract
+// at DBMilestoneToAPIProjectMilestone. Parent comes strictly from the
+// parent_id column — the authoritative source — never from the blob's copy;
+// only the ID is populated here (the repo read stitches Parent.Name over the
+// catalog's id→row map).
+func DBProjectLabelToAPIProjectLabel(label ProjectLabel) api.ProjectLabel {
+	var l api.ProjectLabel
+	if len(label.Data) > 0 {
+		// Best-effort: on a bad blob keep the zero struct and rely on the columns.
+		_ = json.Unmarshal(label.Data, &l)
+	}
+	l.ID = label.ID
+	l.Name = label.Name
+	l.Color = NullStringValue(label.Color)
+	l.Description = NullStringValue(label.Description)
+	l.IsGroup = label.IsGroup != 0
+	if label.ParentID.Valid {
+		l.Parent = &api.ProjectLabel{ID: label.ParentID.String}
+	} else {
+		l.Parent = nil
+	}
+	if label.RetiredAt.Valid {
+		t := label.RetiredAt.Time
+		l.RetiredAt = &t
+	} else {
+		l.RetiredAt = nil
+	}
+	if label.CreatedAt.Valid {
+		l.CreatedAt = label.CreatedAt.Time
+	}
+	if label.UpdatedAt.Valid {
+		l.UpdatedAt = label.UpdatedAt.Time
+	}
+	return l
+}
+
+// DBProjectLabelsToAPIProjectLabels converts a slice of db.ProjectLabel to
+// api.ProjectLabel
+func DBProjectLabelsToAPIProjectLabels(labels []ProjectLabel) []api.ProjectLabel {
+	result := make([]api.ProjectLabel, len(labels))
+	for i, label := range labels {
+		result[i] = DBProjectLabelToAPIProjectLabel(label)
+	}
+	return result
+}
+
+// =============================================================================
 // User Conversion
 // =============================================================================
 

@@ -132,6 +132,28 @@ type Project struct {
 	Status      *Status             `json:"status"`
 	Initiatives *ProjectInitiatives `json:"initiatives"`
 	Milestones  *ProjectMilestones  `json:"projectMilestones"`
+	// LabelIds are the project's ProjectLabel IDs (a cheap scalar on the wire;
+	// names resolve locally against the project_labels catalog).
+	LabelIds []string `json:"labelIds"`
+}
+
+// ProjectLabel is a WORKSPACE-scoped label applied to projects. Deliberately
+// not unified with Label (IssueLabel): no team edge, group/retirement
+// lifecycle, disjoint mutations. See CONTEXT.md "Project-label selection".
+// IsGroup labels are containers and cannot be applied directly; only one
+// child per group may be applied. RetiredAt != nil means not newly assignable
+// but valid on existing projects (the wire ACCEPTS retired assignment — the
+// mount enforces the documented semantics as policy).
+type ProjectLabel struct {
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Color       string        `json:"color"`
+	Description string        `json:"description"`
+	IsGroup     bool          `json:"isGroup"`
+	Parent      *ProjectLabel `json:"parent,omitempty"` // id from wire; Name stitched by the repo read
+	RetiredAt   *time.Time    `json:"retiredAt,omitempty"`
+	CreatedAt   time.Time     `json:"createdAt"`
+	UpdatedAt   time.Time     `json:"updatedAt"`
 }
 
 // ProjectMilestones is a collection of milestones within a project
@@ -168,6 +190,9 @@ type ProjectMilestone struct {
 type ProjectUpdateInput struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
+	// LabelIds is a full-set write (no removedLabelIds analog exists).
+	// nil = untouched; &[]string{} = clear all labels.
+	LabelIds *[]string `json:"labelIds,omitempty"`
 }
 
 // InitiativeUpdateInput is the input for updating an initiative's mutable fields.

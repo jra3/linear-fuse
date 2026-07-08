@@ -772,6 +772,38 @@ func (lfs *LinearFS) GetInitiatives(ctx context.Context) ([]api.Initiative, erro
 	return lfs.repo.GetInitiatives(ctx)
 }
 
+// GetProjectLabels returns the workspace project-label catalog (Parent names
+// stitched by the repo read).
+func (lfs *LinearFS) GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error) {
+	return lfs.repo.GetProjectLabels(ctx)
+}
+
+// projectLabelNames maps a project's labelIds to catalog names for rendering.
+// An ID missing from the catalog renders VERBATIM, never dropped — the
+// round-trip invariant: a cold or stale catalog must not cause an untouched
+// save to strip a label (the resolver accepts exact-ID passthrough for the
+// same reason; see resolveProjectLabels).
+func (lfs *LinearFS) projectLabelNames(ctx context.Context, ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	byID := make(map[string]string)
+	if catalog, err := lfs.GetProjectLabels(ctx); err == nil {
+		for _, l := range catalog {
+			byID[l.ID] = l.Name
+		}
+	}
+	names := make([]string, len(ids))
+	for i, id := range ids {
+		if name, ok := byID[id]; ok && name != "" {
+			names[i] = name
+		} else {
+			names[i] = id
+		}
+	}
+	return names
+}
+
 // MountFS mounts an existing LinearFS instance at the given path.
 // This is useful for testing when you need to configure LinearFS before mounting.
 func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error) {

@@ -277,6 +277,35 @@ DELETE FROM labels WHERE id = ?;
 DELETE FROM labels WHERE team_id = ?;
 
 -- =============================================================================
+-- Project labels queries (workspace-scoped catalog; see schema.sql)
+-- =============================================================================
+
+-- name: ListProjectLabels :many
+SELECT * FROM project_labels ORDER BY name COLLATE NOCASE;
+
+-- name: UpsertProjectLabel :exec
+INSERT INTO project_labels (id, name, color, description, is_group, parent_id,
+    retired_at, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    color = excluded.color,
+    description = excluded.description,
+    is_group = excluded.is_group,
+    parent_id = excluded.parent_id,
+    retired_at = excluded.retired_at,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data;
+
+-- Workspace-wide prune, licensed ONLY by a complete drain of Query.projectLabels.
+-- The drain includes retired labels (live-verified 2026-07-08), so retirement
+-- never reads as removal here; only true deletion/archival does.
+-- name: PruneProjectLabels :exec
+DELETE FROM project_labels WHERE synced_at < ?;
+
+-- =============================================================================
 -- Users queries
 -- =============================================================================
 

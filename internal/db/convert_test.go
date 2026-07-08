@@ -906,6 +906,65 @@ func TestLabelRoundTrip(t *testing.T) {
 	}
 }
 
+// TestProjectLabelRoundTrip pins the contract for the workspace project-label
+// catalog. Parent carries only the ID through the round-trip (names stitch at
+// the repo read); retirement is a kept lifecycle state, not deletion.
+func TestProjectLabelRoundTrip(t *testing.T) {
+	t.Parallel()
+	retired := time.Date(2026, 7, 8, 5, 3, 11, 0, time.UTC)
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	updated := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+	orig := api.ProjectLabel{
+		ID:          "plabel-rt",
+		Name:        "Platform",
+		Color:       "#5e6ad2",
+		Description: "Platform work",
+		IsGroup:     false,
+		Parent:      &api.ProjectLabel{ID: "plabel-group"},
+		RetiredAt:   &retired,
+		CreatedAt:   created,
+		UpdatedAt:   updated,
+	}
+
+	params, err := APIProjectLabelToDBProjectLabel(orig)
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	row := ProjectLabel{
+		ID: params.ID, Name: params.Name, Color: params.Color,
+		Description: params.Description, IsGroup: params.IsGroup,
+		ParentID: params.ParentID, RetiredAt: params.RetiredAt,
+		CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt,
+		Data: params.Data,
+	}
+	got := DBProjectLabelToAPIProjectLabel(row)
+	// Parent comes back ID-only regardless of what the blob carried.
+	want := orig
+	want.Parent = &api.ProjectLabel{ID: "plabel-group"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("round-trip mismatch:\n got=%+v\nwant=%+v", got, want)
+	}
+
+	// A group label with no parent and no retirement.
+	group := api.ProjectLabel{ID: "plabel-g", Name: "Area", IsGroup: true, CreatedAt: created, UpdatedAt: updated}
+	gp, err := APIProjectLabelToDBProjectLabel(group)
+	if err != nil {
+		t.Fatalf("forward (group): %v", err)
+	}
+	gRow := ProjectLabel{ID: gp.ID, Name: gp.Name, IsGroup: gp.IsGroup, CreatedAt: gp.CreatedAt, UpdatedAt: gp.UpdatedAt, Data: gp.Data}
+	gGot := DBProjectLabelToAPIProjectLabel(gRow)
+	if !gGot.IsGroup || gGot.Parent != nil || gGot.RetiredAt != nil {
+		t.Errorf("group round-trip: %+v", gGot)
+	}
+
+	corrupt := row
+	corrupt.Data = []byte("{not json")
+	if got := DBProjectLabelToAPIProjectLabel(corrupt); got.ID != orig.ID || got.Name != orig.Name ||
+		got.Parent == nil || got.Parent.ID != "plabel-group" || got.RetiredAt == nil {
+		t.Errorf("corrupt data row did not fall back to columns: %+v", got)
+	}
+}
+
 // TestUserRoundTrip pins the contract for users.
 func TestUserRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -1464,6 +1523,38 @@ func TestOverlayColumnsWin(t *testing.T) {
 		// The blob-only field must still flow through — overlay, not replace.
 		if !reflect.DeepEqual(got.IssueCountHistory, []int{1, 2, 3}) {
 			t.Errorf("blob-only history did not survive the overlay: %+v", got.IssueCountHistory)
+		}
+	})
+
+	t.Run("project-label", func(t *testing.T) {
+		t.Parallel()
+		colRetired := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+		blob := mustMarshal(api.ProjectLabel{
+			ID: "blob-id", Name: "blob-name", Color: "blob-color",
+			Description: "blob-desc", IsGroup: true,
+			Parent: &api.ProjectLabel{ID: "blob-parent", Name: "smuggled-name"},
+		})
+		got := DBProjectLabelToAPIProjectLabel(ProjectLabel{
+			ID:          "col-id",
+			Name:        "col-name",
+			Color:       sql.NullString{String: "col-color", Valid: true},
+			Description: sql.NullString{String: "col-desc", Valid: true},
+			IsGroup:     0,
+			ParentID:    sql.NullString{String: "col-parent", Valid: true},
+			RetiredAt:   sql.NullTime{Time: colRetired, Valid: true},
+			Data:        blob,
+		})
+		if got.ID != "col-id" || got.Name != "col-name" || got.Color != "col-color" ||
+			got.Description != "col-desc" || got.IsGroup {
+			t.Errorf("blob won over columns: %+v", got)
+		}
+		// Parent is strictly column-derived: the blob's smuggled Name must not
+		// survive (only the ID is populated; the repo read stitches names).
+		if got.Parent == nil || got.Parent.ID != "col-parent" || got.Parent.Name != "" {
+			t.Errorf("parent not column-derived: %+v", got.Parent)
+		}
+		if got.RetiredAt == nil || !got.RetiredAt.Equal(colRetired) {
+			t.Errorf("retired_at column did not win: %+v", got.RetiredAt)
 		}
 	})
 

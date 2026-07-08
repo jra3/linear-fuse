@@ -156,6 +156,27 @@ fragment LabelFields on IssueLabel {
 }
 `
 
+// ProjectLabelFields is the shared projection for a workspace project label.
+// Defined mutation-less in this slice so future catalog CRUD mutations project
+// through it (see CLAUDE.md: mutations must project through the entity's
+// fragment). parent selects only the id — the catalog is always fully in hand
+// locally, so parent/group names stitch at the repo read, not on the wire.
+// retiredAt is doc-tagged [Internal] in the schema but live-verified selectable
+// by API-key clients (2026-07-08).
+const projectLabelFieldsFragment = `
+fragment ProjectLabelFields on ProjectLabel {
+  id
+  name
+  color
+  description
+  isGroup
+  retiredAt
+  createdAt
+  updatedAt
+  parent { id }
+}
+`
+
 // AttachmentFieldsFragment is a GraphQL fragment for attachment fields.
 const AttachmentFieldsFragment = `
 fragment AttachmentFields on Attachment {
@@ -322,6 +343,21 @@ query WorkspaceLabelsPage($after: String) {
 }
 ` + labelFieldsFragment
 
+// queryProjectLabelsPage drains the workspace project-label catalog. No
+// filter: the drain must include retired and group labels — completeness is
+// what licenses the sync pass's full-table prune (retirement is
+// keep-but-not-newly-assignable, so a retired label absent from the drain
+// would read as deleted and be pruned, which live verification 2026-07-08
+// confirmed does not happen: retired labels ARE in the default drain).
+var queryProjectLabelsPage = `
+query ProjectLabelsPage($after: String) {
+  projectLabels(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...ProjectLabelFields }
+  }
+}
+` + projectLabelFieldsFragment
+
 const queryTeamStates = `
 query TeamStates($teamId: String!) {
   team(id: $teamId) {
@@ -387,6 +423,7 @@ query TeamProjects($teamId: String!, $after: String) {
         targetDate
         createdAt
         updatedAt
+        labelIds
         lead {
           id
           name
@@ -424,6 +461,7 @@ query Project($id: String!) {
     targetDate
     createdAt
     updatedAt
+    labelIds
     lead {
       id
       name
@@ -553,6 +591,7 @@ mutation CreateProject($input: ProjectCreateInput!) {
       state
       createdAt
       updatedAt
+      labelIds
     }
   }
 }

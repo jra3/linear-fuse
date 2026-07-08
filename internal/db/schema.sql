@@ -101,6 +101,31 @@ CREATE INDEX IF NOT EXISTS idx_labels_team ON labels(team_id);
 CREATE INDEX IF NOT EXISTS idx_labels_name ON labels(name);
 
 -- =============================================================================
+-- Project labels (Linear "ProjectLabel"). WORKSPACE-scoped: the schema has no
+-- team edge, so unlike `labels` there is no team_id column at all. Deliberately
+-- a twin of `labels`, not a kind-column extension of it: scoping, prune regime,
+-- and lifecycle (retirement) all differ -- see CONTEXT.md "Project-label
+-- selection". Retired labels are KEPT (retirement is keep-but-not-newly-
+-- assignable, not deletion) so name resolution on existing projects keeps
+-- working.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS project_labels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    color TEXT,
+    description TEXT,
+    is_group INTEGER NOT NULL DEFAULT 0,  -- groups cannot be applied directly
+    parent_id TEXT,                       -- group parent; NULL = top-level
+    retired_at DATETIME,                  -- NULL = active
+    created_at DATETIME,
+    updated_at DATETIME,
+    synced_at DATETIME NOT NULL,
+    data JSON NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_labels_name ON project_labels(name);
+
+-- =============================================================================
 -- Users (workspace members)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS users (

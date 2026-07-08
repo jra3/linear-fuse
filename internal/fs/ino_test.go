@@ -46,6 +46,7 @@ func TestInodeNamespaceDistinct(t *testing.T) {
 		"relationIno":             relationIno(id),
 		"labelsDirIno":            labelsDirIno(id),
 		"labelIno":                labelIno(id),
+		"projectLabelsCatalogIno": projectLabelsCatalogIno(), // workspace singleton (no id)
 		"projectsDirIno":          projectsDirIno(id),
 		"projectDirIno":           projectDirIno(id),
 		"projectInfoIno":          projectInfoIno(id),

@@ -30,6 +30,7 @@ func (r *RootNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrO
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "README.md", Mode: syscall.S_IFREG},
+		{Name: "project-labels.md", Mode: syscall.S_IFREG},
 		{Name: "teams", Mode: syscall.S_IFDIR},
 		{Name: "users", Mode: syscall.S_IFDIR},
 		{Name: "my", Mode: syscall.S_IFDIR},
@@ -47,6 +48,18 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return r.lookupRenderFile(ctx, out, "README.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return []byte(generateReadme(lfs.MountPoint())), time.Time{}, time.Time{}
 		}, 0, inheritTimeout), 0
+
+	case "project-labels.md":
+		// The workspace project-label catalog (ProjectLabel has no team edge,
+		// so this is a root surface like initiatives/). SQLite-only read; an
+		// error or empty catalog still renders — the surface never ENOENTs.
+		lfs := r.lfs
+		return r.lookupRenderFile(ctx, out, "project-labels.md",
+			func(ctx context.Context) ([]byte, time.Time, time.Time) {
+				labels, _ := lfs.GetProjectLabels(ctx)
+				mtime, ctime := projectLabelCatalogTimes(labels)
+				return projectLabelsMarkdown(labels), mtime, ctime
+			}, projectLabelsCatalogIno(), inheritTimeout), 0
 
 	case "teams":
 		node := &TeamsNode{BaseNode: BaseNode{lfs: r.lfs}}

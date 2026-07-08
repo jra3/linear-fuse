@@ -585,6 +585,14 @@ func (c *Client) GetTeamProjects(ctx context.Context, teamID string) ([]Project,
 		map[string]any{"teamId": teamID}, "team", "projects")
 }
 
+// GetProjectLabels drains the workspace project-label catalog to completion.
+// No filter deliberately: the drain must include retired and group labels —
+// completeness is what licenses the sync pass's full-table prune (see
+// queryProjectLabelsPage).
+func (c *Client) GetProjectLabels(ctx context.Context) ([]ProjectLabel, error) {
+	return fetchAll[ProjectLabel](ctx, c, queryProjectLabelsPage, nil, "projectLabels")
+}
+
 // GetProjectMilestones fetches milestones for a project
 func (c *Client) GetProjectMilestones(ctx context.Context, projectID string) ([]ProjectMilestone, error) {
 	var result struct {
