@@ -252,7 +252,7 @@ func (p *ProjectNode) manifest() *dirManifest {
 	// project.md is editable-only; identity/status/dates live in project.meta.
 	m.file("project.md", projectInfoIno(project.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project}
-		content := node.generateContent()
+		content := node.generateContent(ctx)
 		node.content = content
 		return node, content, 0
 	})
@@ -362,9 +362,11 @@ var _ fs.NodeSetattrer = (*ProjectInfoNode)(nil)
 
 // generateContent renders the editable-only project.md via
 // marshal.ProjectToMarkdown; a render failure serves an empty file rather
-// than failing the node.
-func (p *ProjectInfoNode) generateContent() []byte {
-	out, err := marshal.ProjectToMarkdown(&p.project)
+// than failing the node. Label IDs render as catalog names; an ID the catalog
+// does not know renders verbatim (round-trip invariant — see projectLabelNames).
+func (p *ProjectInfoNode) generateContent(ctx context.Context) []byte {
+	labelNames := p.lfs.projectLabelNames(ctx, p.project.LabelIds)
+	out, err := marshal.ProjectToMarkdown(&p.project, labelNames)
 	if err != nil {
 		return []byte{}
 	}
@@ -424,6 +426,53 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return syscall.EINVAL
 	}
 
+	// Labels: parse + guard + resolve + validate — all PURE, hoisted before
+	// any mutation so a validation failure cannot leave the initiatives
+	// reconcile partially applied.
+	rawLabels, labelsPresent := doc.Frontmatter["labels"]
+	desiredNames := marshal.StringSliceFromYAML(rawLabels)
+
+	// Stale-blob clobber guard: a project blob predating the LabelIds field
+	// reads current as empty, so an agent ADDING one label would full-set-write
+	// just that label and silently wipe the project's real labels in Linear —
+	// invisible to the divergence check (fresh == sent). One targeted refresh
+	// in exactly the at-risk state; interactive-promoted because it is a
+	// synchronous read inside a user-blocking flush.
+	if len(p.project.LabelIds) == 0 && len(desiredNames) > 0 {
+		if fresh, err := p.lfs.verify().GetProject(api.WithInteractive(ctx), p.project.ID); err == nil && fresh != nil {
+			p.project.LabelIds = fresh.LabelIds
+		}
+	}
+
+	currentIDSet := make(map[string]bool, len(p.project.LabelIds))
+	for _, id := range p.project.LabelIds {
+		currentIDSet[id] = true
+	}
+
+	// Key absent + current empty = labels untouched. Key absent + current
+	// non-empty = delete-the-line clear (the mount-wide contract). An explicit
+	// empty list clears too.
+	var desiredIDs []string
+	labelsChanged := false
+	if labelsPresent || len(p.project.LabelIds) > 0 {
+		if len(desiredNames) > 0 {
+			catalog, err := p.lfs.GetProjectLabels(ctx)
+			if err != nil {
+				catalog = nil // ID passthrough via currentIDSet still resolves
+			}
+			ids, selected, ferr := resolveProjectLabels(catalog, desiredNames, currentIDSet)
+			if ferr == nil {
+				ferr = validateProjectLabelSelection(selected, currentIDSet, catalog)
+			}
+			if ferr != nil {
+				p.lfs.SetWriteError(p.project.ID, ferr.Detail())
+				return syscall.EINVAL
+			}
+			desiredIDs = ids
+		}
+		labelsChanged = !sameIDSet(desiredIDs, p.project.LabelIds)
+	}
+
 	// Extract initiatives from frontmatter (coerced via the shared marshal helper)
 	newInitiatives := marshal.StringSliceFromYAML(doc.Frontmatter["initiatives"])
 
@@ -464,12 +513,21 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return errno
 	}
 
-	// Persist editable scalar fields (name in frontmatter, description in body).
-	// The body maps to the project's description, matching generateContent().
-	// scalarEdit owns the diff, name coercion, and the divergence compare below.
+	// Persist editable scalar fields (name in frontmatter, description in
+	// body) plus the label set, in ONE UpdateProject call. Labels are a
+	// full-set atomic input (no removedLabelIds analog), so this is scalarEdit
+	// territory — deliberately not reconcileLinks, which exists for per-pair
+	// link mutations. Pointer-or-omit: untouched labels send nil.
 	edit := newScalarEdit(doc, p.project.Name, p.project.Description)
 	projectInput := api.ProjectUpdateInput{Name: edit.name, Description: edit.desc}
-	if edit.changed() {
+	if labelsChanged {
+		ids := desiredIDs
+		if ids == nil {
+			ids = []string{} // clear (live-verified: labelIds: [] empties the set)
+		}
+		projectInput.LabelIds = &ids
+	}
+	if edit.changed() || labelsChanged {
 		if err := p.lfs.mutator().UpdateProject(ctx, p.project.ID, projectInput); err != nil {
 			msg, errno := classifyMutationErr("update project", err)
 			p.lfs.SetWriteError(p.project.ID, msg)
@@ -490,7 +548,19 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)
 		},
 		compare: func(fresh *api.Project) []writeBackResult {
-			return edit.divergences(fresh.Name, fresh.Description)
+			results := edit.divergences(fresh.Name, fresh.Description)
+			// Guarded on labelsChanged: an untouched label set must produce
+			// zero label divergence (a plain rename would otherwise EIO
+			// whenever another writer touches labels concurrently). Order is
+			// not divergence — the set is.
+			if labelsChanged && !sameIDSet(fresh.LabelIds, desiredIDs) {
+				results = append(results, writeBackResult{
+					message: fmt.Sprintf("Field: labels\nError: the write was accepted but the persisted label set differs (sent %d labels, %d persisted). Re-read the file to see the stored set.",
+						len(desiredIDs), len(fresh.LabelIds)),
+					fatal: true,
+				})
+			}
+			return results
 		},
 	})
 	if fresh != nil {

@@ -460,6 +460,93 @@ func TestWorkspaceSyncPruneSparesMidSyncLink(t *testing.T) {
 	}
 }
 
+func seedProjectLabel(t *testing.T, store *db.Store, id, name string, syncedAt time.Time) {
+	t.Helper()
+	if err := store.Queries().UpsertProjectLabel(context.Background(), db.UpsertProjectLabelParams{
+		ID:       id,
+		Name:     name,
+		SyncedAt: syncedAt,
+		Data:     []byte("{}"),
+	}); err != nil {
+		t.Fatalf("seed project_label %s: %v", id, err)
+	}
+}
+
+func projectLabelNames(t *testing.T, store *db.Store) []string {
+	t.Helper()
+	rows, err := store.Queries().ListProjectLabels(context.Background())
+	if err != nil {
+		t.Fatalf("list project labels: %v", err)
+	}
+	names := make([]string, len(rows))
+	for i, r := range rows {
+		names[i] = r.Name
+	}
+	return names
+}
+
+// TestWorkspaceSyncReconcilesProjectLabels: the complete catalog drain is the
+// completeness set — a row it no longer returns (label deleted in Linear) is
+// pruned, while a RETIRED label the drain still returns is upserted and KEPT
+// (retirement is keep-but-not-newly-assignable, not deletion).
+func TestWorkspaceSyncReconcilesProjectLabels(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	old := db.Now().Add(-time.Minute)
+	seedProjectLabel(t, store, "plabel-gone", "Deleted-In-Linear", old)
+	seedProjectLabel(t, store, "plabel-retired", "Legacy", old)
+
+	retired := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	mock := newMockAPIClient()
+	mock.projectLabels = []api.ProjectLabel{
+		{ID: "plabel-retired", Name: "Legacy", RetiredAt: &retired},
+		{ID: "plabel-new", Name: "Platform"},
+	}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncWorkspace(ctx); err != nil {
+		t.Fatalf("syncWorkspace: %v", err)
+	}
+
+	got := projectLabelNames(t, store)
+	if len(got) != 2 || got[0] != "Legacy" || got[1] != "Platform" {
+		t.Errorf("catalog = %v, want [Legacy Platform] (deleted pruned, retired kept)", got)
+	}
+	rows, err := store.Queries().ListProjectLabels(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !rows[0].RetiredAt.Valid {
+		t.Errorf("retired label lost its retired_at through the sync")
+	}
+}
+
+// TestProjectLabelFetchErrorIsIsolated: a failed catalog drain must neither
+// prune the catalog (no completeness set) nor fail the workspace pass
+// (log-and-continue isolation).
+func TestProjectLabelFetchErrorIsIsolated(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	seedProjectLabel(t, store, "plabel-stale", "Survivor", db.Now().Add(-time.Minute))
+
+	mock := newMockAPIClient()
+	mock.projectLabelsErr = errors.New("catalog down")
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncWorkspace(ctx); err != nil {
+		t.Fatalf("catalog failure must not fail the workspace pass: %v", err)
+	}
+	if got := projectLabelNames(t, store); len(got) != 1 || got[0] != "Survivor" {
+		t.Errorf("catalog = %v, want [Survivor] untouched after failed drain", got)
+	}
+}
+
 // TestWorkspaceFetchErrorPrunesNothing: a failed workspace fetch must leave
 // every junction row untouched.
 func TestWorkspaceFetchErrorPrunesNothing(t *testing.T) {

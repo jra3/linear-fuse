@@ -113,9 +113,30 @@ type graphQLRequest struct {
 type graphQLResponse struct {
 	Data   json.RawMessage `json:"data"`
 	Errors []struct {
-		Message string `json:"message"`
+		Message    string `json:"message"`
+		Extensions struct {
+			Code                   string `json:"code"`
+			UserError              bool   `json:"userError"`
+			UserPresentableMessage string `json:"userPresentableMessage"`
+		} `json:"extensions"`
 	} `json:"errors,omitempty"`
 }
+
+// GraphQLError is a structured GraphQL rejection. Linear tags input
+// rejections with extensions {code: "INPUT_ERROR", userError: true,
+// userPresentableMessage: "..."} — the presentable message is far more
+// actionable than the terse internal one (live example: internal "labelIds
+// contain parent labels" vs presentable "The label 'X' is a group and cannot
+// be assigned to projects directly."). Error() keeps the legacy "GraphQL
+// error: <message>" shape so existing string matches keep working.
+type GraphQLError struct {
+	Message                string
+	Code                   string
+	UserError              bool
+	UserPresentableMessage string
+}
+
+func (e *GraphQLError) Error() string { return "GraphQL error: " + e.Message }
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
 	// Extract operation name for stats and logging
@@ -274,8 +295,14 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	}
 
 	if len(gqlResp.Errors) > 0 {
-		errMsg := gqlResp.Errors[0].Message
-		queryErr = fmt.Errorf("GraphQL error: %s", errMsg)
+		first := gqlResp.Errors[0]
+		errMsg := first.Message
+		queryErr = &GraphQLError{
+			Message:                errMsg,
+			Code:                   first.Extensions.Code,
+			UserError:              first.Extensions.UserError,
+			UserPresentableMessage: first.Extensions.UserPresentableMessage,
+		}
 		if strings.Contains(errMsg, "RATELIMITED") || strings.Contains(strings.ToLower(errMsg), "rate limit") {
 			adm.rateLimited(resp.Header)
 			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, errMsg)
@@ -583,6 +610,14 @@ func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, err
 func (c *Client) GetTeamProjects(ctx context.Context, teamID string) ([]Project, error) {
 	return fetchAll[Project](ctx, c, queryTeamProjects,
 		map[string]any{"teamId": teamID}, "team", "projects")
+}
+
+// GetProjectLabels drains the workspace project-label catalog to completion.
+// No filter deliberately: the drain must include retired and group labels —
+// completeness is what licenses the sync pass's full-table prune (see
+// queryProjectLabelsPage).
+func (c *Client) GetProjectLabels(ctx context.Context) ([]ProjectLabel, error) {
+	return fetchAll[ProjectLabel](ctx, c, queryProjectLabelsPage, nil, "projectLabels")
 }
 
 // GetProjectMilestones fetches milestones for a project

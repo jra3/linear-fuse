@@ -559,6 +559,29 @@ func (r *SQLiteRepository) GetTeamLabels(ctx context.Context, teamID string) ([]
 	return db.DBLabelsToAPILabels(labels), nil
 }
 
+// GetProjectLabels returns the workspace project-label catalog, sorted by
+// name. The converter populates Parent strictly as an ID from the parent_id
+// column; the full catalog is in hand here, so parent names are stitched in
+// one in-memory pass over the id→name map (the wire never carries them —
+// see projectLabelFieldsFragment).
+func (r *SQLiteRepository) GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error) {
+	rows, err := r.store.Queries().ListProjectLabels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list project labels: %w", err)
+	}
+	labels := db.DBProjectLabelsToAPIProjectLabels(rows)
+	byID := make(map[string]string, len(labels))
+	for _, l := range labels {
+		byID[l.ID] = l.Name
+	}
+	for i := range labels {
+		if p := labels[i].Parent; p != nil {
+			p.Name = byID[p.ID] // unknown parent stays name-less; render copes
+		}
+	}
+	return labels, nil
+}
+
 func (r *SQLiteRepository) GetLabelByName(ctx context.Context, teamID, name string) (*api.Label, error) {
 	return queryOne("get label by name",
 		func() (db.Label, error) {

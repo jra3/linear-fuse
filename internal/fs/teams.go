@@ -87,6 +87,7 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		{Name: "team.md", Mode: syscall.S_IFREG},
 		{Name: "states.md", Mode: syscall.S_IFREG},
 		{Name: "labels.md", Mode: syscall.S_IFREG},
+		{Name: "project-labels.md", Mode: syscall.S_IFLNK},
 		{Name: "by", Mode: syscall.S_IFDIR},
 		{Name: "cycles", Mode: syscall.S_IFDIR},
 		{Name: "projects", Mode: syscall.S_IFDIR},
@@ -130,6 +131,15 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 			}
 			return labelsMarkdown(team, labels), team.UpdatedAt, team.CreatedAt
 		}, 0, inheritTimeout), 0
+
+	case "project-labels.md":
+		// Ergonomics alias beside states.md/labels.md, where agents already
+		// look for validation references. A symlink (not a per-team file)
+		// honestly discloses the workspace scoping — ProjectLabel has no team
+		// edge. Zero times: stamping catalog times here would need a catalog
+		// load per team-Lookup; a stat THROUGH the link reports the render
+		// file's real times.
+		return t.newSymlinkInode(ctx, out, "../../project-labels.md", time.Time{}, time.Time{}), 0
 
 	case "by":
 		out.Attr.Mode = 0755 | syscall.S_IFDIR

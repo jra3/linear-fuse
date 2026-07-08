@@ -156,6 +156,27 @@ fragment LabelFields on IssueLabel {
 }
 `
 
+// ProjectLabelFields is the shared projection for a workspace project label.
+// Defined mutation-less in this slice so future catalog CRUD mutations project
+// through it (see CLAUDE.md: mutations must project through the entity's
+// fragment). parent selects only the id — the catalog is always fully in hand
+// locally, so parent/group names stitch at the repo read, not on the wire.
+// retiredAt is doc-tagged [Internal] in the schema but live-verified selectable
+// by API-key clients (2026-07-08).
+const projectLabelFieldsFragment = `
+fragment ProjectLabelFields on ProjectLabel {
+  id
+  name
+  color
+  description
+  isGroup
+  retiredAt
+  createdAt
+  updatedAt
+  parent { id }
+}
+`
+
 // AttachmentFieldsFragment is a GraphQL fragment for attachment fields.
 const AttachmentFieldsFragment = `
 fragment AttachmentFields on Attachment {
@@ -322,6 +343,21 @@ query WorkspaceLabelsPage($after: String) {
 }
 ` + labelFieldsFragment
 
+// queryProjectLabelsPage drains the workspace project-label catalog. No
+// filter: the drain must include retired and group labels — completeness is
+// what licenses the sync pass's full-table prune (retirement is
+// keep-but-not-newly-assignable, so a retired label absent from the drain
+// would read as deleted and be pruned, which live verification 2026-07-08
+// confirmed does not happen: retired labels ARE in the default drain).
+var queryProjectLabelsPage = `
+query ProjectLabelsPage($after: String) {
+  projectLabels(first: 250, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...ProjectLabelFields }
+  }
+}
+` + projectLabelFieldsFragment
+
 const queryTeamStates = `
 query TeamStates($teamId: String!) {
   team(id: $teamId) {
@@ -367,6 +403,47 @@ query TeamCycles($teamId: String!) {
 }
 `
 
+// ProjectFields is the shared projection for a project — the team-projects
+// page, the single-project fetch (the WriteBack verify read), and the create
+// mutation's echo all project through it, per the fragment rule: an inlined
+// copy silently drifts when one site gains a field (the create echo had
+// already drifted, omitting startDate/targetDate/lead/status/initiatives/
+// milestones/labelIds). References ProjectMilestoneFields; queries appending
+// this fragment get that one with it.
+const projectFieldsFragment = `
+fragment ProjectFields on Project {
+  id
+  name
+  slugId
+  description
+  url
+  state
+  startDate
+  targetDate
+  createdAt
+  updatedAt
+  labelIds
+  lead {
+    id
+    name
+    email
+  }
+  status {
+    id
+    name
+  }
+  initiatives {
+    nodes {
+      id
+      name
+    }
+  }
+  projectMilestones {
+    nodes { ...ProjectMilestoneFields }
+  }
+}
+` + projectMilestoneFieldsFragment
+
 // queryTeamProjects pages at 50: the nested initiatives/projectMilestones
 // selections cost ~187 complexity points per project node, so 50 is the
 // largest page that fits Linear's 10k complexity budget (measured live:
@@ -376,75 +453,17 @@ query TeamProjects($teamId: String!, $after: String) {
   team(id: $teamId) {
     projects(first: 50, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-        slugId
-        description
-        url
-        state
-        startDate
-        targetDate
-        createdAt
-        updatedAt
-        lead {
-          id
-          name
-          email
-        }
-        status {
-          id
-          name
-        }
-        initiatives {
-          nodes {
-            id
-            name
-          }
-        }
-        projectMilestones {
-          nodes { ...ProjectMilestoneFields }
-        }
-      }
+      nodes { ...ProjectFields }
     }
   }
 }
-` + projectMilestoneFieldsFragment
+` + projectFieldsFragment
 
 var queryProject = `
 query Project($id: String!) {
-  project(id: $id) {
-    id
-    name
-    slugId
-    description
-    url
-    state
-    startDate
-    targetDate
-    createdAt
-    updatedAt
-    lead {
-      id
-      name
-      email
-    }
-    status {
-      id
-      name
-    }
-    initiatives {
-      nodes {
-        id
-        name
-      }
-    }
-    projectMilestones {
-      nodes { ...ProjectMilestoneFields }
-    }
-  }
+  project(id: $id) { ...ProjectFields }
 }
-` + projectMilestoneFieldsFragment
+` + projectFieldsFragment
 
 var queryProjectMilestones = `
 query ProjectMilestones($projectId: String!) {
@@ -540,23 +559,14 @@ mutation CreateInitiativeUpdate($initiativeId: String!, $body: String!, $health:
 }
 ` + initiativeUpdateFieldsFragment
 
-const mutationCreateProject = `
+var mutationCreateProject = `
 mutation CreateProject($input: ProjectCreateInput!) {
   projectCreate(input: $input) {
     success
-    project {
-      id
-      name
-      slugId
-      description
-      url
-      state
-      createdAt
-      updatedAt
-    }
+    project { ...ProjectFields }
   }
 }
-`
+` + projectFieldsFragment
 
 const mutationArchiveProject = `
 mutation ArchiveProject($id: String!) {

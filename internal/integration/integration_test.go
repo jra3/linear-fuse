@@ -206,8 +206,11 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 	labels := fixtures.FixtureAPILabels()
 	users := fixtures.FixtureAPIUsers()
 
-	// Create a project
+	// Create a project, pre-labeled with a group child + a retired label (the
+	// carried-through case: labelIds is a full-set write, so a save that keeps
+	// Legacy must re-send it and pass validation).
 	project := fixtures.FixtureAPIProject()
+	project.LabelIds = []string{"plabel-backend", "plabel-legacy"}
 
 	// Create issues with various configurations
 	issues := []api.Issue{
@@ -312,6 +315,11 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 	// Populate cycle
 	cycle := fixtures.FixtureAPICycle()
 	if err := fixtures.PopulateCycle(ctx, store, cycle, team.ID); err != nil {
+		return err
+	}
+
+	// Populate the workspace project-label catalog
+	if err := fixtures.PopulateProjectLabels(ctx, store, fixtures.FixtureAPIProjectLabels()); err != nil {
 		return err
 	}
 

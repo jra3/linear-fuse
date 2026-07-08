@@ -217,6 +217,20 @@ type Project struct {
 	Data        json.RawMessage `json:"data"`
 }
 
+type ProjectLabel struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Color       sql.NullString  `json:"color"`
+	Description sql.NullString  `json:"description"`
+	IsGroup     int64           `json:"is_group"`
+	ParentID    sql.NullString  `json:"parent_id"`
+	RetiredAt   sql.NullTime    `json:"retired_at"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
 type ProjectMilestone struct {
 	ID          string          `json:"id"`
 	ProjectID   string          `json:"project_id"`

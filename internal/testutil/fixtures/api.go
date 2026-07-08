@@ -86,6 +86,22 @@ func FixtureAPILabels() []api.Label {
 	}
 }
 
+// FixtureAPIProjectLabels returns a mini workspace project-label catalog
+// exercising the group/retired lifecycle: group "Area" with children
+// "Backend"/"Frontend", standalone "Ops", and retired "Legacy". The live
+// workspace has no groups or retired labels, so tests must synthesize them.
+func FixtureAPIProjectLabels() []api.ProjectLabel {
+	retired := fixtureTime
+	area := &api.ProjectLabel{ID: "plabel-area", Name: "Area"}
+	return []api.ProjectLabel{
+		{ID: "plabel-area", Name: "Area", IsGroup: true, CreatedAt: fixtureTime, UpdatedAt: fixtureTime},
+		{ID: "plabel-backend", Name: "Backend", Color: "#5e6ad2", Parent: area, CreatedAt: fixtureTime, UpdatedAt: fixtureTime},
+		{ID: "plabel-frontend", Name: "Frontend", Color: "#f2994a", Parent: area, CreatedAt: fixtureTime, UpdatedAt: fixtureTime},
+		{ID: "plabel-ops", Name: "Ops", Color: "#4cb782", CreatedAt: fixtureTime, UpdatedAt: fixtureTime},
+		{ID: "plabel-legacy", Name: "Legacy", Color: "#95a2b3", RetiredAt: &retired, CreatedAt: fixtureTime, UpdatedAt: fixtureTime},
+	}
+}
+
 // FixtureAPIUser returns a test user.
 func FixtureAPIUser() api.User {
 	return api.User{

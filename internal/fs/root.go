@@ -30,6 +30,7 @@ func (r *RootNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrO
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: "README.md", Mode: syscall.S_IFREG},
+		{Name: "project-labels.md", Mode: syscall.S_IFREG},
 		{Name: "teams", Mode: syscall.S_IFDIR},
 		{Name: "users", Mode: syscall.S_IFDIR},
 		{Name: "my", Mode: syscall.S_IFDIR},
@@ -47,6 +48,18 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return r.lookupRenderFile(ctx, out, "README.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return []byte(generateReadme(lfs.MountPoint())), time.Time{}, time.Time{}
 		}, 0, inheritTimeout), 0
+
+	case "project-labels.md":
+		// The workspace project-label catalog (ProjectLabel has no team edge,
+		// so this is a root surface like initiatives/). SQLite-only read; an
+		// error or empty catalog still renders — the surface never ENOENTs.
+		lfs := r.lfs
+		return r.lookupRenderFile(ctx, out, "project-labels.md",
+			func(ctx context.Context) ([]byte, time.Time, time.Time) {
+				labels, _ := lfs.GetProjectLabels(ctx)
+				mtime, ctime := projectLabelCatalogTimes(labels)
+				return projectLabelsMarkdown(labels), mtime, ctime
+			}, projectLabelsCatalogIno(), inheritTimeout), 0
 
 	case "teams":
 		node := &TeamsNode{BaseNode: BaseNode{lfs: r.lfs}}
@@ -96,6 +109,7 @@ Mount point: %s (all paths below are relative to this mount point)
 <directory_structure>
 teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
+  project-labels.md                 [symlink to ../../project-labels.md]
   issues/                           [mkdir "Title" for quick create]
     _create                         [write full frontmatter+body to create one issue with all fields]
     .error                          [read-only: last failed issue creation]
@@ -147,6 +161,8 @@ teams/{KEY}/
   cycles/
     current                         [symlink to active cycle]
     {name}/                         [issue symlinks]
+
+project-labels.md                   [read-only: workspace project-label catalog (groups, retired)]
 
 initiatives/{slug}/
   initiative.md                     [read/write: editable fields + body ONLY]
@@ -209,6 +225,21 @@ cycle: "Sprint 42"
 ---
 Description body (editable)
 </issue_frontmatter>
+
+<project_frontmatter>
+project.md holds only editable fields (below) + the description body. Read-only
+identity/status/lead/dates live in the sibling project.meta. A successful write
+never rewrites project.md.
+---
+name: "API Gateway"                         [editable]
+initiatives: ["Platform Modernization"]     [names; see initiatives/]
+labels: [Backend, Q3-Bet]                   [must match project-labels.md; groups
+                                             cannot be applied; max one child per
+                                             group; retired = existing-only; raw
+                                             label IDs also accepted]
+---
+Project description (editable - the body maps to the description)
+</project_frontmatter>
 
 <initiative_frontmatter>
 initiative.md holds only editable fields (below) + the description body. Read-only
@@ -274,7 +305,9 @@ Failure model (every writable surface follows this contract):
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
 Validated issue fields: status, assignee, labels, priority, project, milestone, cycle, parent
-Reference files: states.md (valid statuses), labels.md (valid labels), initiatives/ (valid initiatives)
+Validated project fields: initiatives, labels
+Reference files: states.md (valid statuses), labels.md (valid issue labels),
+project-labels.md (valid project labels), initiatives/ (valid initiatives)
 </validation_errors>
 
 <important_notes>
@@ -287,6 +320,9 @@ Reference files: states.md (valid statuses), labels.md (valid labels), initiativ
 - Cache TTL: 60s for issues, 10min for states/labels/users
 - Timestamps: mtime=updatedAt, ctime=createdAt from Linear
 - Project slugs: Use slug (e.g., "api-gateway"), not name, in initiative.md
+- Project labels are workspace-wide (see project-labels.md). A label group cannot
+  be applied directly (pick one of its children; max one child per group); a
+  retired label stays on existing projects but cannot be newly applied
 </important_notes>
 
 <claude_code_instructions>
@@ -319,6 +355,7 @@ WRITING ISSUE CONTENT:
 - To update an issue: use Edit tool on the issue.md file
 - Only edit fields you intend to change; leave others untouched
 - Check <mount>/teams/ENG/states.md and labels.md for valid values before editing
+- Check <mount>/project-labels.md before editing labels: in project.md
 
 BASH PATTERNS TO AVOID:
 - Avoid: for x in list; do cat $x; done  → instead: parallel Read tool calls

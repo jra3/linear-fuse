@@ -89,6 +89,52 @@ the handler maps it to `EINVAL`. This collapsed the issue-`Flush` front half fro
 `Resolve*` lookups, satisfied by `*LinearFS`), so the whole path is unit-tested with a
 fake resolver — no repo, SQLite, or API. The individual `Resolve*` methods remain as
 shared primitives (also used singly by initiatives and projects).
+`resolveProjectLabels` (see "Project-label selection") is the second multi-name
+resolver — same `FieldError` contract, but a pure function over a catalog slice
+rather than a method on the resolver seam.
+
+### Project-label selection (`projectlabels.go`)
+The workspace project-label surface (#130). Linear's `ProjectLabel` is
+**workspace-scoped** — the schema has no team edge at all (contrast `IssueLabel`'s
+nullable team edge, which is why issue `labels.md` lives per-team) — with a
+lifecycle issue labels lack: **groups** (`isGroup` containers; only one child per
+group may be applied) and **retirement** (kept on existing projects, not newly
+assignable). The surface: a root read-only `project-labels.md` **renderFile**
+(never-ENOENT, groups/retired flagged, the assignment rules as prose in-file — it
+is the file an agent reads after a validation `.error`), a per-team
+`project-labels.md` **symlinkNode** alias, a `project_labels` twin table synced by
+a workspace **syncCollection** pass (complete unfiltered drain = the completeness
+set licensing a full-table prune; retired labels are IN the drain, live-verified
+2026-07-08), and a `labels:` names list in project.md that resolves and validates
+in `internal/fs/projectlabels.go` — all **pure functions over a catalog slice**
+(no mount, no interface) — then rides the existing single `UpdateProject` call
+(`ProjectUpdateInput.LabelIds *[]string`, pointer-or-omit full-set write).
+
+Load-bearing invariant: **render unknown label IDs verbatim; the resolver accepts
+exact-ID passthrough** (catalog IDs and current-member IDs) — a cold or stale
+catalog can never strip labels on an untouched save, and IDs are the documented
+duplicate-name disambiguation (bare-name ties: prefer-current, then the single
+active candidate, else a loud ambiguity error listing candidate IDs — never a
+silent sibling pick). Validation policy in one sentence: **we enforce what
+Linear's docs say about label assignment, even where the API is lax** —
+live-verified that the wire *accepts* retired assignment; the mount still rejects
+newly-applied retired labels (carried-through ones pass, since a full-set write
+re-sends them) and group/one-child-per-group violations, with errors that name
+the assignable children. The stale-blob clobber guard (one interactive-promoted
+`GetProject` refresh iff current `LabelIds` is empty and the write changes
+labels) closes the pre-upgrade-blob wipe: a full-set write computed against an
+empty stale set would silently erase the project's real labels.
+
+**Unification with issue labels was evaluated and rejected** (recorded so no
+future round re-derives the merge): a `kind` column on `labels` breaks on
+`GetLabelByName`'s `(team_id = ? OR team_id IS NULL)` union (project-label names
+would resolve as issue labels and feed ProjectLabel IDs to `issueUpdate.labelIds`)
+and on `ListTeamLabels` (project labels would leak into every team's `labels.md`
+and `labels/` CRUD dir, where `rm` fires `issueLabelDelete`); the scoping axis,
+prune regime, and lifecycle all differ; and GraphQL fragments cannot span
+`IssueLabel`/`ProjectLabel`, so the one expensive share is forbidden by the wire
+anyway. Sharing happens only through the already-generic seams (renderFile,
+symlinkNode, syncCollection, hydrate-then-overlay, FieldError, paginate, ino).
 
 ### Link reconciliation (`reconcileLinks`)
 The **deep module** owning the *relational* front half of an edit — the counterpart
@@ -108,6 +154,9 @@ name lists — so it returns a **`FieldError`** (bad name → `EINVAL` via
 unit-tested with recording closures (no FUSE mount, SQLite, or API). Persisting each
 junction row inline (rather than the old deferred batch a mid-loop failure skipped)
 keeps SQLite consistent with whatever the API actually accepted on a partial failure.
+Project labels deliberately do **not** reconcile through this module: `labelIds`
+is one atomic full-set input on the project update (no per-pair link mutation
+exists), so the labels edit is scalar-edit-shaped — see "Project-label selection".
 
 ### Scalar edit (`scalarEdit`)
 The **deep module** owning the *scalar* front half of a project/initiative edit —
@@ -599,10 +648,11 @@ The **deep module** owning the invariant tail of every metadata sync — the
 sync-side sibling of the write-path tails (`commitCreate`/`commitWriteBack`/
 `commitDelete`) and the module that actually **performs the metadata prunes**
 `paginate`'s completeness licenses. Its shape is `convert → upsert-all →
-prune-if-clean`. Six sites reconcile through it: `states` (upsert-only),
+prune-if-clean`. Seven sites reconcile through it: `states` (upsert-only),
 `labels`, `cycles`, `projects` (entity + `project_teams` junction + nested
-milestones), `members` (entity + `team_members` junction), and
-`initiativeProjects` (junction-only). Each restated the same `clean`-flag idiom
+milestones), `members` (entity + `team_members` junction),
+`initiativeProjects` (junction-only), and `projectLabels` (the workspace
+catalog — a complete unfiltered drain licenses its full-table prune). Each restated the same `clean`-flag idiom
 by hand — declare `xClean := true`, loop upserting, `if xClean { Prune }` — so a
 new metadata kind copy-pasted it and a forgotten flag would let a *partial* fetch
 read as removals (silent data loss). `initiativeProjects` even hand-rolled a

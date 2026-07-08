@@ -24,9 +24,9 @@ func frontmatterKeys(t *testing.T, content []byte) ([]string, *Document) {
 }
 
 // TestProjectToMarkdown pins the editable-only contract for project.md: name,
-// the initiatives list, and the description body — and nothing server-managed
-// (id/url/status live in project.meta), so a successful write never rewrites
-// the bytes the writer wrote.
+// the initiatives list, the labels list, and the description body — and
+// nothing server-managed (id/url/status live in project.meta), so a successful
+// write never rewrites the bytes the writer wrote.
 func TestProjectToMarkdown(t *testing.T) {
 	t.Parallel()
 	project := &api.Project{
@@ -38,21 +38,34 @@ func TestProjectToMarkdown(t *testing.T) {
 		Initiatives: &api.ProjectInitiatives{Nodes: []api.ProjectInitiative{{Name: "Platform"}, {Name: "Modernization"}}},
 	}
 
-	content, err := ProjectToMarkdown(project)
+	content, err := ProjectToMarkdown(project, []string{"Backend", "Q3-Bet"})
 	if err != nil {
 		t.Fatalf("ProjectToMarkdown: %v", err)
 	}
 	keys, doc := frontmatterKeys(t, content)
-	if want := []string{"initiatives", "name"}; !reflect.DeepEqual(keys, want) {
+	if want := []string{"initiatives", "labels", "name"}; !reflect.DeepEqual(keys, want) {
 		t.Errorf("project.md frontmatter keys = %v, want %v (editable-only)", keys, want)
 	}
 	if doc.Body != project.Description {
 		t.Errorf("body = %q, want the description", doc.Body)
 	}
+	if got := StringSliceFromYAML(doc.Frontmatter["labels"]); !reflect.DeepEqual(got, []string{"Backend", "Q3-Bet"}) {
+		t.Errorf("labels = %v, want the caller-resolved names", got)
+	}
 
-	// No initiatives → no initiatives key at all (deleting the line clears).
+	// Labels but no initiatives.
+	content, err = ProjectToMarkdown(&api.Project{Name: "Labeled"}, []string{"Bug"})
+	if err != nil {
+		t.Fatalf("ProjectToMarkdown(labeled): %v", err)
+	}
+	if keys, _ := frontmatterKeys(t, content); !reflect.DeepEqual(keys, []string{"labels", "name"}) {
+		t.Errorf("labeled project frontmatter keys = %v, want [labels name]", keys)
+	}
+
+	// No initiatives and no labels → neither key at all (deleting the line
+	// clears; an empty list must not render).
 	bare := &api.Project{Name: "Bare"}
-	content, err = ProjectToMarkdown(bare)
+	content, err = ProjectToMarkdown(bare, nil)
 	if err != nil {
 		t.Fatalf("ProjectToMarkdown(bare): %v", err)
 	}

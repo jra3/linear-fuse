@@ -2185,6 +2185,49 @@ func (q *Queries) ListProjectIssues(ctx context.Context, projectID sql.NullStrin
 	return items, nil
 }
 
+const listProjectLabels = `-- name: ListProjectLabels :many
+
+SELECT id, name, color, description, is_group, parent_id, retired_at, created_at, updated_at, synced_at, data FROM project_labels ORDER BY name COLLATE NOCASE
+`
+
+// =============================================================================
+// Project labels queries (workspace-scoped catalog; see schema.sql)
+// =============================================================================
+func (q *Queries) ListProjectLabels(ctx context.Context) ([]ProjectLabel, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectLabels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProjectLabel{}
+	for rows.Next() {
+		var i ProjectLabel
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Color,
+			&i.Description,
+			&i.IsGroup,
+			&i.ParentID,
+			&i.RetiredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectMilestones = `-- name: ListProjectMilestones :many
 SELECT id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data FROM project_milestones WHERE project_id = ? ORDER BY sort_order
 `
@@ -3994,6 +4037,18 @@ func (q *Queries) PruneIssueRelations(ctx context.Context, arg PruneIssueRelatio
 	return err
 }
 
+const pruneProjectLabels = `-- name: PruneProjectLabels :exec
+DELETE FROM project_labels WHERE synced_at < ?
+`
+
+// Workspace-wide prune, licensed ONLY by a complete drain of Query.projectLabels.
+// The drain includes retired labels (live-verified 2026-07-08), so retirement
+// never reads as removal here; only true deletion/archival does.
+func (q *Queries) PruneProjectLabels(ctx context.Context, syncedAt time.Time) error {
+	_, err := q.db.ExecContext(ctx, pruneProjectLabels, syncedAt)
+	return err
+}
+
 const pruneProjectTeams = `-- name: PruneProjectTeams :exec
 DELETE FROM project_teams WHERE team_id = ? AND synced_at < ?
 `
@@ -4855,6 +4910,54 @@ func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) er
 		arg.TargetDate,
 		arg.LeadID,
 		arg.Url,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
+	)
+	return err
+}
+
+const upsertProjectLabel = `-- name: UpsertProjectLabel :exec
+INSERT INTO project_labels (id, name, color, description, is_group, parent_id,
+    retired_at, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    name = excluded.name,
+    color = excluded.color,
+    description = excluded.description,
+    is_group = excluded.is_group,
+    parent_id = excluded.parent_id,
+    retired_at = excluded.retired_at,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertProjectLabelParams struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Color       sql.NullString  `json:"color"`
+	Description sql.NullString  `json:"description"`
+	IsGroup     int64           `json:"is_group"`
+	ParentID    sql.NullString  `json:"parent_id"`
+	RetiredAt   sql.NullTime    `json:"retired_at"`
+	CreatedAt   sql.NullTime    `json:"created_at"`
+	UpdatedAt   sql.NullTime    `json:"updated_at"`
+	SyncedAt    time.Time       `json:"synced_at"`
+	Data        json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertProjectLabel(ctx context.Context, arg UpsertProjectLabelParams) error {
+	_, err := q.db.ExecContext(ctx, upsertProjectLabel,
+		arg.ID,
+		arg.Name,
+		arg.Color,
+		arg.Description,
+		arg.IsGroup,
+		arg.ParentID,
+		arg.RetiredAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.SyncedAt,

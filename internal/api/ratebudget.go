@@ -117,6 +117,7 @@ var opBaseTier = map[string]priority{
 	"TeamProjects":             pSkeleton,
 	"Workspace":                pSkeleton,
 	"WorkspaceLabelsPage":      pSkeleton,
+	"ProjectLabelsPage":        pSkeleton,
 	"WorkspaceUsersPage":       pSkeleton,
 	"WorkspaceInitiativesPage": pSkeleton,
 	"InitiativeProjectsPage":   pSkeleton,
