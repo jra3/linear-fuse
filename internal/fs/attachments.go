@@ -157,7 +157,6 @@ var _ fs.NodeReader = (*EmbeddedFileNode)(nil)
 
 func (n *EmbeddedFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	file := n.fileSnapshot()
-	now := time.Now()
 	out.Mode = 0444 // Read-only
 	n.SetOwner(out)
 	if file.FileSize > 0 {
@@ -168,7 +167,15 @@ func (n *EmbeddedFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *f
 		// Use 1MB as a reasonable placeholder for images.
 		out.Size = 1024 * 1024
 	}
-	out.SetTimes(&now, &now, &now)
+	// Real times from the row (this was the package's last fabricated now(),
+	// reshuffling attachments/ on every ls -lt): ctime = when the file was
+	// first extracted, mtime/atime = when its metadata last synced. A zero
+	// time reports unset.
+	mtime := file.SyncedAt
+	if mtime.IsZero() {
+		mtime = file.CreatedAt
+	}
+	out.SetTimes(nonZeroTime(mtime), nonZeroTime(mtime), nonZeroTime(file.CreatedAt))
 	return 0
 }
 
