@@ -1,11 +1,13 @@
 package fs
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // Project-label selection (see CONTEXT.md): the pure half of the workspace
@@ -244,6 +246,110 @@ func validateProjectLabelSelection(selected []api.ProjectLabel, currentIDs map[s
 		}
 	}
 	return nil
+}
+
+// labelsEdit is the labels front half of a project.md edit — sibling of
+// scalarEdit (scalar fields) and reconcileLinks (per-pair link lists) in the
+// edit-front-half family. It COMPOSES this file's pure primitives
+// (resolveProjectLabels, validateProjectLabelSelection, sameIDSet) and owns the
+// whole label decision in one place: parse the frontmatter list, fire the
+// stale-blob clobber guard in exactly the at-risk state, resolve + validate,
+// compute "changed" exactly once, map onto the update input (pointer-or-omit),
+// and classify the read-your-writes divergence. ProjectInfoNode.Flush used to
+// smear those concerns across three points (the front block, the input build,
+// and the commitWriteBack compare closure), stating the change test twice.
+type labelsEdit struct {
+	desiredIDs []string // resolved target set; nil means clear (when changed)
+	isChanged  bool     // the ONE change decision, computed at construction
+}
+
+// newLabelsEdit evaluates the labels edit. rawLabels/labelsPresent are the
+// parsed doc's `labels` frontmatter value and key presence; currentIDs is the
+// project's present label set. catalog fetches the workspace project-label
+// catalog (a fetch error degrades to a nil catalog — exact-ID passthrough via
+// the current set still resolves, the round-trip invariant). refreshCurrent is
+// the stale-blob clobber guard's fetch; the module decides WHEN it fires.
+//
+// Stale-blob clobber guard: a project blob predating the LabelIds field reads
+// current as empty, so an agent ADDING one label would full-set-write just that
+// label and silently wipe the project's real labels in Linear — invisible to
+// the divergence check (fresh == sent). refreshCurrent fires exactly once, in
+// exactly the at-risk state: current empty AND the write would apply labels.
+//
+// Change semantics (the mount-wide contract): key absent + current empty =
+// untouched; key absent + current non-empty = delete-the-line clear; an
+// explicit empty list clears too. The set diff is order-insensitive.
+//
+// A validation failure returns a *FieldError; the caller maps it to
+// SetWriteError + EINVAL.
+func newLabelsEdit(ctx context.Context, rawLabels any, labelsPresent bool, currentIDs []string,
+	catalog func(context.Context) ([]api.ProjectLabel, error),
+	refreshCurrent func(context.Context) []string,
+) (labelsEdit, *FieldError) {
+	desiredNames := marshal.StringSliceFromYAML(rawLabels)
+
+	if len(currentIDs) == 0 && len(desiredNames) > 0 {
+		currentIDs = refreshCurrent(ctx)
+	}
+
+	currentIDSet := make(map[string]bool, len(currentIDs))
+	for _, id := range currentIDs {
+		currentIDSet[id] = true
+	}
+
+	var e labelsEdit
+	if labelsPresent || len(currentIDs) > 0 {
+		if len(desiredNames) > 0 {
+			cat, err := catalog(ctx)
+			if err != nil {
+				cat = nil // ID passthrough via currentIDSet still resolves
+			}
+			ids, selected, ferr := resolveProjectLabels(cat, desiredNames, currentIDSet)
+			if ferr == nil {
+				ferr = validateProjectLabelSelection(selected, currentIDSet, cat)
+			}
+			if ferr != nil {
+				return labelsEdit{}, ferr
+			}
+			e.desiredIDs = ids
+		}
+		e.isChanged = !sameIDSet(e.desiredIDs, currentIDs)
+	}
+	return e, nil
+}
+
+// changed reports whether the label set needs an API update.
+func (e labelsEdit) changed() bool { return e.isChanged }
+
+// applyTo maps the edit onto the update input. Pointer-or-omit: untouched
+// labels leave LabelIds nil; a clear sends the empty set (live-verified:
+// labelIds: [] empties it). labelIds is a full-set atomic write — there is no
+// removedLabelIds analog, which is why labels are edit-shaped, not
+// reconcileLinks-shaped.
+func (e labelsEdit) applyTo(input *api.ProjectUpdateInput) {
+	if !e.isChanged {
+		return
+	}
+	ids := e.desiredIDs
+	if ids == nil {
+		ids = []string{}
+	}
+	input.LabelIds = &ids
+}
+
+// divergences classifies the read-your-writes result for the label set.
+// Guarded on changed: an untouched label set must produce zero label
+// divergence (a plain rename would otherwise EIO whenever another writer
+// touches labels concurrently). Order is not divergence — the set is.
+func (e labelsEdit) divergences(freshIDs []string) []writeBackResult {
+	if !e.isChanged || sameIDSet(freshIDs, e.desiredIDs) {
+		return nil
+	}
+	return []writeBackResult{{
+		message: fmt.Sprintf("Field: labels\nError: the write was accepted but the persisted label set differs (sent %d labels, %d persisted). Re-read the file to see the stored set.",
+			len(e.desiredIDs), len(freshIDs)),
+		fatal: true,
+	}}
 }
 
 // sameIDSet reports whether two label-ID lists carry the same set —
