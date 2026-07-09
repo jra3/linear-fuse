@@ -943,5 +943,8 @@ DELETE FROM pending_detail_sync WHERE issue_id = ?;
 -- name: ListPendingDetailSync :many
 SELECT issue_id, identifier FROM pending_detail_sync ORDER BY queued_at;
 
+-- name: CountPendingDetailSync :one
+SELECT COUNT(*) FROM pending_detail_sync;
+
 -- name: ClearPendingDetailSync :exec
 DELETE FROM pending_detail_sync;

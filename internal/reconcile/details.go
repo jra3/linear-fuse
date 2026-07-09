@@ -53,6 +53,7 @@ func PersistIssueDetails(ctx context.Context, deps Deps, issueID string, details
 
 	clean = Collection(ctx, CollectionSpec[api.Comment]{
 		Label: "comment " + issueID,
+		Kind:  "comment",
 		Items: details.Comments,
 		Upsert: func(ctx context.Context, comment api.Comment) error {
 			params, err := db.APICommentToDBComment(comment, issueID)
@@ -76,6 +77,7 @@ func PersistIssueDetails(ctx context.Context, deps Deps, issueID string, details
 
 	clean = Collection(ctx, CollectionSpec[api.Document]{
 		Label: "document " + issueID,
+		Kind:  "document",
 		Items: details.Documents,
 		Upsert: func(ctx context.Context, doc api.Document) error {
 			params, err := db.APIDocumentToDBDocument(doc)
@@ -91,6 +93,7 @@ func PersistIssueDetails(ctx context.Context, deps Deps, issueID string, details
 
 	clean = Collection(ctx, CollectionSpec[api.Attachment]{
 		Label: "attachment " + issueID,
+		Kind:  "attachment",
 		Items: details.Attachments,
 		Upsert: func(ctx context.Context, attachment api.Attachment) error {
 			params, err := db.APIAttachmentToDBAttachment(attachment, issueID)
@@ -110,6 +113,7 @@ func PersistIssueDetails(ctx context.Context, deps Deps, issueID string, details
 	// .rel file and one deleted there lingered as a phantom.
 	clean = Collection(ctx, CollectionSpec[api.IssueRelation]{
 		Label: "relation " + issueID,
+		Kind:  "relation",
 		Items: details.Relations,
 		Upsert: func(ctx context.Context, rel api.IssueRelation) error {
 			if rel.RelatedIssue == nil {
@@ -130,6 +134,7 @@ func PersistIssueDetails(ctx context.Context, deps Deps, issueID string, details
 	// this collection is upsert-only, like states.
 	clean = Collection(ctx, CollectionSpec[api.IssueRelation]{
 		Label: "inverse relation " + issueID,
+		Kind:  "inverse-relation",
 		Items: details.InverseRelations,
 		Upsert: func(ctx context.Context, rel api.IssueRelation) error {
 			if rel.Issue == nil {

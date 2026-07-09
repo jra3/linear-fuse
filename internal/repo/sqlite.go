@@ -70,6 +70,9 @@ type SQLiteRepository struct {
 	// Semaphore to limit concurrent background refreshes
 	refreshSem chan struct{}
 
+	// SWR-layer instruments, bound at construction (zero value = no-op).
+	metrics swrMetrics
+
 	// Adaptive reconciliation: triggered by reactive orphan deletions,
 	// rate-limited by reconcileCooldown.
 	reconcileMu      sync.Mutex
@@ -89,6 +92,7 @@ func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository 
 		refreshContext:     ctx,
 		refreshCancel:      cancel,
 		refreshSem:         make(chan struct{}, maxConcurrentRefreshes),
+		metrics:            newSWRMetrics(),
 	}
 	if client != nil {
 		r.extractor = &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader}
@@ -125,14 +129,21 @@ func (r *SQLiteRepository) Close() {
 // triggerBackgroundRefresh starts a background refresh if not already in progress.
 // Uses a semaphore to limit concurrency — if too many refreshes are in-flight,
 // new requests are dropped. This prevents stampedes after connectivity loss.
-func (r *SQLiteRepository) triggerBackgroundRefresh(key string, refreshFn func(context.Context) error) {
+//
+// It takes the refreshKind (not a pre-built key) so its three exits — the
+// round-18 leak surface — record linearfs.swr.triggers with the bounded kind
+// attribute; the dedup key is still minted only by refreshKind.key. The
+// nil-client return records nothing.
+func (r *SQLiteRepository) triggerBackgroundRefresh(kind refreshKind, id string, refreshFn func(context.Context) error) {
 	if r.client == nil {
 		return
 	}
 
+	key := kind.key(id)
 	r.refreshMu.Lock()
 	if r.refreshing[key] {
 		r.refreshMu.Unlock()
+		r.metrics.recordTrigger(kind, "deduped")
 		return
 	}
 	r.refreshing[key] = true
@@ -146,9 +157,11 @@ func (r *SQLiteRepository) triggerBackgroundRefresh(key string, refreshFn func(c
 		r.refreshMu.Lock()
 		delete(r.refreshing, key)
 		r.refreshMu.Unlock()
+		r.metrics.recordTrigger(kind, "sem_dropped")
 		return
 	}
 
+	r.metrics.recordTrigger(kind, "triggered")
 	go func() {
 		defer func() {
 			<-r.refreshSem
@@ -159,7 +172,9 @@ func (r *SQLiteRepository) triggerBackgroundRefresh(key string, refreshFn func(c
 
 		ctx, cancel := context.WithTimeout(r.refreshContext, refreshTimeout)
 		defer cancel()
-		if err := refreshFn(ctx); err != nil {
+		err := refreshFn(ctx)
+		r.metrics.recordRefreshOutcome(kind, err)
+		if err != nil {
 			if r.refreshContext.Err() == nil && ctx.Err() == nil {
 				log.Printf("[repo] background refresh %s failed: %v", key, err)
 			}
@@ -1041,6 +1056,7 @@ func (r *SQLiteRepository) refreshProjectDocuments(ctx context.Context, projectI
 
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Document]{
 		Label: "project document " + projectID,
+		Kind:  "document",
 		Items: docs,
 		Upsert: func(ctx context.Context, doc api.Document) error {
 			params, err := db.APIDocumentToDBDocument(doc)
@@ -1084,6 +1100,7 @@ func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initi
 
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Document]{
 		Label: "initiative document " + initiativeID,
+		Kind:  "document",
 		Items: docs,
 		Upsert: func(ctx context.Context, doc api.Document) error {
 			params, err := db.APIDocumentToDBDocument(doc)
@@ -1163,6 +1180,7 @@ func (r *SQLiteRepository) refreshProjectUpdates(ctx context.Context, projectID 
 
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.ProjectUpdate]{
 		Label: "project update " + projectID,
+		Kind:  "project-update",
 		Items: updates,
 		Upsert: func(ctx context.Context, update api.ProjectUpdate) error {
 			params, err := db.APIProjectUpdateToDBUpdate(update, projectID)
@@ -1206,6 +1224,7 @@ func (r *SQLiteRepository) refreshInitiativeUpdates(ctx context.Context, initiat
 
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.InitiativeUpdate]{
 		Label: "initiative update " + initiativeID,
+		Kind:  "initiative-update",
 		Items: updates,
 		Upsert: func(ctx context.Context, update api.InitiativeUpdate) error {
 			params, err := db.APIInitiativeUpdateToDBUpdate(update, initiativeID)

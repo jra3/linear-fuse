@@ -9,13 +9,29 @@ package reconcile
 import (
 	"context"
 	"log"
+	"sync"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/jra3/linear-fuse/internal/telemetry"
 )
 
 // CollectionSpec declares how one collection reconciles into SQLite.
 // See CONTEXT.md "Sync reconcile tail (syncCollection)".
 type CollectionSpec[T any] struct {
 	// Label names the collection in log lines ("label", "cycle", "project", …).
+	// The detail labels embed the issue ID ("comment <id>"), so Label must
+	// NEVER become a metric attribute — that cardinality is unbounded.
 	Label string
+
+	// Kind is the collection's closed-enum name for the linearfs.sync.prunes
+	// metric attribute: state|label|cycle|project|member|initiative-project|
+	// project-label|comment|document|attachment|relation|inverse-relation
+	// (plus the repo's upsert-only update kinds, which never prune). Bounded
+	// by construction — every caller sets a constant string, never an ID.
+	Kind string
 
 	// Items is the complete, drained server-side set to reconcile. Completeness
 	// is what licenses prune — a truncated fetch would read as removals.
@@ -64,6 +80,29 @@ func Collection[T any](ctx context.Context, spec CollectionSpec[T]) (clean bool)
 	}
 	if err := spec.Prune(ctx); err != nil {
 		log.Printf("[reconcile] prune %s failed: %v", spec.Label, err)
+	} else {
+		prunesCounter().Add(ctx, 1, metric.WithAttributes(
+			attribute.String("collection", spec.Kind)))
 	}
 	return clean
+}
+
+// prunes is the linearfs.sync.prunes counter — a prune that actually
+// executed is the destructive half of the reconcile contract, so it is the
+// one worth counting (a suppressed prune records nothing). The package has
+// no construction point, so the instrument binds lazily on the first firing
+// prune; in production that is long after telemetry.Init registered the
+// provider, and without one the global no-op makes every Add free.
+var (
+	prunesOnce sync.Once
+	prunes     metric.Int64Counter
+)
+
+func prunesCounter() metric.Int64Counter {
+	prunesOnce.Do(func() {
+		prunes = telemetry.MustInt64Counter(otel.Meter("linearfs/sync"),
+			"linearfs.sync.prunes",
+			metric.WithDescription("Reconcile prunes that actually executed, by collection kind"))
+	})
+	return prunes
 }

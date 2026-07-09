@@ -882,7 +882,11 @@ reads stale, and retriggers. The four doc/update tails run
 prune for these fetches — and convert errors now log-and-mark-unclean
 instead of a silent `continue`). The repo constructs its
 `reconcile.Extractor{Q, AuthHeader}` only when it has a client; fixture mode
-leaves `Deps.Extract` nil, which skips extraction.
+leaves `Deps.Extract` nil, which skips extraction. The coordinator also
+emits the SWR metrics (`linearfs.swr.triggers{kind,decision}` at the
+staleness check and `triggerBackgroundRefresh`'s three exits — which now
+takes the `refreshKind` and mints the dedup key itself — and
+`.refresh_outcomes{kind,outcome}` from the refresh goroutine).
 
 ### Detail sync outcome (`syncDetails`)
 The single entry point for issue-detail syncing (`internal/sync/worker.go`):
@@ -906,7 +910,9 @@ unclean issue — or one missing from the response, a trap for a violation of
 flow — is re-enqueued, un-stamped. The hazard class this closes: **an issue
 silently dropped or partially persisted must never be stamped fresh** (a
 stamp would mask its staleness from the SWR path until the next real change)
-**nor lose its retry**.
+**nor lose its retry**. The ledger also feeds the
+`linearfs.sync.detail_outcomes{outcome}` counter — gate paths included, so
+every issue leaving `syncDetails` is counted exactly once.
 
 The stamp's arrival also deleted `syncTeamIssues`' touch-on-unchanged block —
 under event-driven staleness an unchanged issue is fresh by definition
@@ -1053,7 +1059,23 @@ per-op series would blow up one line, `renderSummary` projects every
 attribute set onto a keep-list (`summaryAttrKeys`:
 outcome/decision/tier/axis/… — `op` is projected away and the collided
 series merged); the full-cardinality data is the JSONL export's job. Phase 3
-(sync + SWR instruments) still pending. Spec:
+completed the set with the budget's consumers, so leak and leaker share one
+view: `linearfs.sync.cycle_duration` (one sample per `syncAllTeams` cycle,
+budget-skipped cycles included — a burst of ~0s samples IS the skip
+signature), `.detail_outcomes{outcome=synced|deferred}` (the `syncDetails`
+ledger; gate paths fold in, every issue counted exactly once),
+`.prunes{collection}` (recorded inside `reconcile.Collection` when a prune
+actually executes — the attribute is the new `CollectionSpec.Kind` closed
+enum, never `Label`, which embeds issue IDs), `.pending_depth` (an
+observable `COUNT(*)` of `pending_detail_sync`, registered at Worker
+construction), and `linearfs.swr.triggers{kind,
+decision=triggered|fresh|deduped|sem_dropped}` /
+`.refresh_outcomes{kind, outcome=ok|error|orphaned}` bound at
+`SQLiteRepository` construction (kind = the six `refreshKind` constants).
+The sync instruments bind at Worker construction; `prunes` binds lazily on
+the first firing prune (the reconcile package has no construction point);
+the shared must-create helpers live in `telemetry/instruments.go`. That
+completes the metrics project (#206) — all three phases shipped. Spec:
 `docs/plans/2026-07-08-otel-metrics-design.md`.
 
 ### Repository read path (deliberately concrete — no interface)

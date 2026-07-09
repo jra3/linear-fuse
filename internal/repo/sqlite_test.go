@@ -1821,7 +1821,7 @@ func TestSQLiteRepository_TriggerBackgroundRefresh_NoClient(t *testing.T) {
 
 	// Should be a no-op with nil client
 	called := false
-	repo.triggerBackgroundRefresh("test-key", func(ctx context.Context) error {
+	repo.triggerBackgroundRefresh("test", "key", func(ctx context.Context) error {
 		called = true
 		return nil
 	})
@@ -2161,7 +2161,7 @@ func TestTriggerBackgroundRefresh_Timeout(t *testing.T) {
 
 	// Track whether refresh was called and whether context had deadline
 	called := make(chan bool, 1)
-	repoWithClient.triggerBackgroundRefresh("test-timeout", func(ctx context.Context) error {
+	repoWithClient.triggerBackgroundRefresh("test", "timeout", func(ctx context.Context) error {
 		_, hasDeadline := ctx.Deadline()
 		called <- hasDeadline
 		return nil
@@ -2193,7 +2193,7 @@ func TestTriggerBackgroundRefresh_SemaphoreDropsExcess(t *testing.T) {
 	blocker := make(chan struct{})
 	for i := 0; i < maxConcurrentRefreshes; i++ {
 		key := fmt.Sprintf("blocker-%d", i)
-		repo.triggerBackgroundRefresh(key, func(ctx context.Context) error {
+		repo.triggerBackgroundRefresh("test", key, func(ctx context.Context) error {
 			<-blocker // block until released
 			return nil
 		})
@@ -2204,7 +2204,7 @@ func TestTriggerBackgroundRefresh_SemaphoreDropsExcess(t *testing.T) {
 
 	// This refresh should be dropped (semaphore full)
 	dropped := true
-	repo.triggerBackgroundRefresh("should-be-dropped", func(ctx context.Context) error {
+	repo.triggerBackgroundRefresh("test", "should-be-dropped", func(ctx context.Context) error {
 		dropped = false
 		return nil
 	})
@@ -2233,7 +2233,7 @@ func TestTriggerBackgroundRefresh_DeduplicatesByKey(t *testing.T) {
 	blocker := make(chan struct{})
 
 	// First call should start
-	repo.triggerBackgroundRefresh("same-key", func(ctx context.Context) error {
+	repo.triggerBackgroundRefresh("test", "same-key", func(ctx context.Context) error {
 		atomic.AddInt32(&callCount, 1)
 		<-blocker
 		return nil
@@ -2242,7 +2242,7 @@ func TestTriggerBackgroundRefresh_DeduplicatesByKey(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Second call with same key should be deduplicated
-	repo.triggerBackgroundRefresh("same-key", func(ctx context.Context) error {
+	repo.triggerBackgroundRefresh("test", "same-key", func(ctx context.Context) error {
 		atomic.AddInt32(&callCount, 1)
 		return nil
 	})
