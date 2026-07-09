@@ -14,22 +14,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
-// InitiativesNode represents the /initiatives directory
+// InitiativesNode represents the /initiatives directory. Stateless container:
+// zero times (honest unknown); Getattr comes from the attrNode mixin.
 type InitiativesNode struct {
-	BaseNode
+	attrNode
 }
 
 var _ fs.NodeReaddirer = (*InitiativesNode)(nil)
 var _ fs.NodeLookuper = (*InitiativesNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativesNode)(nil)
-
-func (i *InitiativesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	i.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (i *InitiativesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	initiatives, err := i.lfs.GetInitiatives(ctx)

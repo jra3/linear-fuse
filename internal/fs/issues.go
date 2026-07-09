@@ -71,9 +71,10 @@ func (lfs *LinearFS) issueCreateSpec(teamID, op, key string, dir uint64, mutate 
 	}
 }
 
-// IssuesNode represents the /teams/{KEY}/issues directory
+// IssuesNode represents the /teams/{KEY}/issues directory. It holds a team
+// snapshot and reports the team's times; Getattr comes from the attrNode mixin.
 type IssuesNode struct {
-	BaseNode
+	attrNode
 	team api.Team
 }
 
@@ -83,16 +84,29 @@ var _ fs.NodeMkdirer = (*IssuesNode)(nil)
 var _ fs.NodeRmdirer = (*IssuesNode)(nil)
 var _ fs.NodeGetattrer = (*IssuesNode)(nil)
 
-func (n *IssuesNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+// entity/setEntity snapshot and swap the directory's team under the node's
+// volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (n *IssuesNode) entity() api.Team {
+	n.stateMu.Lock()
+	defer n.stateMu.Unlock()
+	return n.team
+}
+
+func (n *IssuesNode) setEntity(team api.Team) {
+	n.stateMu.Lock()
+	n.team = team
+	n.stateMu.Unlock()
+}
+
+func (n *IssuesNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*IssuesNode); ok {
+		n.setEntity(f.team)
+	}
 }
 
 func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	issues, err := n.lfs.GetTeamIssues(ctx, n.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -112,7 +126,7 @@ func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 // trio declares the issues collection's writable surfaces: _create takes a
 // full issue spec (frontmatter + body).
 func (n *IssuesNode) trio() collectionTrio {
-	return collectionTrio{kind: "issues", parentID: n.team.ID, onFlush: n.createIssue}
+	return collectionTrio{kind: "issues", parentID: n.entity().ID, onFlush: n.createIssue}
 }
 
 func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -185,18 +199,19 @@ func retryableCreateErr(err error) bool {
 
 // Mkdir creates a new issue from a directory name
 func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	team := n.entity()
 	if n.lfs.debug {
-		log.Printf("Mkdir: %s in team %s (creating issue)", name, n.team.Key)
+		log.Printf("Mkdir: %s in team %s (creating issue)", name, team.Key)
 	}
 
 	// Quick path: title-only spec. Full-object creation goes through issues/_create.
 	issue, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
-		n.team.ID,
+		team.ID,
 		`create issue "`+name+`"`,
-		collectionErrorKey("issues", n.team.ID),
-		issuesDirIno(n.team.ID),
+		collectionErrorKey("issues", team.ID),
+		issuesDirIno(team.ID),
 		func(ctx context.Context) (*api.Issue, error) {
-			return n.lfs.createIssueFromSpec(ctx, n.team, map[string]any{"title": name})
+			return n.lfs.createIssueFromSpec(ctx, team, map[string]any{"title": name})
 		},
 	))
 	if errno != 0 {
@@ -211,11 +226,12 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 // spec (frontmatter + body) creates one issue with all fields set at birth,
 // resolving names to IDs and reporting the new identity to issues/.last (#151).
 func (n *IssuesNode) createIssue(ctx context.Context, content []byte) syscall.Errno {
+	team := n.entity()
 	_, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
-		n.team.ID,
+		team.ID,
 		"create issue from spec",
-		collectionErrorKey("issues", n.team.ID),
-		issuesDirIno(n.team.ID),
+		collectionErrorKey("issues", team.ID),
+		issuesDirIno(team.ID),
 		func(ctx context.Context) (*api.Issue, error) {
 			spec, err := marshal.MarkdownToIssueCreate(content)
 			if err != nil {
@@ -230,7 +246,7 @@ func (n *IssuesNode) createIssue(ctx context.Context, content []byte) syscall.Er
 				}
 				return nil, &FieldError{Field: field, Message: msg}
 			}
-			return n.lfs.createIssueFromSpec(ctx, n.team, spec)
+			return n.lfs.createIssueFromSpec(ctx, team, spec)
 		},
 	))
 	return errno
@@ -238,15 +254,16 @@ func (n *IssuesNode) createIssue(ctx context.Context, content []byte) syscall.Er
 
 // Rmdir archives an issue (soft delete)
 func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	team := n.entity()
 	if n.lfs.debug {
-		log.Printf("Rmdir: %s in team %s (archiving issue)", name, n.team.Key)
+		log.Printf("Rmdir: %s in team %s (archiving issue)", name, team.Key)
 	}
 
 	return commitDelete(ctx, n.lfs, deleteSpec[api.Issue]{
 		op:  `archive issue "` + name + `"`,
-		key: collectionErrorKey("issues", n.team.ID),
+		key: collectionErrorKey("issues", team.ID),
 		find: func(ctx context.Context) (*api.Issue, error) {
-			issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+			issues, err := n.lfs.GetTeamIssues(ctx, team.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -266,12 +283,12 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		forget: func(ctx context.Context, i *api.Issue) error {
 			return n.lfs.store.Queries().DeleteIssue(ctx, i.ID)
 		},
-		dir:  issuesDirIno(n.team.ID),
+		dir:  issuesDirIno(team.ID),
 		name: name,
 		invalidateExtra: func(i *api.Issue) {
 			// The archived issue must also vanish from recent/ immediately
 			// (symmetric with the create tail's recent/ coherence).
-			n.lfs.InvalidateDeleted(recentDirIno(n.team.ID), name)
+			n.lfs.InvalidateDeleted(recentDirIno(team.ID), name)
 		},
 	})
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"syscall"
-	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -20,7 +19,7 @@ const recentLimit = 50
 // agent a shell-flag-independent "what changed lately" (ls recent/ | head) that
 // doesn't depend on `ls -t` (which failed under eza in the #148 retro).
 type RecentNode struct {
-	BaseNode
+	attrNode
 	team api.Team
 }
 
@@ -28,12 +27,25 @@ var _ fs.NodeReaddirer = (*RecentNode)(nil)
 var _ fs.NodeLookuper = (*RecentNode)(nil)
 var _ fs.NodeGetattrer = (*RecentNode)(nil)
 
-func (n *RecentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0555 | syscall.S_IFDIR // read-only dir
-	n.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+// entity/setEntity snapshot and swap the directory's team under the node's
+// volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (n *RecentNode) entity() api.Team {
+	n.stateMu.Lock()
+	defer n.stateMu.Unlock()
+	return n.team
+}
+
+func (n *RecentNode) setEntity(team api.Team) {
+	n.stateMu.Lock()
+	n.team = team
+	n.stateMu.Unlock()
+}
+
+func (n *RecentNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*RecentNode); ok {
+		n.setEntity(f.team)
+	}
 }
 
 // recentIssues returns the team's issues sorted newest-first and capped. SQL
@@ -41,7 +53,7 @@ func (n *RecentNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 // explicitly — in one place used by both Readdir and Lookup so `ls` and
 // `stat recent/X` agree on membership.
 func (n *RecentNode) recentIssues(ctx context.Context) ([]api.Issue, error) {
-	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	issues, err := n.lfs.GetTeamIssues(ctx, n.entity().ID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +88,7 @@ func (n *RecentNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Resolve against ALL team issues, not just the capped window: lookup must be
 	// a superset of readdir so a name that appeared in `ls recent/` never fails
 	// its per-entry stat (the safe direction; the cap lives only in Readdir).
-	issues, err := n.lfs.GetTeamIssues(ctx, n.team.ID)
+	issues, err := n.lfs.GetTeamIssues(ctx, n.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

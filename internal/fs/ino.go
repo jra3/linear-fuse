@@ -90,6 +90,36 @@ func initiativeUpdatesDirIno(initiativeID string) uint64 {
 }
 func initiativeUpdateIno(updateID string) uint64 { return ino("initiative-update", updateID) }
 
+// Root views ----------------------------------------------------------------
+// The stateless top-level containers (teams/, users/, my/, initiatives/) and
+// the my/ subdirs are keyed by their fixed directory name — there is exactly
+// one of each per mount.
+
+func viewDirIno(name string) uint64 { return ino("viewdir", name) }
+func myDirIno(name string) uint64   { return ino("mydir", name) }
+
+// Team tree -----------------------------------------------------------------
+
+func teamDirIno(teamID string) uint64   { return ino("teamdir", teamID) }
+func cyclesDirIno(teamID string) uint64 { return ino("cyclesdir", teamID) }
+func cycleDirIno(cycleID string) uint64 { return ino("cycledir", cycleID) }
+
+// Filter views (by/) ----------------------------------------------------------
+// Composite keys: a category dir is per team+category, a value dir per
+// team+category+value. FUSE names never contain "/", so "/" is a safe joiner.
+
+func byDirIno(teamID string) uint64 { return ino("bydir", teamID) }
+func byCategoryIno(teamID, category string) uint64 {
+	return ino("bycat", teamID+"/"+category)
+}
+func byValueIno(teamID, category, value string) uint64 {
+	return ino("byval", teamID+"/"+category+"/"+value)
+}
+
+// Users ----------------------------------------------------------------------
+
+func userDirIno(userID string) uint64 { return ino("userdir", userID) }
+
 // Team views ---------------------------------------------------------------
 
 func recentDirIno(teamID string) uint64 { return ino("recentdir", teamID) }

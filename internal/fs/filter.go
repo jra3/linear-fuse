@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -28,9 +27,10 @@ func assigneeHandle(user *api.User) string {
 	return user.Email
 }
 
-// FilterRootNode represents the by/ directory
+// FilterRootNode represents the by/ directory. It holds a team snapshot and
+// reports the team's times; Getattr comes from the attrNode mixin.
 type FilterRootNode struct {
-	BaseNode
+	attrNode
 	team api.Team
 }
 
@@ -40,12 +40,25 @@ var _ fs.NodeGetattrer = (*FilterRootNode)(nil)
 
 var filterCategories = []string{"status", "label", "assignee"}
 
-func (f *FilterRootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	f.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+// entity/setEntity snapshot and swap the directory's team under the node's
+// volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (f *FilterRootNode) entity() api.Team {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.team
+}
+
+func (f *FilterRootNode) setEntity(team api.Team) {
+	f.stateMu.Lock()
+	f.team = team
+	f.stateMu.Unlock()
+}
+
+func (f *FilterRootNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if fr, ok := fresh.(*FilterRootNode); ok {
+		f.setEntity(fr.team)
+	}
 }
 
 func (f *FilterRootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -60,27 +73,24 @@ func (f *FilterRootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 }
 
 func (f *FilterRootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	team := f.entity()
 	for _, cat := range filterCategories {
 		if cat == name {
-			now := time.Now()
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = f.lfs.uid
-			out.Attr.Gid = f.lfs.gid
-			out.Attr.SetTimes(&now, &now, &now)
 			node := &FilterCategoryNode{
-				BaseNode: BaseNode{lfs: f.lfs},
-				team:     f.team,
+				attrNode: attrNode{BaseNode: BaseNode{lfs: f.lfs}},
+				team:     team,
 				category: name,
 			}
-			return f.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			return f.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), byCategoryIno(team.ID, name), inheritTimeout), 0
 		}
 	}
 	return nil, syscall.ENOENT
 }
 
-// FilterCategoryNode represents a filter category directory (e.g., by/status/)
+// FilterCategoryNode represents a filter category directory (e.g., by/status/).
+// The category is immutable identity; the team snapshot is the volatile half.
 type FilterCategoryNode struct {
-	BaseNode
+	attrNode
 	team     api.Team
 	category string
 }
@@ -89,12 +99,22 @@ var _ fs.NodeReaddirer = (*FilterCategoryNode)(nil)
 var _ fs.NodeLookuper = (*FilterCategoryNode)(nil)
 var _ fs.NodeGetattrer = (*FilterCategoryNode)(nil)
 
-func (f *FilterCategoryNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	f.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+func (f *FilterCategoryNode) entity() api.Team {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.team
+}
+
+func (f *FilterCategoryNode) setEntity(team api.Team) {
+	f.stateMu.Lock()
+	f.team = team
+	f.stateMu.Unlock()
+}
+
+func (f *FilterCategoryNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if fr, ok := fresh.(*FilterCategoryNode); ok {
+		f.setEntity(fr.team)
+	}
 }
 
 func (f *FilterCategoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -119,30 +139,27 @@ func (f *FilterCategoryNode) Lookup(ctx context.Context, name string, out *fuse.
 		return nil, syscall.EIO
 	}
 
+	team := f.entity()
 	for _, val := range values {
 		if val == name {
-			now := time.Now()
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = f.lfs.uid
-			out.Attr.Gid = f.lfs.gid
-			out.Attr.SetTimes(&now, &now, &now)
 			node := &FilterValueNode{
-				BaseNode: BaseNode{lfs: f.lfs},
-				team:     f.team,
+				attrNode: attrNode{BaseNode: BaseNode{lfs: f.lfs}},
+				team:     team,
 				category: f.category,
 				value:    name,
 			}
-			return f.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			return f.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), byValueIno(team.ID, f.category, name), inheritTimeout), 0
 		}
 	}
 	return nil, syscall.ENOENT
 }
 
 func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, error) {
+	teamID := f.entity().ID
 	switch f.category {
 	case "status":
 		// Use team states from API - much faster than scanning all issues
-		states, err := f.lfs.GetTeamStates(ctx, f.team.ID)
+		states, err := f.lfs.GetTeamStates(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
@@ -155,7 +172,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 
 	case "label":
 		// Use team labels from API - much faster than scanning all issues
-		labels, err := f.lfs.GetTeamLabels(ctx, f.team.ID)
+		labels, err := f.lfs.GetTeamLabels(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +185,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 
 	case "assignee":
 		// Use team members - show only users who are members of this team plus "unassigned"
-		users, err := f.lfs.GetTeamMembers(ctx, f.team.ID)
+		users, err := f.lfs.GetTeamMembers(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
@@ -184,9 +201,10 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 	return nil, nil
 }
 
-// FilterValueNode represents a filter value directory (e.g., by/status/In Progress/)
+// FilterValueNode represents a filter value directory (e.g., by/status/In Progress/).
+// category/value are immutable identity; the team snapshot is the volatile half.
 type FilterValueNode struct {
-	BaseNode
+	attrNode
 	team     api.Team
 	category string
 	value    string
@@ -196,12 +214,22 @@ var _ fs.NodeReaddirer = (*FilterValueNode)(nil)
 var _ fs.NodeLookuper = (*FilterValueNode)(nil)
 var _ fs.NodeGetattrer = (*FilterValueNode)(nil)
 
-func (f *FilterValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	f.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+func (f *FilterValueNode) entity() api.Team {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.team
+}
+
+func (f *FilterValueNode) setEntity(team api.Team) {
+	f.stateMu.Lock()
+	f.team = team
+	f.stateMu.Unlock()
+}
+
+func (f *FilterValueNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if fr, ok := fresh.(*FilterValueNode); ok {
+		f.setEntity(fr.team)
+	}
 }
 
 func (f *FilterValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -237,22 +265,23 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 }
 
 func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, error) {
+	teamID := f.entity().ID
 	// Use server-side filtering for much better performance
 	switch f.category {
 	case "status":
-		return f.lfs.GetFilteredIssuesByStatus(ctx, f.team.ID, f.value)
+		return f.lfs.GetFilteredIssuesByStatus(ctx, teamID, f.value)
 	case "label":
-		return f.lfs.GetFilteredIssuesByLabel(ctx, f.team.ID, f.value)
+		return f.lfs.GetFilteredIssuesByLabel(ctx, teamID, f.value)
 	case "assignee":
 		if f.value == "unassigned" {
-			return f.lfs.GetFilteredIssuesUnassigned(ctx, f.team.ID)
+			return f.lfs.GetFilteredIssuesUnassigned(ctx, teamID)
 		}
 		// Need to resolve assignee handle to ID
 		assigneeID, err := f.resolveAssigneeID(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return f.lfs.GetFilteredIssuesByAssignee(ctx, f.team.ID, assigneeID)
+		return f.lfs.GetFilteredIssuesByAssignee(ctx, teamID, assigneeID)
 	default:
 		return nil, fmt.Errorf("unknown filter category: %s", f.category)
 	}
@@ -260,7 +289,7 @@ func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, e
 
 // resolveAssigneeID converts an assignee handle (display name or email prefix) to user ID
 func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error) {
-	users, err := f.lfs.GetTeamMembers(ctx, f.team.ID)
+	users, err := f.lfs.GetTeamMembers(ctx, f.entity().ID)
 	if err != nil {
 		return "", err
 	}
