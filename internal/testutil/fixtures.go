@@ -171,14 +171,17 @@ func FixtureProjectUpdate() map[string]any {
 
 // Response builders for mock server
 
-// TeamsResponse returns a response structure for GetTeams.
+// TeamsResponse returns a response structure for GetTeams. The pageInfo is
+// required: GetTeams drains the connection, and fetchAll errors on a
+// response missing pageInfo.
 func TeamsResponse(teams ...map[string]any) map[string]any {
 	if len(teams) == 0 {
 		teams = []map[string]any{FixtureTeam()}
 	}
 	return map[string]any{
 		"teams": map[string]any{
-			"nodes": teams,
+			"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+			"nodes":    teams,
 		},
 	}
 }
@@ -257,12 +260,14 @@ func TeamProjectsResponse(projects ...map[string]any) map[string]any {
 	}
 }
 
-// ProjectUpdatesResponse returns a response for GetProjectUpdates.
+// ProjectUpdatesResponse returns a response for GetProjectUpdates. The
+// pageInfo is required: the updates connection is drained (fetchAll).
 func ProjectUpdatesResponse(updates ...map[string]any) map[string]any {
 	return map[string]any{
 		"project": map[string]any{
 			"projectUpdates": map[string]any{
-				"nodes": updates,
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+				"nodes":    updates,
 			},
 		},
 	}
@@ -377,12 +382,14 @@ func FixtureInitiativeUpdate() map[string]any {
 	}
 }
 
-// InitiativeUpdatesResponse returns a response for GetInitiativeUpdates.
+// InitiativeUpdatesResponse returns a response for GetInitiativeUpdates. The
+// pageInfo is required: the updates connection is drained (fetchAll).
 func InitiativeUpdatesResponse(updates ...map[string]any) map[string]any {
 	return map[string]any{
 		"initiative": map[string]any{
 			"initiativeUpdates": map[string]any{
-				"nodes": updates,
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+				"nodes":    updates,
 			},
 		},
 	}
@@ -398,11 +405,13 @@ func CreateInitiativeUpdateResponse(update map[string]any) map[string]any {
 	}
 }
 
-// ProjectDocumentsResponse returns a response for GetProjectDocuments.
+// ProjectDocumentsResponse returns a response for GetProjectDocuments. The
+// pageInfo is required: the documents connection is drained (fetchAll).
 func ProjectDocumentsResponse(docs ...map[string]any) map[string]any {
 	return map[string]any{
 		"documents": map[string]any{
-			"nodes": docs,
+			"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+			"nodes":    docs,
 		},
 	}
 }

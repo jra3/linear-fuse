@@ -411,9 +411,13 @@ func (c *Client) BudgetSnapshot() (count int, pct float64) {
 	return int(used), used / rq.limit * 100
 }
 
-// GetTeams fetches all teams the user has access to
+// GetTeams fetches all teams the user has access to, draining the
+// connection to completion — this is the sync worker's root fetch, so a
+// silent 50-team cap would truncate the whole sync. All-or-nothing like
+// every fetchAll caller; a low rate budget defers it (ErrBudget) and the
+// worker retries next cycle.
 func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
-	return fetchNodes[Team](ctx, c, queryTeams, nil, "teams")
+	return fetchAll[Team](ctx, c, queryTeams, nil, "teams")
 }
 
 // GetTeamIssuesPage fetches a single page of issues ordered by updatedAt DESC.
@@ -637,9 +641,11 @@ func (c *Client) DeleteProjectMilestone(ctx context.Context, milestoneID string)
 	return execMutationOK(ctx, c, mutationDeleteProjectMilestone, map[string]any{"id": milestoneID}, "projectMilestoneDelete")
 }
 
-// GetProjectUpdates fetches status updates for a project
+// GetProjectUpdates fetches status updates for a project, drained — updates
+// accumulate past a page over a project's lifetime, and the SWR refresh is
+// upsert-only, so a capped read silently froze completeness.
 func (c *Client) GetProjectUpdates(ctx context.Context, projectID string) ([]ProjectUpdate, error) {
-	return fetchNodes[ProjectUpdate](ctx, c, queryProjectUpdates,
+	return fetchAll[ProjectUpdate](ctx, c, queryProjectUpdates,
 		map[string]any{"projectId": projectID}, "project", "projectUpdates")
 }
 
@@ -655,9 +661,10 @@ func (c *Client) CreateProjectUpdate(ctx context.Context, projectID, body, healt
 	return execMutation[ProjectUpdate](ctx, c, mutationCreateProjectUpdate, vars, "projectUpdateCreate", "projectUpdate")
 }
 
-// GetInitiativeUpdates fetches status updates for an initiative
+// GetInitiativeUpdates fetches status updates for an initiative, drained
+// (see GetProjectUpdates).
 func (c *Client) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]InitiativeUpdate, error) {
-	return fetchNodes[InitiativeUpdate](ctx, c, queryInitiativeUpdates,
+	return fetchAll[InitiativeUpdate](ctx, c, queryInitiativeUpdates,
 		map[string]any{"initiativeId": initiativeID}, "initiative", "initiativeUpdates")
 }
 
@@ -868,9 +875,10 @@ func (c *Client) GetIssueAttachments(ctx context.Context, issueID string) ([]Att
 		map[string]any{"issueId": issueID}, "issue", "attachments")
 }
 
-// GetIssueHistory fetches the history/audit trail for an issue
+// GetIssueHistory fetches the history/audit trail for an issue, drained —
+// it backs history.md live and an old issue's trail outgrows a page.
 func (c *Client) GetIssueHistory(ctx context.Context, issueID string) ([]IssueHistoryEntry, error) {
-	return fetchNodes[IssueHistoryEntry](ctx, c, queryIssueHistory,
+	return fetchAll[IssueHistoryEntry](ctx, c, queryIssueHistory,
 		map[string]any{"issueId": issueID}, "issue", "history")
 }
 
@@ -880,15 +888,15 @@ func (c *Client) GetTeamDocuments(ctx context.Context, teamID string) ([]Documen
 	return []Document{}, nil
 }
 
-// GetProjectDocuments fetches documents for a project
+// GetProjectDocuments fetches documents for a project, drained.
 func (c *Client) GetProjectDocuments(ctx context.Context, projectID string) ([]Document, error) {
-	return fetchNodes[Document](ctx, c, queryProjectDocuments,
+	return fetchAll[Document](ctx, c, queryProjectDocuments,
 		map[string]any{"projectId": projectID}, "documents")
 }
 
-// GetInitiativeDocuments fetches documents for an initiative
+// GetInitiativeDocuments fetches documents for an initiative, drained.
 func (c *Client) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]Document, error) {
-	return fetchNodes[Document](ctx, c, queryInitiativeDocuments,
+	return fetchAll[Document](ctx, c, queryInitiativeDocuments,
 		map[string]any{"initiativeId": initiativeID}, "documents")
 }
 

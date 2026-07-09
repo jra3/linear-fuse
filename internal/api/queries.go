@@ -2,9 +2,13 @@ package api
 
 import "fmt"
 
+// queryTeams drains: this is the sync worker's root fetch, and Linear
+// silently caps a connection without first: at 50 nodes — a 51st team would
+// have silently truncated the whole sync.
 const queryTeams = `
-query Teams {
-  teams {
+query Teams($after: String) {
+  teams(first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       id
       key
@@ -466,10 +470,14 @@ mutation DeleteProjectMilestone($id: String!) {
 }
 `
 
+// queryProjectUpdates drains: updates accumulate past 50 over a project's
+// lifetime, and the SWR refresh is upsert-only — the implicit 50-cap was
+// silently freezing completeness.
 var queryProjectUpdates = `
-query ProjectUpdates($projectId: String!) {
+query ProjectUpdates($projectId: String!, $after: String) {
   project(id: $projectId) {
-    projectUpdates {
+    projectUpdates(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes { ...ProjectUpdateFields }
     }
   }
@@ -485,10 +493,12 @@ mutation CreateProjectUpdate($projectId: String!, $body: String!, $health: Proje
 }
 ` + projectUpdateFieldsFragment
 
+// queryInitiativeUpdates drains, for the same reason as queryProjectUpdates.
 var queryInitiativeUpdates = `
-query InitiativeUpdates($initiativeId: String!) {
+query InitiativeUpdates($initiativeId: String!, $after: String) {
   initiative(id: $initiativeId) {
-    initiativeUpdates {
+    initiativeUpdates(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes { ...InitiativeUpdateFields }
     }
   }
@@ -728,7 +738,13 @@ query IssueDetails($issueId: String!) {
 	CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment +
 	issueRelationFieldsFragment + issueInverseRelationFieldsFragment
 
-// queryIssueAttachments fetches only attachments for an issue
+// queryIssueAttachments fetches only attachments for an issue.
+//
+// DELIBERATE cap: first: 100, single page, no drain. This query serves the
+// interactive attachment-create re-check (the authoritative read a user's
+// FUSE write blocks on), and fetchAll's LowBudget gate must never sit on a
+// write path — a low budget would turn a create into a spurious failure. An
+// issue with more than 100 attachments is out of scope.
 var queryIssueAttachments = `
 query IssueAttachments($issueId: String!) {
   issue(id: $issueId) {
@@ -766,16 +782,18 @@ mutation DeleteComment($id: String!) {
 `
 
 var queryProjectDocuments = `
-query ProjectDocuments($projectId: ID!) {
-  documents(first: 100, filter: { project: { id: { eq: $projectId } } }) {
+query ProjectDocuments($projectId: ID!, $after: String) {
+  documents(first: 100, after: $after, filter: { project: { id: { eq: $projectId } } }) {
+    pageInfo { hasNextPage endCursor }
     nodes { ...DocumentFields }
   }
 }
 ` + DocumentFieldsFragment
 
 var queryInitiativeDocuments = `
-query InitiativeDocuments($initiativeId: ID!) {
-  documents(first: 100, filter: { initiative: { id: { eq: $initiativeId } } }) {
+query InitiativeDocuments($initiativeId: ID!, $after: String) {
+  documents(first: 100, after: $after, filter: { initiative: { id: { eq: $initiativeId } } }) {
+    pageInfo { hasNextPage endCursor }
     nodes { ...DocumentFields }
   }
 }
@@ -921,11 +939,13 @@ mutation DeleteAttachment($id: String!) {
 }
 `
 
-// queryIssueHistory fetches the history/audit trail for an issue
+// queryIssueHistory fetches the history/audit trail for an issue, drained —
+// it backs history.md live, and an old issue's audit trail outgrows a page.
 const queryIssueHistory = `
-query IssueHistory($issueId: String!) {
+query IssueHistory($issueId: String!, $after: String) {
   issue(id: $issueId) {
-    history(first: 100) {
+    history(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         id
         createdAt

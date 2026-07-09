@@ -811,10 +811,20 @@ Four read methods stay hand-written, each for cause: `GetTeamMetadata` and
 `GetWorkspace` are combined multi-connection queries already on
 `conn`+`drain`; `GetIssueDetailsBatch` builds dynamic aliases and owns its
 own all-or-nothing contract; `GetTeamDocuments` is an empty stub (Linear has
-no team-level documents). Recorded follow-up, deliberately not done in this
-refactor: ten of the converted list queries set no `first:` and are silently
-50-capped by Linear (and `GetIssueHistory`, which backs `history.md` live,
-caps at `first: 100` with no drain) — the drain audit is queued work.
+no team-level documents). The recorded follow-up — Linear silently caps a
+connection without `first:` at 50 nodes — ran as the drain audit. Nine of
+the ten capped queries turned out to be **dead client methods**: every
+production caller was the SQLite repo twin (`lfs.repo.*`), the worker's
+drained metadata sync having superseded them, so they were deleted with
+their single-use query consts (states/cycles/labels/users/members/
+initiatives/milestones/issue-comments/issue-documents). The six live capped
+reads — teams (the sync worker's root fetch), project/initiative updates,
+project/initiative documents, and issue history — are drained via
+`fetchAll`. The attachments re-check keeps its deliberate `first: 100`
+single page: it serves the interactive attachment-create re-check, and
+`fetchAll`'s LowBudget gate must not sit on a write path. The detail-family
+page caps (`pruneWhenComplete`) and the combined queries' nested caps remain
+recorded designs.
 
 ### Sync reconcile tail (`syncCollection`)
 The **deep module** owning the invariant tail of every metadata sync — the

@@ -42,7 +42,7 @@ func TestRequestLogEntryFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Complexity", "1234")
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -92,7 +92,7 @@ func TestRequestLogComplexityOmittedWithoutHeader(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -177,7 +177,7 @@ func TestRequestLogDisabledByDefault(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 

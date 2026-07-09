@@ -46,6 +46,114 @@ func TestGetTeams(t *testing.T) {
 	}
 }
 
+// TestGetTeamsDrainsPages proves GetTeams drains the teams connection —
+// Linear silently caps a connection without first: at 50 nodes, and this is
+// the sync worker's root fetch, so page 2 must be fetched with page 1's
+// cursor and both pages' nodes returned.
+func TestGetTeamsDrainsPages(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	teamA := testutil.FixtureTeam()
+	teamB := testutil.FixtureTeam()
+	teamB["id"] = "team-456"
+	teamB["key"] = "SEC"
+	mock.SetResponseSequence("Teams",
+		map[string]any{
+			"teams": map[string]any{
+				"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "cursor-1"},
+				"nodes":    []map[string]any{teamA},
+			},
+		},
+		map[string]any{
+			"teams": map[string]any{
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+				"nodes":    []map[string]any{teamB},
+			},
+		},
+	)
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
+
+	teams, err := client.GetTeams(context.Background())
+	if err != nil {
+		t.Fatalf("GetTeams failed: %v", err)
+	}
+
+	if len(teams) != 2 {
+		t.Fatalf("expected 2 teams across 2 pages, got %d", len(teams))
+	}
+	if teams[0].ID != "team-123" || teams[1].ID != "team-456" {
+		t.Errorf("teams out of order: got %q, %q", teams[0].ID, teams[1].ID)
+	}
+
+	calls := mock.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if got := calls[0].Variables["after"]; got != nil {
+		t.Errorf("page 1 carried after=%v, want none", got)
+	}
+	if got := calls[1].Variables["after"]; got != "cursor-1" {
+		t.Errorf("page 2 fetched with after=%v, want cursor-1", got)
+	}
+}
+
+// TestGetProjectUpdatesDrainsPages proves the updates read drains past the
+// old implicit 50-cap: updates accumulate over a project's lifetime and the
+// SWR refresh is upsert-only, so a capped read silently froze completeness.
+func TestGetProjectUpdatesDrainsPages(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	updateA := testutil.FixtureProjectUpdate()
+	updateB := testutil.FixtureProjectUpdate()
+	updateB["id"] = "update-456"
+	page := func(pi map[string]any, updates ...map[string]any) map[string]any {
+		return map[string]any{
+			"project": map[string]any{
+				"projectUpdates": map[string]any{
+					"pageInfo": pi,
+					"nodes":    updates,
+				},
+			},
+		}
+	}
+	mock.SetResponseSequence("ProjectUpdates",
+		page(map[string]any{"hasNextPage": true, "endCursor": "cursor-1"}, updateA),
+		page(map[string]any{"hasNextPage": false, "endCursor": ""}, updateB),
+	)
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
+
+	updates, err := client.GetProjectUpdates(context.Background(), "project-123")
+	if err != nil {
+		t.Fatalf("GetProjectUpdates failed: %v", err)
+	}
+
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates across 2 pages, got %d", len(updates))
+	}
+	if updates[0].ID != "update-123" || updates[1].ID != "update-456" {
+		t.Errorf("updates out of order: got %q, %q", updates[0].ID, updates[1].ID)
+	}
+
+	calls := mock.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if got := calls[1].Variables["after"]; got != "cursor-1" {
+		t.Errorf("page 2 fetched with after=%v, want cursor-1", got)
+	}
+	if got := calls[1].Variables["projectId"]; got != "project-123" {
+		t.Errorf("page 2 lost projectId: got %v", got)
+	}
+}
+
 func TestGetIssue(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()
@@ -186,8 +294,14 @@ func TestGraphQLError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if err.Error() != "GraphQL error: authentication failed" {
+	// GetTeams drains, so the GraphQL error arrives wrapped with page
+	// context; the structured error must survive the wrap.
+	if !strings.Contains(err.Error(), "GraphQL error: authentication failed") {
 		t.Errorf("unexpected error message: %v", err)
+	}
+	var gqlErr *GraphQLError
+	if !errors.As(err, &gqlErr) {
+		t.Errorf("error does not unwrap to *GraphQLError: %v", err)
 	}
 }
 
@@ -711,7 +825,7 @@ func TestRateLimitResetHeaderParsed(t *testing.T) {
 		w.Header().Set("X-RateLimit-Complexity-Reset", strconv.FormatInt(resetMs, 10))
 		w.Header().Set("X-RateLimit-Requests-Reset", strconv.FormatInt(resetMs, 10))
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -799,7 +913,7 @@ func TestRateLimitResetHeaderMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// No X-RateLimit-Reset header
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -853,7 +967,7 @@ func TestCircuitBreakerResetsOnSuccess(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -876,7 +990,7 @@ func TestCircuitBreakerCooldownAllowsProbe(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -910,7 +1024,7 @@ func TestMutationPriorityReservesBudgetForWrites(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
