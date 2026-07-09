@@ -357,21 +357,34 @@ The seam: construction helpers (`newDirInode`/`newFileInode`/`newRenderInode`/
 the bridge will keep if it dedups — and push the fresh twin's volatile state
 into it via `refreshFrom(fresh)` (`internal/fs/refresh.go`). A nil child means
 the kernel FORGOT it and the fresh node installs — already fresh. Per-type
-rules: the three entity dir nodes swap their entity under `attrNode.stateMu`
+rules: snapshot-carrying dir nodes swap their entity under `attrNode.stateMu`
 (which also guards `nodeAttr`, re-stamped by the seam) and expose
-`entity()/setEntity` snapshots; the seven editBuffer file nodes go through
+`entity()/setEntity` snapshots — the three entity dirs (issue/project/
+initiative) plus, since the view-dir normalization, `TeamNode`, `UserNode`,
+`CycleDirNode` (team+cycle under one lock), and every team-view dir holding a
+team (`IssuesNode`/`ProjectsNode`/`CyclesNode`/`RecentNode`/the three by/
+filter shapes); the seven editBuffer file nodes go through
 `editBuffer.refresh` — **a dirty buffer always wins** (a user's in-flight
 edit is never clobbered by background sync) — with Getattr snapshotting
 size+times under one lock; renderFile swaps its closure under `renderMu`
 (embedders with entity fields shadow `refreshFrom` and reuse that lock);
-`EmbeddedFileNode` swaps its file metadata under its own mu. `TeamNode`/
-`UserNode`/cycle dirs are constructed with auto-assigned inos (fresh node per
-Lookup) and don't need the seam — a pre-existing inconsistency with the inode
-namespace that happens to dodge the bug. Guarded end-to-end by
+`EmbeddedFileNode` swaps its file metadata under its own mu. The old
+exception paragraph is GONE: `TeamNode`/`UserNode`/cycle dirs used to ride
+auto-assigned inos (fresh node per Lookup) and dodge the bug — that
+inconsistency is erased; they are on stable inos with the seam like everyone
+else. Because dirty-buffer-wins means the kept node can refuse a refresh,
+`newFileInode` reports the KEPT node's size in the Lookup answer (an
+`interface{ size() int }` probe after `refreshExisting`), not the fresh
+render's — a fresh-twin size would clamp kernel reads of longer dirty content
+(a real truncation: project.md read back "unclosed" after a rejected save;
+`TestRejectedSaveKeepsDirtyContentReadable` pins it). Guarded end-to-end by
 `TestRemoteUpdateVisibleAfterKernelRevalidation` (remote upsert → pinned
 inode chain so the kernel cannot FORGET → 31s real entry-timeout expiry →
 fresh content and mtime; the pin is what forces the reuse path — without it
-the kernel may forget everything and the test passes vacuously).
+the kernel may forget everything and the test passes vacuously) and its
+`TestRemoteTeamUpdateVisibleAfterKernelRevalidation` twin on the busiest
+reused node (pin the team dir, upsert the team row, expiry, fresh team.md +
+dir mtime).
 
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are
@@ -395,6 +408,22 @@ with the times their parent's Lookup answered. The collapsed contract is the
 issue's times uniformly (`atime/mtime = UpdatedAt`, `ctime = CreatedAt`), which
 forced the directory nodes to become self-describing — carry the times they
 report rather than re-derive them per call.
+
+The view-dir normalization finished the sweep: every directory node now
+routes through `newDirInode` and the mixin — the four stateless root
+containers (`TeamsNode`/`UsersNode`/`MyNode`/`InitiativesNode`, plus the
+mount root's own `Getattr` and the `my/` subdirs) report **zero times, an
+honest unknown**, never a fabricated `now()`; `TeamNode` and the team-view
+dirs (`issues/`, `projects/`, `cycles/`, `recent/`, `by/` and its two nested
+shapes) report the team's times; `CycleDirNode` keeps the cycle tier's
+convention via the one deliberate `nodeAttr.atime` override (atime=EndsAt,
+mtime/ctime=StartsAt — `api.Cycle` has no created/updated; the `current`
+symlink mirrors it); `UserNode` is zero-times (`api.User` has no time
+fields). `newDirInode` accepts `inheritTimeout` (< 0 skips the Set*Timeout
+calls, like the render files) so the view dirs keep the mount default they
+always had. Remaining exception: `LabelFileNode`/`MilestoneFileNode` `Getattr`
+still report `now()` (their API types carry no timestamps — see
+[[edit-buffer]]).
 
 **Directories vs files.** A directory's attributes are wholly static, so it
 gets the mixin and the inherited `Getattr` (true no-drift). A file's `Size` is
@@ -424,6 +453,17 @@ serving as the checklist a new kind must join. `scratchIno` (`atomicwrite.go`)
 is deliberately **not** a wrapper: its key mixes the parent directory inode with
 the name (so concurrent temp files in different dirs don't collide), a different
 shape than `kind:id`.
+
+The namespace is **total for directories** since the view-dir normalization:
+`viewdir:{name}` (the teams/users/my/initiatives containers) and
+`mydir:{name}` (my/ subdirs) key on the fixed directory name; `teamdir`/
+`cyclesdir`/`recentdir` on the team id, `cycledir` on the cycle id, `userdir`
+on the user id; the by/ filter tree uses composite keys joined with `/` (a
+character a FUSE name can never contain): `bydir:{team}`,
+`bycat:{team}/{category}`, `byval:{team}/{category}/{value}`. No directory is
+ever auto-assigned anymore — the only deliberate auto-ino residents are the
+write-only `_create` trigger files (stateless, one node per open-write-close)
+and symlinks.
 
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file

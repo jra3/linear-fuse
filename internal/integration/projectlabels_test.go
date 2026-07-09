@@ -221,11 +221,10 @@ func TestProjectLabelsRetiredNewlyApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read project.md: %v", err)
 	}
-	t.Cleanup(func() { _ = writeProjectMD(t, projectMDPath(), string(orig)) })
 
-	// Step 1: delete the labels block entirely (the key line plus its YAML
-	// list items) — the mount-wide delete-the-line clear contract.
-	var kept []string
+	// The labels-free variant of orig (the key line plus its YAML list items
+	// removed) — used by step 1 and by the cleanup.
+	var keptLines []string
 	inLabels := false
 	for _, line := range strings.Split(string(orig), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -237,9 +236,33 @@ func TestProjectLabelsRetiredNewlyApplied(t *testing.T) {
 			continue
 		}
 		inLabels = false
-		kept = append(kept, line)
+		keptLines = append(keptLines, line)
 	}
-	if err := writeProjectMD(t, projectMDPath(), strings.Join(kept, "\n")); err != nil {
+	kept := strings.Join(keptLines, "\n")
+
+	t.Cleanup(func() {
+		// A content-only restore of orig is REJECTED here (EINVAL — once the
+		// set was cleared, re-adding the retired Legacy counts as
+		// newly-applied), which used to fail silently and leave the node's
+		// buffer permanently dirty with a size the next Lookup contradicted,
+		// poisoning later reads of project.md for the rest of the suite. So:
+		// first clear the dirty buffer with a save the validator ACCEPTS (the
+		// labels-free content — matches the mock's current cleared state),
+		// then restore the store row; the now-clean buffer adopts the
+		// restored labels on the next lookup's refresh.
+		if err := writeProjectMD(t, projectMDPath(), kept); err != nil {
+			t.Errorf("cleanup save (labels-free) failed: %v", err)
+		}
+		restored := fixtures.FixtureAPIProject()
+		restored.LabelIds = []string{"plabel-backend", "plabel-legacy"}
+		if err := fixtures.PopulateProject(context.Background(), testStore, restored, fixtures.FixtureAPITeam().ID); err != nil {
+			t.Errorf("restore project row: %v", err)
+		}
+	})
+
+	// Step 1: delete the labels block entirely — the mount-wide
+	// delete-the-line clear contract.
+	if err := writeProjectMD(t, projectMDPath(), kept); err != nil {
 		t.Fatalf("delete-the-line clear failed: %v", err)
 	}
 	after, err := readFileWithRetry(projectMDPath(), defaultWaitTime)

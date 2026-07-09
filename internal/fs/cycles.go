@@ -22,9 +22,10 @@ func cycleDirName(cycle api.Cycle) string {
 	return strings.ReplaceAll(name, " ", "-")
 }
 
-// CyclesNode represents the /teams/{KEY}/cycles directory
+// CyclesNode represents the /teams/{KEY}/cycles directory. It holds a team
+// snapshot and reports the team's times; Getattr comes from the attrNode mixin.
 type CyclesNode struct {
-	BaseNode
+	attrNode
 	team api.Team
 }
 
@@ -32,16 +33,29 @@ var _ fs.NodeReaddirer = (*CyclesNode)(nil)
 var _ fs.NodeLookuper = (*CyclesNode)(nil)
 var _ fs.NodeGetattrer = (*CyclesNode)(nil)
 
-func (c *CyclesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	c.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+// entity/setEntity snapshot and swap the directory's team under the node's
+// volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (c *CyclesNode) entity() api.Team {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.team
+}
+
+func (c *CyclesNode) setEntity(team api.Team) {
+	c.stateMu.Lock()
+	c.team = team
+	c.stateMu.Unlock()
+}
+
+func (c *CyclesNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*CyclesNode); ok {
+		c.setEntity(f.team)
+	}
 }
 
 func (c *CyclesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	cycles, err := c.lfs.GetTeamCycles(ctx, c.team.ID)
+	cycles, err := c.lfs.GetTeamCycles(ctx, c.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -71,7 +85,8 @@ func (c *CyclesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 }
 
 func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	cycles, err := c.lfs.GetTeamCycles(ctx, c.team.ID)
+	team := c.entity()
+	cycles, err := c.lfs.GetTeamCycles(ctx, team.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -90,12 +105,12 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Match by cycle directory name
 	for _, cycle := range cycles {
 		if cycleDirName(cycle) == name {
-			node := &CycleDirNode{BaseNode: BaseNode{lfs: c.lfs}, team: c.team, cycle: cycle}
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = c.lfs.uid
-			out.Attr.Gid = c.lfs.gid
-			out.Attr.SetTimes(&cycle.EndsAt, &cycle.StartsAt, &cycle.StartsAt)
-			return c.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			node := &CycleDirNode{attrNode: attrNode{BaseNode: BaseNode{lfs: c.lfs}}, team: team, cycle: cycle}
+			// api.Cycle has no created/updated fields; the cycle tier's
+			// convention is mtime/ctime=StartsAt with atime=EndsAt (which the
+			// "current" symlink mirrors) — never now().
+			na := nodeAttr{mode: 0755 | syscall.S_IFDIR, created: cycle.StartsAt, updated: cycle.StartsAt, atime: cycle.EndsAt}
+			return c.newDirInode(ctx, out, name, node, na, cycleDirIno(cycle.ID), inheritTimeout), 0
 		}
 	}
 
@@ -104,7 +119,7 @@ func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 
 // CycleDirNode represents a cycle directory (e.g., /teams/ENG/cycles/71/)
 type CycleDirNode struct {
-	BaseNode
+	attrNode
 	team  api.Team
 	cycle api.Cycle
 }
@@ -113,15 +128,30 @@ var _ fs.NodeReaddirer = (*CycleDirNode)(nil)
 var _ fs.NodeLookuper = (*CycleDirNode)(nil)
 var _ fs.NodeGetattrer = (*CycleDirNode)(nil)
 
-func (c *CycleDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	c.SetOwner(out)
-	out.Attr.SetTimes(&c.cycle.EndsAt, &c.cycle.StartsAt, &c.cycle.StartsAt)
-	return 0
+// entity/setEntity snapshot and swap the directory's team+cycle under the
+// node's volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (c *CycleDirNode) entity() (api.Team, api.Cycle) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.team, c.cycle
+}
+
+func (c *CycleDirNode) setEntity(team api.Team, cycle api.Cycle) {
+	c.stateMu.Lock()
+	c.team, c.cycle = team, cycle
+	c.stateMu.Unlock()
+}
+
+func (c *CycleDirNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*CycleDirNode); ok {
+		c.setEntity(f.team, f.cycle)
+	}
 }
 
 func (c *CycleDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := c.lfs.GetCycleIssues(ctx, c.cycle.ID)
+	_, cycle := c.entity()
+	issues, err := c.lfs.GetCycleIssues(ctx, cycle.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -144,17 +174,17 @@ func (c *CycleDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 }
 
 func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	team, cycle := c.entity()
 	// Handle cycle.md. A cycle has no updatedAt; report StartsAt as both mtime
 	// and ctime (preserving the previous sort order), never now().
 	if name == "cycle.md" {
-		team, cycle := c.team, c.cycle
 		return c.lookupRenderFile(ctx, out, "cycle.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return cycleMarkdown(team, cycle), cycle.StartsAt, cycle.StartsAt
 		}, 0, inheritTimeout), 0
 	}
 
 	// Handle issue symlinks (e.g., "ENG-123")
-	issues, err := c.lfs.GetCycleIssues(ctx, c.cycle.ID)
+	issues, err := c.lfs.GetCycleIssues(ctx, cycle.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

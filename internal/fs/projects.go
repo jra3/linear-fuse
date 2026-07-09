@@ -15,9 +15,10 @@ import (
 	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
-// ProjectsNode represents the /teams/{KEY}/projects directory
+// ProjectsNode represents the /teams/{KEY}/projects directory. It holds a team
+// snapshot and reports the team's times; Getattr comes from the attrNode mixin.
 type ProjectsNode struct {
-	BaseNode
+	attrNode
 	team api.Team
 }
 
@@ -27,16 +28,29 @@ var _ fs.NodeMkdirer = (*ProjectsNode)(nil)
 var _ fs.NodeRmdirer = (*ProjectsNode)(nil)
 var _ fs.NodeGetattrer = (*ProjectsNode)(nil)
 
-func (p *ProjectsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	p.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+// entity/setEntity snapshot and swap the directory's team under the node's
+// volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (p *ProjectsNode) entity() api.Team {
+	p.stateMu.Lock()
+	defer p.stateMu.Unlock()
+	return p.team
+}
+
+func (p *ProjectsNode) setEntity(team api.Team) {
+	p.stateMu.Lock()
+	p.team = team
+	p.stateMu.Unlock()
+}
+
+func (p *ProjectsNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*ProjectsNode); ok {
+		p.setEntity(f.team)
+	}
 }
 
 func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
+	projects, err := p.lfs.GetTeamProjects(ctx, p.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -57,7 +71,7 @@ func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 // trio declares the projects collection's feedback surfaces. Projects are
 // created by mkdir rather than a _create trigger, so onFlush stays nil.
 func (p *ProjectsNode) trio() collectionTrio {
-	return collectionTrio{kind: "projects", parentID: p.team.ID}
+	return collectionTrio{kind: "projects", parentID: p.entity().ID}
 }
 
 func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -65,14 +79,15 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return inode, 0
 	}
 
-	projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
+	team := p.entity()
+	projects, err := p.lfs.GetTeamProjects(ctx, team.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
 
 	for _, project := range projects {
 		if projectDirName(project) == name {
-			node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: p.team, project: project}
+			node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: team, project: project}
 			return p.newDirInode(ctx, out, name, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
 		}
 	}
@@ -82,17 +97,18 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 // Mkdir creates a new project
 func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	team := p.entity()
 	if p.lfs.debug {
-		log.Printf("Mkdir: creating project %s in team %s", name, p.team.Key)
+		log.Printf("Mkdir: creating project %s in team %s", name, team.Key)
 	}
 
 	project, errno := commitCreate(ctx, p.lfs, createSpec[api.Project]{
 		op:  `create project "` + name + `"`,
-		key: collectionErrorKey("projects", p.team.ID),
+		key: collectionErrorKey("projects", team.ID),
 		mutate: func(ctx context.Context) (*api.Project, error) {
 			return p.lfs.mutator().CreateProject(ctx, map[string]any{
 				"name":    name,
-				"teamIds": []string{p.team.ID},
+				"teamIds": []string{team.ID},
 			})
 		},
 		result: func(pr *api.Project) WriteResult {
@@ -104,30 +120,31 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 			}
 		},
 		persist: func(ctx context.Context, pr *api.Project) error {
-			return p.lfs.UpsertProject(ctx, p.team.ID, *pr)
+			return p.lfs.UpsertProject(ctx, team.ID, *pr)
 		},
-		dir:       projectsDirIno(p.team.ID),
+		dir:       projectsDirIno(team.ID),
 		entryName: func(pr *api.Project) string { return projectDirName(*pr) },
 	})
 	if errno != 0 {
 		return nil, errno
 	}
 
-	node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: p.team, project: *project}
+	node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: team, project: *project}
 	return p.newDirInode(ctx, out, projectDirName(*project), node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
 }
 
 // Rmdir archives a project (soft delete)
 func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	team := p.entity()
 	if p.lfs.debug {
-		log.Printf("Rmdir: archiving project %s in team %s", name, p.team.Key)
+		log.Printf("Rmdir: archiving project %s in team %s", name, team.Key)
 	}
 
 	return commitDelete(ctx, p.lfs, deleteSpec[api.Project]{
 		op:  `archive project "` + name + `"`,
-		key: collectionErrorKey("projects", p.team.ID),
+		key: collectionErrorKey("projects", team.ID),
 		find: func(ctx context.Context) (*api.Project, error) {
-			projects, err := p.lfs.GetTeamProjects(ctx, p.team.ID)
+			projects, err := p.lfs.GetTeamProjects(ctx, team.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -147,7 +164,7 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		forget: func(ctx context.Context, pr *api.Project) error {
 			return p.lfs.store.Queries().DeleteProject(ctx, pr.ID)
 		},
-		dir:  projectsDirIno(p.team.ID),
+		dir:  projectsDirIno(team.ID),
 		name: name,
 	})
 }

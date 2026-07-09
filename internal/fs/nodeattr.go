@@ -22,6 +22,11 @@ type nodeAttr struct {
 	size    uint64
 	created time.Time
 	updated time.Time
+	// atime, when non-zero, overrides the default atime==updated. The lone
+	// deliberate exception is the cycle directory tier (atime=EndsAt,
+	// mtime/ctime=StartsAt — api.Cycle has no created/updated fields), a
+	// pre-existing convention the "current" symlink mirrors.
+	atime time.Time
 }
 
 // fill renders the nodeAttr into a bare fuse.Attr. Both the directory mixin's
@@ -32,7 +37,11 @@ func (na nodeAttr) fill(attr *fuse.Attr, b *BaseNode) {
 	attr.Mode = na.mode
 	b.setOwnerAttr(attr)
 	attr.Size = na.size
-	attr.SetTimes(nonZeroTime(na.updated), nonZeroTime(na.updated), nonZeroTime(na.created))
+	atime := na.updated
+	if !na.atime.IsZero() {
+		atime = na.atime
+	}
+	attr.SetTimes(nonZeroTime(atime), nonZeroTime(na.updated), nonZeroTime(na.created))
 }
 
 // dirAttr is the nodeAttr for a standard 0755 directory reporting an entity's
@@ -99,13 +108,16 @@ type dirChild interface {
 // newDirInode builds a static-attr directory child from a parent's Lookup. It
 // fixes the child's reporting identity, fills the Lookup EntryOut by calling the
 // child's own fillAttr — the exact method its Getattr uses — sets the entry
-// timeout, and returns the inode. A Lookup answer and a later stat therefore
-// render identically by construction.
+// timeout (inheritTimeout leaves the mount default, like the render files), and
+// returns the inode. A Lookup answer and a later stat therefore render
+// identically by construction.
 func (b *BaseNode) newDirInode(ctx context.Context, out *fuse.EntryOut, name string, child dirChild, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
 	child.setAttr(na)
 	child.fillAttr(&out.Attr)
-	out.SetAttrTimeout(timeout)
-	out.SetEntryTimeout(timeout)
+	if timeout >= 0 {
+		out.SetAttrTimeout(timeout)
+		out.SetEntryTimeout(timeout)
+	}
 	// The bridge dedups AFTER this handler returns: if it still knows a node
 	// under this name, that one will serve — push the freshly-fetched times
 	// and entity into it (see refresh.go).
@@ -130,5 +142,18 @@ func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, name st
 	// The bridge dedups AFTER this handler returns: push fresh content/entity
 	// into the node it will keep (a dirty edit buffer wins — see refresh.go).
 	refreshExisting(b, name, child)
+	// When the bridge keeps an already-known node, the Lookup answer must
+	// report THAT node's size, not the fresh render's. The two can differ in
+	// exactly one case: a dirty edit buffer refused the refresh (the user's
+	// in-flight or rejected-flush content always wins), and a size taken from
+	// the fresh twin would clamp kernel reads of the longer dirty content —
+	// observed as a truncated project.md ("unclosed frontmatter") after a
+	// rejected save.
+	if existing := b.EmbeddedInode().GetChild(name); existing != nil {
+		ops := existing.Operations()
+		if s, ok := ops.(interface{ size() int }); ok && ops != fs.InodeEmbedder(child) {
+			out.Attr.Size = uint64(s.size())
+		}
+	}
 	return b.NewInode(ctx, child, fs.StableAttr{Mode: na.mode & syscall.S_IFMT, Ino: ino})
 }

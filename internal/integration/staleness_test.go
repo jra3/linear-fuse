@@ -73,9 +73,10 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	// Let the kernel's caches expire for real — the production freshness
 	// mechanism. The sync worker never notifies the kernel; entry timeouts
 	// (30s) make the next path walk re-Lookup every component, and each
-	// re-Lookup runs the nodeRefresher seam. (Targeted EntryNotify calls
-	// can't stand in for this: several ancestor dirs use auto-assigned inos,
-	// so their kernel ids aren't derivable from the ino namespace.)
+	// re-Lookup runs the nodeRefresher seam. (The ino namespace is total now —
+	// every ancestor dir has a derivable stable ino — but timeout-driven
+	// revalidation remains the production mechanism, so it is what this
+	// exercises.)
 	if testing.Short() {
 		t.Skip("waits out the 30s kernel entry timeout; skipped with -short")
 	}
@@ -113,5 +114,156 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 		} else {
 			t.Logf("CONTRAST: issue.meta reflects the remote update (re-fetching closure) while issue.md does not:\n%s", meta)
 		}
+	}
+}
+
+// TestRejectedSaveKeepsDirtyContentReadable pins the size half of the
+// dirty-buffer-wins rule: a rejected save (EINVAL) deliberately leaves the
+// user's content in the edit buffer so it can be corrected and re-saved — and
+// every subsequent Lookup must report THAT buffer's size, not the fresh
+// render's. newFileInode used to fill the Lookup answer from the fresh twin
+// while refreshExisting let the dirty buffer keep its content, so the kernel
+// clamped reads of the longer dirty content mid-file ("unclosed frontmatter"
+// on project.md) — a latent mismatch the view-dir normalization surfaced once
+// the whole directory chain became stably reusable.
+func TestRejectedSaveKeepsDirtyContentReadable(t *testing.T) {
+	if testStore == nil {
+		t.Skip("store-backed simulation requires fixture mode")
+	}
+	enableMockMutations(t)
+	ctx := context.Background()
+
+	// A dedicated project row so the poisoned dirty state cannot leak into
+	// other tests' fixtures.
+	proj := fixtures.FixtureAPIProject()
+	proj.ID, proj.Slug, proj.Name = "project-dirty", "dirty-project", "Dirty Project"
+	if err := fixtures.PopulateProject(ctx, testStore, proj, fixtures.FixtureAPITeam().ID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testStore.DB().Exec("DELETE FROM projects WHERE id = 'project-dirty'")
+		_, _ = testStore.DB().Exec("DELETE FROM project_teams WHERE project_id = 'project-dirty'")
+	})
+
+	path := mountPoint + "/teams/" + testTeamKey + "/projects/dirty-project/project.md"
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read project.md: %v", err)
+	}
+
+	// A save that validation rejects: an unknown label name. The flush returns
+	// EINVAL and the buffer stays dirty with exactly this content.
+	rejected := strings.Replace(string(orig), "name:", "labels: [__no_such_project_label__]\nname:", 1)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("open for write: %v", err)
+	}
+	if _, err := f.Write([]byte(rejected)); err != nil {
+		f.Close()
+		t.Fatalf("write: %v", err)
+	}
+	if err := f.Close(); err == nil {
+		t.Fatal("expected the save to be rejected (EINVAL), but close succeeded")
+	}
+
+	// Force fresh Lookups through the whole chain (project children run a 0
+	// entry timeout, so every walk re-Lookups), then read back: the stat size
+	// and the read must both cover the FULL dirty content.
+	if _, err := os.ReadDir(mountPoint + "/teams/" + testTeamKey + "/projects/dirty-project"); err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if int64(len(got)) != st.Size() {
+		t.Errorf("stat size %d != read length %d — Lookup answered a different size than the serving buffer", st.Size(), len(got))
+	}
+	if string(got) != rejected {
+		t.Errorf("dirty content clamped or replaced after rejected save:\nwant %d bytes:\n%s\ngot %d bytes:\n%s", len(rejected), rejected, len(got), got)
+	}
+
+	// The documented retry path: writing corrected content must succeed and
+	// leave the buffer clean again.
+	if err := os.WriteFile(path, orig, 0644); err != nil {
+		t.Errorf("corrected re-save failed: %v", err)
+	}
+}
+
+// TestRemoteTeamUpdateVisibleAfterKernelRevalidation extends the pinned-fd
+// revalidation technique to the busiest reused directory node: teams/{KEY} is
+// now on a stable ino (teamDirIno), so after entry-timeout expiry the kernel's
+// re-Lookup dedups onto the FIRST TeamNode ever mounted. The nodeRefresher
+// seam must push the freshly-fetched team snapshot into that node (and
+// newDirInode must re-stamp its nodeAttr), or the directory would report
+// first-Lookup times and team.md would render the old name for as long as the
+// kernel remembered the inode — the exact hazard the view-dir normalization
+// took on when it moved these nodes off auto-assigned inos.
+func TestRemoteTeamUpdateVisibleAfterKernelRevalidation(t *testing.T) {
+	ctx := context.Background()
+	teamDir := mountPoint + "/teams/" + testTeamKey
+	teamFile := teamDir + "/team.md"
+
+	before, err := os.ReadFile(teamFile)
+	if err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+	if !strings.Contains(string(before), "Test Team") {
+		t.Fatalf("fixture team not served, got:\n%s", before)
+	}
+
+	// Pin the team directory: an open descriptor keeps the kernel from
+	// FORGETting the dir inode and its ancestor dentries, so the post-expiry
+	// re-Lookup of "TST" hits the ALREADY-KNOWN TeamNode — the go-fuse reuse
+	// path this test exists to guard.
+	pin, err := os.Open(teamDir)
+	if err != nil {
+		t.Fatalf("pin open: %v", err)
+	}
+	defer pin.Close()
+
+	if testStore == nil {
+		t.Skip("store-backed staleness simulation requires fixture mode")
+	}
+
+	// Simulate the sync worker landing a remote team edit: same team, new
+	// name, newer updatedAt — written straight to the store, no kernel
+	// notification (faithful to production sync).
+	team := fixtures.FixtureAPITeam()
+	team.Name = "Renamed Team By Remote Sync"
+	team.UpdatedAt = time.Now()
+	if err := testStore.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("upsert team: %v", err)
+	}
+
+	// Wait out the kernel's entry/attr timeouts for real, as in the issue
+	// variant above: expiry forces the next path walk to re-Lookup every
+	// component, and each re-Lookup runs the nodeRefresher seam.
+	if testing.Short() {
+		t.Skip("waits out the 30s kernel entry timeout; skipped with -short")
+	}
+	time.Sleep(31 * time.Second)
+
+	after, err := os.ReadFile(teamFile)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if !strings.Contains(string(after), "Renamed Team By Remote Sync") {
+		t.Errorf("STALE: team.md still serves first-Lookup content after remote team update + full kernel revalidation.\ngot:\n%s", after)
+	}
+
+	// The team directory's own attrs must follow: mtime = the team's fresh
+	// updatedAt (the honest-times half of the normalization), not the fixture
+	// base time the first Lookup stamped.
+	st, err := os.Stat(teamDir)
+	if err != nil {
+		t.Fatalf("stat team dir: %v", err)
+	}
+	if age := time.Since(st.ModTime()); age > time.Hour {
+		t.Errorf("STALE ATTRS: team dir mtime %v predates the remote update (age %v)", st.ModTime(), age)
 	}
 }

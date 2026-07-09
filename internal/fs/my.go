@@ -10,22 +10,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// MyNode represents the /my directory (personal views)
+// MyNode represents the /my directory (personal views). Stateless container:
+// zero times (honest unknown); Getattr comes from the attrNode mixin.
 type MyNode struct {
-	BaseNode
+	attrNode
 }
 
 var _ fs.NodeReaddirer = (*MyNode)(nil)
 var _ fs.NodeLookuper = (*MyNode)(nil)
 var _ fs.NodeGetattrer = (*MyNode)(nil)
-
-func (m *MyNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	m.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
@@ -37,22 +30,12 @@ func (m *MyNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	now := time.Now()
-	out.Attr.Mode = 0755 | syscall.S_IFDIR
-	out.Attr.Uid = m.lfs.uid
-	out.Attr.Gid = m.lfs.gid
-	out.Attr.SetTimes(&now, &now, &now)
-
 	switch name {
-	case "assigned":
-		node := &MyIssuesNode{BaseNode: BaseNode{lfs: m.lfs}, issueType: "assigned"}
-		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
-	case "created":
-		node := &MyIssuesNode{BaseNode: BaseNode{lfs: m.lfs}, issueType: "created"}
-		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
-	case "active":
-		node := &MyIssuesNode{BaseNode: BaseNode{lfs: m.lfs}, issueType: "active"}
-		return m.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+	case "assigned", "created", "active":
+		// Stateless like the parent (the name IS the identity): zero times,
+		// ino keyed on the fixed subdir name.
+		node := &MyIssuesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: m.lfs}}, issueType: name}
+		return m.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), myDirIno(name), inheritTimeout), 0
 	default:
 		return nil, syscall.ENOENT
 	}
@@ -60,21 +43,13 @@ func (m *MyNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*
 
 // MyIssuesNode represents /my/{assigned,created,active} directories
 type MyIssuesNode struct {
-	BaseNode
+	attrNode
 	issueType string // "assigned", "created", or "active"
 }
 
 var _ fs.NodeReaddirer = (*MyIssuesNode)(nil)
 var _ fs.NodeLookuper = (*MyIssuesNode)(nil)
 var _ fs.NodeGetattrer = (*MyIssuesNode)(nil)
-
-func (m *MyIssuesNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	m.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (m *MyIssuesNode) getIssues(ctx context.Context) ([]api.Issue, error) {
 	switch m.issueType {

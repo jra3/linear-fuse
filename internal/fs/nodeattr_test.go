@@ -69,6 +69,28 @@ func TestNodeAttrZeroTimeStaysEpoch(t *testing.T) {
 	}
 }
 
+// TestNodeAttrAtimeOverride pins the one deliberate exception to atime==updated:
+// a non-zero atime field overrides it (the cycle directory tier reports
+// atime=EndsAt with mtime/ctime=StartsAt, since api.Cycle has no
+// created/updated fields), while mtime/ctime stay on updated/created.
+func TestNodeAttrAtimeOverride(t *testing.T) {
+	t.Parallel()
+	lfs := testLFS(t)
+	starts := time.Unix(1_700_000_000, 0)
+	ends := time.Unix(1_700_500_000, 0)
+
+	na := nodeAttr{mode: 0755 | syscall.S_IFDIR, created: starts, updated: starts, atime: ends}
+	var attr fuse.Attr
+	na.fill(&attr, &BaseNode{lfs: lfs})
+
+	if int64(attr.Atime) != ends.Unix() {
+		t.Errorf("atime = %d, want %d (override)", attr.Atime, ends.Unix())
+	}
+	if int64(attr.Mtime) != starts.Unix() || int64(attr.Ctime) != starts.Unix() {
+		t.Errorf("mtime/ctime = %d/%d, want %d (updated/created untouched by the override)", attr.Mtime, attr.Ctime, starts.Unix())
+	}
+}
+
 // dirAttrNode is every constructed directory node: it carries a nodeAttr and
 // reports it through the attrNode mixin's promoted methods. fillAttr is the
 // Lookup-answer path (what newDirInode uses); Getattr is the stat path.
@@ -106,6 +128,24 @@ func TestDirNodeLookupGetattrAgree(t *testing.T) {
 		"issue-dir":      &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
 		"project-dir":    &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
 		"initiative-dir": &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		// The view/entity directory kinds normalized onto attrNode: the four
+		// top-level containers, the team/user entity dirs, and the team's view
+		// subdirectories (previously hand-rolled time.Now() blocks).
+		"teams-root":       &TeamsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"users-root":       &UsersNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"my-root":          &MyNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"initiatives-root": &InitiativesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"team-dir":         &TeamNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"user-dir":         &UserNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"issues":           &IssuesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"projects":         &ProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"cycles":           &CyclesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"cycle-dir":        &CycleDirNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"recent":           &RecentNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"by-root":          &FilterRootNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"by-category":      &FilterCategoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"by-value":         &FilterValueNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
+		"my-issues":        &MyIssuesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}},
 	}
 
 	for name, node := range nodes {

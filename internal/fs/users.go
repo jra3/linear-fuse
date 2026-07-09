@@ -12,20 +12,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// UsersNode represents the /users directory
+// UsersNode represents the /users directory. Stateless container: zero times
+// (honest unknown), no refresh needs; Getattr comes from the attrNode mixin.
 type UsersNode struct {
-	BaseNode
+	attrNode
 }
 
 var _ fs.NodeReaddirer = (*UsersNode)(nil)
 var _ fs.NodeLookuper = (*UsersNode)(nil)
 var _ fs.NodeGetattrer = (*UsersNode)(nil)
-
-func (u *UsersNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	u.SetOwner(out)
-	return 0
-}
 
 func (u *UsersNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	users, err := u.lfs.GetUsers(ctx)
@@ -52,13 +47,10 @@ func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	for _, user := range users {
 		if userDirName(user) == name {
-			now := time.Now()
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = u.lfs.uid
-			out.Attr.Gid = u.lfs.gid
-			out.Attr.SetTimes(&now, &now, &now)
-			node := &UserNode{BaseNode: BaseNode{lfs: u.lfs}, user: user}
-			return u.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			// api.User carries no time fields; the dir honestly reports zero
+			// (unknown) rather than a fabricated now().
+			node := &UserNode{attrNode: attrNode{BaseNode: BaseNode{lfs: u.lfs}}, user: user}
+			return u.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), userDirIno(user.ID), inheritTimeout), 0
 		}
 	}
 
@@ -78,9 +70,12 @@ func userDirName(user api.User) string {
 	return user.Email
 }
 
-// UserNode represents a single user's directory (e.g., /users/alice)
+// UserNode represents a single user's directory (e.g., /users/alice).
+// api.User has no time fields, so the dir reports zero times, but it still
+// carries a user snapshot (user.md renders from it) — so it implements the
+// nodeRefresher seam like the other snapshot carriers.
 type UserNode struct {
-	BaseNode
+	attrNode
 	user api.User
 }
 
@@ -88,16 +83,29 @@ var _ fs.NodeReaddirer = (*UserNode)(nil)
 var _ fs.NodeLookuper = (*UserNode)(nil)
 var _ fs.NodeGetattrer = (*UserNode)(nil)
 
-func (u *UserNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	u.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
+// entity/setEntity snapshot and swap the directory's user under the node's
+// volatile-state lock; setEntity is written by the nodeRefresher seam
+// (refresh.go).
+func (u *UserNode) entity() api.User {
+	u.stateMu.Lock()
+	defer u.stateMu.Unlock()
+	return u.user
+}
+
+func (u *UserNode) setEntity(user api.User) {
+	u.stateMu.Lock()
+	u.user = user
+	u.stateMu.Unlock()
+}
+
+func (u *UserNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*UserNode); ok {
+		u.setEntity(f.user)
+	}
 }
 
 func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)
+	issues, err := u.lfs.GetUserIssues(ctx, u.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -119,16 +127,16 @@ func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	user := u.entity() // snapshot captured by the closures below
 	// Handle user.md metadata file. api.User carries no created/updated times,
 	// so the file honestly reports zero (unknown) rather than a fabricated now().
 	if name == "user.md" {
-		user := u.user
 		return u.lookupRenderFile(ctx, out, "user.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return userMarkdown(user), time.Time{}, time.Time{}
 		}, 0, inheritTimeout), 0
 	}
 
-	issues, err := u.lfs.GetUserIssues(ctx, u.user.ID)
+	issues, err := u.lfs.GetUserIssues(ctx, user.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

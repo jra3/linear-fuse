@@ -11,22 +11,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// TeamsNode represents the /teams directory
+// TeamsNode represents the /teams directory. Stateless container: zero times
+// (honest unknown), no refresh needs; Getattr comes from the attrNode mixin.
 type TeamsNode struct {
-	BaseNode
+	attrNode
 }
 
 var _ fs.NodeReaddirer = (*TeamsNode)(nil)
 var _ fs.NodeLookuper = (*TeamsNode)(nil)
 var _ fs.NodeGetattrer = (*TeamsNode)(nil)
-
-func (t *TeamsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
-	out.Mode = 0755 | syscall.S_IFDIR
-	t.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
-	return 0
-}
 
 func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	teams, err := t.lfs.GetTeams(ctx)
@@ -53,12 +46,8 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	for _, team := range teams {
 		if team.Key == name {
-			out.Attr.Mode = 0755 | syscall.S_IFDIR
-			out.Attr.Uid = t.lfs.uid
-			out.Attr.Gid = t.lfs.gid
-			out.Attr.SetTimes(&team.UpdatedAt, &team.UpdatedAt, &team.CreatedAt)
-			node := &TeamNode{BaseNode: BaseNode{lfs: t.lfs}, team: team}
-			return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+			node := &TeamNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+			return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), teamDirIno(team.ID), inheritTimeout), 0
 		}
 	}
 
@@ -67,7 +56,7 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 // TeamNode represents a single team directory (e.g., /teams/ENG)
 type TeamNode struct {
-	BaseNode
+	attrNode
 	team api.Team
 }
 
@@ -75,11 +64,26 @@ var _ fs.NodeReaddirer = (*TeamNode)(nil)
 var _ fs.NodeLookuper = (*TeamNode)(nil)
 var _ fs.NodeGetattrer = (*TeamNode)(nil)
 
-func (t *TeamNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	t.SetOwner(out)
-	out.SetTimes(&t.team.UpdatedAt, &t.team.UpdatedAt, &t.team.CreatedAt)
-	return 0
+// entity/setEntity snapshot and swap the directory's team under the node's
+// volatile-state lock: setEntity is written by the nodeRefresher seam
+// (refresh.go), which pushes freshly-fetched state into this node when
+// go-fuse dedups a later Lookup onto it.
+func (t *TeamNode) entity() api.Team {
+	t.stateMu.Lock()
+	defer t.stateMu.Unlock()
+	return t.team
+}
+
+func (t *TeamNode) setEntity(team api.Team) {
+	t.stateMu.Lock()
+	t.team = team
+	t.stateMu.Unlock()
+}
+
+func (t *TeamNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*TeamNode); ok {
+		t.setEntity(f.team)
+	}
 }
 
 func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -101,10 +105,9 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	now := time.Now()
+	team := t.entity() // snapshot captured by the arms and their closures
 	switch name {
 	case "team.md":
-		team := t.team
 		return t.lookupRenderFile(ctx, out, "team.md", func(context.Context) ([]byte, time.Time, time.Time) {
 			return teamMarkdown(team), team.UpdatedAt, team.CreatedAt
 		}, 0, inheritTimeout), 0
@@ -113,7 +116,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		// states.md has no single mtime (it lists a collection); report the
 		// team's times as a stable proxy — never now(). Content is fetched from
 		// SQLite on each read (cheap), so no node-level cache is needed.
-		lfs, team := t.lfs, t.team
+		lfs := t.lfs
 		return t.lookupRenderFile(ctx, out, "states.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			states, err := lfs.GetTeamStates(ctx, team.ID)
 			if err != nil {
@@ -123,7 +126,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		}, 0, inheritTimeout), 0
 
 	case "labels.md":
-		lfs, team := t.lfs, t.team
+		lfs := t.lfs
 		return t.lookupRenderFile(ctx, out, "labels.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			labels, err := lfs.GetTeamLabels(ctx, team.ID)
 			if err != nil {
@@ -141,65 +144,40 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		// file's real times.
 		return t.newSymlinkInode(ctx, out, "../../project-labels.md", time.Time{}, time.Time{}), 0
 
+	// The team's view subdirectories hold a team snapshot and report the
+	// team's times: they are (or contain) projections of the team's state.
 	case "by":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &FilterRootNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &FilterRootNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), byDirIno(team.ID), inheritTimeout), 0
 
 	case "cycles":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &CyclesNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &CyclesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), cyclesDirIno(team.ID), inheritTimeout), 0
 
 	case "projects":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &ProjectsNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  projectsDirIno(t.team.ID),
-		}), 0
+		node := &ProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), projectsDirIno(team.ID), inheritTimeout), 0
 
 	case "issues":
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &IssuesNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
+		node := &IssuesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
 		// The stable ino is what makes create/delete invalidations against
 		// issuesDirIno reach the kernel; without it InodeNotify targets an
 		// inode the kernel never learned.
-		return t.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  issuesDirIno(t.team.ID),
-		}), 0
+		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), issuesDirIno(team.ID), inheritTimeout), 0
 
 	case "recent":
-		out.Attr.Mode = 0555 | syscall.S_IFDIR // read-only view
-		out.Attr.Uid = t.lfs.uid
-		out.Attr.Gid = t.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		node := &RecentNode{BaseNode: BaseNode{lfs: t.lfs}, team: t.team}
-		return t.NewInode(ctx, node, fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-			Ino:  recentDirIno(t.team.ID),
-		}), 0
+		node := &RecentNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		// 0555: read-only view.
+		na := nodeAttr{mode: 0555 | syscall.S_IFDIR, created: team.CreatedAt, updated: team.UpdatedAt}
+		return t.newDirInode(ctx, out, name, node, na, recentDirIno(team.ID), inheritTimeout), 0
 
 	case "docs":
-		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: t.team.ID}
-		return t.newDirInode(ctx, out, "docs", node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), docsDirIno(t.team.ID), 0), 0
+		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: team.ID}
+		return t.newDirInode(ctx, out, "docs", node, dirAttr(team.CreatedAt, team.UpdatedAt), docsDirIno(team.ID), 0), 0
 
 	case "labels":
-		node := &LabelsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: t.team.ID}
-		return t.newDirInode(ctx, out, "labels", node, dirAttr(t.team.CreatedAt, t.team.UpdatedAt), labelsDirIno(t.team.ID), 0), 0
+		node := &LabelsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: team.ID}
+		return t.newDirInode(ctx, out, "labels", node, dirAttr(team.CreatedAt, team.UpdatedAt), labelsDirIno(team.ID), 0), 0
 	}
 
 	return nil, syscall.ENOENT

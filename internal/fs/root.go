@@ -20,10 +20,11 @@ var _ fs.NodeLookuper = (*RootNode)(nil)
 var _ fs.NodeGetattrer = (*RootNode)(nil)
 
 func (r *RootNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	now := time.Now()
+	// The mount root is a stateless container like teams/ or users/: it has no
+	// entity times, so it reports zero (honest unknown) — never a fabricated
+	// now() that reshuffles on every stat.
 	out.Mode = 0755 | syscall.S_IFDIR
 	r.SetOwner(out)
-	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
@@ -40,7 +41,6 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	now := time.Now()
 	switch name {
 	case "README.md":
 		// The generated docs have no natural entity time; report zero (unknown).
@@ -61,37 +61,24 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 				return projectLabelsMarkdown(labels), mtime, ctime
 			}, projectLabelsCatalogIno(), inheritTimeout), 0
 
+	// The four top-level containers are stateless — no entity backs them, so
+	// they report zero times (honest unknown) and key their inos on the fixed
+	// directory name.
 	case "teams":
-		node := &TeamsNode{BaseNode: BaseNode{lfs: r.lfs}}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = r.lfs.uid
-		out.Attr.Gid = r.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &TeamsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: r.lfs}}}
+		return r.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), viewDirIno(name), inheritTimeout), 0
 
 	case "users":
-		node := &UsersNode{BaseNode: BaseNode{lfs: r.lfs}}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = r.lfs.uid
-		out.Attr.Gid = r.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &UsersNode{attrNode: attrNode{BaseNode: BaseNode{lfs: r.lfs}}}
+		return r.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), viewDirIno(name), inheritTimeout), 0
 
 	case "my":
-		node := &MyNode{BaseNode: BaseNode{lfs: r.lfs}}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = r.lfs.uid
-		out.Attr.Gid = r.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &MyNode{attrNode: attrNode{BaseNode: BaseNode{lfs: r.lfs}}}
+		return r.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), viewDirIno(name), inheritTimeout), 0
 
 	case "initiatives":
-		node := &InitiativesNode{BaseNode: BaseNode{lfs: r.lfs}}
-		out.Attr.Mode = 0755 | syscall.S_IFDIR
-		out.Attr.Uid = r.lfs.uid
-		out.Attr.Gid = r.lfs.gid
-		out.Attr.SetTimes(&now, &now, &now)
-		return r.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFDIR}), 0
+		node := &InitiativesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: r.lfs}}}
+		return r.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), viewDirIno(name), inheritTimeout), 0
 
 	default:
 		return nil, syscall.ENOENT
