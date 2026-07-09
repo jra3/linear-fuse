@@ -296,43 +296,33 @@ func (p *ProjectNode) Create(ctx context.Context, name string, flags uint32, mod
 }
 
 // Rename persists an editor's atomic save: a scratch temp file renamed onto
-// project.md is written through project.md's normal Flush path. project.md is the
-// only writable file here, so other rename targets are rejected.
+// project.md is written through project.md's normal Flush path. The tail (EXDEV /
+// target guard / flush / adopt-on-{0,EIO} / invalidate) is the shared
+// renameSave module.
 func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	team, project := p.entity()
 	if p.lfs.debug {
 		log.Printf("Rename in project %s: %s -> %s", project.Name, name, newName)
 	}
 
-	dirIno := p.EmbeddedInode().StableAttr().Ino
-	if newParent.EmbeddedInode().StableAttr().Ino != dirIno {
-		return syscall.EXDEV
-	}
-
-	content, ok := scratchRenameBytes(p, name)
-	if !ok {
-		return syscall.ENOTSUP
-	}
-
-	if newName != "project.md" {
-		p.lfs.SetWriteError(project.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only project.md is writable in this directory; save your changes onto project.md (atomic save-via-rename onto project.md is supported).", name, newName))
-		return syscall.ENOTSUP
-	}
-
-	fileNode := &ProjectInfoNode{
-		BaseNode:   BaseNode{lfs: p.lfs},
-		team:       team,
-		project:    project,
-		editBuffer: editBuffer{content: content, dirty: true},
-	}
-	errno := fileNode.Flush(ctx, nil)
-
-	if errno == 0 || errno == syscall.EIO {
-		p.setEntity(fileNode.project)
-		p.lfs.InvalidateRenamed(dirIno, name, newName, projectInfoIno(fileNode.project.ID))
-	}
-
-	return errno
+	var fileNode *ProjectInfoNode
+	return renameSave(ctx, p.lfs, name, newParent, newName, renameSaveSpec{
+		targetName: "project.md",
+		errKey:     project.ID,
+		dirIno:     p.EmbeddedInode().StableAttr().Ino,
+		fileIno:    projectInfoIno(project.ID),
+		scratch:    func(oldName string) ([]byte, bool) { return scratchRenameBytes(p, oldName) },
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
+			fileNode = &ProjectInfoNode{
+				BaseNode:   BaseNode{lfs: p.lfs},
+				team:       team,
+				project:    project,
+				editBuffer: editBuffer{content: content, dirty: true},
+			}
+			return fileNode.Flush(ctx, nil)
+		},
+		adopt: func() { p.setEntity(fileNode.project) },
+	})
 }
 
 // Unlink lets editors clean up an abandoned atomic-save temp file. Only scratch
