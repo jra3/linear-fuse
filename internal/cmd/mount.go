@@ -9,8 +9,11 @@ import (
 	"strings"
 	"syscall"
 
+	"time"
+
 	"github.com/jra3/linear-fuse/internal/config"
 	"github.com/jra3/linear-fuse/internal/fs"
+	"github.com/jra3/linear-fuse/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -58,6 +61,21 @@ func runMount(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Mounting Linear filesystem at %s\n", mountpoint)
+
+	// Telemetry first, so instruments registered during filesystem/worker
+	// construction land on the real provider. Failure must never block
+	// mounting — log and continue without it.
+	if shutdownTelemetry, err := telemetry.Init(cfg.Telemetry, Version, GitCommit); err != nil {
+		fmt.Printf("Warning: telemetry disabled: %v\n", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownTelemetry(shutdownCtx); err != nil {
+				fmt.Printf("Warning: telemetry shutdown failed: %v\n", err)
+			}
+		}()
+	}
 
 	// Create LinearFS instance
 	lfs, err := fs.NewLinearFS(cfg, debug)
