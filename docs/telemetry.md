@@ -54,6 +54,9 @@ telemetry:
 Source: `internal/config/config.go` (`TelemetryConfig`,
 `TelemetryFileConfig`, `DefaultTelemetryPath`).
 
+`telemetry.requests.*` (the per-request debug log — not an OTEL signal) is
+documented in its own section below.
+
 ## Instruments
 
 Naming: `linearfs.<layer>.<what>`; meter scopes are `linearfs/process`,
@@ -181,6 +184,67 @@ jq -r '.ScopeMetrics[] | .Metrics[] | select(.Name=="linearfs.swr.triggers")
 jq -r '[(.ScopeMetrics[].Metrics[] | select(.Name=="linearfs.budget.remaining")
   | .Data.DataPoints[] | select(.Attributes[0].Value.Value=="complexity") | .Value)] | first' $M
 ```
+
+## Per-request debug log — `telemetry.requests.*`
+
+**A debug log, not an OTEL signal.** The meter pipeline above is untouched by
+this (metrics only — traces never, still). When enabled, the api client
+appends one JSON line per completed GraphQL request to a separate JSONL file,
+written at the same place in `Client.query` where the response settles (the
+`apiMetrics` record site). Built for the cold-start observation runs
+(`docs/plans/2026-07-09-coldstart-observation-plan.md`): duplicate-fetch
+detection and complexity attribution need per-request granularity with full
+variables, which no bounded-cardinality metric can carry.
+
+```yaml
+telemetry:
+  requests:
+    enabled: true                   # default false
+    path: ~/custom-requests.jsonl   # default: <UserConfigDir>/linearfs/requests.jsonl
+```
+
+One line per request:
+
+```json
+{"ts":"2026-07-09T02:00:01.123456789Z","op":"TeamIssuesByUpdatedAt",
+ "vars":{"teamId":"...","first":50},"duration_ms":312.4,"outcome":"ok","complexity":8231}
+```
+
+- `ts` — RFC3339Nano, UTC, at completion.
+- `op` — the same `extractOpName` value as the `op` metric attribute.
+- `vars` — the request's **full** variables map (ids, cursors), deliberately:
+  grouping lines by `(op, vars)` is the duplicate-fetch detector. This is why
+  the log is off by default — it can carry entity IDs.
+- `duration_ms` — wall time of the request.
+- `outcome` — `ok` | `error` | `ratelimited`, the exact classification of
+  `linearfs.api.requests` (one shared classifier).
+- `complexity` — the response's actual `X-Complexity`, threaded from the
+  budget's reconcile (still the ONE place the header is parsed); **omitted**
+  when the response carried none.
+
+Semantics match `linearfs.api.requests`: only requests actually sent are
+logged — budget deferrals never appear (they land in
+`linearfs.budget.decisions`). Disabled costs nothing (nil writer, one
+branch); the file reuses the metrics export's rotation writer with a fixed
+100 MB cap (disk bounded at ~2×). Sources:
+`internal/api/requestlog.go` (entry + log site),
+`internal/telemetry/requestlog.go` (writer), wired at client construction in
+`internal/fs/linearfs.go`.
+
+### Cold-start observation scripts
+
+`scripts/coldstart-observe.sh` is the unattended runbook that consumes this
+log (budget-gated double cold start of the live service; see the plan doc).
+It refuses to run without `LINEARFS_COLDSTART_CONFIRM=1` and is
+`at`-schedulable:
+
+```bash
+echo "LINEARFS_COLDSTART_CONFIRM=1 ~/jra3/linear-fuse/scripts/coldstart-observe.sh" | at 02:00
+```
+
+`scripts/coldstart-probe.sh` is its Run B companion: a 15s loop wall-timing
+fixed read paths on the mount into a TSV. Both are operator tools for the
+live service — never run by CI or any test.
 
 ## Adding an instrument (the phase-2/3 pattern)
 

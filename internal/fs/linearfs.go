@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/repo"
 	"github.com/jra3/linear-fuse/internal/sync"
+	"github.com/jra3/linear-fuse/internal/telemetry"
 )
 
 // IssueError represents a validation error from a failed write operation
@@ -33,6 +35,7 @@ type LinearFS struct {
 	repo       *repo.SQLiteRepository // For all read operations
 	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
 	syncWorker *sync.Worker           // Background sync worker
+	requestLog io.Closer              // per-request debug log writer (nil when disabled); closed in Close
 	debug      bool
 	uid        uint32 // Owner UID for files/dirs
 	gid        uint32 // Owner GID for files/dirs
@@ -90,6 +93,18 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 
 	client := api.NewClient(cfg.APIKey)
 
+	// Optional per-request JSONL debug log (telemetry.requests.*, default
+	// off). Wired at client construction — the config lives under telemetry
+	// but the client is born here, not in cmd. Failure to open it must never
+	// block mounting: log and continue without it.
+	var requestLog io.Closer
+	if w, err := telemetry.NewRequestLog(cfg.Telemetry.Requests); err != nil {
+		log.Printf("[linearfs] request log disabled: %v", err)
+	} else if w != nil {
+		client.SetRequestLog(w)
+		requestLog = w
+	}
+
 	// Initialize file cache directory
 	cacheDir := filepath.Join(os.Getenv("HOME"), "Library", "Caches", "linearfs", "files")
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
@@ -102,6 +117,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		client:       client,
 		mutatorImpl:  client,
 		verifierImpl: client,
+		requestLog:   requestLog,
 		debug:        debug,
 	}
 	// Wire the feedback store's kernel-cache seam to this instance. The method
@@ -135,6 +151,10 @@ func (lfs *LinearFS) Close() {
 	// Close SQLite store
 	if lfs.store != nil {
 		lfs.store.Close()
+	}
+	// Release the request debug log writer (no more queries after this)
+	if lfs.requestLog != nil {
+		_ = lfs.requestLog.Close()
 	}
 }
 

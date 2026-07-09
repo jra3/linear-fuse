@@ -273,6 +273,11 @@ type admission struct {
 	tier    priority
 	cost    float64
 	settled bool // guarded by b.mu
+
+	// The response's parsed X-Complexity, captured when observe/rateLimited
+	// reconciles the headers (guarded by b.mu; see actualComplexity).
+	actual     float64
+	actualSeen bool
 }
 
 // admit gates one request at the given priority. On allow it reserves the
@@ -340,7 +345,19 @@ func (a *admission) observe(h http.Header) {
 	}
 	a.settled = true
 	a.b.releaseLocked(a.cost)
-	a.b.reconcileLocked(a.op, h)
+	a.actual, a.actualSeen = a.b.reconcileLocked(a.op, h)
+}
+
+// actualComplexity reports the response's X-Complexity as parsed by the
+// budget's reconcile — the ONE place the header is parsed; the request debug
+// log (requestlog.go) reads the value from here rather than parsing twice.
+// ok is false until the admission has settled via observe/rateLimited, and
+// stays false when the response carried no X-Complexity header (or the
+// admission was released without a response).
+func (a *admission) actualComplexity() (v float64, ok bool) {
+	a.b.mu.Lock()
+	defer a.b.mu.Unlock()
+	return a.actual, a.actualSeen
 }
 
 // rateLimited settles the admission from a 400/RATELIMITED (or 429)
@@ -356,7 +373,7 @@ func (a *admission) rateLimited(h http.Header) {
 	}
 	a.settled = true
 	a.b.releaseLocked(a.cost)
-	a.b.reconcileLocked(a.op, h)
+	a.actual, a.actualSeen = a.b.reconcileLocked(a.op, h)
 	a.b.snapExhaustedLocked()
 	a.b.metrics.recordDecision(a.tier, "ratelimited")
 }
@@ -388,9 +405,12 @@ func (b *rateBudget) releaseLocked(cost float64) {
 // reconcileLocked snaps both axes to the response headers and records the
 // op's actual cost. Missing headers leave the corresponding fields alone.
 // The reset headers are epoch MILLISECONDS, per-axis (the old code read a
-// header Linear doesn't send, as seconds — dead backoff).
-func (b *rateBudget) reconcileLocked(op string, h http.Header) {
-	if v, ok := headerFloat(h, "X-Complexity"); ok {
+// header Linear doesn't send, as seconds — dead backoff). The parsed
+// X-Complexity is returned (ok=false when the header is absent) so callers
+// can thread it onward without parsing the header a second time.
+func (b *rateBudget) reconcileLocked(op string, h http.Header) (complexity float64, ok bool) {
+	if v, seen := headerFloat(h, "X-Complexity"); seen {
+		complexity, ok = v, true
 		b.cost[op] = v
 		// The one place X-Complexity is parsed also records it.
 		b.metrics.complexity.Record(context.Background(), v,
@@ -406,6 +426,7 @@ func (b *rateBudget) reconcileLocked(op string, h http.Header) {
 				w.remaining, w.limit, w.name, op)
 		}
 	}
+	return complexity, ok
 }
 
 func reconcileAxis(w *window, h http.Header, prefix string) {

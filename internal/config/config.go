@@ -35,11 +35,13 @@ type LogConfig struct {
 	File  string `yaml:"file"`
 }
 
-// TelemetryConfig configures the OTEL metrics pipeline (internal/telemetry).
-// The in-memory meter and the journald summary line are always on; only the
-// JSONL file export is configurable here.
+// TelemetryConfig configures the OTEL metrics pipeline (internal/telemetry)
+// plus the per-request debug log. The in-memory meter and the journald
+// summary line are always on; only the JSONL file export and the request log
+// are configurable here.
 type TelemetryConfig struct {
-	File TelemetryFileConfig `yaml:"file"`
+	File     TelemetryFileConfig     `yaml:"file"`
+	Requests TelemetryRequestsConfig `yaml:"requests"`
 }
 
 // TelemetryFileConfig gates the JSONL metrics file export (off by default).
@@ -48,6 +50,18 @@ type TelemetryFileConfig struct {
 	Path      string        `yaml:"path"`
 	Interval  time.Duration `yaml:"interval"`
 	MaxSizeMB int           `yaml:"max_size_mb"`
+}
+
+// TelemetryRequestsConfig gates the per-request JSONL debug log (off by
+// default): one JSON line per completed GraphQL request, written by the api
+// client. This is an application debug log, NOT an OTEL signal — the
+// metrics-only/traces-never policy is untouched. It exists for offline
+// analysis runs (duplicate-fetch detection, complexity attribution; see
+// docs/plans/2026-07-09-coldstart-observation-plan.md), which is why the
+// full variables map is logged.
+type TelemetryRequestsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Path    string `yaml:"path"`
 }
 
 func DefaultConfig() *Config {
@@ -70,6 +84,10 @@ func DefaultConfig() *Config {
 				Interval:  60 * time.Second,
 				MaxSizeMB: 50,
 			},
+			Requests: TelemetryRequestsConfig{
+				Enabled: false,
+				Path:    DefaultRequestLogPath(),
+			},
 		},
 	}
 }
@@ -83,6 +101,17 @@ func DefaultTelemetryPath() string {
 		configDir = os.Getenv("HOME")
 	}
 	return filepath.Join(configDir, "linearfs", "metrics.jsonl")
+}
+
+// DefaultRequestLogPath returns the default per-request JSONL debug log
+// path, next to the other linearfs state files (same convention as
+// DefaultTelemetryPath's metrics.jsonl).
+func DefaultRequestLogPath() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = os.Getenv("HOME")
+	}
+	return filepath.Join(configDir, "linearfs", "requests.jsonl")
 }
 
 // Load loads configuration using the real environment.

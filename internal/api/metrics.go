@@ -41,17 +41,24 @@ func newAPIMetrics() apiMetrics {
 	}
 }
 
+// outcomeFor classifies a completed request's error into the closed outcome
+// enum shared by linearfs.api.requests and the request debug log
+// (requestlog.go) — one classification, two consumers.
+func outcomeFor(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case IsRateLimited(err):
+		return "ratelimited"
+	default:
+		return "error"
+	}
+}
+
 // record counts one completed request (one that was actually sent — budget
 // deferrals never reach here; they land in linearfs.budget.decisions).
 func (am apiMetrics) record(ctx context.Context, op string, elapsed time.Duration, err error) {
-	outcome := "ok"
-	switch {
-	case err == nil:
-	case IsRateLimited(err):
-		outcome = "ratelimited"
-	default:
-		outcome = "error"
-	}
+	outcome := outcomeFor(err)
 	am.requests.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("op", op),
 		attribute.String("outcome", outcome)))
