@@ -413,33 +413,13 @@ func (c *Client) BudgetSnapshot() (count int, pct float64) {
 
 // GetTeams fetches all teams the user has access to
 func (c *Client) GetTeams(ctx context.Context) ([]Team, error) {
-	var result struct {
-		Teams struct {
-			Nodes []Team `json:"nodes"`
-		} `json:"teams"`
-	}
-
-	err := c.query(ctx, queryTeams, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Teams.Nodes, nil
+	return fetchNodes[Team](ctx, c, queryTeams, nil, "teams")
 }
 
 // GetTeamIssuesPage fetches a single page of issues ordered by updatedAt DESC.
 // Returns the issues, page info, and any error.
 // Use cursor="" for the first page.
 func (c *Client) GetTeamIssuesPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]Issue, PageInfo, error) {
-	var result struct {
-		Team struct {
-			Issues struct {
-				PageInfo PageInfo `json:"pageInfo"`
-				Nodes    []Issue  `json:"nodes"`
-			} `json:"issues"`
-		} `json:"team"`
-	}
-
 	vars := map[string]any{
 		"teamId": teamID,
 		"first":  pageSize,
@@ -448,48 +428,21 @@ func (c *Client) GetTeamIssuesPage(ctx context.Context, teamID string, cursor st
 		vars["after"] = cursor
 	}
 
-	err := c.query(ctx, queryTeamIssuesByUpdatedAt, vars, &result)
+	cn, err := fetchConn[Issue](ctx, c, queryTeamIssuesByUpdatedAt, vars, "team", "issues")
 	if err != nil {
 		return nil, PageInfo{}, err
 	}
-
-	return result.Team.Issues.Nodes, result.Team.Issues.PageInfo, nil
+	return cn.Nodes, *cn.PageInfo, nil
 }
 
 // GetIssue fetches a single issue by ID
 func (c *Client) GetIssue(ctx context.Context, issueID string) (*Issue, error) {
-	var result struct {
-		Issue Issue `json:"issue"`
-	}
-
-	vars := map[string]any{
-		"id": issueID,
-	}
-
-	err := c.query(ctx, queryIssue, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return &result.Issue, nil
+	return fetchOne[Issue](ctx, c, queryIssue, map[string]any{"id": issueID}, "issue")
 }
 
 // GetProject fetches a single project by ID
 func (c *Client) GetProject(ctx context.Context, projectID string) (*Project, error) {
-	var result struct {
-		Project Project `json:"project"`
-	}
-
-	vars := map[string]any{
-		"id": projectID,
-	}
-
-	err := c.query(ctx, queryProject, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return &result.Project, nil
+	return fetchOne[Project](ctx, c, queryProject, map[string]any{"id": projectID}, "project")
 }
 
 // UpdateIssue updates an existing issue
@@ -638,24 +591,8 @@ func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
 
 // GetTeamStates fetches workflow states for a team
 func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, error) {
-	var result struct {
-		Team struct {
-			States struct {
-				Nodes []State `json:"nodes"`
-			} `json:"states"`
-		} `json:"team"`
-	}
-
-	vars := map[string]any{
-		"teamId": teamID,
-	}
-
-	err := c.query(ctx, queryTeamStates, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Team.States.Nodes, nil
+	return fetchNodes[State](ctx, c, queryTeamStates,
+		map[string]any{"teamId": teamID}, "team", "states")
 }
 
 // GetTeamProjects fetches all projects for a team. Paginated: a team's
@@ -676,24 +613,8 @@ func (c *Client) GetProjectLabels(ctx context.Context) ([]ProjectLabel, error) {
 
 // GetProjectMilestones fetches milestones for a project
 func (c *Client) GetProjectMilestones(ctx context.Context, projectID string) ([]ProjectMilestone, error) {
-	var result struct {
-		Project struct {
-			ProjectMilestones struct {
-				Nodes []ProjectMilestone `json:"nodes"`
-			} `json:"projectMilestones"`
-		} `json:"project"`
-	}
-
-	vars := map[string]any{
-		"projectId": projectID,
-	}
-
-	err := c.query(ctx, queryProjectMilestones, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Project.ProjectMilestones.Nodes, nil
+	return fetchNodes[ProjectMilestone](ctx, c, queryProjectMilestones,
+		map[string]any{"projectId": projectID}, "project", "projectMilestones")
 }
 
 // CreateProjectMilestone creates a new milestone for a project
@@ -730,24 +651,8 @@ func (c *Client) DeleteProjectMilestone(ctx context.Context, milestoneID string)
 
 // GetProjectUpdates fetches status updates for a project
 func (c *Client) GetProjectUpdates(ctx context.Context, projectID string) ([]ProjectUpdate, error) {
-	var result struct {
-		Project struct {
-			ProjectUpdates struct {
-				Nodes []ProjectUpdate `json:"nodes"`
-			} `json:"projectUpdates"`
-		} `json:"project"`
-	}
-
-	vars := map[string]any{
-		"projectId": projectID,
-	}
-
-	err := c.query(ctx, queryProjectUpdates, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Project.ProjectUpdates.Nodes, nil
+	return fetchNodes[ProjectUpdate](ctx, c, queryProjectUpdates,
+		map[string]any{"projectId": projectID}, "project", "projectUpdates")
 }
 
 // CreateProjectUpdate creates a new status update on a project
@@ -764,24 +669,8 @@ func (c *Client) CreateProjectUpdate(ctx context.Context, projectID, body, healt
 
 // GetInitiativeUpdates fetches status updates for an initiative
 func (c *Client) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]InitiativeUpdate, error) {
-	var result struct {
-		Initiative struct {
-			InitiativeUpdates struct {
-				Nodes []InitiativeUpdate `json:"nodes"`
-			} `json:"initiativeUpdates"`
-		} `json:"initiative"`
-	}
-
-	vars := map[string]any{
-		"initiativeId": initiativeID,
-	}
-
-	err := c.query(ctx, queryInitiativeUpdates, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Initiative.InitiativeUpdates.Nodes, nil
+	return fetchNodes[InitiativeUpdate](ctx, c, queryInitiativeUpdates,
+		map[string]any{"initiativeId": initiativeID}, "initiative", "initiativeUpdates")
 }
 
 // CreateInitiativeUpdate creates a new status update on an initiative
@@ -818,44 +707,23 @@ func (c *Client) RemoveProjectFromInitiative(ctx context.Context, projectID, ini
 
 // GetTeamCycles fetches cycles for a team
 func (c *Client) GetTeamCycles(ctx context.Context, teamID string) ([]Cycle, error) {
-	var result struct {
-		Team struct {
-			Cycles struct {
-				Nodes []Cycle `json:"nodes"`
-			} `json:"cycles"`
-		} `json:"team"`
-	}
+	return fetchNodes[Cycle](ctx, c, queryTeamCycles,
+		map[string]any{"teamId": teamID}, "team", "cycles")
+}
 
-	vars := map[string]any{
-		"teamId": teamID,
+// GetTeamLabels fetches labels for a team (team + workspace labels). One
+// query carries two connections, so it walks the shared root twice instead
+// of going through a single-path front.
+func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, error) {
+	var root map[string]json.RawMessage
+	if err := c.query(ctx, queryTeamLabels, map[string]any{"teamId": teamID}, &root); err != nil {
+		return nil, err
 	}
-
-	err := c.query(ctx, queryTeamCycles, vars, &result)
+	teamLabels, err := connAt[Label](root, []string{"team", "labels"})
 	if err != nil {
 		return nil, err
 	}
-
-	return result.Team.Cycles.Nodes, nil
-}
-
-// GetTeamLabels fetches labels for a team (team + workspace labels)
-func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, error) {
-	var result struct {
-		Team struct {
-			Labels struct {
-				Nodes []Label `json:"nodes"`
-			} `json:"labels"`
-		} `json:"team"`
-		IssueLabels struct {
-			Nodes []Label `json:"nodes"`
-		} `json:"issueLabels"`
-	}
-
-	vars := map[string]any{
-		"teamId": teamID,
-	}
-
-	err := c.query(ctx, queryTeamLabels, vars, &result)
+	workspaceLabels, err := connAt[Label](root, []string{"issueLabels"})
 	if err != nil {
 		return nil, err
 	}
@@ -863,13 +731,13 @@ func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, err
 	// Combine team labels and workspace labels, deduplicating by ID
 	seen := make(map[string]bool)
 	var labels []Label
-	for _, l := range result.Team.Labels.Nodes {
+	for _, l := range teamLabels.Nodes {
 		if !seen[l.ID] {
 			seen[l.ID] = true
 			labels = append(labels, l)
 		}
 	}
-	for _, l := range result.IssueLabels.Nodes {
+	for _, l := range workspaceLabels.Nodes {
 		if !seen[l.ID] {
 			seen[l.ID] = true
 			labels = append(labels, l)
@@ -896,54 +764,18 @@ func (c *Client) DeleteLabel(ctx context.Context, id string) error {
 
 // GetUsers fetches all users in the workspace
 func (c *Client) GetUsers(ctx context.Context) ([]User, error) {
-	var result struct {
-		Users struct {
-			Nodes []User `json:"nodes"`
-		} `json:"users"`
-	}
-
-	err := c.query(ctx, queryUsers, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Users.Nodes, nil
+	return fetchNodes[User](ctx, c, queryUsers, nil, "users")
 }
 
 // GetViewer fetches the currently authenticated user
 func (c *Client) GetViewer(ctx context.Context) (*User, error) {
-	var result struct {
-		Viewer User `json:"viewer"`
-	}
-
-	err := c.query(ctx, queryViewer, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return &result.Viewer, nil
+	return fetchOne[User](ctx, c, queryViewer, nil, "viewer")
 }
 
 // GetTeamMembers fetches members of a specific team
 func (c *Client) GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
-	var result struct {
-		Team struct {
-			Members struct {
-				Nodes []User `json:"nodes"`
-			} `json:"members"`
-		} `json:"team"`
-	}
-
-	vars := map[string]any{
-		"teamId": teamID,
-	}
-
-	err := c.query(ctx, queryTeamMembers, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Team.Members.Nodes, nil
+	return fetchNodes[User](ctx, c, queryTeamMembers,
+		map[string]any{"teamId": teamID}, "team", "members")
 }
 
 // CreateIssue creates a new issue
@@ -993,22 +825,15 @@ func (p issueDetailsPayload) toDetails() *IssueDetails {
 }
 
 // GetIssueDetails fetches comments, documents, attachments, and relations for
-// an issue in a single query
+// an issue in a single query. A null issue (not found) is an error, never
+// five empty, "complete" collections — the same contract as the batch.
 func (c *Client) GetIssueDetails(ctx context.Context, issueID string) (*IssueDetails, error) {
-	var result struct {
-		Issue issueDetailsPayload `json:"issue"`
-	}
-
-	vars := map[string]any{
-		"issueId": issueID,
-	}
-
-	err := c.query(ctx, queryIssueDetails, vars, &result)
+	payload, err := fetchOne[issueDetailsPayload](ctx, c, queryIssueDetails,
+		map[string]any{"issueId": issueID}, "issue")
 	if err != nil {
 		return nil, err
 	}
-
-	return result.Issue.toDetails(), nil
+	return payload.toDetails(), nil
 }
 
 // GetIssueDetailsBatch fetches comments, documents, attachments, and relations
@@ -1089,24 +914,8 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 
 // GetIssueComments fetches comments for an issue
 func (c *Client) GetIssueComments(ctx context.Context, issueID string) ([]Comment, error) {
-	var result struct {
-		Issue struct {
-			Comments struct {
-				Nodes []Comment `json:"nodes"`
-			} `json:"comments"`
-		} `json:"issue"`
-	}
-
-	vars := map[string]any{
-		"issueId": issueID,
-	}
-
-	err := c.query(ctx, queryIssueComments, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Issue.Comments.Nodes, nil
+	return fetchNodes[Comment](ctx, c, queryIssueComments,
+		map[string]any{"issueId": issueID}, "issue", "comments")
 }
 
 // CreateComment creates a new comment on an issue
@@ -1126,68 +935,20 @@ func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
 
 // GetIssueDocuments fetches documents attached to an issue
 func (c *Client) GetIssueDocuments(ctx context.Context, issueID string) ([]Document, error) {
-	var result struct {
-		Issue struct {
-			Documents struct {
-				Nodes []Document `json:"nodes"`
-			} `json:"documents"`
-		} `json:"issue"`
-	}
-
-	vars := map[string]any{
-		"issueId": issueID,
-	}
-
-	err := c.query(ctx, queryIssueDocuments, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Issue.Documents.Nodes, nil
+	return fetchNodes[Document](ctx, c, queryIssueDocuments,
+		map[string]any{"issueId": issueID}, "issue", "documents")
 }
 
 // GetIssueAttachments fetches attachments (external links) for an issue
 func (c *Client) GetIssueAttachments(ctx context.Context, issueID string) ([]Attachment, error) {
-	var result struct {
-		Issue struct {
-			Attachments struct {
-				Nodes []Attachment `json:"nodes"`
-			} `json:"attachments"`
-		} `json:"issue"`
-	}
-
-	vars := map[string]any{
-		"issueId": issueID,
-	}
-
-	err := c.query(ctx, queryIssueAttachments, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Issue.Attachments.Nodes, nil
+	return fetchNodes[Attachment](ctx, c, queryIssueAttachments,
+		map[string]any{"issueId": issueID}, "issue", "attachments")
 }
 
 // GetIssueHistory fetches the history/audit trail for an issue
 func (c *Client) GetIssueHistory(ctx context.Context, issueID string) ([]IssueHistoryEntry, error) {
-	var result struct {
-		Issue struct {
-			History struct {
-				Nodes []IssueHistoryEntry `json:"nodes"`
-			} `json:"history"`
-		} `json:"issue"`
-	}
-
-	vars := map[string]any{
-		"issueId": issueID,
-	}
-
-	err := c.query(ctx, queryIssueHistory, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Issue.History.Nodes, nil
+	return fetchNodes[IssueHistoryEntry](ctx, c, queryIssueHistory,
+		map[string]any{"issueId": issueID}, "issue", "history")
 }
 
 // GetTeamDocuments returns an empty list since Linear API doesn't support team-level documents
@@ -1198,42 +959,14 @@ func (c *Client) GetTeamDocuments(ctx context.Context, teamID string) ([]Documen
 
 // GetProjectDocuments fetches documents for a project
 func (c *Client) GetProjectDocuments(ctx context.Context, projectID string) ([]Document, error) {
-	var result struct {
-		Documents struct {
-			Nodes []Document `json:"nodes"`
-		} `json:"documents"`
-	}
-
-	vars := map[string]any{
-		"projectId": projectID,
-	}
-
-	err := c.query(ctx, queryProjectDocuments, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Documents.Nodes, nil
+	return fetchNodes[Document](ctx, c, queryProjectDocuments,
+		map[string]any{"projectId": projectID}, "documents")
 }
 
 // GetInitiativeDocuments fetches documents for an initiative
 func (c *Client) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]Document, error) {
-	var result struct {
-		Documents struct {
-			Nodes []Document `json:"nodes"`
-		} `json:"documents"`
-	}
-
-	vars := map[string]any{
-		"initiativeId": initiativeID,
-	}
-
-	err := c.query(ctx, queryInitiativeDocuments, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Documents.Nodes, nil
+	return fetchNodes[Document](ctx, c, queryInitiativeDocuments,
+		map[string]any{"initiativeId": initiativeID}, "documents")
 }
 
 // CreateDocument creates a new document
@@ -1253,36 +986,12 @@ func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
 
 // GetInitiatives fetches all initiatives
 func (c *Client) GetInitiatives(ctx context.Context) ([]Initiative, error) {
-	var result struct {
-		Initiatives struct {
-			Nodes []Initiative `json:"nodes"`
-		} `json:"initiatives"`
-	}
-
-	err := c.query(ctx, queryInitiatives, nil, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result.Initiatives.Nodes, nil
+	return fetchNodes[Initiative](ctx, c, queryInitiatives, nil, "initiatives")
 }
 
 // GetInitiative fetches a single initiative by ID
 func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*Initiative, error) {
-	var result struct {
-		Initiative Initiative `json:"initiative"`
-	}
-
-	vars := map[string]any{
-		"id": initiativeID,
-	}
-
-	err := c.query(ctx, queryInitiative, vars, &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return &result.Initiative, nil
+	return fetchOne[Initiative](ctx, c, queryInitiative, map[string]any{"id": initiativeID}, "initiative")
 }
 
 // =============================================================================
