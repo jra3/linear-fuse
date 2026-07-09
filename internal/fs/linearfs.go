@@ -88,9 +88,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	uid := uint32(os.Getuid())
 	gid := uint32(os.Getgid())
 
-	client := api.NewClientWithOptions(cfg.APIKey, api.ClientOptions{
-		APIStatsEnabled: cfg.Log.APIStats,
-	})
+	client := api.NewClient(cfg.APIKey)
 
 	// Initialize file cache directory
 	cacheDir := filepath.Join(os.Getenv("HOME"), "Library", "Caches", "linearfs", "files")
@@ -137,10 +135,6 @@ func (lfs *LinearFS) Close() {
 	// Close SQLite store
 	if lfs.store != nil {
 		lfs.store.Close()
-	}
-	// Close API client (stops stats logger)
-	if lfs.client != nil {
-		lfs.client.Close()
 	}
 }
 
@@ -212,7 +206,7 @@ func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error
 
 	// Create and start sync worker
 	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())
-	lfs.syncWorker.SetBudgetReporter(lfs.client.Stats())
+	lfs.syncWorker.SetBudgetReporter(lfs.client)
 	lfs.syncWorker.SetCatchUpModeToggler(lfs.repo)
 	lfs.syncWorker.Start(ctx)
 

@@ -35,6 +35,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // priority ranks a request's claim on the remaining budget. Higher
@@ -87,10 +90,10 @@ var reserveFrac = map[priority]float64{
 // until the first response teaches us their real cost.
 const defaultPredictedCost = 10000
 
-// seedHourlyRequestLimit seeds the micro-burst rate.Limiter and the stats
-// denominator before the first response has reported the real request
-// limit. It is a smoothing seed only — admit never gates on it; both
-// budgets read their limits exclusively from response headers.
+// seedHourlyRequestLimit seeds the micro-burst rate.Limiter before the
+// first response has reported the real request limit. It is a smoothing
+// seed only — admit never gates on it; both budgets read their limits
+// exclusively from response headers.
 const seedHourlyRequestLimit = 2500
 
 // rateLimitedFallbackBackoff bounds the lockout after a RATELIMITED
@@ -240,15 +243,24 @@ type rateBudget struct {
 	inFlightCost float64            // complexity points reserved by unsettled admissions
 	inFlightReqs float64            // request count reserved by unsettled admissions
 	cost         map[string]float64 // opName -> last-seen X-Complexity
+
+	// metrics are the budget-owned OTEL instruments (metrics.go): the
+	// decisions counter fires where admit resolves, the complexity
+	// histogram where reconcile parses X-Complexity. No-op when no global
+	// provider is registered.
+	metrics budgetMetrics
 }
 
 func newRateBudget(now func() time.Time) *rateBudget {
-	return &rateBudget{
+	b := &rateBudget{
 		now:        now,
 		complexity: window{name: "complexity"},
 		requests:   window{name: "requests"},
 		cost:       make(map[string]float64),
+		metrics:    newBudgetMetrics(),
 	}
+	registerBudgetGauges(b)
+	return b
 }
 
 // admission is one allowed request's reservation. Exactly one of observe /
@@ -258,6 +270,7 @@ func newRateBudget(now func() time.Time) *rateBudget {
 type admission struct {
 	b       *rateBudget
 	op      string
+	tier    priority
 	cost    float64
 	settled bool // guarded by b.mu
 }
@@ -273,14 +286,17 @@ func (b *rateBudget) admit(op string, p priority) (*admission, decision) {
 	now := b.now()
 	cost := b.predictLocked(op)
 	if d, ok := admitAxis(&b.complexity, cost, b.inFlightCost, p, now); !ok {
+		b.metrics.recordDecision(p, "defer")
 		return nil, d
 	}
 	if d, ok := admitAxis(&b.requests, 1, b.inFlightReqs, p, now); !ok {
+		b.metrics.recordDecision(p, "defer")
 		return nil, d
 	}
 	b.inFlightCost += cost
 	b.inFlightReqs++
-	return &admission{b: b, op: op, cost: cost}, decision{allow: true}
+	b.metrics.recordDecision(p, "admit")
+	return &admission{b: b, op: op, tier: p, cost: cost}, decision{allow: true}
 }
 
 // admitAxis is the per-axis gate: cost <= remaining − inFlight − reserve.
@@ -342,6 +358,7 @@ func (a *admission) rateLimited(h http.Header) {
 	a.b.releaseLocked(a.cost)
 	a.b.reconcileLocked(a.op, h)
 	a.b.snapExhaustedLocked()
+	a.b.metrics.recordDecision(a.tier, "ratelimited")
 }
 
 // release settles the admission for a request that never produced a
@@ -375,6 +392,9 @@ func (b *rateBudget) releaseLocked(cost float64) {
 func (b *rateBudget) reconcileLocked(op string, h http.Header) {
 	if v, ok := headerFloat(h, "X-Complexity"); ok {
 		b.cost[op] = v
+		// The one place X-Complexity is parsed also records it.
+		b.metrics.complexity.Record(context.Background(), v,
+			metric.WithAttributes(attribute.String("op", op)))
 	}
 	reconcileAxis(&b.complexity, h, "X-RateLimit-Complexity")
 	reconcileAxis(&b.requests, h, "X-RateLimit-Requests")
@@ -456,6 +476,41 @@ func (b *rateBudget) low(p priority) bool {
 		return true
 	}
 	return false
+}
+
+// axisSnapshot is one axis's state as read by the observable budget gauges
+// (and Client.BudgetSnapshot): the raw window numbers plus the in-flight
+// reservation, with seconds-to-reset computed on the injected clock. seen
+// mirrors window.seen — false until the server has reported this axis.
+type axisSnapshot struct {
+	seen         bool
+	limit        float64
+	remaining    float64
+	inFlight     float64
+	resetSeconds float64
+}
+
+// snapshot reads both axes under the existing mutex — the read seam for the
+// telemetry gauges; no new locks.
+func (b *rateBudget) snapshot() (complexity, requests axisSnapshot) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	return snapAxis(&b.complexity, b.inFlightCost, now),
+		snapAxis(&b.requests, b.inFlightReqs, now)
+}
+
+func snapAxis(w *window, inFlight float64, now time.Time) axisSnapshot {
+	s := axisSnapshot{
+		seen:      w.seen,
+		limit:     w.limit,
+		remaining: w.remaining,
+		inFlight:  inFlight,
+	}
+	if w.resetAt.After(now) {
+		s.resetSeconds = w.resetAt.Sub(now).Seconds()
+	}
+	return s
 }
 
 // requestsLimit returns the server-reported hourly request limit, 0 until

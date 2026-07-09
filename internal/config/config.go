@@ -27,10 +27,12 @@ type MountConfig struct {
 	AllowOther  bool   `yaml:"allow_other"`
 }
 
+// LogConfig configures logging. The api_stats key that used to live here is
+// gone with APIStats (the OTEL telemetry summary is always on); yaml.v3
+// ignores unknown keys, so old config files carrying it still parse.
 type LogConfig struct {
-	Level    string `yaml:"level"`
-	File     string `yaml:"file"`
-	APIStats bool   `yaml:"api_stats"`
+	Level string `yaml:"level"`
+	File  string `yaml:"file"`
 }
 
 // TelemetryConfig configures the OTEL metrics pipeline (internal/telemetry).
