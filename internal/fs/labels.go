@@ -11,6 +11,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // LabelsNode represents the /teams/{KEY}/labels/ directory
@@ -33,7 +34,9 @@ func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	entries := append(n.trio().entries(), n.listing(labels).entries()...)
+	items := n.listing(labels).entries()
+	entries := append(n.trio().entries(), items...)
+	entries = append(entries, metaSidecarEntries(items)...)
 	return fs.NewListDirStream(entries), 0
 }
 
@@ -59,6 +62,15 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.EIO
 	}
 
+	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
+	if mdName, ok := metaSidecarSource(name); ok {
+		label, found := n.listing(labels).find(mdName)
+		if !found {
+			return nil, syscall.ENOENT
+		}
+		return n.lfs.mountRenderFile(ctx, n, name, n.labelMetaRender(label), labelMetaIno(label.ID), 0, out), 0
+	}
+
 	if label, ok := n.listing(labels).find(name); ok {
 		return n.newLabelInode(ctx, name, label, out)
 	}
@@ -66,10 +78,38 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	return nil, syscall.ENOENT
 }
 
+// labelMetaRender returns the render closure behind a label's .meta sidecar:
+// re-derive the freshest label on every read. api.Label carries no timestamps,
+// so the times are zero — an honest "unknown" (see the renderFile rule), never
+// a fabricated now().
+func (n *LabelsNode) labelMetaRender(label api.Label) renderFunc {
+	lfs, teamID := n.lfs, n.teamID
+	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		cur := label
+		if labels, err := lfs.GetTeamLabels(ctx, teamID); err == nil {
+			for _, l := range labels {
+				if l.ID == label.ID {
+					cur = l
+					break
+				}
+			}
+		}
+		b, err := marshal.LabelMetaToMarkdown(&cur)
+		if err != nil {
+			return nil, time.Time{}, time.Time{}
+		}
+		return b, time.Time{}, time.Time{}
+	}
+}
+
 // newLabelInode builds the read/write LabelFileNode inode for an existing label,
 // populated with its current content. Shared by Lookup and Create.
 func (n *LabelsNode) newLabelInode(ctx context.Context, name string, label api.Label, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	content := labelToMarkdown(&label)
+	content, err := marshal.LabelToMarkdown(&label)
+	if err != nil {
+		log.Printf("Failed to marshal label: %v", err)
+		return nil, syscall.EIO
+	}
 	node := &LabelFileNode{
 		BaseNode:   BaseNode{lfs: n.lfs},
 		label:      label,
@@ -103,6 +143,12 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EPERM
 	}
 
+	// The .meta sidecar is a read-only virtual file; it vanishes with its
+	// entity (rm the .md), never on its own.
+	if _, isMeta := metaSidecarSource(name); isMeta {
+		return syscall.EPERM
+	}
+
 	return commitDelete(ctx, n.lfs, deleteSpec[api.Label]{
 		op:  `delete label "` + name + `"`,
 		key: collectionErrorKey("labels", n.teamID),
@@ -127,6 +173,10 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		},
 		dir:  labelsDirIno(n.teamID),
 		name: name,
+		// The .meta sidecar renders from the deleted entity: drop its entry too.
+		invalidateExtra: func(l *api.Label) {
+			n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), metaSidecarName(name))
+		},
 	})
 }
 
@@ -137,6 +187,11 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 
 	// Don't allow renaming _create
 	if name == "_create" {
+		return syscall.EPERM
+	}
+
+	// The .meta sidecar is read-only; its name follows the .md's.
+	if _, isMeta := metaSidecarSource(name); isMeta {
 		return syscall.EPERM
 	}
 
@@ -181,8 +236,10 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	if n.lfs.debug {
 		log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
 	}
-	// Invalidate kernel cache for old and new names
+	// Invalidate kernel cache for old and new names — the .meta sidecar's
+	// name follows the .md's, so both pairs move.
 	n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), name, newName, 0)
+	n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), metaSidecarName(name), metaSidecarName(newName), 0)
 	return 0
 }
 
@@ -221,28 +278,6 @@ func labelFilename(label api.Label) string {
 	name := strings.ReplaceAll(label.Name, " ", "-")
 	name = strings.ReplaceAll(name, "/", "-")
 	return name + ".md"
-}
-
-// labelToMarkdown converts a label to markdown with YAML frontmatter, routed
-// through renderWithFrontmatter so hostile names/descriptions stay valid YAML
-// (Go %q quoting was ALMOST YAML — not guaranteed).
-func labelToMarkdown(label *api.Label) []byte {
-	fm := map[string]any{
-		"id":          label.ID,
-		"name":        label.Name,
-		"color":       label.Color,
-		"description": label.Description,
-	}
-	body := fmt.Sprintf(`
-# %s
-
-- **Color:** %s
-- **ID:** %s
-`, label.Name, label.Color, label.ID)
-	if label.Description != "" {
-		body += fmt.Sprintf("\n%s\n", label.Description)
-	}
-	return renderWithFrontmatter(fm, body)
 }
 
 // LabelFileNode represents a single label file (read-write)
@@ -340,8 +375,9 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 
 	n.dirty = false
 
-	// Invalidate kernel inode cache
+	// Invalidate kernel inode cache (the .meta sidecar renders from the label)
 	n.lfs.InvalidateUpdated(labelIno(n.label.ID))
+	n.lfs.InvalidateUpdated(labelMetaIno(n.label.ID))
 
 	return errno
 }
@@ -466,8 +502,12 @@ func parseYAMLFrontmatter(content []byte) (map[string]any, error) {
 		}
 		key := strings.TrimSpace(line[:colonIdx])
 		value := strings.TrimSpace(line[colonIdx+1:])
-		// Remove quotes if present
-		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		// Remove quotes if present. Single quotes matter: yaml.v3 renders a
+		// #-leading color as 'color: '#FF0000'', so a re-save of the rendered
+		// file must not read the quotes as part of the value (it used to, and
+		// the phantom "change" pushed a corrupted color).
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') ||
+			(value[0] == '\'' && value[len(value)-1] == '\'')) {
 			value = value[1 : len(value)-1]
 		}
 		result[key] = value

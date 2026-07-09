@@ -121,9 +121,11 @@ teams/{KEY}/
     .error                          [read-only: last failed write here]
     .last                           [read-only: sub-issues created via children/]
     comments/                       [_create=trigger, .error=feedback, .last=created ids]
-      {id}.md                       [read/write]
+      {id}.md                       [read/write: comment body ONLY, no frontmatter]
+      {id}.meta                     [read-only: id, author, created, updated]
     docs/                           [_create=trigger, .error=feedback, .last=created docs]
-      {slug}.md                     [read/write]
+      {slug}.md                     [read/write: title, icon, color + body]
+      {slug}.meta                   [read-only: id, url, creator, created, updated]
     attachments/                    [embedded files + external links]
       _create                       [write "URL [title]" to link]
       .error                        [read-only: last failed write here]
@@ -138,7 +140,8 @@ teams/{KEY}/
     children/                       [symlinks to sub-issues, mkdir to create]
   by/status|label|assignee/{value}/ [issue symlinks]
   labels/                           [_create=trigger, .error=feedback, .last=created labels]
-    {name}.md                       [read/write, rm to delete]
+    {name}.md                       [read/write: name, color, description; rm to delete]
+    {name}.meta                     [read-only: id]
   projects/                         [mkdir "Name" to create a project]
     .error                          [read-only: last failed project creation]
     .last                           [read-only: recent project creations]
@@ -156,7 +159,8 @@ teams/{KEY}/
       _create                       [write "name\ndescription" to create]
       .error                        [read-only: last failed write here]
       .last                         [read-only: recent created milestones]
-      {name}.md                     [read/write, rm to delete]
+      {name}.md                     [read/write: name, targetDate, sortOrder + body; rm to delete]
+      {name}.meta                   [read-only: id]
     {ISSUE-ID} symlinks
   cycles/
     current                         [symlink to active cycle]
@@ -169,7 +173,8 @@ initiatives/{slug}/
   initiative.meta                   [read-only: id, slug, url, status, owner, dates]
   .error                            [read-only: last failed write here]
   docs/                             [_create=trigger, .error=feedback]
-    {slug}.md                       [read/write]
+    {slug}.md                       [read/write: title, icon, color + body]
+    {slug}.meta                     [read-only: id, url, creator, created, updated]
   projects/                         [symlinks to team projects]
     {project-slug}                  [symlink to ../../../teams/{KEY}/projects/{slug}]
   updates/                          [status updates]
@@ -264,10 +269,16 @@ Usage:
 </initiative_frontmatter>
 
 <permissions>
--r--r--r--  Read-only     team.md, states.md, user.md
--rw-r--r--  Editable      issue.md, project.md, initiative.md, comments/*.md, docs/*.md, milestones/*.md
+-r--r--r--  Read-only     team.md, states.md, user.md, every *.meta sidecar
+-rw-r--r--  Editable      issue.md, project.md, initiative.md, comments/*.md, docs/*.md, milestones/*.md, labels/*.md
 --w-------  Write-only    _create (write triggers creation; reads are rejected)
 lrwxrwxrwx  Symlink       Issues in by/, cycles/, projects/, users/
+
+Every editable file holds ONLY its editable fields; the server-managed fields
+(id, url, timestamps, author, …) live in a read-only sidecar named after it:
+issue.md/issue.meta, and per collection item {name}.md/{name}.meta. Comment
+.md files are the pure body with no frontmatter at all. Editing a server
+field is impossible by construction — it is not in the editable file.
 </permissions>
 
 <_create_behavior>

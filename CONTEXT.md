@@ -232,22 +232,64 @@ relational front half — were exported from marshal for this.)
 
 ### Entity render (`marshal.*ToMarkdown`)
 Every entity's markdown render lives in `internal/marshal`, one seam for
-markdown ↔ entity: Issue/Document/Milestone always did, and round 14 moved
+markdown ↔ entity: Issue/Document/Milestone always did, round 14 moved
 Project and Initiative (plus their `.meta` renders) out of the fs node methods
 (`ProjectToMarkdown`/`ProjectMetaToMarkdown`, `InitiativeToMarkdown`/
 `InitiativeMetaToMarkdown`) — before that, two of five entities' render policy
-was observable only through a mounted filesystem. The editable-only split
-(server-managed fields live in `.meta`, so a successful write never rewrites
-the writer's bytes) is now pinned by unit tests on the exact frontmatter key
-sets. The fs nodes keep one-line wrappers that degrade a render failure to an
-empty file. The parse side stays with [[scalar-edit]] (name/description) and
-[[link-reconciliation]] (the member lists). The read-only catalog renders
-(team.md, states.md, labels.md, project-labels.md, user.md, cycle.md, updates,
-label files) also route their frontmatter through this seam
-(`renderWithFrontmatter`, internal/fs/catalogrender.go) — they used to
-fmt.Sprintf-concatenate YAML, so a name like `Q3: Bets` emitted invalid YAML
-in exactly the files agents machine-parse after a `.error`; the bodies stay
-hand-built prose/tables.
+was observable only through a mounted filesystem — and the collection meta
+split (below) moved the last two fs-resident renders onto the seam
+(`CommentToMarkdown`, previously a hand-rolled raw-yaml writer in
+fs/comments.go, and `LabelToMarkdown`). **All seven rendered entities now
+follow the editable-only split** (server-managed fields live in a `.meta`
+sidecar, so a successful write never rewrites the writer's bytes), each pinned
+by unit tests on the exact frontmatter key sets. The fs nodes keep one-line
+wrappers that degrade a render failure to an empty file. The parse side stays
+with [[scalar-edit]] (name/description) and [[link-reconciliation]] (the
+member lists). The read-only catalog renders (team.md, states.md, labels.md,
+project-labels.md, user.md, cycle.md, updates) also route their frontmatter
+through this seam (`renderWithFrontmatter`, internal/fs/catalogrender.go) —
+they used to fmt.Sprintf-concatenate YAML, so a name like `Q3: Bets` emitted
+invalid YAML in exactly the files agents machine-parse after a `.error`; the
+bodies stay hand-built prose/tables.
+
+### Collection meta split (`{base}.meta` sidecars)
+The editable-only split, extended to the four small collection entities —
+documents, comments, milestones, labels. Their editable `.md` files used to
+render server-managed fields into the frontmatter (comments: ALL of it), and
+every parse silently ignored edits to them — a **silent no-op with no
+`.error`**, violating the documented failure model. Now each item's `.md`
+carries editable fields only (docs: title/icon/color + body; comments: the
+**pure body, no frontmatter at all**; milestones: name/targetDate/sortOrder +
+body; labels: name/color/description, empty body — the old generated prose
+that re-printed the ID is gone) and a read-only `{base}.meta` sidecar carries
+the server half (docs: id/url/created/updated/creator?/slug?; comments:
+id/created/updated/edited?/author?/authorName?; milestones: id; labels: id +
+team? — the two timestamp-less types report zero times, per the [[render-file]]
+rule). The mistake becomes unrepresentable instead of punished.
+
+The sidecars are *dynamic* children, so unlike the entity `.meta`s (which live
+on [[entity-directory-manifest]]) they hook into the collections'
+Lookup/Readdir: two pure functions in `internal/fs/metasidecar.go` own the
+`"X.md" ⇄ "X.meta"` derivation (`metaSidecarName`/`metaSidecarSource`), Readdir
+appends `metaSidecarEntries(items)` after the listing's entries, and Lookup
+routes a `.meta` hit back through the **same** `listing().find()` — so the
+listed⇔openable round-trip [[named-listing]]/[[indexed-listing]] guarantee for
+the `.md` files extends to the sidecars by construction
+(`TestMetaSidecarRoundTrip`). Each sidecar is a plain [[render-file]] via
+`mountRenderFile` (0444, DIRECT_IO, timeout 0, re-finds the freshest entity by
+ID on every read), with its own ino kind (`commentMetaIno`/`documentMetaIno`/
+`milestoneMetaIno`/`labelMetaIno`, registered in `TestInodeNamespaceDistinct`).
+Unlink/Rename of a `.meta` is EPERM (it vanishes with its entity — the
+delete/rename tails invalidate the sidecar entry alongside the item's).
+Accepted costs, eyes open: collection listings double, and comment authorship
+moves out of the read path into the sidecar. The comment parse keeps the
+lenient strip-leading-frontmatter behavior (an agent pasting old-format
+content must not break). **Rejected alternatives, recorded so future rounds
+don't re-derive them:** a changed-value guard (error only when a server field
+is *edited*) keeps the leak and adds diff bookkeeping; dropping the fields
+entirely loses id/author/url data agents actually consume. Conformance is
+pinned end-to-end by `TestWriteContractMetaSplitCollections` and the README
+assertions in `TestGeneratedReadmeMatchesBehavior`.
 
 ### Create trigger (`createFileNode`)
 The **deep module** owning the write-only `_create` file (and the named-file

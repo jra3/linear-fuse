@@ -31,11 +31,15 @@ func errorIno(issueID string) uint64       { return ino("error", issueID) }
 
 func commentsDirIno(issueID string) uint64 { return ino("comments", issueID) }
 func commentIno(commentID string) uint64   { return ino("comment", commentID) }
+func commentMetaIno(commentID string) uint64 {
+	return ino("comment-meta", commentID)
+}
 
 // Documents ----------------------------------------------------------------
 
-func docsDirIno(parentID string) uint64 { return ino("docs", parentID) }
-func documentIno(docID string) uint64   { return ino("doc", docID) }
+func docsDirIno(parentID string) uint64   { return ino("docs", parentID) }
+func documentIno(docID string) uint64     { return ino("doc", docID) }
+func documentMetaIno(docID string) uint64 { return ino("doc-meta", docID) }
 
 // Attachments --------------------------------------------------------------
 
@@ -50,8 +54,9 @@ func relationIno(relationID string) uint64  { return ino("relation", relationID)
 
 // Labels -------------------------------------------------------------------
 
-func labelsDirIno(teamID string) uint64 { return ino("labels", teamID) }
-func labelIno(labelID string) uint64    { return ino("label", labelID) }
+func labelsDirIno(teamID string) uint64  { return ino("labels", teamID) }
+func labelIno(labelID string) uint64     { return ino("label", labelID) }
+func labelMetaIno(labelID string) uint64 { return ino("label-meta", labelID) }
 
 // projectLabelsCatalogIno is the root project-labels.md catalog file — a
 // workspace singleton, so the id is a constant.
@@ -69,6 +74,9 @@ func projectUpdateIno(updateID string) uint64 { return ino("project-update", upd
 
 func milestonesDirIno(projectID string) uint64 { return ino("milestones", projectID) }
 func milestoneIno(milestoneID string) uint64   { return ino("milestone", milestoneID) }
+func milestoneMetaIno(milestoneID string) uint64 {
+	return ino("milestone-meta", milestoneID)
+}
 
 // Initiatives --------------------------------------------------------------
 

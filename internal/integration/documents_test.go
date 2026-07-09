@@ -70,10 +70,10 @@ func TestDocumentFilenameFormat(t *testing.T) {
 		t.Fatalf("Failed to read docs directory: %v", err)
 	}
 
-	// Find document files (not _create)
+	// Find document files (not _create; each .md has a read-only .meta sidecar)
 	for _, entry := range entries {
 		name := entry.Name()
-		if isControlFile(name) {
+		if isControlFile(name) || strings.HasSuffix(name, ".meta") {
 			continue
 		}
 		// Should be {slugId}.md format
@@ -107,7 +107,7 @@ func TestDocumentFileContents(t *testing.T) {
 
 	// Find and read a document file
 	for _, entry := range entries {
-		if isControlFile(entry.Name()) {
+		if isControlFile(entry.Name()) || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 
@@ -121,19 +121,13 @@ func TestDocumentFileContents(t *testing.T) {
 			t.Fatalf("Failed to parse document frontmatter: %v", err)
 		}
 
-		// Check required fields
-		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Error("Document missing id field")
-		}
+		// Editable field stays in the .md; server-managed fields live in the
+		// {base}.meta sidecar (the collection meta split).
 		if _, ok := doc.Frontmatter["title"]; !ok {
 			t.Error("Document missing title field")
 		}
-		if _, ok := doc.Frontmatter["created"]; !ok {
-			t.Error("Document missing created field")
-		}
-		if _, ok := doc.Frontmatter["url"]; !ok {
-			t.Error("Document missing url field")
-		}
+		metaName := strings.TrimSuffix(entry.Name(), ".md") + ".meta"
+		assertMetaHasFields(t, docFilePath(testTeamKey, issue.Identifier, metaName), "id", "url", "created", "updated")
 
 		// Check body contains our text
 		if !strings.Contains(doc.Body, docContent) {
@@ -279,10 +273,12 @@ func TestDeleteDocument(t *testing.T) {
 
 	var docFile string
 	for _, entry := range entries {
-		if isControlFile(entry.Name()) {
+		if isControlFile(entry.Name()) || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
-		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, entry.Name()))
+		// The id lives in the {base}.meta sidecar now, not the editable .md.
+		metaName := strings.TrimSuffix(entry.Name(), ".md") + ".meta"
+		content, err := os.ReadFile(docFilePath(testTeamKey, issue.Identifier, metaName))
 		if err != nil {
 			continue
 		}

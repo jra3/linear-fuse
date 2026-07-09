@@ -75,7 +75,9 @@ func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	entries := append(n.trio().entries(), n.listing(docs).entries()...)
+	items := n.listing(docs).entries()
+	entries := append(n.trio().entries(), items...)
+	entries = append(entries, metaSidecarEntries(items)...)
 	return fs.NewListDirStream(entries), 0
 }
 
@@ -102,11 +104,42 @@ func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.EIO
 	}
 
+	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
+	if mdName, ok := metaSidecarSource(name); ok {
+		doc, found := n.listing(docs).find(mdName)
+		if !found {
+			return nil, syscall.ENOENT
+		}
+		return n.lfs.mountRenderFile(ctx, n, name, n.documentMetaRender(doc), documentMetaIno(doc.ID), 0, out), 0
+	}
+
 	if doc, ok := n.listing(docs).find(name); ok {
 		return n.newDocumentInode(ctx, name, doc, out)
 	}
 
 	return nil, syscall.ENOENT
+}
+
+// documentMetaRender returns the render closure behind a document's .meta
+// sidecar: re-derive the freshest document on every read and report its real
+// times.
+func (n *DocsNode) documentMetaRender(doc api.Document) renderFunc {
+	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		cur := doc
+		if docs, err := n.getDocuments(ctx); err == nil {
+			for _, d := range docs {
+				if d.ID == doc.ID {
+					cur = d
+					break
+				}
+			}
+		}
+		b, err := marshal.DocumentMetaToMarkdown(&cur)
+		if err != nil {
+			return nil, cur.UpdatedAt, cur.CreatedAt
+		}
+		return b, cur.UpdatedAt, cur.CreatedAt
+	}
 }
 
 func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -116,6 +149,12 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 	// Don't allow deleting _create
 	if name == "_create" {
+		return syscall.EPERM
+	}
+
+	// The .meta sidecar is a read-only virtual file; it vanishes with its
+	// entity (rm the .md), never on its own.
+	if _, isMeta := metaSidecarSource(name); isMeta {
 		return syscall.EPERM
 	}
 
@@ -140,6 +179,10 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		},
 		dir:  docsDirIno(n.parentID()),
 		name: name,
+		// The .meta sidecar renders from the deleted entity: drop its entry too.
+		invalidateExtra: func(d *api.Document) {
+			n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), metaSidecarName(name))
+		},
 	})
 }
 
@@ -150,6 +193,11 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 
 	// Don't allow renaming _create
 	if name == "_create" {
+		return syscall.EPERM
+	}
+
+	// The .meta sidecar is read-only; its name follows the .md's.
+	if _, isMeta := metaSidecarSource(name); isMeta {
 		return syscall.EPERM
 	}
 
@@ -193,8 +241,10 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	if n.lfs.debug {
 		log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
 	}
-	// Invalidate kernel cache for old and new names
+	// Invalidate kernel cache for old and new names — the .meta sidecar's
+	// name follows the .md's, so both pairs move.
 	n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), name, newName, 0)
+	n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), metaSidecarName(name), metaSidecarName(newName), 0)
 	return 0
 }
 
@@ -365,8 +415,10 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		},
 	})
 
-	// Invalidate kernel cache for this document file
+	// Invalidate kernel cache for this document file and its .meta sidecar
+	// (updated reflects the edit)
 	n.lfs.InvalidateUpdated(documentIno(n.document.ID))
+	n.lfs.InvalidateUpdated(documentMetaIno(n.document.ID))
 
 	if fresh != nil {
 		n.document = *fresh

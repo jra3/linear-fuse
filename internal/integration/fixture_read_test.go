@@ -166,7 +166,7 @@ func TestFixtureCommentFilenameFormat(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if isControlFile(name) {
+		if isControlFile(name) || strings.HasSuffix(name, ".meta") {
 			continue
 		}
 		// Should be in format: NNN-YYYY-MM-DDTHH-MM.md
@@ -199,26 +199,17 @@ func TestFixtureCommentFileContents(t *testing.T) {
 			t.Fatalf("Failed to read comment file %s: %v", entry.Name(), err)
 		}
 
-		doc, err := parseFrontmatter(content)
-		if err != nil {
-			t.Fatalf("Failed to parse comment frontmatter for %s: %v", entry.Name(), err)
+		// The comment .md is the pure body — no frontmatter at all. The
+		// server-managed fields live in the {base}.meta sidecar.
+		if strings.HasPrefix(string(content), "---") {
+			t.Errorf("Comment %s should carry no frontmatter, got:\n%s", entry.Name(), content)
+		}
+		if !strings.Contains(string(content), "Test comment") {
+			t.Errorf("Comment %s body should contain 'Test comment', got: %q", entry.Name(), content)
 		}
 
-		// Check required fields
-		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Errorf("Comment %s missing id field", entry.Name())
-		}
-		if _, ok := doc.Frontmatter["author"]; !ok {
-			t.Errorf("Comment %s missing author field", entry.Name())
-		}
-		if _, ok := doc.Frontmatter["created"]; !ok {
-			t.Errorf("Comment %s missing created field", entry.Name())
-		}
-
-		// Body should contain "Test comment"
-		if !strings.Contains(doc.Body, "Test comment") {
-			t.Errorf("Comment %s body should contain 'Test comment', got: %q", entry.Name(), doc.Body)
-		}
+		metaName := strings.TrimSuffix(entry.Name(), ".md") + ".meta"
+		assertMetaHasFields(t, commentFilePath(testTeamKey, "TST-1", metaName), "id", "author", "created")
 
 		testedCount++
 	}
@@ -281,7 +272,7 @@ func TestFixtureDocumentFilenameFormat(t *testing.T) {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if isControlFile(name) {
+		if isControlFile(name) || strings.HasSuffix(name, ".meta") {
 			continue
 		}
 		if !strings.HasSuffix(name, ".md") {
@@ -315,13 +306,16 @@ func TestFixtureDocumentFileContents(t *testing.T) {
 			t.Fatalf("Failed to parse document frontmatter for %s: %v", entry.Name(), err)
 		}
 
-		// Check required fields
-		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Errorf("Document %s missing id field", entry.Name())
-		}
+		// Editable field stays in the .md; server-managed id lives in the
+		// {base}.meta sidecar (the collection meta split).
 		if _, ok := doc.Frontmatter["title"]; !ok {
 			t.Errorf("Document %s missing title field", entry.Name())
 		}
+		if _, ok := doc.Frontmatter["id"]; ok {
+			t.Errorf("Document %s leaks server field id (belongs in .meta)", entry.Name())
+		}
+		metaName := strings.TrimSuffix(entry.Name(), ".md") + ".meta"
+		assertMetaHasFields(t, docFilePath(testTeamKey, "TST-1", metaName), "id", "url", "created", "updated")
 
 		// Body should have content
 		if len(doc.Body) == 0 {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 func TestExtractCommentBody(t *testing.T) {
@@ -81,143 +82,33 @@ Third line`,
 	}
 }
 
-func TestCommentToMarkdown(t *testing.T) {
+// TestCommentRenderExtractRoundTrip: the rendered comment .md (pure body, no
+// frontmatter — the editable-only split) extracts back to the original body,
+// so a no-op save pushes nothing. And the lenient parse still strips a leading
+// frontmatter block, so an agent pasting old-format content works too.
+func TestCommentRenderExtractRoundTrip(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
-	edited := now.Add(time.Hour)
-
-	tests := []struct {
-		name        string
-		comment     *api.Comment
-		wantContain []string
-	}{
-		{
-			name: "basic comment",
-			comment: &api.Comment{
-				ID:        "comment-123",
-				Body:      "This is the comment",
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-			wantContain: []string{
-				"---",
-				"id: comment-123",
-				"created:",
-				"updated:",
-				"---",
-				"This is the comment",
-			},
-		},
-		{
-			name: "comment with author",
-			comment: &api.Comment{
-				ID:        "comment-456",
-				Body:      "Author comment",
-				CreatedAt: now,
-				UpdatedAt: now,
-				User: &api.User{
-					Email: "test@example.com",
-					Name:  "Test User",
-				},
-			},
-			wantContain: []string{
-				"author: test@example.com",
-				"authorName: Test User",
-				"Author comment",
-			},
-		},
-		{
-			name: "comment with edited time",
-			comment: &api.Comment{
-				ID:        "comment-789",
-				Body:      "Edited comment",
-				CreatedAt: now,
-				UpdatedAt: edited,
-				EditedAt:  &edited,
-			},
-			wantContain: []string{
-				"edited:",
-				"Edited comment",
-			},
-		},
-		{
-			name: "multiline comment body",
-			comment: &api.Comment{
-				ID:        "comment-abc",
-				Body:      "Line 1\nLine 2\nLine 3",
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-			wantContain: []string{
-				"Line 1\nLine 2\nLine 3",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := string(commentToMarkdown(tt.comment))
-			for _, want := range tt.wantContain {
-				if !strings.Contains(got, want) {
-					t.Errorf("commentToMarkdown() missing %q\nGot:\n%s", want, got)
-				}
-			}
-		})
-	}
-}
-
-func TestCommentToMarkdown_HasValidYAML(t *testing.T) {
-	t.Parallel()
-	now := time.Now()
-	comment := &api.Comment{
-		ID:        "comment-123",
-		Body:      "Test body",
-		CreatedAt: now,
-		UpdatedAt: now,
-		User: &api.User{
-			Email: "user@example.com",
-			Name:  "User Name",
-		},
-	}
-
-	content := commentToMarkdown(comment)
-
-	// Should start with frontmatter
-	if !strings.HasPrefix(string(content), "---\n") {
-		t.Error("Comment should start with YAML frontmatter")
-	}
-
-	// Should have closing frontmatter
-	if !strings.Contains(string(content), "\n---\n") {
-		t.Error("Comment should have closing frontmatter delimiter")
-	}
-
-	// Body should come after frontmatter
-	parts := strings.Split(string(content), "---")
-	if len(parts) < 3 {
-		t.Error("Expected frontmatter and body sections")
-	}
-}
-
-func TestCommentToMarkdown_RoundTrip(t *testing.T) {
-	t.Parallel()
-	now := time.Now()
-	originalBody := "This is my original comment body"
+	originalBody := "This is my original comment body\nwith a second line"
 	comment := &api.Comment{
 		ID:        "comment-123",
 		Body:      originalBody,
 		CreatedAt: now,
 		UpdatedAt: now,
+		User:      &api.User{Email: "test@example.com", Name: "Test User"},
 	}
 
-	// Convert to markdown
-	content := commentToMarkdown(comment)
+	content := marshal.CommentToMarkdown(comment)
+	if strings.HasPrefix(string(content), "---") {
+		t.Error("comment .md must carry no frontmatter (server fields live in the .meta sidecar)")
+	}
+	if got := extractCommentBody(content); got != originalBody {
+		t.Errorf("Round-trip failed: got %q, want %q", got, originalBody)
+	}
 
-	// Extract body back
-	extractedBody := extractCommentBody(content)
-
-	// Should get original body back
-	if extractedBody != originalBody {
-		t.Errorf("Round-trip failed: got %q, want %q", extractedBody, originalBody)
+	// Old-format paste: a frontmatter block is stripped, not treated as body.
+	oldFormat := []byte("---\nid: comment-123\nauthor: test@example.com\n---\n" + originalBody + "\n")
+	if got := extractCommentBody(oldFormat); got != originalBody {
+		t.Errorf("Old-format extract = %q, want %q", got, originalBody)
 	}
 }

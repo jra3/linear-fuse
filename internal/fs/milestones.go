@@ -31,7 +31,9 @@ func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	entries := append(n.trio().entries(), n.listing(milestones).entries()...)
+	items := n.listing(milestones).entries()
+	entries := append(n.trio().entries(), items...)
+	entries = append(entries, metaSidecarEntries(items)...)
 	return fs.NewListDirStream(entries), 0
 }
 
@@ -55,6 +57,15 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
 	if err != nil {
 		return nil, syscall.EIO
+	}
+
+	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
+	if mdName, ok := metaSidecarSource(name); ok {
+		m, found := n.listing(milestones).find(mdName)
+		if !found {
+			return nil, syscall.ENOENT
+		}
+		return n.lfs.mountRenderFile(ctx, n, name, n.milestoneMetaRender(m), milestoneMetaIno(m.ID), 0, out), 0
 	}
 
 	m, ok := n.listing(milestones).find(name)
@@ -90,6 +101,30 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}), 0
 }
 
+// milestoneMetaRender returns the render closure behind a milestone's .meta
+// sidecar: re-derive the freshest milestone on every read. api.ProjectMilestone
+// carries no timestamps, so the times are zero — an honest "unknown" (see the
+// renderFile rule), never a fabricated now().
+func (n *MilestonesNode) milestoneMetaRender(m api.ProjectMilestone) renderFunc {
+	lfs, projectID := n.lfs, n.projectID
+	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		cur := m
+		if milestones, err := lfs.GetProjectMilestones(ctx, projectID); err == nil {
+			for _, mm := range milestones {
+				if mm.ID == m.ID {
+					cur = mm
+					break
+				}
+			}
+		}
+		b, err := marshal.MilestoneMetaToMarkdown(&cur)
+		if err != nil {
+			return nil, time.Time{}, time.Time{}
+		}
+		return b, time.Time{}, time.Time{}
+	}
+}
+
 func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	if n.lfs.debug {
 		log.Printf("Unlink milestone: %s", name)
@@ -97,6 +132,12 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 
 	// Don't allow deleting _create
 	if name == "_create" {
+		return syscall.EPERM
+	}
+
+	// The .meta sidecar is a read-only virtual file; it vanishes with its
+	// entity (rm the .md), never on its own.
+	if _, isMeta := metaSidecarSource(name); isMeta {
 		return syscall.EPERM
 	}
 
@@ -121,6 +162,10 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 		},
 		dir:  milestonesDirIno(n.projectID),
 		name: name,
+		// The .meta sidecar renders from the deleted entity: drop its entry too.
+		invalidateExtra: func(m *api.ProjectMilestone) {
+			n.lfs.InvalidateDeleted(milestonesDirIno(n.projectID), metaSidecarName(name))
+		},
 	})
 }
 
@@ -240,8 +285,9 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 		}
 	}
 
-	// Invalidate kernel cache for this milestone file
+	// Invalidate kernel cache for this milestone file and its .meta sidecar
 	n.lfs.InvalidateUpdated(milestoneIno(n.milestone.ID))
+	n.lfs.InvalidateUpdated(milestoneMetaIno(n.milestone.ID))
 
 	n.dirty = false
 	return errno

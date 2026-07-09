@@ -1,6 +1,7 @@
 package marshal
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,13 +35,9 @@ func TestDocumentToMarkdown(t *testing.T) {
 				Creator:   &api.User{ID: "user-1", Name: "Alice", Email: "alice@example.com"},
 			},
 			wantContain: []string{
-				"id: doc-123",
 				"title: Technical Requirements",
-				"url: https://linear.app/docs/technical-requirements",
-				"slug: technical-requirements-abc123",
 				"icon:", // YAML may use different quote styles for emoji
 				"color:",
-				"creator: alice@example.com",
 				"# Overview",
 				"This is the technical spec.",
 			},
@@ -55,7 +52,6 @@ func TestDocumentToMarkdown(t *testing.T) {
 				UpdatedAt: baseTime,
 			},
 			wantContain: []string{
-				"id: doc-min",
 				"title: Simple Doc",
 				"# Simple Doc", // Auto-generated body
 			},
@@ -114,6 +110,79 @@ func TestDocumentToMarkdown(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestDocumentToMarkdownKeys pins the editable-only contract for a document
+// .md: title, icon, color, and the content body — and nothing server-managed
+// (id/url/created/updated/creator/slug live in the .meta sidecar), so a
+// successful write never rewrites the bytes the writer wrote.
+func TestDocumentToMarkdownKeys(t *testing.T) {
+	t.Parallel()
+	full := &api.Document{
+		ID:      "doc-123",
+		Title:   "Spec",
+		Content: "Body.",
+		SlugID:  "spec-abc",
+		URL:     "https://linear.app/docs/spec",
+		Icon:    "📄",
+		Color:   "#3B82F6",
+		Creator: &api.User{Email: "alice@example.com"},
+	}
+	content, err := DocumentToMarkdown(full)
+	if err != nil {
+		t.Fatalf("DocumentToMarkdown: %v", err)
+	}
+	keys, doc := frontmatterKeys(t, content)
+	if want := []string{"color", "icon", "title"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("document .md frontmatter keys = %v, want %v (editable-only)", keys, want)
+	}
+	if doc.Body != "Body." {
+		t.Errorf("body = %q, want the content", doc.Body)
+	}
+
+	// Empty icon/color are omitted (delete-the-line clears nothing here; the
+	// keys simply don't render).
+	content, err = DocumentToMarkdown(&api.Document{Title: "Bare", Content: "x"})
+	if err != nil {
+		t.Fatalf("DocumentToMarkdown(bare): %v", err)
+	}
+	if keys, _ := frontmatterKeys(t, content); !reflect.DeepEqual(keys, []string{"title"}) {
+		t.Errorf("bare document frontmatter keys = %v, want [title]", keys)
+	}
+}
+
+// TestDocumentMetaToMarkdown pins the server-managed half.
+func TestDocumentMetaToMarkdown(t *testing.T) {
+	t.Parallel()
+	full := &api.Document{
+		ID:        "doc-123",
+		Title:     "Spec",
+		SlugID:    "spec-abc",
+		URL:       "https://linear.app/docs/spec",
+		CreatedAt: time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2025, 1, 16, 14, 0, 0, 0, time.UTC),
+		Creator:   &api.User{Email: "alice@example.com"},
+	}
+	content, err := DocumentMetaToMarkdown(full)
+	if err != nil {
+		t.Fatalf("DocumentMetaToMarkdown: %v", err)
+	}
+	keys, doc := frontmatterKeys(t, content)
+	if want := []string{"created", "creator", "id", "slug", "updated", "url"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("document .meta frontmatter keys = %v, want %v", keys, want)
+	}
+	if doc.Body != "" {
+		t.Errorf("meta must be frontmatter-only, got body %q", doc.Body)
+	}
+
+	// Nil creator and empty slug are omitted, as the editable render always did.
+	content, err = DocumentMetaToMarkdown(&api.Document{ID: "doc-min"})
+	if err != nil {
+		t.Fatalf("DocumentMetaToMarkdown(min): %v", err)
+	}
+	if keys, _ := frontmatterKeys(t, content); !reflect.DeepEqual(keys, []string{"created", "id", "updated", "url"}) {
+		t.Errorf("minimal document .meta keys = %v, want [created id updated url]", keys)
 	}
 }
 

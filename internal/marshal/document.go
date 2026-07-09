@@ -7,24 +7,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// DocumentToMarkdown converts a Linear document to markdown with YAML frontmatter
+// DocumentToMarkdown renders the editable-only document .md: title, icon,
+// color, and the content body. Server-managed fields (id, url, timestamps,
+// creator, slug) live in the sibling .meta (see DocumentMetaToMarkdown), so a
+// successful write never rewrites the bytes the writer wrote — and an edit to
+// a server field is unrepresentable instead of a silent no-op.
 func DocumentToMarkdown(doc *api.Document) ([]byte, error) {
 	fm := make(map[string]any)
 
-	// Read-only fields
-	fm["id"] = doc.ID
 	fm["title"] = doc.Title
-	fm["url"] = doc.URL
-	fm["created"] = doc.CreatedAt.Format(time.RFC3339)
-	fm["updated"] = doc.UpdatedAt.Format(time.RFC3339)
-
-	if doc.Creator != nil {
-		fm["creator"] = doc.Creator.Email
-	}
-
-	if doc.SlugID != "" {
-		fm["slug"] = doc.SlugID
-	}
 
 	if doc.Icon != "" {
 		fm["icon"] = doc.Icon
@@ -46,6 +37,25 @@ func DocumentToMarkdown(doc *api.Document) ([]byte, error) {
 	}
 
 	return Render(mdDoc)
+}
+
+// DocumentMetaToMarkdown renders the read-only document .meta sidecar:
+// server-managed identity, url, timestamps, creator, and slug as a
+// frontmatter-only block (empties omitted, as the editable render always did).
+func DocumentMetaToMarkdown(doc *api.Document) ([]byte, error) {
+	fm := map[string]any{
+		"id":      doc.ID,
+		"url":     doc.URL,
+		"created": doc.CreatedAt.Format(time.RFC3339),
+		"updated": doc.UpdatedAt.Format(time.RFC3339),
+	}
+	if doc.Creator != nil {
+		fm["creator"] = doc.Creator.Email
+	}
+	if doc.SlugID != "" {
+		fm["slug"] = doc.SlugID
+	}
+	return Render(&Document{Frontmatter: fm})
 }
 
 // MarkdownToDocumentUpdate parses markdown and returns fields that changed

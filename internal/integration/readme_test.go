@@ -49,6 +49,44 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		}
 	}
 
+	// The collection meta split: every collection item {base}.md is documented
+	// with a read-only {base}.meta sidecar, and comment .md files are the pure
+	// body. The README's structure map must teach both.
+	for _, want := range []string{"{id}.meta", "{slug}.meta", "{name}.meta", "no frontmatter", "*.meta sidecar"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q (collection meta split)", want)
+		}
+	}
+	// And the documented surfaces must really behave that way: a fixture doc's
+	// .meta exists, reads, and rejects writes; the comment .md has no frontmatter.
+	if entries, err := os.ReadDir(docsPath(testTeamKey, "TST-1")); err == nil {
+		for _, e := range entries {
+			if isControlFile(e.Name()) || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			metaPath := docFilePath(testTeamKey, "TST-1", strings.TrimSuffix(e.Name(), ".md")+".meta")
+			if _, err := os.ReadFile(metaPath); err != nil {
+				t.Errorf("README documents doc .meta sidecars but %s is unreadable: %v", metaPath, err)
+			}
+			if err := os.WriteFile(metaPath, []byte("x"), 0644); err == nil {
+				t.Errorf("README documents %s as read-only but it accepted a write", metaPath)
+			}
+			break
+		}
+	}
+	if entries, err := os.ReadDir(commentsPath(testTeamKey, "TST-1")); err == nil {
+		for _, e := range entries {
+			if isControlFile(e.Name()) || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			content, err := os.ReadFile(commentFilePath(testTeamKey, "TST-1", e.Name()))
+			if err == nil && strings.HasPrefix(string(content), "---") {
+				t.Errorf("README documents comment .md as frontmatter-free, but %s carries frontmatter", e.Name())
+			}
+			break
+		}
+	}
+
 	// Spot-check the documented _create read behavior against the real node:
 	// reading issues/_create must fail (write-only), matching the README.
 	if _, err := os.ReadFile(issuesPath(testTeamKey) + "/_create"); err == nil {
