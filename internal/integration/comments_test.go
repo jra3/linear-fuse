@@ -71,10 +71,10 @@ func TestCommentFilenameFormat(t *testing.T) {
 		t.Fatalf("Failed to read comments directory: %v", err)
 	}
 
-	// Find comment files (not _create)
+	// Find comment files (not _create; each .md has a read-only .meta sidecar)
 	for _, entry := range entries {
 		name := entry.Name()
-		if isControlFile(name) {
+		if isControlFile(name) || strings.HasSuffix(name, ".meta") {
 			continue
 		}
 		// Should be in format: NNN-YYYY-MM-DDTHH-MM.md
@@ -111,7 +111,7 @@ func TestCommentFileContents(t *testing.T) {
 
 	// Find and read a comment file
 	for _, entry := range entries {
-		if isControlFile(entry.Name()) {
+		if isControlFile(entry.Name()) || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 
@@ -120,26 +120,17 @@ func TestCommentFileContents(t *testing.T) {
 			t.Fatalf("Failed to read comment file: %v", err)
 		}
 
-		doc, err := parseFrontmatter(content)
-		if err != nil {
-			t.Fatalf("Failed to parse comment frontmatter: %v", err)
+		// The comment .md is the pure body — no frontmatter at all. The
+		// server-managed fields live in the {base}.meta sidecar.
+		if strings.HasPrefix(string(content), "---") {
+			t.Errorf("Comment .md should carry no frontmatter, got:\n%s", content)
 		}
-
-		// Check required fields
-		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Error("Comment missing id field")
-		}
-		if _, ok := doc.Frontmatter["author"]; !ok {
-			t.Error("Comment missing author field")
-		}
-		if _, ok := doc.Frontmatter["created"]; !ok {
-			t.Error("Comment missing created field")
-		}
-
-		// Check body contains our text
-		if !strings.Contains(doc.Body, commentBody) {
+		if !strings.Contains(string(content), commentBody) {
 			t.Errorf("Comment body should contain %q", commentBody)
 		}
+
+		metaName := strings.TrimSuffix(entry.Name(), ".md") + ".meta"
+		assertMetaHasFields(t, commentFilePath(testTeamKey, issue.Identifier, metaName), "id", "author", "created")
 
 		break // Only check first comment
 	}

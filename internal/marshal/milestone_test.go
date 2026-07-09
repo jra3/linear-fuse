@@ -1,6 +1,7 @@
 package marshal
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,7 +27,6 @@ func TestMilestoneToMarkdown(t *testing.T) {
 
 	content := string(md)
 	for _, want := range []string{
-		"id: milestone-1",
 		"name: Phase 1",
 		`targetDate: "2025-06-30"`,
 		"sortOrder: 1.5",
@@ -35,6 +35,32 @@ func TestMilestoneToMarkdown(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Errorf("MilestoneToMarkdown() missing %q in:\n%s", want, content)
 		}
+	}
+
+	// Editable-only: the server-managed id lives in the .meta sidecar.
+	keys, _ := frontmatterKeys(t, md)
+	if want := []string{"name", "sortOrder", "targetDate"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("milestone .md frontmatter keys = %v, want %v (editable-only)", keys, want)
+	}
+}
+
+// TestMilestoneMetaToMarkdown pins the server-managed half: the identity alone
+// (api.ProjectMilestone carries no timestamps or url), frontmatter-only.
+func TestMilestoneMetaToMarkdown(t *testing.T) {
+	t.Parallel()
+	md, err := MilestoneMetaToMarkdown(&api.ProjectMilestone{ID: "milestone-1", Name: "Phase 1"})
+	if err != nil {
+		t.Fatalf("MilestoneMetaToMarkdown() error: %v", err)
+	}
+	keys, doc := frontmatterKeys(t, md)
+	if want := []string{"id"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("milestone .meta frontmatter keys = %v, want %v", keys, want)
+	}
+	if doc.Frontmatter["id"] != "milestone-1" {
+		t.Errorf("id = %v, want milestone-1", doc.Frontmatter["id"])
+	}
+	if doc.Body != "" {
+		t.Errorf("meta must be frontmatter-only, got body %q", doc.Body)
 	}
 }
 

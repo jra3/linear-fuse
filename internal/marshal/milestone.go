@@ -9,12 +9,12 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// MilestoneToMarkdown converts a Linear milestone to markdown with YAML frontmatter
+// MilestoneToMarkdown renders the editable-only milestone .md: name,
+// targetDate, sortOrder, and the description body. The server-managed id lives
+// in the sibling .meta (see MilestoneMetaToMarkdown), so an edit to it is
+// unrepresentable instead of a silent no-op.
 func MilestoneToMarkdown(m *api.ProjectMilestone) ([]byte, error) {
 	fm := make(map[string]any)
-
-	// Read-only field
-	fm["id"] = m.ID
 
 	// Editable fields
 	fm["name"] = m.Name
@@ -36,6 +36,13 @@ func MilestoneToMarkdown(m *api.ProjectMilestone) ([]byte, error) {
 	}
 
 	return Render(mdDoc)
+}
+
+// MilestoneMetaToMarkdown renders the read-only milestone .meta sidecar.
+// api.ProjectMilestone carries no other server-managed fields (no timestamps,
+// no url), so the sidecar is the identity alone.
+func MilestoneMetaToMarkdown(m *api.ProjectMilestone) ([]byte, error) {
+	return Render(&Document{Frontmatter: map[string]any{"id": m.ID}})
 }
 
 // MarkdownToMilestoneUpdate parses markdown and returns fields that changed

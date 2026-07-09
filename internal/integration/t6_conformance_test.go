@@ -73,6 +73,125 @@ func TestWriteContractMetaSplitGeneralizes(t *testing.T) {
 	}
 }
 
+// firstItemFile returns the first "{base}.md" collection item in dir (skipping
+// the _create/.error/.last trio and the .meta sidecars), or "" if none.
+func firstItemFile(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Skipf("no %s: %v", dir, err)
+	}
+	for _, e := range entries {
+		if isControlFile(e.Name()) || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		return e.Name()
+	}
+	return ""
+}
+
+// TestWriteContractMetaSplitCollections extends the meta split to the four
+// small collection entities: every item .md is free of server-managed fields
+// (its edits used to be silently discarded — a no-op with no .error), every
+// item has an openable read-only "{base}.meta" carrying them, and the sidecar
+// can be neither written nor rm'd on its own.
+func TestWriteContractMetaSplitCollections(t *testing.T) {
+	surfaces := []struct {
+		name      string
+		dir       string
+		forbidden []string
+		metaHas   []string
+	}{
+		{
+			name:      "docs",
+			dir:       docsPath(testTeamKey, "TST-1"),
+			forbidden: []string{"id", "url", "created", "updated", "creator", "slug"},
+			metaHas:   []string{"id", "url", "created", "updated"},
+		},
+		{
+			name:      "labels",
+			dir:       labelsPath(testTeamKey),
+			forbidden: []string{"id"},
+			metaHas:   []string{"id"},
+		},
+		{
+			name:      "milestones",
+			dir:       filepath.Join(projectsPath(testTeamKey), "test-project", "milestones"),
+			forbidden: []string{"id"},
+			metaHas:   []string{"id"},
+		},
+	}
+
+	for _, tc := range surfaces {
+		t.Run(tc.name, func(t *testing.T) {
+			mdName := firstItemFile(t, tc.dir)
+			if mdName == "" && tc.name == "milestones" && !liveAPIMode {
+				// The fixture ships no milestone: seed one via the mock so the
+				// sidecar contract isn't vacuously green here.
+				enableMockMutations(t)
+				if err := os.WriteFile(filepath.Join(tc.dir, "_create"), []byte("MetaSplit Probe\nprobe milestone"), 0200); err != nil {
+					t.Fatalf("seed milestone: %v", err)
+				}
+				mdName = firstItemFile(t, tc.dir)
+			}
+			if mdName == "" {
+				t.Skipf("no %s item in fixture", tc.name)
+			}
+			assertEditableOnly(t, filepath.Join(tc.dir, mdName), tc.forbidden...)
+
+			metaName := strings.TrimSuffix(mdName, ".md") + ".meta"
+			metaPath := filepath.Join(tc.dir, metaName)
+			assertMetaHasFields(t, metaPath, tc.metaHas...)
+
+			// The sidecar is listed alongside its .md (listed⇔openable).
+			entries, err := os.ReadDir(tc.dir)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.dir, err)
+			}
+			listed := false
+			for _, e := range entries {
+				if e.Name() == metaName {
+					listed = true
+				}
+			}
+			if !listed {
+				t.Errorf("%s resolves but is not listed in the directory", metaName)
+			}
+
+			// Read-only: writes are rejected, and rm of the sidecar alone is too
+			// (it vanishes with its entity, via rm of the .md).
+			if info, err := os.Stat(metaPath); err == nil && info.Mode().Perm() != 0444 {
+				t.Errorf("%s mode = %v, want 0444", metaName, info.Mode().Perm())
+			}
+			if err := os.WriteFile(metaPath, []byte("x"), 0644); err == nil {
+				t.Errorf("%s is writable, want read-only", metaName)
+			}
+			if err := os.Remove(metaPath); err == nil {
+				t.Errorf("rm %s succeeded, want EPERM (the sidecar vanishes with its .md)", metaName)
+			}
+		})
+	}
+
+	// Comments: the .md is the PURE body (no frontmatter at all); id/author/
+	// timestamps live in the sidecar.
+	t.Run("comments", func(t *testing.T) {
+		dir := commentsPath(testTeamKey, "TST-1")
+		mdName := firstItemFile(t, dir)
+		if mdName == "" {
+			t.Skip("no comment in fixture")
+		}
+		content, err := os.ReadFile(filepath.Join(dir, mdName))
+		if err != nil {
+			t.Fatalf("read %s: %v", mdName, err)
+		}
+		if strings.HasPrefix(string(content), "---") {
+			t.Errorf("comment .md carries frontmatter, want pure body:\n%s", content)
+		}
+		metaName := strings.TrimSuffix(mdName, ".md") + ".meta"
+		assertMetaHasFields(t, filepath.Join(dir, metaName), "id", "created", "updated")
+	})
+}
+
 // TestWriteContractLastSidecarShape: .last on a collection is read-only (0444)
 // and parses as a YAML list of {identifier,url,path,title,status}. Creates one
 // issue first (via the mock) so the key assertions aren't vacuous on an empty log.

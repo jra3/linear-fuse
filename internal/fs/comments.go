@@ -1,7 +1,6 @@
 package fs
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -12,7 +11,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/api"
-	"gopkg.in/yaml.v3"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // CommentsNode represents /teams/{KEY}/issues/{ID}/comments/
@@ -39,7 +38,9 @@ func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		return fs.NewListDirStream(n.trio().entries()), 0
 	}
 
-	entries := append(n.trio().entries(), n.listing(comments).entries()...)
+	items := n.listing(comments).entries()
+	entries := append(n.trio().entries(), items...)
+	entries = append(entries, metaSidecarEntries(items)...)
 	return fs.NewListDirStream(entries), 0
 }
 
@@ -70,11 +71,20 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return nil, syscall.EIO
 	}
 
+	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
+	if mdName, ok := metaSidecarSource(name); ok {
+		comment, found := n.listing(comments).find(mdName)
+		if !found {
+			return nil, syscall.ENOENT
+		}
+		return n.lfs.mountRenderFile(ctx, n, name, n.commentMetaRender(comment), commentMetaIno(comment.ID), 0, out), 0
+	}
+
 	comment, ok := n.listing(comments).find(name)
 	if !ok {
 		return nil, syscall.ENOENT
 	}
-	content := commentToMarkdown(&comment)
+	content := marshal.CommentToMarkdown(&comment)
 	node := &CommentNode{
 		BaseNode:   BaseNode{lfs: n.lfs},
 		issueID:    n.issueID,
@@ -85,6 +95,30 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
 }
 
+// commentMetaRender returns the render closure behind a comment's .meta
+// sidecar: re-derive the freshest comment on every read (renderFile is
+// DIRECT_IO, so baked bytes would go stale for the life of the mount) and
+// report its real times.
+func (n *CommentsNode) commentMetaRender(comment api.Comment) renderFunc {
+	lfs, issueID := n.lfs, n.issueID
+	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
+		cur := comment
+		if comments, err := lfs.GetIssueComments(ctx, issueID); err == nil {
+			for _, c := range comments {
+				if c.ID == comment.ID {
+					cur = c
+					break
+				}
+			}
+		}
+		b, err := marshal.CommentMetaToMarkdown(&cur)
+		if err != nil {
+			return nil, cur.UpdatedAt, cur.CreatedAt
+		}
+		return b, cur.UpdatedAt, cur.CreatedAt
+	}
+}
+
 func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	if n.lfs.debug {
 		log.Printf("Unlink comment: %s", name)
@@ -92,6 +126,12 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 	// Don't allow deleting _create
 	if name == "_create" {
+		return syscall.EPERM
+	}
+
+	// The .meta sidecar is a read-only virtual file; it vanishes with its
+	// entity (rm the .md), never on its own.
+	if _, isMeta := metaSidecarSource(name); isMeta {
 		return syscall.EPERM
 	}
 
@@ -116,6 +156,10 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		},
 		dir:  commentsDirIno(n.issueID),
 		name: name,
+		// The .meta sidecar renders from the deleted entity: drop its entry too.
+		invalidateExtra: func(c *api.Comment) {
+			n.lfs.InvalidateDeleted(commentsDirIno(n.issueID), metaSidecarName(name))
+		},
 	})
 }
 
@@ -227,8 +271,10 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		},
 	})
 
-	// Invalidate kernel cache for this comment file
+	// Invalidate kernel cache for this comment file and its .meta sidecar
+	// (updated/edited reflect the edit)
 	n.lfs.InvalidateUpdated(commentIno(n.comment.ID))
+	n.lfs.InvalidateUpdated(commentMetaIno(n.comment.ID))
 
 	if fresh != nil {
 		n.comment = *fresh
@@ -286,34 +332,4 @@ func (n *CommentsNode) createComment(ctx context.Context, content []byte) syscal
 		dir: commentsDirIno(n.issueID),
 	})
 	return errno
-}
-
-// commentToMarkdown converts a comment to markdown with YAML frontmatter
-func commentToMarkdown(comment *api.Comment) []byte {
-	var buf bytes.Buffer
-
-	// Build frontmatter
-	frontmatter := map[string]any{
-		"id":      comment.ID,
-		"created": comment.CreatedAt.Format(time.RFC3339),
-		"updated": comment.UpdatedAt.Format(time.RFC3339),
-	}
-
-	if comment.EditedAt != nil {
-		frontmatter["edited"] = comment.EditedAt.Format(time.RFC3339)
-	}
-
-	if comment.User != nil {
-		frontmatter["author"] = comment.User.Email
-		frontmatter["authorName"] = comment.User.Name
-	}
-
-	buf.WriteString("---\n")
-	yamlData, _ := yaml.Marshal(frontmatter)
-	buf.Write(yamlData)
-	buf.WriteString("---\n\n")
-	buf.WriteString(comment.Body)
-	buf.WriteString("\n")
-
-	return buf.Bytes()
 }

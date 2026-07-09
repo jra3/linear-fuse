@@ -208,16 +208,19 @@ func TestFixtureLabelFileContents(t *testing.T) {
 			t.Fatalf("Failed to parse label frontmatter: %v", err)
 		}
 
-		// Check required fields
-		if _, ok := doc.Frontmatter["id"]; !ok {
-			t.Errorf("Label %s missing id field", entry.Name())
-		}
+		// Editable fields stay in the .md; the server-managed id lives in the
+		// {base}.meta sidecar (the collection meta split).
 		if _, ok := doc.Frontmatter["name"]; !ok {
 			t.Errorf("Label %s missing name field", entry.Name())
 		}
 		if _, ok := doc.Frontmatter["color"]; !ok {
 			t.Errorf("Label %s missing color field", entry.Name())
 		}
+		if _, ok := doc.Frontmatter["id"]; ok {
+			t.Errorf("Label %s leaks server field id (belongs in .meta)", entry.Name())
+		}
+		metaName := strings.TrimSuffix(entry.Name(), ".md") + ".meta"
+		assertMetaHasFields(t, labelFilePath(testTeamKey, metaName), "id")
 
 		testedCount++
 	}

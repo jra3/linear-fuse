@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 func TestLabelFilename(t *testing.T) {
@@ -56,68 +57,34 @@ func TestLabelFilename(t *testing.T) {
 	}
 }
 
-func TestLabelToMarkdown(t *testing.T) {
+// TestLabelRenderParseRoundTrip pins parse(render(label)) as a fixpoint: the
+// editable-only render (marshal.LabelToMarkdown) parses back with zero
+// changes, so a no-op save pushes nothing. This is the test that caught the
+// single-quote gap: yaml.v3 renders '#FF0000' single-quoted, and the hand
+// parser only stripped double quotes, so every re-save "changed" the color to
+// a quote-wrapped corruption.
+func TestLabelRenderParseRoundTrip(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name        string
-		label       *api.Label
-		wantContain []string
-	}{
-		{
-			name: "full label",
-			label: &api.Label{
-				ID:          "label-123",
-				Name:        "Bug",
-				Color:       "#FF0000",
-				Description: "Something is broken",
-			},
-			wantContain: []string{
-				"id: label-123",
-				"name: Bug",
-				`color: '#FF0000'`,
-				"description: Something is broken",
-				"# Bug",
-				"**Color:** #FF0000",
-				"**ID:** label-123",
-				"Something is broken",
-			},
-		},
-		{
-			name: "label without description",
-			label: &api.Label{
-				ID:          "label-456",
-				Name:        "Feature",
-				Color:       "#00FF00",
-				Description: "",
-			},
-			wantContain: []string{
-				"id: label-456",
-				"name: Feature",
-				`color: '#00FF00'`,
-				"# Feature",
-			},
-		},
-		{
-			name: "label with special characters in name",
-			label: &api.Label{
-				ID:    "label-789",
-				Name:  "Bug: Critical",
-				Color: "#0000FF",
-			},
-			wantContain: []string{
-				`name: 'Bug: Critical'`,
-				"# Bug: Critical",
-			},
-		},
+	labels := []*api.Label{
+		{ID: "label-123", Name: "Bug", Color: "#FF0000", Description: "Something is broken"},
+		{ID: "label-456", Name: "Feature", Color: "#00FF00"},
+		{ID: "label-789", Name: "Bug: Critical", Color: "#0000FF"},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := string(labelToMarkdown(tt.label))
-			for _, want := range tt.wantContain {
-				if !strings.Contains(got, want) {
-					t.Errorf("labelToMarkdown() missing %q\nGot:\n%s", want, got)
-				}
+	for _, label := range labels {
+		t.Run(label.Name, func(t *testing.T) {
+			content, err := marshal.LabelToMarkdown(label)
+			if err != nil {
+				t.Fatalf("LabelToMarkdown: %v", err)
+			}
+			if strings.Contains(string(content), "id:") {
+				t.Errorf("label .md leaks the server-managed id (it lives in .meta):\n%s", content)
+			}
+			update, err := parseLabelMarkdown(content, label)
+			if err != nil {
+				t.Fatalf("parseLabelMarkdown: %v", err)
+			}
+			if len(update) != 0 {
+				t.Errorf("Roundtrip produced unexpected changes: %v (rendered:\n%s)", update, content)
 			}
 		})
 	}
