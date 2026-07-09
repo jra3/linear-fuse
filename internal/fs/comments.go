@@ -29,10 +29,10 @@ var _ fs.NodeGetattrer = (*CommentsNode)(nil)
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Trigger background refresh of sub-resources if stale
-	n.lfs.MaybeRefreshIssueDetails(n.issueID)
+	n.lfs.repo.MaybeRefreshIssueDetails(n.issueID)
 
 	// Fetch comments (uses cache if available)
-	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
+	comments, err := n.lfs.repo.GetIssueComments(ctx, n.issueID)
 	if err != nil {
 		// On error, still serve the trio
 		return fs.NewListDirStream(n.trio().entries()), 0
@@ -66,7 +66,7 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return inode, 0
 	}
 
-	comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
+	comments, err := n.lfs.repo.GetIssueComments(ctx, n.issueID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -103,7 +103,7 @@ func (n *CommentsNode) commentMetaRender(comment api.Comment) renderFunc {
 	lfs, issueID := n.lfs, n.issueID
 	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		cur := comment
-		if comments, err := lfs.GetIssueComments(ctx, issueID); err == nil {
+		if comments, err := lfs.repo.GetIssueComments(ctx, issueID); err == nil {
 			for _, c := range comments {
 				if c.ID == comment.ID {
 					cur = c
@@ -139,7 +139,7 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		op:  `delete comment "` + name + `"`,
 		key: collectionErrorKey("comments", n.issueID),
 		find: func(ctx context.Context) (*api.Comment, error) {
-			comments, err := n.lfs.GetIssueComments(ctx, n.issueID)
+			comments, err := n.lfs.repo.GetIssueComments(ctx, n.issueID)
 			if err != nil {
 				return nil, err
 			}

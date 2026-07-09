@@ -32,17 +32,17 @@ var _ fs.NodeGetattrer = (*DocsNode)(nil)
 func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 	if n.issueID != "" {
 		// Trigger background refresh of sub-resources if stale
-		n.lfs.MaybeRefreshIssueDetails(n.issueID)
-		return n.lfs.GetIssueDocuments(ctx, n.issueID)
+		n.lfs.repo.MaybeRefreshIssueDetails(n.issueID)
+		return n.lfs.repo.GetIssueDocuments(ctx, n.issueID)
 	}
 	if n.teamID != "" {
 		return n.lfs.GetTeamDocuments(ctx, n.teamID)
 	}
 	if n.projectID != "" {
-		return n.lfs.GetProjectDocuments(ctx, n.projectID)
+		return n.lfs.repo.GetProjectDocuments(ctx, n.projectID)
 	}
 	if n.initiativeID != "" {
-		return n.lfs.GetInitiativeDocuments(ctx, n.initiativeID)
+		return n.lfs.repo.GetInitiativeDocuments(ctx, n.initiativeID)
 	}
 	return nil, nil
 }

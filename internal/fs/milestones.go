@@ -25,7 +25,7 @@ var _ fs.NodeUnlinker = (*MilestonesNode)(nil)
 var _ fs.NodeGetattrer = (*MilestonesNode)(nil)
 
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
+	milestones, err := n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
 	if err != nil {
 		// On error, still serve the trio
 		return fs.NewListDirStream(n.trio().entries()), 0
@@ -54,7 +54,7 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return inode, 0
 	}
 
-	milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
+	milestones, err := n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -109,7 +109,7 @@ func (n *MilestonesNode) milestoneMetaRender(m api.ProjectMilestone) renderFunc 
 	lfs, projectID := n.lfs, n.projectID
 	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		cur := m
-		if milestones, err := lfs.GetProjectMilestones(ctx, projectID); err == nil {
+		if milestones, err := lfs.repo.GetProjectMilestones(ctx, projectID); err == nil {
 			for _, mm := range milestones {
 				if mm.ID == m.ID {
 					cur = mm
@@ -145,7 +145,7 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 		op:  `delete milestone "` + name + `"`,
 		key: collectionErrorKey("milestones", n.projectID),
 		find: func(ctx context.Context) (*api.ProjectMilestone, error) {
-			milestones, err := n.lfs.GetProjectMilestones(ctx, n.projectID)
+			milestones, err := n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
 			if err != nil {
 				return nil, err
 			}

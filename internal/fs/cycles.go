@@ -55,7 +55,7 @@ func (c *CyclesNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (c *CyclesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	cycles, err := c.lfs.GetTeamCycles(ctx, c.entity().ID)
+	cycles, err := c.lfs.repo.GetTeamCycles(ctx, c.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -86,7 +86,7 @@ func (c *CyclesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 
 func (c *CyclesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	team := c.entity()
-	cycles, err := c.lfs.GetTeamCycles(ctx, team.ID)
+	cycles, err := c.lfs.repo.GetTeamCycles(ctx, team.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

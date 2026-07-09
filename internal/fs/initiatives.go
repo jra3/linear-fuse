@@ -25,7 +25,7 @@ var _ fs.NodeLookuper = (*InitiativesNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativesNode)(nil)
 
 func (i *InitiativesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	initiatives, err := i.lfs.GetInitiatives(ctx)
+	initiatives, err := i.lfs.repo.GetInitiatives(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -42,7 +42,7 @@ func (i *InitiativesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 }
 
 func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	initiatives, err := i.lfs.GetInitiatives(ctx)
+	initiatives, err := i.lfs.repo.GetInitiatives(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -135,7 +135,7 @@ func (i *InitiativeNode) manifest() *dirManifest {
 	// initiative.md is reflected here.
 	m.metaFile("initiative.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		init := initiative
-		if inits, err := lfs.GetInitiatives(ctx); err == nil {
+		if inits, err := lfs.repo.GetInitiatives(ctx); err == nil {
 			init = freshestByID(inits, initiative.ID, func(i api.Initiative) string { return i.ID }, initiative)
 		}
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
@@ -464,7 +464,7 @@ var _ fs.NodeCreater = (*InitiativeUpdatesNode)(nil)
 var _ fs.NodeGetattrer = (*InitiativeUpdatesNode)(nil)
 
 func (n *InitiativeUpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	updates, err := n.lfs.GetInitiativeUpdates(ctx, n.initiativeID)
+	updates, err := n.lfs.repo.GetInitiativeUpdates(ctx, n.initiativeID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -493,7 +493,7 @@ func (n *InitiativeUpdatesNode) Lookup(ctx context.Context, name string, out *fu
 		return inode, 0
 	}
 
-	updates, err := n.lfs.GetInitiativeUpdates(ctx, n.initiativeID)
+	updates, err := n.lfs.repo.GetInitiativeUpdates(ctx, n.initiativeID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

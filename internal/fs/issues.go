@@ -106,7 +106,7 @@ func (n *IssuesNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (n *IssuesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := n.lfs.GetTeamIssues(ctx, n.entity().ID)
+	issues, err := n.lfs.repo.GetTeamIssues(ctx, n.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -263,7 +263,7 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		op:  `archive issue "` + name + `"`,
 		key: collectionErrorKey("issues", team.ID),
 		find: func(ctx context.Context) (*api.Issue, error) {
-			issues, err := n.lfs.GetTeamIssues(ctx, team.ID)
+			issues, err := n.lfs.repo.GetTeamIssues(ctx, team.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -372,7 +372,7 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 		if fresh, err := lfs.FetchIssueByIdentifier(ctx, ident); err == nil && fresh != nil {
 			iss = fresh
 		}
-		att, _ := lfs.GetIssueAttachments(ctx, iss.ID)
+		att, _ := lfs.repo.GetIssueAttachments(ctx, iss.ID)
 		b, err := marshal.IssueMetaToMarkdown(iss, att...)
 		if err != nil {
 			return nil, iss.UpdatedAt, iss.CreatedAt
@@ -384,7 +384,7 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 	// activity history on each read. It reports the issue's own times; a transient
 	// fetch failure renders an empty file rather than making the entry vanish.
 	m.renderFile("history.md", historyIno(issue.ID), func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		entries, err := lfs.GetIssueHistory(ctx, issue.ID)
+		entries, err := lfs.repo.GetIssueHistory(ctx, issue.ID)
 		if err != nil {
 			log.Printf("Failed to fetch history for %s: %v", issue.Identifier, err)
 			return nil, issue.UpdatedAt, issue.CreatedAt
@@ -598,7 +598,7 @@ var _ fs.NodeMkdirer = (*ChildrenNode)(nil)
 
 func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Query children from database by parent_id
-	children, err := n.lfs.GetIssueChildren(ctx, n.issue.ID)
+	children, err := n.lfs.repo.GetIssueChildren(ctx, n.issue.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -614,7 +614,7 @@ func (n *ChildrenNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 
 func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	// Query children from database by parent_id
-	children, err := n.lfs.GetIssueChildren(ctx, n.issue.ID)
+	children, err := n.lfs.repo.GetIssueChildren(ctx, n.issue.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

@@ -22,7 +22,7 @@ var _ fs.NodeLookuper = (*TeamsNode)(nil)
 var _ fs.NodeGetattrer = (*TeamsNode)(nil)
 
 func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	teams, err := t.lfs.GetTeams(ctx)
+	teams, err := t.lfs.repo.GetTeams(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -39,7 +39,7 @@ func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	teams, err := t.lfs.GetTeams(ctx)
+	teams, err := t.lfs.repo.GetTeams(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -118,7 +118,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		// SQLite on each read (cheap), so no node-level cache is needed.
 		lfs := t.lfs
 		return t.lookupRenderFile(ctx, out, "states.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
-			states, err := lfs.GetTeamStates(ctx, team.ID)
+			states, err := lfs.repo.GetTeamStates(ctx, team.ID)
 			if err != nil {
 				return []byte("# Error loading states\n"), team.UpdatedAt, team.CreatedAt
 			}
@@ -128,7 +128,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	case "labels.md":
 		lfs := t.lfs
 		return t.lookupRenderFile(ctx, out, "labels.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
-			labels, err := lfs.GetTeamLabels(ctx, team.ID)
+			labels, err := lfs.repo.GetTeamLabels(ctx, team.ID)
 			if err != nil {
 				return []byte("# Error loading labels\n"), team.UpdatedAt, team.CreatedAt
 			}

@@ -28,7 +28,7 @@ var _ fs.NodeUnlinker = (*LabelsNode)(nil)
 var _ fs.NodeRenamer = (*LabelsNode)(nil)
 
 func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
+	labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
 	if err != nil {
 		log.Printf("Failed to get labels: %v", err)
 		return nil, syscall.EIO
@@ -57,7 +57,7 @@ func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return inode, 0
 	}
 
-	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
+	labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -86,7 +86,7 @@ func (n *LabelsNode) labelMetaRender(label api.Label) renderFunc {
 	lfs, teamID := n.lfs, n.teamID
 	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		cur := label
-		if labels, err := lfs.GetTeamLabels(ctx, teamID); err == nil {
+		if labels, err := lfs.repo.GetTeamLabels(ctx, teamID); err == nil {
 			for _, l := range labels {
 				if l.ID == label.ID {
 					cur = l
@@ -153,7 +153,7 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		op:  `delete label "` + name + `"`,
 		key: collectionErrorKey("labels", n.teamID),
 		find: func(ctx context.Context) (*api.Label, error) {
-			labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
+			labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
 			if err != nil {
 				return nil, err
 			}
@@ -211,7 +211,7 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	newLabelName := strings.TrimSuffix(newName, ".md")
 	newLabelName = strings.ReplaceAll(newLabelName, "-", " ")
 
-	labels, err := n.lfs.GetTeamLabels(ctx, n.teamID)
+	labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -256,7 +256,7 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 	// If a label already exists with this name, return its read/write node so an
 	// overwrite (mv/cp/editor save-over) updates it in place instead of binding a
 	// write-only _create node to the name and corrupting it (#137).
-	if labels, err := n.lfs.GetTeamLabels(ctx, n.teamID); err == nil {
+	if labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID); err == nil {
 		if label, ok := n.listing(labels).find(name); ok {
 			inode, errno := n.newLabelInode(ctx, name, label, out)
 			if errno != 0 {

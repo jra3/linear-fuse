@@ -162,7 +162,7 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 	})
 
 	t.Run("GetFilteredIssuesByPriority", func(t *testing.T) {
-		issues, err := lfs.GetFilteredIssuesByPriority(ctx, "team-1", 4)
+		issues, err := lfs.repo.GetIssuesByPriority(ctx, "team-1", 4)
 		if err != nil {
 			t.Fatalf("GetFilteredIssuesByPriority failed: %v", err)
 		}
@@ -175,7 +175,7 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 	})
 
 	t.Run("GetFilteredIssuesByAssignee", func(t *testing.T) {
-		issues, err := lfs.GetFilteredIssuesByAssignee(ctx, "team-1", "user-1")
+		issues, err := lfs.repo.GetIssuesByAssignee(ctx, "team-1", "user-1")
 		if err != nil {
 			t.Fatalf("GetFilteredIssuesByAssignee failed: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 	})
 
 	t.Run("GetFilteredIssuesUnassigned", func(t *testing.T) {
-		issues, err := lfs.GetFilteredIssuesUnassigned(ctx, "team-1")
+		issues, err := lfs.repo.GetUnassignedIssues(ctx, "team-1")
 		if err != nil {
 			t.Fatalf("GetFilteredIssuesUnassigned failed: %v", err)
 		}
