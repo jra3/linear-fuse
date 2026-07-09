@@ -155,6 +155,60 @@ telemetry:
 	}
 }
 
+// TestLoadTelemetryRequestsConfig covers the per-request debug log gate
+// (telemetry.requests.*): parsing an explicit config, and the off-by-default
+// with default path when the keys are absent.
+func TestLoadTelemetryRequestsConfig(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "linearfs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	configContent := `
+telemetry:
+  requests:
+    enabled: true
+    path: /tmp/custom-requests.jsonl
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	env := mockEnv(map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	})
+
+	cfg, err := LoadWithEnv(env)
+	if err != nil {
+		t.Fatalf("LoadWithEnv() error: %v", err)
+	}
+
+	if !cfg.Telemetry.Requests.Enabled {
+		t.Error("LoadWithEnv() Telemetry.Requests.Enabled should be true")
+	}
+	if cfg.Telemetry.Requests.Path != "/tmp/custom-requests.jsonl" {
+		t.Errorf("LoadWithEnv() Telemetry.Requests.Path = %q, want /tmp/custom-requests.jsonl", cfg.Telemetry.Requests.Path)
+	}
+	// The sibling file export keeps its defaults untouched.
+	if cfg.Telemetry.File.Enabled {
+		t.Error("LoadWithEnv() Telemetry.File.Enabled flipped by a requests-only config")
+	}
+}
+
+func TestTelemetryRequestsDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	if cfg.Telemetry.Requests.Enabled {
+		t.Error("DefaultConfig() Telemetry.Requests.Enabled should be false (the request log is opt-in)")
+	}
+	if filepath.Base(cfg.Telemetry.Requests.Path) != "requests.jsonl" {
+		t.Errorf("DefaultConfig() Telemetry.Requests.Path = %q, want default requests.jsonl path", cfg.Telemetry.Requests.Path)
+	}
+}
+
 func TestLoadWithConfigFile(t *testing.T) {
 	t.Parallel()
 	// Create a temporary directory for config

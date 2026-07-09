@@ -45,6 +45,10 @@ type Client struct {
 	// completed request records a count and a duration, per operation.
 	metrics apiMetrics
 
+	// reqLog, when non-nil, receives one JSON line per completed request —
+	// the per-request debug log (requestlog.go). nil = disabled (default).
+	reqLog io.Writer
+
 	// budget is the hourly rate-limit governor (see ratebudget.go): query
 	// admits every request through its priority-reserve ladder and observes
 	// every response's headers back into it.
@@ -206,11 +210,16 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 			opName, rateLimitWait.Round(time.Millisecond), hourly, pct)
 	}
 
-	// Record the request count (by outcome) and duration once it completes.
+	// Record the request count (by outcome) and duration once it completes —
+	// and, when enabled, the request debug log line (same site, same outcome
+	// classification; the admission carries the response's X-Complexity by
+	// the time this defer runs, since observe/rateLimited settle inline).
 	reqStart := time.Now()
 	var queryErr error
 	defer func() {
-		c.metrics.record(ctx, opName, time.Since(reqStart), queryErr)
+		elapsed := time.Since(reqStart)
+		c.metrics.record(ctx, opName, elapsed, queryErr)
+		c.logRequest(opName, variables, elapsed, queryErr, adm)
 	}()
 
 	reqBody := graphQLRequest{
