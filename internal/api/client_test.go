@@ -370,14 +370,11 @@ func TestMockReset(t *testing.T) {
 		t.Errorf("expected 0 calls after reset, got %d", len(mock.Calls()))
 	}
 
-	// Should return empty data now
-	teams, err := client.GetTeams(context.Background())
-	if err != nil {
-		t.Fatalf("GetTeams failed: %v", err)
-	}
-
-	if len(teams) != 0 {
-		t.Errorf("expected 0 teams after reset, got %d", len(teams))
+	// The mock now returns empty data — under the fetch null policy that is
+	// a loud error, not a silent empty team list.
+	_, err := client.GetTeams(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `"teams" missing or null`) {
+		t.Fatalf("GetTeams after reset: err = %v, want missing-or-null error", err)
 	}
 }
 

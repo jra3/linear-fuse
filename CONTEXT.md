@@ -777,6 +777,46 @@ is why stamping the syncing team was wrong). The team prune targets
 `team_id = <team>`, so `NULL` workspace labels are outside every team's prune
 scope.
 
+### Read fetch (`fetchOne`/`fetchNodes`/`fetchConn`)
+The **deep module** owning the read-side response envelope — the third
+sibling completing `execMutation` (the mutation envelope) and
+`paginate` (the connection drain). Every single-shot read on `Client`
+restated the same ritual: declare an anonymous result struct mirroring the
+JSON path from the response root, call `c.query`, unwrap the nested fields —
+copied ~21 times across client.go. The three fronts
+(`internal/api/fetch.go`) own it once over one shared descent, `walkPath`
+(extracted from `walkConn`, which is rebuilt on it — its
+`paginate:`-prefixed error strings are preserved verbatim); call sites keep
+only what genuinely varies: the query constant, the variable map, and the
+path. `fetchOne[T]` decodes the terminal into an entity; `fetchNodes[T]`
+decodes it as the `conn[T]` envelope and returns the nodes; `fetchConn[T]`
+returns the whole envelope for page-shaped callers (`GetTeamIssuesPage`) and
+errors on a nil `PageInfo` — the same "query must select pageInfo" contract
+as `fetchAll`. `GetTeamLabels` walks two connections out of one shared root
+(`connAt`) and keeps its dedup body.
+
+**The null policy is a deliberate behavior change.** A missing or null path
+element — the terminal included — is an error naming the dotted path
+(`fetch: "team.states" missing or null in response`), where the old
+anonymous structs decoded a null terminal as a **silent zero-value entity**
+(`GetIssue` of a nonexistent ID returned an empty `Issue`, nil error;
+`GetIssueDetails` of a vanished issue returned five empty, "complete"
+collections — the same null-reads-as-empty class the details batch had
+already closed for itself). `fetchNodes` also carries a truncation tripwire:
+a response that selects `pageInfo` and reports `hasNextPage` errors — the
+connection must be drained (`fetchAll`), never silently truncated. Inert
+today (no converted query selects `pageInfo`); live for any future query
+that does.
+
+Four read methods stay hand-written, each for cause: `GetTeamMetadata` and
+`GetWorkspace` are combined multi-connection queries already on
+`conn`+`drain`; `GetIssueDetailsBatch` builds dynamic aliases and owns its
+own all-or-nothing contract; `GetTeamDocuments` is an empty stub (Linear has
+no team-level documents). Recorded follow-up, deliberately not done in this
+refactor: ten of the converted list queries set no `first:` and are silently
+50-capped by Linear (and `GetIssueHistory`, which backs `history.md` live,
+caps at `first: 100` with no drain) — the drain audit is queued work.
+
 ### Sync reconcile tail (`syncCollection`)
 The **deep module** owning the invariant tail of every metadata sync — the
 sync-side sibling of the write-path tails (`commitCreate`/`commitWriteBack`/

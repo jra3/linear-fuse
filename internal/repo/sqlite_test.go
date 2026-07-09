@@ -1856,9 +1856,13 @@ func TestMaybeRefreshIssueDetails_EmptyFamiliesNoRefetchLoop(t *testing.T) {
 
 	mock := testutil.NewMockLinearServer()
 	defer mock.Close()
-	// No IssueDetails response configured: the mock returns empty data, which
-	// decodes as an issue with all five detail families empty — exactly the
-	// zero-docs/zero-comments shape that drove the loop.
+	// An issue that exists but has all five detail families empty — exactly
+	// the zero-docs/zero-comments shape that drove the loop. (The issue
+	// object must be present: the api fetch front now errors on a missing or
+	// null issue instead of decoding it as empty families.)
+	mock.SetResponse("IssueDetails", map[string]any{
+		"issue": map[string]any{},
+	})
 
 	client := api.NewClient("test-key")
 	client.SetAPIURL(mock.URL())
