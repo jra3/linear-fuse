@@ -176,32 +176,20 @@ func connFetch[N any](c *Client, query string, vars map[string]any, path []strin
 	}
 }
 
-// walkConn descends path from the decoded data root and decodes the
-// terminal value as a connection envelope. A missing or null element
-// errors with the path walked so far.
+// walkConn descends path from the decoded data root (the shared walkPath
+// descent, see fetch.go) and decodes the terminal value as a connection
+// envelope. A missing or null element errors with the path walked so far.
 func walkConn[N any](root map[string]json.RawMessage, path []string) (conn[N], error) {
 	if len(path) == 0 {
 		return conn[N]{}, fmt.Errorf("paginate: empty connection path")
 	}
-	cur := root
-	for i, elem := range path {
-		raw, ok := cur[elem]
-		if !ok || string(raw) == "null" {
-			return conn[N]{}, fmt.Errorf("paginate: %q missing or null in response", strings.Join(path[:i+1], "."))
-		}
-		if i == len(path)-1 {
-			var cn conn[N]
-			if err := json.Unmarshal(raw, &cn); err != nil {
-				return conn[N]{}, fmt.Errorf("paginate: decode connection at %q: %w", strings.Join(path, "."), err)
-			}
-			return cn, nil
-		}
-		next := make(map[string]json.RawMessage)
-		if err := json.Unmarshal(raw, &next); err != nil {
-			return conn[N]{}, fmt.Errorf("paginate: decode object at %q: %w", strings.Join(path[:i+1], "."), err)
-		}
-		cur = next
+	raw, err := walkPath(root, path)
+	if err != nil {
+		return conn[N]{}, fmt.Errorf("paginate: %w", err)
 	}
-	// Unreachable: the loop returns on the last element.
-	return conn[N]{}, fmt.Errorf("paginate: empty connection path")
+	var cn conn[N]
+	if err := json.Unmarshal(raw, &cn); err != nil {
+		return conn[N]{}, fmt.Errorf("paginate: decode connection at %q: %w", strings.Join(path, "."), err)
+	}
+	return cn, nil
 }
