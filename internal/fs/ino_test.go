@@ -8,7 +8,11 @@ import "testing"
 // never share an inode.
 func TestInoStableAndKeyed(t *testing.T) {
 	t.Parallel()
-	if ino("k", "a") != ino("k", "a") {
+	// Two separate calls, compared through variables: the stability property
+	// (same (kind, id) → same ino across calls) stated without tripping
+	// staticcheck's identical-expressions check.
+	first, second := ino("k", "a"), ino("k", "a")
+	if first != second {
 		t.Error("ino not stable for the same (kind, id)")
 	}
 	if ino("k", "a") == ino("k", "b") {

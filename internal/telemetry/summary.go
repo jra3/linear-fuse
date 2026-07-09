@@ -165,7 +165,7 @@ func projectAttrs(set attribute.Set) string {
 	var pairs []string
 	for _, kv := range set.ToSlice() {
 		if summaryAttrKeys[string(kv.Key)] {
-			pairs = append(pairs, string(kv.Key)+"="+kv.Value.Emit())
+			pairs = append(pairs, string(kv.Key)+"="+kv.Value.String())
 		}
 	}
 	if len(pairs) == 0 {

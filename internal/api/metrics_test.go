@@ -73,7 +73,7 @@ func findMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metric
 func attrsMatch(set attribute.Set, kvs []attribute.KeyValue) bool {
 	for _, kv := range kvs {
 		v, ok := set.Value(kv.Key)
-		if !ok || v.Emit() != kv.Value.Emit() {
+		if !ok || v.String() != kv.Value.String() {
 			return false
 		}
 	}
