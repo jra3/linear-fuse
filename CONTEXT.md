@@ -1006,6 +1006,34 @@ logs and proceeds. Probe sequencing and the delay path are unit-tested in
 `worker_test.go` (`TestProbe*`); the client-level seed-then-defer wiring in
 `client_test.go` (`TestViewerProbeSeedsBudget`).
 
+### Telemetry (meter) (`internal/telemetry`)
+The **deep module** owning the OTEL metrics pipeline. One call —
+`telemetry.Init(cfg.Telemetry, Version, GitCommit)` in `cmd/mount`, before
+filesystem/worker construction — builds the SDK MeterProvider, registers it
+globally, and returns a shutdown (deferred; flushes both readers); instrument
+sites everywhere else just call `otel.Meter("linearfs/<layer>")` and never
+import the SDK. **Metrics only — traces never** (recorded policy: no tracer,
+no span design; revisit only if something concrete demands traces). The
+governing rule is **one data source, two renderings**: both readers collect
+the same provider, so the renderings cannot drift. Rendering 1, always on: a
+5-minute PeriodicReader whose exporter (`summary.go`) emits ONE compact
+human-readable log line to journald — generic over whatever instruments
+exist, so later phases enrich it for free (`renderSummary` is the pure,
+unit-tested projection). Rendering 2, config-gated OFF by default
+(`telemetry: {file: {enabled, path, interval, max_size_mb}}`, path defaulting
+next to cache.db): a PeriodicReader driving stdoutmetric through a
+**size-capped rotation writer** (`rotate.go`: a write that would exceed the
+cap first renames the file to `path.1` — replacing any previous `.1`, never
+accumulating — then truncates; disk bounded at ~2× cap, output stays jq-able
+JSONL). Failure is never fatal: file-export setup trouble degrades to
+summary-only, and cmd treats an `Init` error as log-and-continue — telemetry
+must never block mounting. Phase 1 ships only the heartbeat
+(`linearfs.process.uptime_seconds` + `linearfs.build.info{version,commit}`)
+to make the pipeline verifiable end-to-end; **APIStats
+(`internal/api/stats.go`) still owns the api journald summary until phase 2
+deletes it** and lands the api+budget instruments; phase 3 adds sync + SWR.
+Spec: `docs/plans/2026-07-08-otel-metrics-design.md`.
+
 ### Repository read path (deliberately concrete — no interface)
 The read path is the concrete `*repo.SQLiteRepository`; there is **no
 Repository interface in front of it, on purpose** (round 14 decision — a

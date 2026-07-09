@@ -49,6 +49,110 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.APIKey != "" {
 		t.Errorf("DefaultConfig() APIKey should be empty, got %q", cfg.APIKey)
 	}
+
+	// Telemetry file export is off by default with sane knob defaults
+	if cfg.Telemetry.File.Enabled {
+		t.Error("DefaultConfig() Telemetry.File.Enabled should be false")
+	}
+	if cfg.Telemetry.File.Interval != 60*time.Second {
+		t.Errorf("DefaultConfig() Telemetry.File.Interval = %v, want %v", cfg.Telemetry.File.Interval, 60*time.Second)
+	}
+	if cfg.Telemetry.File.MaxSizeMB != 50 {
+		t.Errorf("DefaultConfig() Telemetry.File.MaxSizeMB = %d, want 50", cfg.Telemetry.File.MaxSizeMB)
+	}
+	// Default path sits next to the other linearfs state files
+	if filepath.Base(cfg.Telemetry.File.Path) != "metrics.jsonl" {
+		t.Errorf("DefaultConfig() Telemetry.File.Path = %q, want a .../linearfs/metrics.jsonl path", cfg.Telemetry.File.Path)
+	}
+	if filepath.Base(filepath.Dir(cfg.Telemetry.File.Path)) != "linearfs" {
+		t.Errorf("DefaultConfig() Telemetry.File.Path = %q, want it under a linearfs dir", cfg.Telemetry.File.Path)
+	}
+}
+
+func TestLoadTelemetryConfig(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "linearfs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	configContent := `
+telemetry:
+  file:
+    enabled: true
+    path: /tmp/custom-metrics.jsonl
+    interval: 30s
+    max_size_mb: 10
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	env := mockEnv(map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	})
+
+	cfg, err := LoadWithEnv(env)
+	if err != nil {
+		t.Fatalf("LoadWithEnv() error: %v", err)
+	}
+
+	if !cfg.Telemetry.File.Enabled {
+		t.Error("LoadWithEnv() Telemetry.File.Enabled should be true")
+	}
+	if cfg.Telemetry.File.Path != "/tmp/custom-metrics.jsonl" {
+		t.Errorf("LoadWithEnv() Telemetry.File.Path = %q, want %q", cfg.Telemetry.File.Path, "/tmp/custom-metrics.jsonl")
+	}
+	if cfg.Telemetry.File.Interval != 30*time.Second {
+		t.Errorf("LoadWithEnv() Telemetry.File.Interval = %v, want %v", cfg.Telemetry.File.Interval, 30*time.Second)
+	}
+	if cfg.Telemetry.File.MaxSizeMB != 10 {
+		t.Errorf("LoadWithEnv() Telemetry.File.MaxSizeMB = %d, want 10", cfg.Telemetry.File.MaxSizeMB)
+	}
+}
+
+func TestLoadTelemetryPartialKeepsDefaults(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "linearfs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+
+	// Only flip the gate — path/interval/cap should keep their defaults.
+	configPath := filepath.Join(configDir, "config.yaml")
+	configContent := `
+telemetry:
+  file:
+    enabled: true
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	env := mockEnv(map[string]string{
+		"XDG_CONFIG_HOME": tmpDir,
+	})
+
+	cfg, err := LoadWithEnv(env)
+	if err != nil {
+		t.Fatalf("LoadWithEnv() error: %v", err)
+	}
+
+	if !cfg.Telemetry.File.Enabled {
+		t.Error("LoadWithEnv() Telemetry.File.Enabled should be true")
+	}
+	if cfg.Telemetry.File.Interval != 60*time.Second {
+		t.Errorf("LoadWithEnv() Telemetry.File.Interval = %v, want default %v", cfg.Telemetry.File.Interval, 60*time.Second)
+	}
+	if cfg.Telemetry.File.MaxSizeMB != 50 {
+		t.Errorf("LoadWithEnv() Telemetry.File.MaxSizeMB = %d, want default 50", cfg.Telemetry.File.MaxSizeMB)
+	}
+	if filepath.Base(cfg.Telemetry.File.Path) != "metrics.jsonl" {
+		t.Errorf("LoadWithEnv() Telemetry.File.Path = %q, want default metrics.jsonl path", cfg.Telemetry.File.Path)
+	}
 }
 
 func TestLoadWithConfigFile(t *testing.T) {
