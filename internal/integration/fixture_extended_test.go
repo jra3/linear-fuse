@@ -737,8 +737,9 @@ func TestFixtureAttachmentsDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
-	// TST-1 has 2 embedded files: screenshot.png and design.pdf
-	// Plus the _create and .error control files = 4 entries
+	// TST-1 has 2 embedded files (screenshot.png, design.pdf) and 1 external
+	// URL attachment (Design Spec.link), plus the _create/.error/.last
+	// control files
 	attachPath := attachmentsPath(testTeamKey, "TST-1")
 	entries, err := os.ReadDir(attachPath)
 	if err != nil {
@@ -751,13 +752,14 @@ func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 			realCount++
 		}
 	}
-	if realCount != 2 {
-		t.Errorf("Expected 2 attachment files (excluding control files), got %d", realCount)
+	if realCount != 3 {
+		t.Errorf("Expected 3 attachment files (excluding control files), got %d", realCount)
 	}
 
 	// Check for expected files
 	hasScreenshot := false
 	hasDesign := false
+	hasLink := false
 	hasCreate := false
 	for _, entry := range entries {
 		switch entry.Name() {
@@ -765,6 +767,8 @@ func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 			hasScreenshot = true
 		case "design.pdf":
 			hasDesign = true
+		case "Design Spec.link":
+			hasLink = true
 		case "_create":
 			hasCreate = true
 		}
@@ -775,6 +779,9 @@ func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 	}
 	if !hasDesign {
 		t.Error("Expected design.pdf in attachments")
+	}
+	if !hasLink {
+		t.Error("Expected Design Spec.link in attachments")
 	}
 	if !hasCreate {
 		t.Error("Expected _create trigger file in attachments")

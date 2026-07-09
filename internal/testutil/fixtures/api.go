@@ -444,3 +444,69 @@ func FixtureAPIProjectMilestone() api.ProjectMilestone {
 		SortOrder:   1.0,
 	}
 }
+
+// WithRelations sets the issue's outgoing relations. They ride the issue's
+// data blob, so issue.meta renders them; the relations/ directory reads the
+// issue_relations table instead (see PopulateIssueRelations).
+func WithRelations(rels ...api.IssueRelation) IssueOption {
+	return func(i *api.Issue) {
+		i.Relations = api.IssueRelations{Nodes: rels}
+	}
+}
+
+// WithInverseRelations sets the issue's incoming relations (see WithRelations).
+func WithInverseRelations(rels ...api.IssueRelation) IssueOption {
+	return func(i *api.Issue) {
+		i.InverseRelations = api.IssueRelations{Nodes: rels}
+	}
+}
+
+// FixtureAPIIssueRelation returns an outgoing relation: TST-1 blocks TST-3.
+// Both endpoints exist in the standard fixture issue set, so the enrichment
+// path (relationView resolving the other end's identifier/title) is exercised.
+func FixtureAPIIssueRelation() api.IssueRelation {
+	return api.IssueRelation{
+		ID:   "rel-1",
+		Type: "blocks",
+		RelatedIssue: &api.ParentIssue{
+			ID:         "issue-3",
+			Identifier: "TST-3",
+			Title:      "Test Issue 3 - High Priority",
+		},
+		CreatedAt: fixtureTime,
+		UpdatedAt: fixtureTime,
+	}
+}
+
+// FixtureAPIAttachment returns an external URL attachment (rendered as a
+// *.link file in the attachments/ directory).
+func FixtureAPIAttachment() api.Attachment {
+	user := FixtureAPIUser()
+	return api.Attachment{
+		ID:         "attachment-1",
+		Title:      "Design Spec",
+		Subtitle:   "example.com",
+		URL:        "https://example.com/design-spec",
+		SourceType: "url",
+		Creator:    &user,
+		CreatedAt:  fixtureTime,
+		UpdatedAt:  fixtureTime,
+	}
+}
+
+// FixtureAPIHistoryEntries returns issue history entries with a describable
+// change (state transition), so HistoryToMarkdown renders a non-empty body.
+func FixtureAPIHistoryEntries() []api.IssueHistoryEntry {
+	actor := FixtureAPIUser()
+	from := FixtureAPIState("unstarted")
+	to := FixtureAPIState("started")
+	return []api.IssueHistoryEntry{
+		{
+			ID:        "history-1",
+			CreatedAt: fixtureTime.Add(time.Hour),
+			Actor:     &actor,
+			FromState: &from,
+			ToState:   &to,
+		},
+	}
+}

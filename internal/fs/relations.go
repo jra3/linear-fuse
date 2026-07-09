@@ -112,7 +112,16 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string,
 		isInverse: isInverse,
 		issueID:   n.issueID,
 	}
-	return n.newRenderInode(ctx, out, name, node, relationIno(rel.ID), 30*time.Second), 0
+	// One relation surfaces as TWO files — blocks-B.rel under A and
+	// blocked-by-A.rel under B — with different renders. They must not share a
+	// stable ino: the bridge dedups nodes by ino AFTER the handler returns, and
+	// the refreshExisting probe (parent.GetChild) can't see across directories,
+	// so a shared ino served one endpoint's content for both paths.
+	inoKey := rel.ID
+	if isInverse {
+		inoKey += "/inverse"
+	}
+	return n.newRenderInode(ctx, out, name, node, relationIno(inoKey), 30*time.Second), 0
 }
 
 // inverseRelationType returns the inverse relation type name

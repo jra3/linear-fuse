@@ -842,6 +842,16 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error)
 func (lfs *LinearFS) InjectTestStore(store *db.Store) error {
 	lfs.store = store
 	lfs.repo = repo.NewSQLiteRepository(store, nil)
+	// Mirror EnableSQLiteCache's viewer load (but never the API refresh): a
+	// fixture-populated viewer_cache row resolves the current user, so the
+	// my/ views are exercisable offline.
+	ctx := context.Background()
+	if cachedViewerID, err := store.Queries().GetViewerUserID(ctx); err == nil {
+		if dbUser, err := store.Queries().GetUser(ctx, cachedViewerID); err == nil {
+			apiUser := db.DBUserToAPIUser(dbUser)
+			lfs.repo.SetCurrentUser(&apiUser)
+		}
+	}
 	return nil
 }
 

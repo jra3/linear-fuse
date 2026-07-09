@@ -3,6 +3,7 @@ package fixtures
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -319,6 +320,120 @@ func PopulateEmbeddedFiles(ctx context.Context, store *db.Store, issueID string,
 		}
 	}
 	return nil
+}
+
+// PopulateIssueRelations inserts outgoing relations for an issue into the
+// issue_relations table (the store behind the relations/ directory). Each
+// relation must carry RelatedIssue; the row is stored from the owner's
+// perspective, so the target issue's relations/ shows the inverse file.
+func PopulateIssueRelations(ctx context.Context, store *db.Store, issueID string, rels []api.IssueRelation) error {
+	q := store.Queries()
+	for _, rel := range rels {
+		if err := q.UpsertIssueRelation(ctx, db.IssueRelationUpsertParams(rel, issueID, rel.RelatedIssue.ID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateProjectMilestones inserts milestones for a project into the SQLite store.
+func PopulateProjectMilestones(ctx context.Context, store *db.Store, projectID string, milestones []api.ProjectMilestone) error {
+	q := store.Queries()
+	for _, m := range milestones {
+		params, err := db.APIProjectMilestoneToDBMilestone(m, projectID)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertProjectMilestone(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateProjectUpdates inserts status updates for a project into the SQLite store.
+func PopulateProjectUpdates(ctx context.Context, store *db.Store, projectID string, updates []api.ProjectUpdate) error {
+	q := store.Queries()
+	for _, u := range updates {
+		params, err := db.APIProjectUpdateToDBUpdate(u, projectID)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertProjectUpdate(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateInitiativeUpdates inserts status updates for an initiative into the SQLite store.
+func PopulateInitiativeUpdates(ctx context.Context, store *db.Store, initiativeID string, updates []api.InitiativeUpdate) error {
+	q := store.Queries()
+	for _, u := range updates {
+		params, err := db.APIInitiativeUpdateToDBUpdate(u, initiativeID)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertInitiativeUpdate(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateAttachments inserts external URL attachments for an issue into the
+// SQLite store (rendered as *.link files in attachments/).
+func PopulateAttachments(ctx context.Context, store *db.Store, issueID string, attachments []api.Attachment) error {
+	q := store.Queries()
+	for _, a := range attachments {
+		params, err := db.APIAttachmentToDBAttachment(a, issueID)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertAttachment(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateIssueHistory caches history entries for an issue (the store behind
+// the history.md render).
+func PopulateIssueHistory(ctx context.Context, store *db.Store, issueID string, entries []api.IssueHistoryEntry) error {
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	return store.Queries().UpsertIssueHistoryCache(ctx, db.UpsertIssueHistoryCacheParams{
+		IssueID:  issueID,
+		SyncedAt: time.Now(),
+		Data:     data,
+	})
+}
+
+// PopulateTeamMembers inserts team membership rows (the store behind the
+// by/assignee value listing).
+func PopulateTeamMembers(ctx context.Context, store *db.Store, teamID string, userIDs []string) error {
+	q := store.Queries()
+	for _, uid := range userIDs {
+		if err := q.UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
+			TeamID:   teamID,
+			UserID:   uid,
+			SyncedAt: time.Now(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateViewer records the viewer identity (the store behind the my/ views;
+// the user must also be populated via PopulateUsers so the identity resolves).
+func PopulateViewer(ctx context.Context, store *db.Store, userID string) error {
+	return store.Queries().SetViewerUserID(ctx, db.SetViewerUserIDParams{
+		UserID:   userID,
+		SyncedAt: time.Now(),
+	})
 }
 
 // FixtureAPIEmbeddedFiles returns a set of embedded files for testing.
