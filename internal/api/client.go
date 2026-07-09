@@ -589,12 +589,6 @@ func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
 	}, nil
 }
 
-// GetTeamStates fetches workflow states for a team
-func (c *Client) GetTeamStates(ctx context.Context, teamID string) ([]State, error) {
-	return fetchNodes[State](ctx, c, queryTeamStates,
-		map[string]any{"teamId": teamID}, "team", "states")
-}
-
 // GetTeamProjects fetches all projects for a team. Paginated: a team's
 // projects connection was the first observed to overflow a page (silently
 // truncating teams/ views and dangling initiative symlinks).
@@ -609,12 +603,6 @@ func (c *Client) GetTeamProjects(ctx context.Context, teamID string) ([]Project,
 // queryProjectLabelsPage).
 func (c *Client) GetProjectLabels(ctx context.Context) ([]ProjectLabel, error) {
 	return fetchAll[ProjectLabel](ctx, c, queryProjectLabelsPage, nil, "projectLabels")
-}
-
-// GetProjectMilestones fetches milestones for a project
-func (c *Client) GetProjectMilestones(ctx context.Context, projectID string) ([]ProjectMilestone, error) {
-	return fetchNodes[ProjectMilestone](ctx, c, queryProjectMilestones,
-		map[string]any{"projectId": projectID}, "project", "projectMilestones")
 }
 
 // CreateProjectMilestone creates a new milestone for a project
@@ -705,48 +693,6 @@ func (c *Client) RemoveProjectFromInitiative(ctx context.Context, projectID, ini
 	return execMutationOK(ctx, c, mutationInitiativeToProjectDelete, map[string]any{"projectId": projectID, "initiativeId": initiativeID}, "initiativeToProjectDelete")
 }
 
-// GetTeamCycles fetches cycles for a team
-func (c *Client) GetTeamCycles(ctx context.Context, teamID string) ([]Cycle, error) {
-	return fetchNodes[Cycle](ctx, c, queryTeamCycles,
-		map[string]any{"teamId": teamID}, "team", "cycles")
-}
-
-// GetTeamLabels fetches labels for a team (team + workspace labels). One
-// query carries two connections, so it walks the shared root twice instead
-// of going through a single-path front.
-func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, error) {
-	var root map[string]json.RawMessage
-	if err := c.query(ctx, queryTeamLabels, map[string]any{"teamId": teamID}, &root); err != nil {
-		return nil, err
-	}
-	teamLabels, err := connAt[Label](root, []string{"team", "labels"})
-	if err != nil {
-		return nil, err
-	}
-	workspaceLabels, err := connAt[Label](root, []string{"issueLabels"})
-	if err != nil {
-		return nil, err
-	}
-
-	// Combine team labels and workspace labels, deduplicating by ID
-	seen := make(map[string]bool)
-	var labels []Label
-	for _, l := range teamLabels.Nodes {
-		if !seen[l.ID] {
-			seen[l.ID] = true
-			labels = append(labels, l)
-		}
-	}
-	for _, l := range workspaceLabels.Nodes {
-		if !seen[l.ID] {
-			seen[l.ID] = true
-			labels = append(labels, l)
-		}
-	}
-
-	return labels, nil
-}
-
 // CreateLabel creates a new label
 func (c *Client) CreateLabel(ctx context.Context, input map[string]any) (*Label, error) {
 	return execMutation[Label](ctx, c, mutationCreateLabel, map[string]any{"input": input}, "issueLabelCreate", "issueLabel")
@@ -762,20 +708,9 @@ func (c *Client) DeleteLabel(ctx context.Context, id string) error {
 	return execMutationOK(ctx, c, mutationDeleteLabel, map[string]any{"id": id}, "issueLabelDelete")
 }
 
-// GetUsers fetches all users in the workspace
-func (c *Client) GetUsers(ctx context.Context) ([]User, error) {
-	return fetchNodes[User](ctx, c, queryUsers, nil, "users")
-}
-
 // GetViewer fetches the currently authenticated user
 func (c *Client) GetViewer(ctx context.Context) (*User, error) {
 	return fetchOne[User](ctx, c, queryViewer, nil, "viewer")
-}
-
-// GetTeamMembers fetches members of a specific team
-func (c *Client) GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
-	return fetchNodes[User](ctx, c, queryTeamMembers,
-		map[string]any{"teamId": teamID}, "team", "members")
 }
 
 // CreateIssue creates a new issue
@@ -912,12 +847,6 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 	return result, nil
 }
 
-// GetIssueComments fetches comments for an issue
-func (c *Client) GetIssueComments(ctx context.Context, issueID string) ([]Comment, error) {
-	return fetchNodes[Comment](ctx, c, queryIssueComments,
-		map[string]any{"issueId": issueID}, "issue", "comments")
-}
-
 // CreateComment creates a new comment on an issue
 func (c *Client) CreateComment(ctx context.Context, issueID string, body string) (*Comment, error) {
 	return execMutation[Comment](ctx, c, mutationCreateComment, map[string]any{"issueId": issueID, "body": body}, "commentCreate", "comment")
@@ -931,12 +860,6 @@ func (c *Client) UpdateComment(ctx context.Context, commentID string, body strin
 // DeleteComment deletes a comment
 func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
 	return execMutationOK(ctx, c, mutationDeleteComment, map[string]any{"id": commentID}, "commentDelete")
-}
-
-// GetIssueDocuments fetches documents attached to an issue
-func (c *Client) GetIssueDocuments(ctx context.Context, issueID string) ([]Document, error) {
-	return fetchNodes[Document](ctx, c, queryIssueDocuments,
-		map[string]any{"issueId": issueID}, "issue", "documents")
 }
 
 // GetIssueAttachments fetches attachments (external links) for an issue
@@ -982,11 +905,6 @@ func (c *Client) UpdateDocument(ctx context.Context, documentID string, input ma
 // DeleteDocument deletes a document
 func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
 	return execMutationOK(ctx, c, mutationDeleteDocument, map[string]any{"id": documentID}, "documentDelete")
-}
-
-// GetInitiatives fetches all initiatives
-func (c *Client) GetInitiatives(ctx context.Context) ([]Initiative, error) {
-	return fetchNodes[Initiative](ctx, c, queryInitiatives, nil, "initiatives")
 }
 
 // GetInitiative fetches a single initiative by ID

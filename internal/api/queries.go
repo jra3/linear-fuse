@@ -193,8 +193,8 @@ fragment AttachmentFields on Attachment {
 `
 
 // ProjectMilestoneFields is the shared projection for a project milestone,
-// used by the nested selections in queryTeamProjects/queryProject, the
-// standalone queryProjectMilestones, and the create/update mutations.
+// used by the nested selections in queryTeamProjects/queryProject and the
+// create/update mutations.
 const projectMilestoneFieldsFragment = `
 fragment ProjectMilestoneFields on ProjectMilestone {
   id
@@ -358,51 +358,6 @@ query ProjectLabelsPage($after: String) {
 }
 ` + projectLabelFieldsFragment
 
-const queryTeamStates = `
-query TeamStates($teamId: String!) {
-  team(id: $teamId) {
-    states {
-      nodes {
-        id
-        name
-        type
-      }
-    }
-  }
-}
-`
-
-var queryTeamLabels = `
-query TeamLabels($teamId: String!) {
-  team(id: $teamId) {
-    labels {
-      nodes { ...LabelFields }
-    }
-  }
-  issueLabels {
-    nodes { ...LabelFields }
-  }
-}
-` + labelFieldsFragment
-
-const queryTeamCycles = `
-query TeamCycles($teamId: String!) {
-  team(id: $teamId) {
-    cycles {
-      nodes {
-        id
-        number
-        name
-        startsAt
-        endsAt
-        completedIssueCountHistory
-        issueCountHistory
-      }
-    }
-  }
-}
-`
-
 // ProjectFields is the shared projection for a project — the team-projects
 // page, the single-project fetch (the WriteBack verify read), and the create
 // mutation's echo all project through it, per the fragment rule: an inlined
@@ -464,16 +419,6 @@ query Project($id: String!) {
   project(id: $id) { ...ProjectFields }
 }
 ` + projectFieldsFragment
-
-var queryProjectMilestones = `
-query ProjectMilestones($projectId: String!) {
-  project(id: $projectId) {
-    projectMilestones {
-      nodes { ...ProjectMilestoneFields }
-    }
-  }
-}
-` + projectMilestoneFieldsFragment
 
 // =============================================================================
 // Project Milestones Mutations
@@ -706,20 +651,6 @@ query InitiativeProjectsPage($id: String!, $after: String) {
 }
 `
 
-const queryUsers = `
-query Users {
-  users {
-    nodes {
-      id
-      name
-      email
-      displayName
-      active
-    }
-  }
-}
-`
-
 const queryViewer = `
 query Viewer {
   viewer {
@@ -728,22 +659,6 @@ query Viewer {
     email
     displayName
     active
-  }
-}
-`
-
-const queryTeamMembers = `
-query TeamMembers($teamId: String!) {
-  team(id: $teamId) {
-    members {
-      nodes {
-        id
-        name
-        email
-        displayName
-        active
-      }
-    }
   }
 }
 `
@@ -824,16 +739,6 @@ query IssueAttachments($issueId: String!) {
 }
 ` + AttachmentFieldsFragment
 
-var queryIssueComments = `
-query IssueComments($issueId: String!) {
-  issue(id: $issueId) {
-    comments(first: 100) {
-      nodes { ...CommentFields }
-    }
-  }
-}
-` + CommentFieldsFragment
-
 var mutationCreateComment = `
 mutation CreateComment($issueId: String!, $body: String!) {
   commentCreate(input: { issueId: $issueId, body: $body }) {
@@ -859,16 +764,6 @@ mutation DeleteComment($id: String!) {
   }
 }
 `
-
-var queryIssueDocuments = `
-query IssueDocuments($issueId: String!) {
-  issue(id: $issueId) {
-    documents(first: 100) {
-      nodes { ...DocumentFields }
-    }
-  }
-}
-` + DocumentFieldsFragment
 
 var queryProjectDocuments = `
 query ProjectDocuments($projectId: ID!) {
@@ -934,40 +829,6 @@ const mutationDeleteLabel = `
 mutation DeleteLabel($id: String!) {
   issueLabelDelete(id: $id) {
     success
-  }
-}
-`
-
-// Filtered team issues queries - server-side filtering for by/ directories
-
-const queryInitiatives = `
-query Initiatives {
-  initiatives {
-    nodes {
-      id
-      name
-      slugId
-      description
-      status
-      color
-      icon
-      targetDate
-      url
-      createdAt
-      updatedAt
-      owner {
-        id
-        name
-        email
-      }
-      projects {
-        nodes {
-          id
-          name
-          slugId
-        }
-      }
-    }
   }
 }
 `

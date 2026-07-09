@@ -792,8 +792,7 @@ path. `fetchOne[T]` decodes the terminal into an entity; `fetchNodes[T]`
 decodes it as the `conn[T]` envelope and returns the nodes; `fetchConn[T]`
 returns the whole envelope for page-shaped callers (`GetTeamIssuesPage`) and
 errors on a nil `PageInfo` — the same "query must select pageInfo" contract
-as `fetchAll`. `GetTeamLabels` walks two connections out of one shared root
-(`connAt`) and keeps its dedup body.
+as `fetchAll`. Both fronts share one connection decode, `connAt`.
 
 **The null policy is a deliberate behavior change.** A missing or null path
 element — the terminal included — is an error naming the dotted path

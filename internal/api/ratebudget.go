@@ -110,12 +110,8 @@ var opBaseTier = map[string]priority{
 	"Viewer":                   pSkeleton,
 	"Teams":                    pSkeleton,
 	"TeamMetadata":             pSkeleton,
-	"TeamStates":               pSkeleton,
-	"TeamLabels":               pSkeleton,
 	"TeamLabelsPage":           pSkeleton,
-	"TeamCycles":               pSkeleton,
 	"TeamCyclesPage":           pSkeleton,
-	"TeamMembers":              pSkeleton,
 	"TeamMembersPage":          pSkeleton,
 	"TeamProjects":             pSkeleton,
 	"Workspace":                pSkeleton,
@@ -124,8 +120,6 @@ var opBaseTier = map[string]priority{
 	"WorkspaceUsersPage":       pSkeleton,
 	"WorkspaceInitiativesPage": pSkeleton,
 	"InitiativeProjectsPage":   pSkeleton,
-	"Users":                    pSkeleton,
-	"Initiatives":              pSkeleton,
 	"Initiative":               pSkeleton,
 	"Project":                  pSkeleton,
 
@@ -140,15 +134,12 @@ var opBaseTier = map[string]priority{
 	// complexity spenders, and the first to defer.
 	"IssueDetailsBatch":   pDetail,
 	"IssueDetails":        pDetail,
-	"IssueComments":       pDetail,
-	"IssueDocuments":      pDetail,
 	"IssueAttachments":    pDetail,
 	"IssueHistory":        pDetail,
 	"ProjectDocuments":    pDetail,
 	"InitiativeDocuments": pDetail,
 	"ProjectUpdates":      pDetail,
 	"InitiativeUpdates":   pDetail,
-	"ProjectMilestones":   pDetail,
 }
 
 // interactiveCtxKey marks a context as carrying a live caller (a user

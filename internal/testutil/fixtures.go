@@ -157,39 +157,6 @@ func FixtureProject() map[string]any {
 	}
 }
 
-// FixtureInitiative returns a test initiative as a map.
-func FixtureInitiative() map[string]any {
-	return map[string]any{
-		"id":          "initiative-123",
-		"name":        "Test Initiative",
-		"slugId":      "test-initiative",
-		"description": "A test initiative",
-		"status":      "active",
-		"color":       "#0000ff",
-		"targetDate":  "2024-12-31",
-		"url":         "https://linear.app/test/initiative/test-initiative",
-		"createdAt":   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		"updatedAt":   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		"owner":       FixtureUser(),
-		"projects": map[string]any{
-			"nodes": []map[string]any{
-				{"id": "project-123", "name": "Test Project", "slugId": "test-project"},
-			},
-		},
-	}
-}
-
-// FixtureCycle returns a test cycle as a map.
-func FixtureCycle() map[string]any {
-	return map[string]any{
-		"id":       "cycle-123",
-		"number":   42,
-		"name":     "Sprint 42",
-		"startsAt": time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		"endsAt":   time.Date(2024, 1, 14, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
-	}
-}
-
 // FixtureProjectUpdate returns a test project update as a map.
 func FixtureProjectUpdate() map[string]any {
 	return map[string]any{
@@ -242,74 +209,6 @@ func CreateCommentResponse(comment map[string]any) map[string]any {
 	}
 }
 
-// TeamStatesResponse returns a response for GetTeamStates.
-func TeamStatesResponse(states ...map[string]any) map[string]any {
-	if len(states) == 0 {
-		states = []map[string]any{
-			FixtureState("backlog"),
-			FixtureState("unstarted"),
-			FixtureState("started"),
-			FixtureState("completed"),
-			FixtureState("canceled"),
-		}
-	}
-	return map[string]any{
-		"team": map[string]any{
-			"states": map[string]any{
-				"nodes": states,
-			},
-		},
-	}
-}
-
-// TeamLabelsResponse returns a response for GetTeamLabels.
-func TeamLabelsResponse(labels ...map[string]any) map[string]any {
-	return map[string]any{
-		"team": map[string]any{
-			"labels": map[string]any{
-				"nodes": labels,
-			},
-		},
-		"issueLabels": map[string]any{
-			"nodes": []map[string]any{},
-		},
-	}
-}
-
-// UsersResponse returns a response for GetUsers.
-func UsersResponse(users ...map[string]any) map[string]any {
-	if len(users) == 0 {
-		users = []map[string]any{FixtureUser()}
-	}
-	return map[string]any{
-		"users": map[string]any{
-			"nodes": users,
-		},
-	}
-}
-
-// IssueCommentsResponse returns a response for GetIssueComments.
-func IssueCommentsResponse(comments ...map[string]any) map[string]any {
-	return map[string]any{
-		"issue": map[string]any{
-			"comments": map[string]any{
-				"nodes": comments,
-			},
-		},
-	}
-}
-
-// IssueDocumentsResponse returns a response for GetIssueDocuments.
-func IssueDocumentsResponse(docs ...map[string]any) map[string]any {
-	return map[string]any{
-		"issue": map[string]any{
-			"documents": map[string]any{
-				"nodes": docs,
-			},
-		},
-	}
-}
-
 // FilteredIssuesResponse returns a response for filtered issue queries (status, label, assignee, unassigned).
 func FilteredIssuesResponse(issues ...map[string]any) map[string]any {
 	return map[string]any{
@@ -358,28 +257,6 @@ func TeamProjectsResponse(projects ...map[string]any) map[string]any {
 	}
 }
 
-// FixtureProjectMilestone returns a test project milestone as a map.
-func FixtureProjectMilestone() map[string]any {
-	return map[string]any{
-		"id":          "milestone-123",
-		"name":        "Alpha Release",
-		"description": "First alpha release",
-		"targetDate":  "2024-03-31",
-		"sortOrder":   1.0,
-	}
-}
-
-// ProjectMilestonesResponse returns a response for GetProjectMilestones.
-func ProjectMilestonesResponse(milestones ...map[string]any) map[string]any {
-	return map[string]any{
-		"project": map[string]any{
-			"projectMilestones": map[string]any{
-				"nodes": milestones,
-			},
-		},
-	}
-}
-
 // ProjectUpdatesResponse returns a response for GetProjectUpdates.
 func ProjectUpdatesResponse(updates ...map[string]any) map[string]any {
 	return map[string]any{
@@ -397,17 +274,6 @@ func CreateProjectUpdateResponse(update map[string]any) map[string]any {
 		"projectUpdateCreate": map[string]any{
 			"success":       true,
 			"projectUpdate": update,
-		},
-	}
-}
-
-// TeamCyclesResponse returns a response for GetTeamCycles.
-func TeamCyclesResponse(cycles ...map[string]any) map[string]any {
-	return map[string]any{
-		"team": map[string]any{
-			"cycles": map[string]any{
-				"nodes": cycles,
-			},
 		},
 	}
 }
@@ -499,15 +365,6 @@ func DeleteDocumentResponse(success bool) map[string]any {
 	}
 }
 
-// InitiativesResponse returns a response for GetInitiatives.
-func InitiativesResponse(initiatives ...map[string]any) map[string]any {
-	return map[string]any{
-		"initiatives": map[string]any{
-			"nodes": initiatives,
-		},
-	}
-}
-
 // FixtureInitiativeUpdate returns a test initiative update as a map.
 func FixtureInitiativeUpdate() map[string]any {
 	return map[string]any{
@@ -546,17 +403,6 @@ func ProjectDocumentsResponse(docs ...map[string]any) map[string]any {
 	return map[string]any{
 		"documents": map[string]any{
 			"nodes": docs,
-		},
-	}
-}
-
-// TeamMembersResponse returns a response for GetTeamMembers.
-func TeamMembersResponse(users ...map[string]any) map[string]any {
-	return map[string]any{
-		"team": map[string]any{
-			"members": map[string]any{
-				"nodes": users,
-			},
 		},
 	}
 }

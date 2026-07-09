@@ -148,7 +148,7 @@ func TestQueryRecordsAPIMetrics(t *testing.T) {
 	defer mock.Close()
 	mock.SetResponse("Viewer", map[string]any{"viewer": map[string]any{"id": "u1", "name": "U"}})
 	mock.SetError("Teams", errors.New("boom"))
-	mock.SetError("Users", errors.New("RATELIMITED: complexity budget exhausted"))
+	mock.SetError("Initiative", errors.New("RATELIMITED: complexity budget exhausted"))
 
 	client := NewClient("test-key")
 	client.SetAPIURL(mock.URL())
@@ -162,8 +162,8 @@ func TestQueryRecordsAPIMetrics(t *testing.T) {
 	}
 	// Rate-limited call LAST: settling it snaps the budget windows to zero,
 	// which would defer any later query.
-	if _, err := client.GetUsers(ctx); err == nil {
-		t.Fatal("GetUsers: want error")
+	if _, err := client.GetInitiative(ctx, "init-1"); err == nil {
+		t.Fatal("GetInitiative: want error")
 	}
 
 	rm := collectMetrics(t, reader)
@@ -173,7 +173,7 @@ func TestQueryRecordsAPIMetrics(t *testing.T) {
 	}{
 		{"Viewer", "ok"},
 		{"Teams", "error"},
-		{"Users", "ratelimited"},
+		{"Initiative", "ratelimited"},
 	} {
 		if got := counterValue(t, rm, "linearfs.api.requests", opAttr(tc.op), outcomeAttr(tc.outcome)); got != 1 {
 			t.Errorf("requests{op=%s,outcome=%s} = %d, want 1", tc.op, tc.outcome, got)

@@ -181,16 +181,6 @@ func (m *mockAPIClient) GetProjectLabels(ctx context.Context) ([]api.ProjectLabe
 
 // GetProjectMilestones removed — milestones now come inline from GetTeamProjects
 
-func (m *mockAPIClient) GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return &api.IssueDetails{
-		Comments:  []api.Comment{},
-		Documents: []api.Document{},
-	}, nil
-}
-
 func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error) {
 	atomic.AddInt32(&m.detailsCalls, 1)
 	if m.simulateError != nil {
@@ -211,27 +201,6 @@ func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []str
 		}
 	}
 	return result, nil
-}
-
-func (m *mockAPIClient) GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return []api.Comment{}, nil
-}
-
-func (m *mockAPIClient) GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return []api.Document{}, nil
-}
-
-func (m *mockAPIClient) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
-	if m.simulateError != nil {
-		return nil, m.simulateError
-	}
-	return []api.Attachment{}, nil
 }
 
 func (m *mockAPIClient) AuthHeader() string {
