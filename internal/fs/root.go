@@ -56,7 +56,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		lfs := r.lfs
 		return r.lookupRenderFile(ctx, out, "project-labels.md",
 			func(ctx context.Context) ([]byte, time.Time, time.Time) {
-				labels, _ := lfs.GetProjectLabels(ctx)
+				labels, _ := lfs.repo.GetProjectLabels(ctx)
 				mtime, ctime := projectLabelCatalogTimes(labels)
 				return projectLabelsMarkdown(labels), mtime, ctime
 			}, projectLabelsCatalogIno(), inheritTimeout), 0

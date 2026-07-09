@@ -23,7 +23,7 @@ var _ fs.NodeLookuper = (*UsersNode)(nil)
 var _ fs.NodeGetattrer = (*UsersNode)(nil)
 
 func (u *UsersNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	users, err := u.lfs.GetUsers(ctx)
+	users, err := u.lfs.repo.GetUsers(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -40,7 +40,7 @@ func (u *UsersNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	users, err := u.lfs.GetUsers(ctx)
+	users, err := u.lfs.repo.GetUsers(ctx)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -105,7 +105,7 @@ func (u *UserNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (u *UserNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	issues, err := u.lfs.GetUserIssues(ctx, u.entity().ID)
+	issues, err := u.lfs.repo.GetUserIssues(ctx, u.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -136,7 +136,7 @@ func (u *UserNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		}, 0, inheritTimeout), 0
 	}
 
-	issues, err := u.lfs.GetUserIssues(ctx, user.ID)
+	issues, err := u.lfs.repo.GetUserIssues(ctx, user.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

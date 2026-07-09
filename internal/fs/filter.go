@@ -159,7 +159,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 	switch f.category {
 	case "status":
 		// Use team states from API - much faster than scanning all issues
-		states, err := f.lfs.GetTeamStates(ctx, teamID)
+		states, err := f.lfs.repo.GetTeamStates(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +172,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 
 	case "label":
 		// Use team labels from API - much faster than scanning all issues
-		labels, err := f.lfs.GetTeamLabels(ctx, teamID)
+		labels, err := f.lfs.repo.GetTeamLabels(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +185,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 
 	case "assignee":
 		// Use team members - show only users who are members of this team plus "unassigned"
-		users, err := f.lfs.GetTeamMembers(ctx, teamID)
+		users, err := f.lfs.repo.GetTeamMembers(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
@@ -274,14 +274,14 @@ func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, e
 		return f.lfs.GetFilteredIssuesByLabel(ctx, teamID, f.value)
 	case "assignee":
 		if f.value == "unassigned" {
-			return f.lfs.GetFilteredIssuesUnassigned(ctx, teamID)
+			return f.lfs.repo.GetUnassignedIssues(ctx, teamID)
 		}
 		// Need to resolve assignee handle to ID
 		assigneeID, err := f.resolveAssigneeID(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return f.lfs.GetFilteredIssuesByAssignee(ctx, teamID, assigneeID)
+		return f.lfs.repo.GetIssuesByAssignee(ctx, teamID, assigneeID)
 	default:
 		return nil, fmt.Errorf("unknown filter category: %s", f.category)
 	}
@@ -289,7 +289,7 @@ func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, e
 
 // resolveAssigneeID converts an assignee handle (display name or email prefix) to user ID
 func (f *FilterValueNode) resolveAssigneeID(ctx context.Context) (string, error) {
-	users, err := f.lfs.GetTeamMembers(ctx, f.entity().ID)
+	users, err := f.lfs.repo.GetTeamMembers(ctx, f.entity().ID)
 	if err != nil {
 		return "", err
 	}

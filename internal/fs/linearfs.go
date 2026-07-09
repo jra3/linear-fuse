@@ -239,26 +239,6 @@ func (lfs *LinearFS) HasSQLiteCache() bool {
 	return lfs.repo != nil
 }
 
-func (lfs *LinearFS) GetTeams(ctx context.Context) ([]api.Team, error) {
-	return lfs.repo.GetTeams(ctx)
-}
-
-func (lfs *LinearFS) GetTeamIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
-	return lfs.repo.GetTeamIssues(ctx, teamID)
-}
-
-func (lfs *LinearFS) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
-	return lfs.repo.GetIssueAttachments(ctx, issueID)
-}
-
-func (lfs *LinearFS) GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error) {
-	return lfs.repo.GetIssueEmbeddedFiles(ctx, issueID)
-}
-
-func (lfs *LinearFS) GetIssueHistory(ctx context.Context, issueID string) ([]api.IssueHistoryEntry, error) {
-	return lfs.repo.GetIssueHistory(ctx, issueID)
-}
-
 // MountPoint returns the filesystem mount path
 func (lfs *LinearFS) MountPoint() string {
 	if lfs.mountPoint == "" {
@@ -426,11 +406,6 @@ func (lfs *LinearFS) GetFilteredIssuesByStatus(ctx context.Context, teamID, stat
 	return lfs.repo.GetIssuesByState(ctx, teamID, state.ID)
 }
 
-// GetFilteredIssuesByPriority fetches issues filtered by priority
-func (lfs *LinearFS) GetFilteredIssuesByPriority(ctx context.Context, teamID string, priority int) ([]api.Issue, error) {
-	return lfs.repo.GetIssuesByPriority(ctx, teamID, priority)
-}
-
 // GetFilteredIssuesByLabel fetches issues filtered by label name
 func (lfs *LinearFS) GetFilteredIssuesByLabel(ctx context.Context, teamID, labelName string) ([]api.Issue, error) {
 	label, err := lfs.repo.GetLabelByName(ctx, teamID, labelName)
@@ -441,40 +416,6 @@ func (lfs *LinearFS) GetFilteredIssuesByLabel(ctx context.Context, teamID, label
 		return []api.Issue{}, nil
 	}
 	return lfs.repo.GetIssuesByLabel(ctx, teamID, label.ID)
-}
-
-// GetFilteredIssuesByAssignee fetches issues filtered by assignee
-func (lfs *LinearFS) GetFilteredIssuesByAssignee(ctx context.Context, teamID, assigneeID string) ([]api.Issue, error) {
-	return lfs.repo.GetIssuesByAssignee(ctx, teamID, assigneeID)
-}
-
-// GetFilteredIssuesUnassigned fetches issues with no assignee
-func (lfs *LinearFS) GetFilteredIssuesUnassigned(ctx context.Context, teamID string) ([]api.Issue, error) {
-	return lfs.repo.GetUnassignedIssues(ctx, teamID)
-}
-
-func (lfs *LinearFS) GetMyIssues(ctx context.Context) ([]api.Issue, error) {
-	return lfs.repo.GetMyIssues(ctx)
-}
-
-func (lfs *LinearFS) GetMyCreatedIssues(ctx context.Context) ([]api.Issue, error) {
-	return lfs.repo.GetMyCreatedIssues(ctx)
-}
-
-func (lfs *LinearFS) GetMyActiveIssues(ctx context.Context) ([]api.Issue, error) {
-	return lfs.repo.GetMyActiveIssues(ctx)
-}
-
-func (lfs *LinearFS) GetTeamStates(ctx context.Context, teamID string) ([]api.State, error) {
-	return lfs.repo.GetTeamStates(ctx, teamID)
-}
-
-func (lfs *LinearFS) GetTeamLabels(ctx context.Context, teamID string) ([]api.Label, error) {
-	return lfs.repo.GetTeamLabels(ctx, teamID)
-}
-
-func (lfs *LinearFS) GetTeamCycles(ctx context.Context, teamID string) ([]api.Cycle, error) {
-	return lfs.repo.GetTeamCycles(ctx, teamID)
 }
 
 // GetCycleIssues returns issues in a cycle as CycleIssue
@@ -496,10 +437,6 @@ func (lfs *LinearFS) GetCycleIssues(ctx context.Context, cycleID string) ([]api.
 		}
 	}
 	return result, nil
-}
-
-func (lfs *LinearFS) GetTeamProjects(ctx context.Context, teamID string) ([]api.Project, error) {
-	return lfs.repo.GetTeamProjects(ctx, teamID)
 }
 
 // GetProjectIssues returns issues in a project as ProjectIssue
@@ -524,32 +461,6 @@ func (lfs *LinearFS) GetProjectIssues(ctx context.Context, projectID string) ([]
 	return result, nil
 }
 
-func (lfs *LinearFS) GetUsers(ctx context.Context) ([]api.User, error) {
-	return lfs.repo.GetUsers(ctx)
-}
-
-func (lfs *LinearFS) GetTeamMembers(ctx context.Context, teamID string) ([]api.User, error) {
-	return lfs.repo.GetTeamMembers(ctx, teamID)
-}
-
-// GetUserIssues returns issues assigned to a user across all teams
-func (lfs *LinearFS) GetUserIssues(ctx context.Context, userID string) ([]api.Issue, error) {
-	return lfs.repo.GetUserIssues(ctx, userID)
-}
-
-// GetIssueChildren returns child issues of a parent issue
-func (lfs *LinearFS) GetIssueChildren(ctx context.Context, parentID string) ([]api.Issue, error) {
-	return lfs.repo.GetIssueChildren(ctx, parentID)
-}
-
-func (lfs *LinearFS) MaybeRefreshIssueDetails(issueID string) {
-	lfs.repo.MaybeRefreshIssueDetails(issueID)
-}
-
-func (lfs *LinearFS) GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error) {
-	return lfs.repo.GetIssueComments(ctx, issueID)
-}
-
 // TryGetCachedComments returns comments from SQLite
 func (lfs *LinearFS) TryGetCachedComments(issueID string) ([]api.Comment, bool) {
 	comments, err := lfs.repo.GetIssueComments(context.Background(), issueID)
@@ -563,25 +474,11 @@ func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentI
 	return lfs.mutator().UpdateComment(ctx, commentID, body)
 }
 
-// Document methods
-
-func (lfs *LinearFS) GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error) {
-	return lfs.repo.GetIssueDocuments(ctx, issueID)
-}
-
 // GetTeamDocuments returns documents for a team (currently via API as not
 // synced). This is a synchronous API call on a live FUSE path — the caller's
 // user is blocked on it — so it promotes to the interactive budget tier.
 func (lfs *LinearFS) GetTeamDocuments(ctx context.Context, teamID string) ([]api.Document, error) {
 	return lfs.client.GetTeamDocuments(api.WithInteractive(ctx), teamID)
-}
-
-func (lfs *LinearFS) GetProjectDocuments(ctx context.Context, projectID string) ([]api.Document, error) {
-	return lfs.repo.GetProjectDocuments(ctx, projectID)
-}
-
-func (lfs *LinearFS) GetInitiativeDocuments(ctx context.Context, initiativeID string) ([]api.Document, error) {
-	return lfs.repo.GetInitiativeDocuments(ctx, initiativeID)
 }
 
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
@@ -590,7 +487,7 @@ func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, inpu
 
 // ResolveUserID converts an email or name to a user ID
 func (lfs *LinearFS) ResolveUserID(ctx context.Context, identifier string) (string, error) {
-	users, err := lfs.GetUsers(ctx)
+	users, err := lfs.repo.GetUsers(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -641,7 +538,7 @@ func (lfs *LinearFS) ResolveIssueID(ctx context.Context, identifier string) (str
 
 // ResolveStateID converts a state name to its ID for a given team
 func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateName string) (string, error) {
-	states, err := lfs.GetTeamStates(ctx, teamID)
+	states, err := lfs.repo.GetTeamStates(ctx, teamID)
 	if err != nil {
 		return "", err
 	}
@@ -652,7 +549,7 @@ func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateNam
 // ResolveLabelIDs converts label names to their IDs for a given team
 // Returns the list of label IDs and any labels that couldn't be resolved
 func (lfs *LinearFS) ResolveLabelIDs(ctx context.Context, teamID string, labelNames []string) ([]string, []string, error) {
-	labels, err := lfs.GetTeamLabels(ctx, teamID)
+	labels, err := lfs.repo.GetTeamLabels(ctx, teamID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -679,7 +576,7 @@ func (lfs *LinearFS) ResolveLabelIDs(ctx context.Context, teamID string, labelNa
 
 // ResolveProjectID converts a project name to its ID for a given team
 func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projectName string) (string, error) {
-	projects, err := lfs.GetTeamProjects(ctx, teamID)
+	projects, err := lfs.repo.GetTeamProjects(ctx, teamID)
 	if err != nil {
 		return "", err
 	}
@@ -690,14 +587,14 @@ func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projec
 // ResolveProjectSlugToID converts a project slug to its ID by searching all teams.
 // Used by initiatives which are workspace-level and can link to projects from any team.
 func (lfs *LinearFS) ResolveProjectSlugToID(ctx context.Context, projectSlug string) (string, error) {
-	teams, err := lfs.GetTeams(ctx)
+	teams, err := lfs.repo.GetTeams(ctx)
 	if err != nil {
 		return "", err
 	}
 
 	// Search all teams for a project with this slug
 	for _, team := range teams {
-		projects, err := lfs.GetTeamProjects(ctx, team.ID)
+		projects, err := lfs.repo.GetTeamProjects(ctx, team.ID)
 		if err != nil {
 			continue // Skip teams with errors
 		}
@@ -711,14 +608,9 @@ func (lfs *LinearFS) ResolveProjectSlugToID(ctx context.Context, projectSlug str
 	return "", fmt.Errorf("unknown project slug: %s", projectSlug)
 }
 
-// GetProjectMilestones fetches milestones for a project
-func (lfs *LinearFS) GetProjectMilestones(ctx context.Context, projectID string) ([]api.ProjectMilestone, error) {
-	return lfs.repo.GetProjectMilestones(ctx, projectID)
-}
-
 // ResolveMilestoneID converts a milestone name to its ID for a given project
 func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, milestoneName string) (string, error) {
-	milestones, err := lfs.GetProjectMilestones(ctx, projectID)
+	milestones, err := lfs.repo.GetProjectMilestones(ctx, projectID)
 	if err != nil {
 		return "", err
 	}
@@ -748,7 +640,7 @@ func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID str
 
 // ResolveCycleID resolves a cycle name to its ID
 func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleName string) (string, error) {
-	cycles, err := lfs.GetTeamCycles(ctx, teamID)
+	cycles, err := lfs.repo.GetTeamCycles(ctx, teamID)
 	if err != nil {
 		return "", err
 	}
@@ -756,19 +648,9 @@ func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleNam
 		func(c api.Cycle) string { return c.Name }, func(c api.Cycle) string { return c.ID })
 }
 
-// GetProjectUpdates fetches status updates for a project
-func (lfs *LinearFS) GetProjectUpdates(ctx context.Context, projectID string) ([]api.ProjectUpdate, error) {
-	return lfs.repo.GetProjectUpdates(ctx, projectID)
-}
-
-// GetInitiativeUpdates fetches status updates for an initiative
-func (lfs *LinearFS) GetInitiativeUpdates(ctx context.Context, initiativeID string) ([]api.InitiativeUpdate, error) {
-	return lfs.repo.GetInitiativeUpdates(ctx, initiativeID)
-}
-
 // ResolveInitiativeID converts an initiative name to its ID
 func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName string) (string, error) {
-	initiatives, err := lfs.GetInitiatives(ctx)
+	initiatives, err := lfs.repo.GetInitiatives(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -781,17 +663,6 @@ func (lfs *LinearFS) UpdateLabel(ctx context.Context, labelID string, input map[
 	return lfs.mutator().UpdateLabel(ctx, labelID, input)
 }
 
-// GetInitiatives fetches all initiatives
-func (lfs *LinearFS) GetInitiatives(ctx context.Context) ([]api.Initiative, error) {
-	return lfs.repo.GetInitiatives(ctx)
-}
-
-// GetProjectLabels returns the workspace project-label catalog (Parent names
-// stitched by the repo read).
-func (lfs *LinearFS) GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error) {
-	return lfs.repo.GetProjectLabels(ctx)
-}
-
 // projectLabelNames maps a project's labelIds to catalog names for rendering.
 // An ID missing from the catalog renders VERBATIM, never dropped — the
 // round-trip invariant: a cold or stale catalog must not cause an untouched
@@ -802,7 +673,7 @@ func (lfs *LinearFS) projectLabelNames(ctx context.Context, ids []string) []stri
 		return nil
 	}
 	byID := make(map[string]string)
-	if catalog, err := lfs.GetProjectLabels(ctx); err == nil {
+	if catalog, err := lfs.repo.GetProjectLabels(ctx); err == nil {
 		for _, l := range catalog {
 			byID[l.ID] = l.Name
 		}

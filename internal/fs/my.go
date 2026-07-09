@@ -54,11 +54,11 @@ var _ fs.NodeGetattrer = (*MyIssuesNode)(nil)
 func (m *MyIssuesNode) getIssues(ctx context.Context) ([]api.Issue, error) {
 	switch m.issueType {
 	case "created":
-		return m.lfs.GetMyCreatedIssues(ctx)
+		return m.lfs.repo.GetMyCreatedIssues(ctx)
 	case "active":
-		return m.lfs.GetMyActiveIssues(ctx)
+		return m.lfs.repo.GetMyActiveIssues(ctx)
 	default:
-		return m.lfs.GetMyIssues(ctx)
+		return m.lfs.repo.GetMyIssues(ctx)
 	}
 }
 

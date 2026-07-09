@@ -50,7 +50,7 @@ func (p *ProjectsNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (p *ProjectsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	projects, err := p.lfs.GetTeamProjects(ctx, p.entity().ID)
+	projects, err := p.lfs.repo.GetTeamProjects(ctx, p.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -80,7 +80,7 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	}
 
 	team := p.entity()
-	projects, err := p.lfs.GetTeamProjects(ctx, team.ID)
+	projects, err := p.lfs.repo.GetTeamProjects(ctx, team.ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -144,7 +144,7 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		op:  `archive project "` + name + `"`,
 		key: collectionErrorKey("projects", team.ID),
 		find: func(ctx context.Context) (*api.Project, error) {
-			projects, err := p.lfs.GetTeamProjects(ctx, team.ID)
+			projects, err := p.lfs.repo.GetTeamProjects(ctx, team.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -278,7 +278,7 @@ func (p *ProjectNode) manifest() *dirManifest {
 	// project.md is reflected here.
 	m.metaFile("project.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 		proj := project
-		if projs, err := lfs.GetTeamProjects(ctx, team.ID); err == nil {
+		if projs, err := lfs.repo.GetTeamProjects(ctx, team.ID); err == nil {
 			proj = freshestByID(projs, project.ID, func(p api.Project) string { return p.ID }, project)
 		}
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
@@ -441,7 +441,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// user-blocking flush; labelsEdit decides when it fires.
 	rawLabels, labelsPresent := doc.Frontmatter["labels"]
 	labels, ferr := newLabelsEdit(ctx, rawLabels, labelsPresent, p.project.LabelIds,
-		p.lfs.GetProjectLabels,
+		p.lfs.repo.GetProjectLabels,
 		func(ctx context.Context) []string {
 			if fresh, err := p.lfs.verify().GetProject(api.WithInteractive(ctx), p.project.ID); err == nil && fresh != nil {
 				p.project.LabelIds = fresh.LabelIds
@@ -552,7 +552,7 @@ var _ fs.NodeCreater = (*UpdatesNode)(nil)
 var _ fs.NodeGetattrer = (*UpdatesNode)(nil)
 
 func (n *UpdatesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	updates, err := n.lfs.GetProjectUpdates(ctx, n.projectID)
+	updates, err := n.lfs.repo.GetProjectUpdates(ctx, n.projectID)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -581,7 +581,7 @@ func (n *UpdatesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		return inode, 0
 	}
 
-	updates, err := n.lfs.GetProjectUpdates(ctx, n.projectID)
+	updates, err := n.lfs.repo.GetProjectUpdates(ctx, n.projectID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

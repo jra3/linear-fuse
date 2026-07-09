@@ -29,7 +29,7 @@ var _ fs.NodeGetattrer = (*AttachmentsNode)(nil)
 
 func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Trigger background refresh of sub-resources if stale
-	n.lfs.MaybeRefreshIssueDetails(n.issueID)
+	n.lfs.repo.MaybeRefreshIssueDetails(n.issueID)
 
 	entries := n.trio().entries()
 
@@ -51,8 +51,8 @@ func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 // records the first error there (Lookup distinguishes "not found" from
 // "couldn't look").
 func (n *AttachmentsNode) listing(ctx context.Context, fetchErr *error) attachmentListing {
-	files, ferr := n.lfs.GetIssueEmbeddedFiles(ctx, n.issueID)
-	attachments, aerr := n.lfs.GetIssueAttachments(ctx, n.issueID)
+	files, ferr := n.lfs.repo.GetIssueEmbeddedFiles(ctx, n.issueID)
+	attachments, aerr := n.lfs.repo.GetIssueAttachments(ctx, n.issueID)
 	if fetchErr != nil {
 		if ferr != nil {
 			*fetchErr = ferr
@@ -278,7 +278,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 	// the authoritative post-failure re-check inside mutate treats a stale-cache
 	// miss as the created attachment.
 	if url := strings.SplitN(content, " ", 2)[0]; url != "" {
-		if existing, err := n.lfs.GetIssueAttachments(ctx, n.issueID); err == nil {
+		if existing, err := n.lfs.repo.GetIssueAttachments(ctx, n.issueID); err == nil {
 			for _, att := range existing {
 				if attachmentURLsEqual(att.URL, url) {
 					n.lfs.ClearWriteError(collectionErrorKey("attachments", n.issueID))

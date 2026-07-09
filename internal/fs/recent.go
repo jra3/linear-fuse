@@ -53,7 +53,7 @@ func (n *RecentNode) refreshFrom(fresh fs.InodeEmbedder) {
 // explicitly — in one place used by both Readdir and Lookup so `ls` and
 // `stat recent/X` agree on membership.
 func (n *RecentNode) recentIssues(ctx context.Context) ([]api.Issue, error) {
-	issues, err := n.lfs.GetTeamIssues(ctx, n.entity().ID)
+	issues, err := n.lfs.repo.GetTeamIssues(ctx, n.entity().ID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (n *RecentNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	// Resolve against ALL team issues, not just the capped window: lookup must be
 	// a superset of readdir so a name that appeared in `ls recent/` never fails
 	// its per-entry stat (the safe direction; the cap lives only in Readdir).
-	issues, err := n.lfs.GetTeamIssues(ctx, n.entity().ID)
+	issues, err := n.lfs.repo.GetTeamIssues(ctx, n.entity().ID)
 	if err != nil {
 		return nil, syscall.EIO
 	}

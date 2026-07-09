@@ -1135,7 +1135,10 @@ modules) rather than mocking under node methods. If a real second adapter
 ever appears (read-through cache, alternate store), re-extract the interface
 from `SQLiteRepository` mechanically. The SQLite fixture helpers
 (`fixtures.PopulateTestData` et al.) are the surviving, genuinely-used part
-of the old scaffolding.
+of the old scaffolding. Round 19 finished the thought: the 29 pure
+passthrough methods `LinearFS` grew over the repo (`GetTeams` et al. +
+`MaybeRefreshIssueDetails`) are deleted — fs call sites use `lfs.repo.X`
+directly, the same way the write handlers use `lfs.store`.
 
 ### ErrorSink
 The minimal seam the WriteBack tail uses to record validation/divergence messages for
