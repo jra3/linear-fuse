@@ -20,7 +20,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
+
+	"github.com/jra3/linear-fuse/internal/telemetry"
 )
 
 // apiMetrics holds the api-layer instruments (meter "linearfs/api"):
@@ -33,9 +34,9 @@ type apiMetrics struct {
 func newAPIMetrics() apiMetrics {
 	m := otel.Meter("linearfs/api")
 	return apiMetrics{
-		requests: mustInt64Counter(m, "linearfs.api.requests",
+		requests: telemetry.MustInt64Counter(m, "linearfs.api.requests",
 			metric.WithDescription("GraphQL requests completed, by operation and outcome (ok|error|ratelimited)")),
-		duration: mustFloat64Histogram(m, "linearfs.api.duration",
+		duration: telemetry.MustFloat64Histogram(m, "linearfs.api.duration",
 			metric.WithUnit("s"),
 			metric.WithDescription("GraphQL request duration by operation")),
 	}
@@ -80,11 +81,11 @@ func newBudgetMetrics() budgetMetrics {
 	apiMeter := otel.Meter("linearfs/api")
 	budgetMeter := otel.Meter("linearfs/budget")
 	return budgetMetrics{
-		complexity: mustFloat64Histogram(apiMeter, "linearfs.api.complexity",
+		complexity: telemetry.MustFloat64Histogram(apiMeter, "linearfs.api.complexity",
 			metric.WithDescription("Actual X-Complexity cost of each response, by operation")),
-		decisions: mustInt64Counter(budgetMeter, "linearfs.budget.decisions",
+		decisions: telemetry.MustInt64Counter(budgetMeter, "linearfs.budget.decisions",
 			metric.WithDescription("Rate-budget ladder verdicts, by tier and decision (admit|defer|wait|ratelimited)")),
-		waitDuration: mustFloat64Histogram(budgetMeter, "linearfs.budget.wait_duration",
+		waitDuration: telemetry.MustFloat64Histogram(budgetMeter, "linearfs.budget.wait_duration",
 			metric.WithUnit("s"),
 			metric.WithDescription("Time spent waiting on rate limiting (limiter smoothing and mutation window waits)")),
 	}
@@ -146,26 +147,4 @@ func registerBudgetGauges(b *rateBudget) {
 	if err != nil {
 		log.Printf("telemetry: budget gauge callback not registered: %v", err)
 	}
-}
-
-// mustInt64Counter / mustFloat64Histogram degrade an instrument-creation
-// failure (invalid name — a programming error) to a logged no-op instead of
-// a nil that would panic at record time. Telemetry must never take the
-// client down.
-func mustInt64Counter(m metric.Meter, name string, opts ...metric.Int64CounterOption) metric.Int64Counter {
-	c, err := m.Int64Counter(name, opts...)
-	if err != nil {
-		log.Printf("telemetry: creating %s: %v", name, err)
-		c, _ = noop.NewMeterProvider().Meter("noop").Int64Counter(name)
-	}
-	return c
-}
-
-func mustFloat64Histogram(m metric.Meter, name string, opts ...metric.Float64HistogramOption) metric.Float64Histogram {
-	h, err := m.Float64Histogram(name, opts...)
-	if err != nil {
-		log.Printf("telemetry: creating %s: %v", name, err)
-		h, _ = noop.NewMeterProvider().Meter("noop").Float64Histogram(name)
-	}
-	return h
 }

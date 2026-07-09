@@ -161,19 +161,6 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 		}
 	})
 
-	t.Run("GetFilteredIssuesByPriority", func(t *testing.T) {
-		issues, err := lfs.repo.GetIssuesByPriority(ctx, "team-1", 4)
-		if err != nil {
-			t.Fatalf("GetFilteredIssuesByPriority failed: %v", err)
-		}
-		if len(issues) != 1 {
-			t.Errorf("Expected 1 urgent priority issue, got %d", len(issues))
-		}
-		if len(issues) > 0 && issues[0].Identifier != "TST-1" {
-			t.Errorf("Expected TST-1, got %s", issues[0].Identifier)
-		}
-	})
-
 	t.Run("GetFilteredIssuesByAssignee", func(t *testing.T) {
 		issues, err := lfs.repo.GetIssuesByAssignee(ctx, "team-1", "user-1")
 		if err != nil {
