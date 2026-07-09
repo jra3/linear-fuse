@@ -46,6 +46,114 @@ func TestGetTeams(t *testing.T) {
 	}
 }
 
+// TestGetTeamsDrainsPages proves GetTeams drains the teams connection —
+// Linear silently caps a connection without first: at 50 nodes, and this is
+// the sync worker's root fetch, so page 2 must be fetched with page 1's
+// cursor and both pages' nodes returned.
+func TestGetTeamsDrainsPages(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	teamA := testutil.FixtureTeam()
+	teamB := testutil.FixtureTeam()
+	teamB["id"] = "team-456"
+	teamB["key"] = "SEC"
+	mock.SetResponseSequence("Teams",
+		map[string]any{
+			"teams": map[string]any{
+				"pageInfo": map[string]any{"hasNextPage": true, "endCursor": "cursor-1"},
+				"nodes":    []map[string]any{teamA},
+			},
+		},
+		map[string]any{
+			"teams": map[string]any{
+				"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+				"nodes":    []map[string]any{teamB},
+			},
+		},
+	)
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
+
+	teams, err := client.GetTeams(context.Background())
+	if err != nil {
+		t.Fatalf("GetTeams failed: %v", err)
+	}
+
+	if len(teams) != 2 {
+		t.Fatalf("expected 2 teams across 2 pages, got %d", len(teams))
+	}
+	if teams[0].ID != "team-123" || teams[1].ID != "team-456" {
+		t.Errorf("teams out of order: got %q, %q", teams[0].ID, teams[1].ID)
+	}
+
+	calls := mock.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if got := calls[0].Variables["after"]; got != nil {
+		t.Errorf("page 1 carried after=%v, want none", got)
+	}
+	if got := calls[1].Variables["after"]; got != "cursor-1" {
+		t.Errorf("page 2 fetched with after=%v, want cursor-1", got)
+	}
+}
+
+// TestGetProjectUpdatesDrainsPages proves the updates read drains past the
+// old implicit 50-cap: updates accumulate over a project's lifetime and the
+// SWR refresh is upsert-only, so a capped read silently froze completeness.
+func TestGetProjectUpdatesDrainsPages(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	updateA := testutil.FixtureProjectUpdate()
+	updateB := testutil.FixtureProjectUpdate()
+	updateB["id"] = "update-456"
+	page := func(pi map[string]any, updates ...map[string]any) map[string]any {
+		return map[string]any{
+			"project": map[string]any{
+				"projectUpdates": map[string]any{
+					"pageInfo": pi,
+					"nodes":    updates,
+				},
+			},
+		}
+	}
+	mock.SetResponseSequence("ProjectUpdates",
+		page(map[string]any{"hasNextPage": true, "endCursor": "cursor-1"}, updateA),
+		page(map[string]any{"hasNextPage": false, "endCursor": ""}, updateB),
+	)
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
+
+	updates, err := client.GetProjectUpdates(context.Background(), "project-123")
+	if err != nil {
+		t.Fatalf("GetProjectUpdates failed: %v", err)
+	}
+
+	if len(updates) != 2 {
+		t.Fatalf("expected 2 updates across 2 pages, got %d", len(updates))
+	}
+	if updates[0].ID != "update-123" || updates[1].ID != "update-456" {
+		t.Errorf("updates out of order: got %q, %q", updates[0].ID, updates[1].ID)
+	}
+
+	calls := mock.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if got := calls[1].Variables["after"]; got != "cursor-1" {
+		t.Errorf("page 2 fetched with after=%v, want cursor-1", got)
+	}
+	if got := calls[1].Variables["projectId"]; got != "project-123" {
+		t.Errorf("page 2 lost projectId: got %v", got)
+	}
+}
+
 func TestGetIssue(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()
@@ -186,136 +294,14 @@ func TestGraphQLError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	if err.Error() != "GraphQL error: authentication failed" {
+	// GetTeams drains, so the GraphQL error arrives wrapped with page
+	// context; the structured error must survive the wrap.
+	if !strings.Contains(err.Error(), "GraphQL error: authentication failed") {
 		t.Errorf("unexpected error message: %v", err)
 	}
-}
-
-func TestGetTeamStates(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	mock.SetResponse("TeamStates", testutil.TeamStatesResponse())
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	states, err := client.GetTeamStates(context.Background(), "team-123")
-	if err != nil {
-		t.Fatalf("GetTeamStates failed: %v", err)
-	}
-
-	if len(states) != 5 {
-		t.Errorf("expected 5 states, got %d", len(states))
-	}
-
-	// Verify state types
-	stateTypes := make(map[string]bool)
-	for _, s := range states {
-		stateTypes[s.Type] = true
-	}
-	expected := []string{"backlog", "unstarted", "started", "completed", "canceled"}
-	for _, st := range expected {
-		if !stateTypes[st] {
-			t.Errorf("missing state type %q", st)
-		}
-	}
-}
-
-func TestGetTeamLabels(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	mock.SetResponse("TeamLabels", testutil.TeamLabelsResponse(
-		testutil.FixtureLabel("Bug"),
-		testutil.FixtureLabel("Feature"),
-	))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	result, err := client.GetTeamLabels(context.Background(), "team-123")
-	if err != nil {
-		t.Fatalf("GetTeamLabels failed: %v", err)
-	}
-
-	if len(result) != 2 {
-		t.Errorf("expected 2 labels, got %d", len(result))
-	}
-}
-
-func TestGetUsers(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	mock.SetResponse("Users", testutil.UsersResponse(
-		testutil.FixtureUser(),
-		map[string]any{"id": "user-456", "name": "Other User", "email": "other@example.com", "active": true},
-	))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	result, err := client.GetUsers(context.Background())
-	if err != nil {
-		t.Fatalf("GetUsers failed: %v", err)
-	}
-
-	if len(result) != 2 {
-		t.Errorf("expected 2 users, got %d", len(result))
-	}
-}
-
-func TestGetIssueComments(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	comment := testutil.FixtureComment()
-	mock.SetResponse("IssueComments", testutil.IssueCommentsResponse(comment))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	result, err := client.GetIssueComments(context.Background(), "issue-123")
-	if err != nil {
-		t.Fatalf("GetIssueComments failed: %v", err)
-	}
-
-	if len(result) != 1 {
-		t.Fatalf("expected 1 comment, got %d", len(result))
-	}
-
-	if result[0].Body != "This is a test comment" {
-		t.Errorf("expected body 'This is a test comment', got %q", result[0].Body)
-	}
-}
-
-func TestGetIssueDocuments(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	doc := testutil.FixtureDocument()
-	mock.SetResponse("IssueDocuments", testutil.IssueDocumentsResponse(doc))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	result, err := client.GetIssueDocuments(context.Background(), "issue-123")
-	if err != nil {
-		t.Fatalf("GetIssueDocuments failed: %v", err)
-	}
-
-	if len(result) != 1 {
-		t.Fatalf("expected 1 document, got %d", len(result))
-	}
-
-	if result[0].Title != "Test Document" {
-		t.Errorf("expected title 'Test Document', got %q", result[0].Title)
+	var gqlErr *GraphQLError
+	if !errors.As(err, &gqlErr) {
+		t.Errorf("error does not unwrap to *GraphQLError: %v", err)
 	}
 }
 
@@ -325,14 +311,14 @@ func TestCallRecording(t *testing.T) {
 	defer mock.Close()
 
 	mock.SetResponse("Teams", testutil.TeamsResponse())
-	mock.SetResponse("Users", testutil.UsersResponse())
+	mock.SetResponse("Viewer", map[string]any{"viewer": testutil.FixtureUser()})
 
 	client := NewClient("test-api-key")
 	client.SetAPIURL(mock.URL())
 
 	// Make multiple calls
 	_, _ = client.GetTeams(context.Background())
-	_, _ = client.GetUsers(context.Background())
+	_, _ = client.GetViewer(context.Background())
 
 	calls := mock.Calls()
 	if len(calls) != 2 {
@@ -343,8 +329,8 @@ func TestCallRecording(t *testing.T) {
 		t.Errorf("expected first operation 'Teams', got %q", calls[0].Operation)
 	}
 
-	if calls[1].Operation != "Users" {
-		t.Errorf("expected second operation 'Users', got %q", calls[1].Operation)
+	if calls[1].Operation != "Viewer" {
+		t.Errorf("expected second operation 'Viewer', got %q", calls[1].Operation)
 	}
 }
 
@@ -464,31 +450,6 @@ func TestGetTeamProjects(t *testing.T) {
 	}
 }
 
-func TestGetProjectMilestones(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	milestone := testutil.FixtureProjectMilestone()
-	mock.SetResponse("ProjectMilestones", testutil.ProjectMilestonesResponse(milestone))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	milestones, err := client.GetProjectMilestones(context.Background(), "project-123")
-	if err != nil {
-		t.Fatalf("GetProjectMilestones failed: %v", err)
-	}
-
-	if len(milestones) != 1 {
-		t.Fatalf("expected 1 milestone, got %d", len(milestones))
-	}
-
-	if milestones[0].Name != "Alpha Release" {
-		t.Errorf("expected milestone name 'Alpha Release', got %q", milestones[0].Name)
-	}
-}
-
 func TestGetProjectUpdates(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()
@@ -537,31 +498,6 @@ func TestCreateProjectUpdate(t *testing.T) {
 	call := mock.LastCall()
 	if call.Variables["projectId"] != "project-123" {
 		t.Errorf("expected projectId 'project-123', got %v", call.Variables["projectId"])
-	}
-}
-
-func TestGetTeamCycles(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	cycle := testutil.FixtureCycle()
-	mock.SetResponse("TeamCycles", testutil.TeamCyclesResponse(cycle))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	cycles, err := client.GetTeamCycles(context.Background(), "team-123")
-	if err != nil {
-		t.Fatalf("GetTeamCycles failed: %v", err)
-	}
-
-	if len(cycles) != 1 {
-		t.Fatalf("expected 1 cycle, got %d", len(cycles))
-	}
-
-	if cycles[0].Number != 42 {
-		t.Errorf("expected cycle number 42, got %d", cycles[0].Number)
 	}
 }
 
@@ -790,31 +726,6 @@ func TestDeleteDocumentFailure(t *testing.T) {
 	}
 }
 
-func TestGetInitiatives(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	initiative := testutil.FixtureInitiative()
-	mock.SetResponse("Initiatives", testutil.InitiativesResponse(initiative))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	initiatives, err := client.GetInitiatives(context.Background())
-	if err != nil {
-		t.Fatalf("GetInitiatives failed: %v", err)
-	}
-
-	if len(initiatives) != 1 {
-		t.Fatalf("expected 1 initiative, got %d", len(initiatives))
-	}
-
-	if initiatives[0].Name != "Test Initiative" {
-		t.Errorf("expected name 'Test Initiative', got %q", initiatives[0].Name)
-	}
-}
-
 func TestGetInitiativeUpdates(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()
@@ -902,31 +813,6 @@ func TestGetTeamDocuments(t *testing.T) {
 	}
 }
 
-func TestGetTeamMembers(t *testing.T) {
-	t.Parallel()
-	mock := testutil.NewMockLinearServer()
-	defer mock.Close()
-
-	user := testutil.FixtureUser()
-	mock.SetResponse("TeamMembers", testutil.TeamMembersResponse(user))
-
-	client := NewClient("test-api-key")
-	client.SetAPIURL(mock.URL())
-
-	members, err := client.GetTeamMembers(context.Background(), "team-123")
-	if err != nil {
-		t.Fatalf("GetTeamMembers failed: %v", err)
-	}
-
-	if len(members) != 1 {
-		t.Fatalf("expected 1 member, got %d", len(members))
-	}
-
-	if members[0].Email != "test@example.com" {
-		t.Errorf("expected email 'test@example.com', got %q", members[0].Email)
-	}
-}
-
 // TestRateLimitResetHeaderParsed verifies the per-axis reset headers are
 // parsed as epoch MILLISECONDS (Linear's actual unit) and surfaced through
 // RateLimitResetAt so the sync worker can use them for adaptive backoff.
@@ -939,7 +825,7 @@ func TestRateLimitResetHeaderParsed(t *testing.T) {
 		w.Header().Set("X-RateLimit-Complexity-Reset", strconv.FormatInt(resetMs, 10))
 		w.Header().Set("X-RateLimit-Requests-Reset", strconv.FormatInt(resetMs, 10))
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -1027,7 +913,7 @@ func TestRateLimitResetHeaderMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// No X-RateLimit-Reset header
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -1081,7 +967,7 @@ func TestCircuitBreakerResetsOnSuccess(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -1104,7 +990,7 @@ func TestCircuitBreakerCooldownAllowsProbe(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 
@@ -1138,7 +1024,7 @@ func TestMutationPriorityReservesBudgetForWrites(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"data": {"teams": {"nodes": []}}}`)
+		fmt.Fprintf(w, `{"data": {"teams": {"pageInfo": {"hasNextPage": false, "endCursor": ""}, "nodes": []}}}`)
 	}))
 	defer server.Close()
 

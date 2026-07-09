@@ -85,9 +85,8 @@ func fetchOne[T any](ctx context.Context, c *Client, query string, vars map[stri
 // connAt walks path from an already-decoded root and decodes the terminal as
 // a connection envelope, with fetch-front error prefixes. It applies no
 // PageInfo policy — that belongs to the front (fetchNodes tolerates an
-// absent pageInfo, fetchConn requires one). Also usable directly against a
-// root a caller decoded itself (GetTeamLabels walks two connections out of
-// one response).
+// absent pageInfo, fetchConn requires one); it is the decode the two fronts
+// share.
 func connAt[T any](root map[string]json.RawMessage, path []string) (conn[T], error) {
 	raw, err := walkPath(root, path)
 	if err != nil {

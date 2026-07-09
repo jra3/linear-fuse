@@ -35,12 +35,10 @@ type APIClient interface {
 	// completeness licenses the prune in syncProjectLabels)
 	GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error)
 
-	// Issue details (comments, documents, attachments)
-	GetIssueDetails(ctx context.Context, issueID string) (*api.IssueDetails, error)
+	// Issue details (comments, documents, attachments, relations), batched —
+	// the worker's only detail fetch; the per-issue variants it once used
+	// were superseded by the batch.
 	GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error)
-	GetIssueComments(ctx context.Context, issueID string) ([]api.Comment, error)
-	GetIssueDocuments(ctx context.Context, issueID string) ([]api.Document, error)
-	GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error)
 
 	// Auth
 	AuthHeader() string

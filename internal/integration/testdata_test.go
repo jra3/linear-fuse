@@ -265,12 +265,18 @@ func getIssueFromSQLite(issueID string) (*api.Issue, error) {
 	return issue, nil
 }
 
-// getTeamStates fetches workflow states for the test team
+// getTeamStates fetches workflow states for the test team (via the combined
+// metadata query — the per-collection client read methods were deleted with
+// the drain audit; the drained GetTeamMetadata is the production path).
 func getTeamStates() ([]api.State, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return apiClient.GetTeamStates(ctx, testTeamID)
+	md, err := apiClient.GetTeamMetadata(ctx, testTeamID)
+	if err != nil {
+		return nil, err
+	}
+	return md.States, nil
 }
 
 // createTestDocument creates a document attached to an issue for testing.
@@ -308,12 +314,17 @@ func createTestDocument(issueID, title, content string) (*api.Document, func(), 
 	return doc, cleanup, nil
 }
 
-// getTeamCycles fetches cycles for the test team
+// getTeamCycles fetches cycles for the test team (see getTeamStates for why
+// this goes through the combined metadata query)
 func getTeamCycles() ([]api.Cycle, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	return apiClient.GetTeamCycles(ctx, testTeamID)
+	md, err := apiClient.GetTeamMetadata(ctx, testTeamID)
+	if err != nil {
+		return nil, err
+	}
+	return md.Cycles, nil
 }
 
 // findFirstActiveCycle finds the first active (current or future) cycle for testing
@@ -352,10 +363,11 @@ func deleteTestIssue(issueID string) error {
 	defer cancel()
 
 	// Find canceled state for the team
-	states, err := apiClient.GetTeamStates(ctx, testTeamID)
+	md, err := apiClient.GetTeamMetadata(ctx, testTeamID)
 	if err != nil {
 		return err
 	}
+	states := md.States
 
 	var canceledID string
 	for _, s := range states {

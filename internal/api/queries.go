@@ -2,9 +2,13 @@ package api
 
 import "fmt"
 
+// queryTeams drains: this is the sync worker's root fetch, and Linear
+// silently caps a connection without first: at 50 nodes — a 51st team would
+// have silently truncated the whole sync.
 const queryTeams = `
-query Teams {
-  teams {
+query Teams($after: String) {
+  teams(first: 50, after: $after) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       id
       key
@@ -193,8 +197,8 @@ fragment AttachmentFields on Attachment {
 `
 
 // ProjectMilestoneFields is the shared projection for a project milestone,
-// used by the nested selections in queryTeamProjects/queryProject, the
-// standalone queryProjectMilestones, and the create/update mutations.
+// used by the nested selections in queryTeamProjects/queryProject and the
+// create/update mutations.
 const projectMilestoneFieldsFragment = `
 fragment ProjectMilestoneFields on ProjectMilestone {
   id
@@ -358,51 +362,6 @@ query ProjectLabelsPage($after: String) {
 }
 ` + projectLabelFieldsFragment
 
-const queryTeamStates = `
-query TeamStates($teamId: String!) {
-  team(id: $teamId) {
-    states {
-      nodes {
-        id
-        name
-        type
-      }
-    }
-  }
-}
-`
-
-var queryTeamLabels = `
-query TeamLabels($teamId: String!) {
-  team(id: $teamId) {
-    labels {
-      nodes { ...LabelFields }
-    }
-  }
-  issueLabels {
-    nodes { ...LabelFields }
-  }
-}
-` + labelFieldsFragment
-
-const queryTeamCycles = `
-query TeamCycles($teamId: String!) {
-  team(id: $teamId) {
-    cycles {
-      nodes {
-        id
-        number
-        name
-        startsAt
-        endsAt
-        completedIssueCountHistory
-        issueCountHistory
-      }
-    }
-  }
-}
-`
-
 // ProjectFields is the shared projection for a project — the team-projects
 // page, the single-project fetch (the WriteBack verify read), and the create
 // mutation's echo all project through it, per the fragment rule: an inlined
@@ -465,16 +424,6 @@ query Project($id: String!) {
 }
 ` + projectFieldsFragment
 
-var queryProjectMilestones = `
-query ProjectMilestones($projectId: String!) {
-  project(id: $projectId) {
-    projectMilestones {
-      nodes { ...ProjectMilestoneFields }
-    }
-  }
-}
-` + projectMilestoneFieldsFragment
-
 // =============================================================================
 // Project Milestones Mutations
 // =============================================================================
@@ -521,10 +470,14 @@ mutation DeleteProjectMilestone($id: String!) {
 }
 `
 
+// queryProjectUpdates drains: updates accumulate past 50 over a project's
+// lifetime, and the SWR refresh is upsert-only — the implicit 50-cap was
+// silently freezing completeness.
 var queryProjectUpdates = `
-query ProjectUpdates($projectId: String!) {
+query ProjectUpdates($projectId: String!, $after: String) {
   project(id: $projectId) {
-    projectUpdates {
+    projectUpdates(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes { ...ProjectUpdateFields }
     }
   }
@@ -540,10 +493,12 @@ mutation CreateProjectUpdate($projectId: String!, $body: String!, $health: Proje
 }
 ` + projectUpdateFieldsFragment
 
+// queryInitiativeUpdates drains, for the same reason as queryProjectUpdates.
 var queryInitiativeUpdates = `
-query InitiativeUpdates($initiativeId: String!) {
+query InitiativeUpdates($initiativeId: String!, $after: String) {
   initiative(id: $initiativeId) {
-    initiativeUpdates {
+    initiativeUpdates(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes { ...InitiativeUpdateFields }
     }
   }
@@ -706,20 +661,6 @@ query InitiativeProjectsPage($id: String!, $after: String) {
 }
 `
 
-const queryUsers = `
-query Users {
-  users {
-    nodes {
-      id
-      name
-      email
-      displayName
-      active
-    }
-  }
-}
-`
-
 const queryViewer = `
 query Viewer {
   viewer {
@@ -728,22 +669,6 @@ query Viewer {
     email
     displayName
     active
-  }
-}
-`
-
-const queryTeamMembers = `
-query TeamMembers($teamId: String!) {
-  team(id: $teamId) {
-    members {
-      nodes {
-        id
-        name
-        email
-        displayName
-        active
-      }
-    }
   }
 }
 `
@@ -813,7 +738,13 @@ query IssueDetails($issueId: String!) {
 	CommentFieldsFragment + DocumentFieldsFragment + AttachmentFieldsFragment +
 	issueRelationFieldsFragment + issueInverseRelationFieldsFragment
 
-// queryIssueAttachments fetches only attachments for an issue
+// queryIssueAttachments fetches only attachments for an issue.
+//
+// DELIBERATE cap: first: 100, single page, no drain. This query serves the
+// interactive attachment-create re-check (the authoritative read a user's
+// FUSE write blocks on), and fetchAll's LowBudget gate must never sit on a
+// write path — a low budget would turn a create into a spurious failure. An
+// issue with more than 100 attachments is out of scope.
 var queryIssueAttachments = `
 query IssueAttachments($issueId: String!) {
   issue(id: $issueId) {
@@ -823,16 +754,6 @@ query IssueAttachments($issueId: String!) {
   }
 }
 ` + AttachmentFieldsFragment
-
-var queryIssueComments = `
-query IssueComments($issueId: String!) {
-  issue(id: $issueId) {
-    comments(first: 100) {
-      nodes { ...CommentFields }
-    }
-  }
-}
-` + CommentFieldsFragment
 
 var mutationCreateComment = `
 mutation CreateComment($issueId: String!, $body: String!) {
@@ -860,27 +781,19 @@ mutation DeleteComment($id: String!) {
 }
 `
 
-var queryIssueDocuments = `
-query IssueDocuments($issueId: String!) {
-  issue(id: $issueId) {
-    documents(first: 100) {
-      nodes { ...DocumentFields }
-    }
-  }
-}
-` + DocumentFieldsFragment
-
 var queryProjectDocuments = `
-query ProjectDocuments($projectId: ID!) {
-  documents(first: 100, filter: { project: { id: { eq: $projectId } } }) {
+query ProjectDocuments($projectId: ID!, $after: String) {
+  documents(first: 100, after: $after, filter: { project: { id: { eq: $projectId } } }) {
+    pageInfo { hasNextPage endCursor }
     nodes { ...DocumentFields }
   }
 }
 ` + DocumentFieldsFragment
 
 var queryInitiativeDocuments = `
-query InitiativeDocuments($initiativeId: ID!) {
-  documents(first: 100, filter: { initiative: { id: { eq: $initiativeId } } }) {
+query InitiativeDocuments($initiativeId: ID!, $after: String) {
+  documents(first: 100, after: $after, filter: { initiative: { id: { eq: $initiativeId } } }) {
+    pageInfo { hasNextPage endCursor }
     nodes { ...DocumentFields }
   }
 }
@@ -934,40 +847,6 @@ const mutationDeleteLabel = `
 mutation DeleteLabel($id: String!) {
   issueLabelDelete(id: $id) {
     success
-  }
-}
-`
-
-// Filtered team issues queries - server-side filtering for by/ directories
-
-const queryInitiatives = `
-query Initiatives {
-  initiatives {
-    nodes {
-      id
-      name
-      slugId
-      description
-      status
-      color
-      icon
-      targetDate
-      url
-      createdAt
-      updatedAt
-      owner {
-        id
-        name
-        email
-      }
-      projects {
-        nodes {
-          id
-          name
-          slugId
-        }
-      }
-    }
   }
 }
 `
@@ -1060,11 +939,13 @@ mutation DeleteAttachment($id: String!) {
 }
 `
 
-// queryIssueHistory fetches the history/audit trail for an issue
+// queryIssueHistory fetches the history/audit trail for an issue, drained —
+// it backs history.md live, and an old issue's audit trail outgrows a page.
 const queryIssueHistory = `
-query IssueHistory($issueId: String!) {
+query IssueHistory($issueId: String!, $after: String) {
   issue(id: $issueId) {
-    history(first: 100) {
+    history(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         id
         createdAt
