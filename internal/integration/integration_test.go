@@ -212,6 +212,18 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 	project := fixtures.FixtureAPIProject()
 	project.LabelIds = []string{"plabel-backend", "plabel-legacy"}
 
+	// One relation both ways: TST-1 blocks TST-3. The issue-embedded copies
+	// back the issue.meta relations render; the issue_relations rows (below)
+	// back the relations/ directory on both endpoints.
+	relation := fixtures.FixtureAPIIssueRelation()
+	inverseRelation := api.IssueRelation{
+		ID:        relation.ID,
+		Type:      relation.Type,
+		Issue:     &api.ParentIssue{ID: "issue-1", Identifier: "TST-1", Title: "Test Issue 1"},
+		CreatedAt: relation.CreatedAt,
+		UpdatedAt: relation.UpdatedAt,
+	}
+
 	// Create issues with various configurations
 	issues := []api.Issue{
 		fixtures.FixtureAPIIssue(
@@ -220,6 +232,7 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 			fixtures.WithDescription("This is test issue 1"),
 			fixtures.WithState(fixtures.FixtureAPIState("started")),
 			fixtures.WithPriority(2),
+			fixtures.WithRelations(relation),
 		),
 		fixtures.FixtureAPIIssue(
 			fixtures.WithIssueID("issue-2", "TST-2"),
@@ -234,6 +247,7 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 			fixtures.WithDescription("This is a high priority issue"),
 			fixtures.WithState(fixtures.FixtureAPIState("backlog")),
 			fixtures.WithPriority(4),
+			fixtures.WithInverseRelations(inverseRelation),
 		),
 		fixtures.FixtureAPIIssue(
 			fixtures.WithIssueID("issue-4", "TST-4"),
@@ -337,6 +351,49 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 	// Populate embedded files for issue-1
 	embeddedFiles := fixtures.FixtureAPIEmbeddedFiles()
 	if err := fixtures.PopulateEmbeddedFiles(ctx, store, "issue-1", embeddedFiles); err != nil {
+		return err
+	}
+
+	// Populate the relation row: TST-1 blocks TST-3 (backs relations/ on both ends)
+	if err := fixtures.PopulateIssueRelations(ctx, store, "issue-1", []api.IssueRelation{relation}); err != nil {
+		return err
+	}
+
+	// Populate milestones and status updates for the project
+	if err := fixtures.PopulateProjectMilestones(ctx, store, project.ID, []api.ProjectMilestone{fixtures.FixtureAPIProjectMilestone()}); err != nil {
+		return err
+	}
+	if err := fixtures.PopulateProjectUpdates(ctx, store, project.ID, []api.ProjectUpdate{fixtures.FixtureAPIProjectUpdate()}); err != nil {
+		return err
+	}
+
+	// Populate a status update for the initiative
+	if err := fixtures.PopulateInitiativeUpdates(ctx, store, initiative.ID, []api.InitiativeUpdate{fixtures.FixtureAPIInitiativeUpdate()}); err != nil {
+		return err
+	}
+
+	// Populate an external URL attachment for issue-1 (a .link file)
+	if err := fixtures.PopulateAttachments(ctx, store, "issue-1", []api.Attachment{fixtures.FixtureAPIAttachment()}); err != nil {
+		return err
+	}
+
+	// Populate cached history for issue-1 (backs the history.md render)
+	if err := fixtures.PopulateIssueHistory(ctx, store, "issue-1", fixtures.FixtureAPIHistoryEntries()); err != nil {
+		return err
+	}
+
+	// Populate team membership (backs the by/assignee value listing)
+	userIDs := make([]string, len(users))
+	for i, u := range users {
+		userIDs[i] = u.ID
+	}
+	if err := fixtures.PopulateTeamMembers(ctx, store, team.ID, userIDs); err != nil {
+		return err
+	}
+
+	// Populate the viewer identity (backs the my/ views; user-1 is the default
+	// fixture assignee, so my/assigned is non-empty)
+	if err := fixtures.PopulateViewer(ctx, store, "user-1"); err != nil {
 		return err
 	}
 
