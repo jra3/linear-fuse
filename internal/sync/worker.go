@@ -90,6 +90,7 @@ type Worker struct {
 	budget    BudgetReporter     // optional: for rate limit budget logging
 	catchUp   CatchUpModeToggler // optional: controls repo staleness during catch-up
 	cycle     atomic.Int64       // sync-cycle counter; rotates the team order
+	metrics   syncMetrics        // sync-layer instruments, bound at construction
 
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
@@ -118,6 +119,9 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 	if cfg.Interval == 0 {
 		cfg.Interval = 2 * time.Minute
 	}
+	// The observable pending-depth gauge registers here too: construction is
+	// the sync layer's one binding point (phase-2 pattern).
+	registerPendingDepthGauge(store.Queries())
 	return &Worker{
 		client:    client,
 		store:     store,
@@ -125,6 +129,7 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 		interval:  cfg.Interval,
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
+		metrics:   newSyncMetrics(),
 	}
 }
 
@@ -221,6 +226,13 @@ func (w *Worker) run(ctx context.Context) {
 }
 
 func (w *Worker) syncAllTeams(ctx context.Context) error {
+	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
+	// invoked it (run's initial sync, the ticker, SyncNow). A budget-skipped
+	// cycle records its ~0s duration too — a burst of near-zero samples IS
+	// the signature of budget-gated skipping.
+	start := time.Now()
+	defer func() { w.metrics.recordCycle(time.Since(start)) }()
+
 	// Skip entire sync cycle when budget is critically high
 	if w.budgetExceeds(budgetSkipSyncPct) {
 		count, pct := 0, 0.0
@@ -533,6 +545,7 @@ func (w *Worker) syncProjectLabels(ctx context.Context, pruneCutoff time.Time) {
 	}
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.ProjectLabel]{
 		Label: "project-label",
+		Kind:  "project-label",
 		Items: plabels,
 		Upsert: func(ctx context.Context, l api.ProjectLabel) error {
 			params, err := db.APIProjectLabelToDBProjectLabel(l)
@@ -557,6 +570,7 @@ func (w *Worker) syncProjectLabels(ctx context.Context, pruneCutoff time.Time) {
 func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Initiative, pruneCutoff time.Time) {
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.InitiativeProject]{
 		Label: "initiative-project",
+		Kind:  "initiative-project",
 		Items: initiative.Projects.Nodes,
 		Upsert: func(ctx context.Context, project api.InitiativeProject) error {
 			return w.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
@@ -602,6 +616,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// a prune — upsert-only (nil prune).
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.State]{
 		Label: "state",
+		Kind:  "state",
 		Items: meta.States,
 		Upsert: func(ctx context.Context, state api.State) error {
 			params, err := db.APIStateToDBState(state, team.ID)
@@ -618,6 +633,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// workspace labels between teams.
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
 		Label: "label",
+		Kind:  "label",
 		Items: meta.Labels,
 		Upsert: func(ctx context.Context, label api.Label) error {
 			params, err := db.APILabelToDBLabel(label)
@@ -636,6 +652,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Cycle]{
 		Label: "cycle",
+		Kind:  "cycle",
 		Items: meta.Cycles,
 		Upsert: func(ctx context.Context, cycle api.Cycle) error {
 			params, err := db.APICycleToDBCycle(cycle, team.ID)
@@ -660,6 +677,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// logged and swallowed, never suppressing the prune.
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Project]{
 		Label: "project",
+		Kind:  "project",
 		Items: meta.Projects,
 		Upsert: func(ctx context.Context, project api.Project) error {
 			params, err := db.APIProjectToDBProject(project)
@@ -702,6 +720,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// workspace-wide users table, which other teams share.
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.User]{
 		Label: "member",
+		Kind:  "member",
 		Items: meta.Members,
 		Upsert: func(ctx context.Context, member api.User) error {
 			params, err := db.APIUserToDBUser(member)
@@ -892,6 +911,9 @@ func (w *Worker) deferDetailIssues(ctx context.Context, issues []issueRef) {
 func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutcome {
 	deferAll := func() detailOutcome {
 		w.deferDetailIssues(ctx, issues)
+		// The gate paths fold into the same ledger metric as the per-issue
+		// outcomes below: every issue leaves syncDetails counted exactly once.
+		w.metrics.recordDetailOutcomes(ctx, 0, len(issues))
 		return detailOutcome{deferred: issues, gated: true}
 	}
 
@@ -980,6 +1002,7 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 		_ = w.store.Queries().DeletePendingDetailSync(ctx, issue.ID)
 		outcome.synced = append(outcome.synced, issue)
 	}
+	w.metrics.recordDetailOutcomes(ctx, len(outcome.synced), len(outcome.deferred))
 	log.Printf("[sync] batch synced details: %d clean, %d deferred", len(outcome.synced), len(outcome.deferred))
 	return outcome
 }

@@ -21,6 +21,17 @@ func (q *Queries) ClearPendingDetailSync(ctx context.Context) error {
 	return err
 }
 
+const countPendingDetailSync = `-- name: CountPendingDetailSync :one
+SELECT COUNT(*) FROM pending_detail_sync
+`
+
+func (q *Queries) CountPendingDetailSync(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPendingDetailSync)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteAttachment = `-- name: DeleteAttachment :exec
 DELETE FROM attachments WHERE id = ?
 `

@@ -128,10 +128,11 @@ func (r *SQLiteRepository) maybeRefreshSWR(spec swrSpec) {
 
 	ts, err := spec.syncedAt()
 	if !swrStale(ts, err, changed, eventDriven, r.stalenessThreshold) {
+		r.metrics.recordTrigger(spec.kind, "fresh")
 		return
 	}
 
-	r.triggerBackgroundRefresh(spec.kind.key(spec.id), orphanOnNotFound(spec.refresh, spec.orphan))
+	r.triggerBackgroundRefresh(spec.kind, spec.id, orphanOnNotFound(spec.refresh, spec.orphan))
 }
 
 // issueChangedAt is the event source for issue-scoped surfaces (details,
