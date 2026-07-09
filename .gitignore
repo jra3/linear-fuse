@@ -34,4 +34,5 @@ go.work.sum
 .claude/settings.local.json
 docs/*
 !docs/plans/
+!docs/telemetry.md
 coverage.out
