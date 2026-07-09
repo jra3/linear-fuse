@@ -315,6 +315,48 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	return nil
 }
 
+// extractOpName extracts the GraphQL operation name from a query string —
+// the "op" attribute on every api instrument and the rate budget's cost-
+// predictor key (~30 stable values; the cardinality guard for op-attributed
+// metrics). It finds the first word before '{' or '(' after
+// "query"/"mutation".
+func extractOpName(query string) string {
+	if len(query) == 0 {
+		return "unknown"
+	}
+
+	// Simple extraction: find first { or ( and take word before it
+	for i, ch := range query {
+		if ch == '{' || ch == '(' {
+			if i == 0 {
+				return "unknown"
+			}
+			// Walk backwards to find operation name
+			end := i - 1
+			for end > 0 && (query[end] == ' ' || query[end] == '\n') {
+				end--
+			}
+			if end < 0 {
+				return "unknown"
+			}
+			start := end
+			for start > 0 && query[start-1] != ' ' && query[start-1] != '\n' {
+				start--
+			}
+			if start <= end && end >= 0 {
+				name := query[start : end+1]
+				// Skip "query" or "mutation" keywords
+				if name == "query" || name == "mutation" {
+					return "unknown"
+				}
+				return name
+			}
+			break
+		}
+	}
+	return "unknown"
+}
+
 // syncLimiterSize re-sizes the micro-burst limiter to the server-reported
 // hourly request limit once the budget has observed it. No-op until the
 // first response and after that only on change; the construction-time seed
@@ -1328,48 +1370,6 @@ func (c *Client) GetWorkspaceProjectIDs(ctx context.Context) ([]string, error) {
 		ids = append(ids, n.ID)
 	}
 	return ids, nil
-}
-
-// extractOpName extracts the GraphQL operation name from a query string —
-// the "op" attribute on every api instrument and the rate budget's cost-
-// predictor key (~30 stable values; the cardinality guard for op-attributed
-// metrics). It finds the first word before '{' or '(' after
-// "query"/"mutation".
-func extractOpName(query string) string {
-	if len(query) == 0 {
-		return "unknown"
-	}
-
-	// Simple extraction: find first { or ( and take word before it
-	for i, ch := range query {
-		if ch == '{' || ch == '(' {
-			if i == 0 {
-				return "unknown"
-			}
-			// Walk backwards to find operation name
-			end := i - 1
-			for end > 0 && (query[end] == ' ' || query[end] == '\n') {
-				end--
-			}
-			if end < 0 {
-				return "unknown"
-			}
-			start := end
-			for start > 0 && query[start-1] != ' ' && query[start-1] != '\n' {
-				start--
-			}
-			if start <= end && end >= 0 {
-				name := query[start : end+1]
-				// Skip "query" or "mutation" keywords
-				if name == "query" || name == "mutation" {
-					return "unknown"
-				}
-				return name
-			}
-			break
-		}
-	}
-	return "unknown"
 }
 
 // GetWorkspaceInitiativeIDs returns IDs of every initiative in the
