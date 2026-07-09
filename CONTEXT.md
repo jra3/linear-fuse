@@ -1162,3 +1162,31 @@ rename (a doc/label title change, `fileIno` 0). Built on a `kernelNotifier` seam
 two primitives, satisfied by `*LinearFS`), so the policy is unit-tested with a recording
 fake — no FUSE server. The raw `InvalidateKernelInode`/`Entry` primitives are now
 **internal-only**: every call site in the package goes through an intent method.
+
+### Mount preflight (`PreflightMountpoint`)
+A crash leaves the FUSE mount wedged ("Transport endpoint is not connected"),
+and a wedged mount at the service's own mountpoint once sent systemd into an
+infinite restart loop — ExecStartPre's mkdir failed on every attempt and
+nothing recovered without a manual `fusermount3 -uz`. The cure lived only in
+the integration harness (the stale-mount preflight from PR #191);
+`fs.PreflightMountpoint` (`internal/fs/preflight.go`) promotes it into the
+product. `runMount` calls it before MkdirAll; the harness's hand-rolled copy
+was deleted in favor of calling the same helper per stale `linearfs-test-*`
+mount.
+
+The policy has exactly three cases: a plain dir or missing path **proceeds**;
+a DEAD mount (statfs `ENOTCONN`, or any statfs failure on a path
+`/proc/self/mounts` still lists) is **healed** — lazy unmount, then a
+verifying re-probe, and a still-wedged mountpoint fails with the manual
+cleanup command; a HEALTHY live mount **refuses loudly** ("already a live
+mount — is another linearfs running?"). Never unmount a live mount: that
+would yank the filesystem out from under a concurrent instance. The heal is
+`fusermount3 -uz` by construction, never `umount2` — unprivileged `umount2`
+is `EPERM` on FUSE (recorded lesson). The three OS touchpoints (statfs,
+mount-table lookup, unmount exec) are seams on `mountPreflight`, so all
+branches are unit-tested without a real mount (`preflight_test.go`). The
+systemd unit carries a belt to these suspenders: an `ExecStartPre` lazy
+unmount ahead of the mkdir (covers old-binary/new-unit skew), `ExecStop -uz`,
+and `StartLimitBurst=5`/`StartLimitIntervalSec=60` so a genuinely broken
+start stops looping; sandboxing directives are deliberately absent (the
+mount lives in `$HOME`, config + cache under `~/.config/linearfs`).
