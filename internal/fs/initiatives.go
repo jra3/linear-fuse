@@ -176,43 +176,33 @@ func (i *InitiativeNode) Create(ctx context.Context, name string, flags uint32, 
 }
 
 // Rename persists an editor's atomic save: a scratch temp file renamed onto
-// initiative.md is written through initiative.md's normal Flush path.
-// initiative.md is the only writable file here, so other targets are rejected.
+// initiative.md is written through initiative.md's normal Flush path. The tail
+// (EXDEV / target guard / flush / adopt-on-{0,EIO} / invalidate) is the shared
+// renameSave module.
 func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	initiative := i.entity()
 	if i.lfs.debug {
 		log.Printf("Rename in initiative %s: %s -> %s", initiative.Name, name, newName)
 	}
 
-	dirIno := i.EmbeddedInode().StableAttr().Ino
-	if newParent.EmbeddedInode().StableAttr().Ino != dirIno {
-		return syscall.EXDEV
-	}
-
-	content, ok := scratchRenameBytes(i, name)
-	if !ok {
-		return syscall.ENOTSUP
-	}
-
-	if newName != "initiative.md" {
-		i.lfs.SetWriteError(initiative.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only initiative.md is writable in this directory; save your changes onto initiative.md (atomic save-via-rename onto initiative.md is supported).", name, newName))
-		return syscall.ENOTSUP
-	}
-
-	fileNode := &InitiativeInfoNode{
-		BaseNode:     BaseNode{lfs: i.lfs},
-		initiative:   initiative,
-		initiativeID: initiative.ID,
-		editBuffer:   editBuffer{content: content, dirty: true},
-	}
-	errno := fileNode.Flush(ctx, nil)
-
-	if errno == 0 || errno == syscall.EIO {
-		i.setEntity(fileNode.initiative)
-		i.lfs.InvalidateRenamed(dirIno, name, newName, initiativeInfoIno(fileNode.initiative.ID))
-	}
-
-	return errno
+	var fileNode *InitiativeInfoNode
+	return renameSave(ctx, i.lfs, name, newParent, newName, renameSaveSpec{
+		targetName: "initiative.md",
+		errKey:     initiative.ID,
+		dirIno:     i.EmbeddedInode().StableAttr().Ino,
+		fileIno:    initiativeInfoIno(initiative.ID),
+		scratch:    func(oldName string) ([]byte, bool) { return scratchRenameBytes(i, oldName) },
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
+			fileNode = &InitiativeInfoNode{
+				BaseNode:     BaseNode{lfs: i.lfs},
+				initiative:   initiative,
+				initiativeID: initiative.ID,
+				editBuffer:   editBuffer{content: content, dirty: true},
+			}
+			return fileNode.Flush(ctx, nil)
+		},
+		adopt: func() { i.setEntity(fileNode.initiative) },
+	})
 }
 
 // Unlink lets editors clean up an abandoned atomic-save temp file. Only scratch

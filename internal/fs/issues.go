@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 	"syscall"
@@ -410,58 +409,33 @@ func (n *IssueDirectoryNode) Create(ctx context.Context, name string, flags uint
 	return newScratchInode(ctx, &n.BaseNode, issueDirIno(issue.ID), name, out)
 }
 
-// Rename persists an editor's atomic save: when a scratch temp file is renamed
-// onto issue.md, its buffered bytes are written through the same path a direct
-// in-place edit uses (frontmatter validation, read-your-writes verification,
-// .error handling, cache invalidation). issue.md is the only writable file here,
-// so renames onto any other target — or of the canonical files themselves — are
-// rejected.
+// Rename persists an editor's atomic save: a scratch temp file renamed onto
+// issue.md is written through issue.md's normal Flush path. The tail (EXDEV /
+// target guard / flush / adopt-on-{0,EIO} / invalidate) is the shared
+// renameSave module.
 func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	issue := n.entity()
 	if n.lfs.debug {
 		log.Printf("Rename in %s: %s -> %s", issue.Identifier, name, newName)
 	}
 
-	// The atomic-save pattern keeps the temp file a sibling of issue.md.
-	if newParent.EmbeddedInode().StableAttr().Ino != n.EmbeddedInode().StableAttr().Ino {
-		return syscall.EXDEV
-	}
-
-	content, ok := scratchRenameBytes(n, name)
-	if !ok {
-		// name isn't a scratch file we created — e.g. an attempt to rename issue.md
-		// itself. The canonical files aren't renamable.
-		return syscall.ENOTSUP
-	}
-
-	if newName != "issue.md" {
-		// A scratch file only has somewhere to persist when renamed onto issue.md,
-		// the one editable file in this directory.
-		n.lfs.SetIssueError(issue.ID, fmt.Sprintf("Operation: rename %s -> %s\nError: only issue.md is writable in this directory; save your changes onto issue.md (atomic save-via-rename onto issue.md is supported).", name, newName))
-		return syscall.ENOTSUP
-	}
-
-	// Route the buffered bytes through the normal issue write path via a transient
-	// file node. Flush returns 0 on success, EINVAL on a parse/validation error,
-	// and EIO only on a fatal read-your-writes divergence (the write still reached
-	// Linear in that case).
-	fileNode := &IssueFileNode{
-		BaseNode:   BaseNode{lfs: n.lfs},
-		issue:      issue,
-		editBuffer: editBuffer{content: content, dirty: true},
-	}
-	errno := fileNode.Flush(ctx, nil)
-
-	if errno == 0 || errno == syscall.EIO {
-		// The write reached Linear. Adopt the fresh issue so issue.md re-renders the
-		// stored content, and drop the kernel caches: go-fuse will MvChild the spent
-		// scratch inode over issue.md, so issue.md must re-Lookup to a fresh
-		// IssueFileNode rather than serve the consumed scratch node.
-		n.setEntity(fileNode.issue)
-		n.lfs.InvalidateRenamed(issueDirIno(fileNode.issue.ID), name, newName, issueIno(fileNode.issue.ID))
-	}
-
-	return errno
+	var fileNode *IssueFileNode
+	return renameSave(ctx, n.lfs, name, newParent, newName, renameSaveSpec{
+		targetName: "issue.md",
+		errKey:     issue.ID,
+		dirIno:     n.EmbeddedInode().StableAttr().Ino,
+		fileIno:    issueIno(issue.ID),
+		scratch:    func(oldName string) ([]byte, bool) { return scratchRenameBytes(n, oldName) },
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
+			fileNode = &IssueFileNode{
+				BaseNode:   BaseNode{lfs: n.lfs},
+				issue:      issue,
+				editBuffer: editBuffer{content: content, dirty: true},
+			}
+			return fileNode.Flush(ctx, nil)
+		},
+		adopt: func() { n.setEntity(fileNode.issue) },
+	})
 }
 
 // Unlink lets editors clean up an abandoned atomic-save temp file (when a save

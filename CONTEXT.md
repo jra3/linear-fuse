@@ -32,6 +32,31 @@ tested with a fake sink and stub closures — no FUSE mount, SQLite, or API.
 The **front half** of each edit (parse, resolve, call API) stays per-entity. For
 issues the resolve step is itself a deep module — see Name→ID resolution below.
 
+### Rename save (`renameSave`)
+The **deep module** owning the atomic-save Rename tail — the rename-shaped
+sibling of the WriteBack tail in the edit-path family. Editors and the Claude
+Code Edit/Write tools never write a file in place: they write a sibling scratch
+temp file (see the Edit buffer's scratch counterpart in
+`internal/fs/atomicwrite.go`, #145) and rename(2) it onto the canonical `.md`.
+The three entity directories that accept this (issue/project/initiative) each
+ended their Rename handler with the same hand-copied tail: same-directory check
+(`EXDEV`) → scratch-buffer lookup (`ENOTSUP` for non-scratch names — the
+canonical files aren't renamable) → target-name guard (`.error` names the one
+writable target, `ENOTSUP`) → flush the bytes through the file's normal edit
+path (a transient file node with a dirty edit buffer, so frontmatter
+validation, read-your-writes verification, and `.error` handling all apply) →
+**adopt on {0, EIO}** → `InvalidateRenamed`. The adopt-on-EIO line is the
+policy, now written once: `Flush` returns `EIO` only on a fatal
+read-your-writes divergence, by which point the write has already reached
+Linear — refusing to adopt would keep serving stale content while `.error`
+explains the divergence. Lives in `internal/fs/renamesave.go`; each directory
+hands it a small spec (target name, error key, dir/file inos,
+scratch/flush/adopt closures). It depends only on the `renameSink` seam
+(ErrorSink + `InvalidateRenamed`, satisfied by `*LinearFS` through the
+writeFeedback and kernelNotify promotions), and the scratch lookup is a spec
+closure, so it is unit-tested with a recording sink — no FUSE mount, inode
+tree, SQLite, or API.
+
 ### Create tail (`commitCreate`)
 The **deep module** that owns the invariant tail of every create (`_create` writes and
 `mkdir`), the create path's counterpart to the WriteBack tail: run the caller's
