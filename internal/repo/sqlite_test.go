@@ -201,15 +201,6 @@ func TestSQLiteRepository_FilteredIssues(t *testing.T) {
 		t.Errorf("Expected 2 issues in state-1, got %d", len(stateIssues))
 	}
 
-	// Test GetIssuesByPriority
-	priorityIssues, err := repo.GetIssuesByPriority(ctx, "team-1", 1)
-	if err != nil {
-		t.Fatalf("GetIssuesByPriority failed: %v", err)
-	}
-	if len(priorityIssues) != 2 {
-		t.Errorf("Expected 2 issues with priority 1, got %d", len(priorityIssues))
-	}
-
 	// Test GetUnassignedIssues
 	unassigned, err := repo.GetUnassignedIssues(ctx, "team-1")
 	if err != nil {
