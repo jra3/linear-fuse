@@ -227,7 +227,7 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 		if w.budget != nil {
 			count, pct = w.budget.BudgetSnapshot()
 		}
-		log.Printf("[sync] skipping sync cycle: budget at %d/1500 (%.0f%%), threshold %.0f%%",
+		log.Printf("[sync] skipping sync cycle: budget at %d requests (%.0f%%), threshold %.0f%%",
 			count, pct, budgetSkipSyncPct)
 		return nil
 	}

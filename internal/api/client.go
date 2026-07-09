@@ -40,7 +40,10 @@ type Client struct {
 	apiKey     string
 	apiURL     string
 	httpClient *http.Client
-	stats      *APIStats
+
+	// metrics are the api-layer OTEL instruments (metrics.go): every
+	// completed request records a count and a duration, per operation.
+	metrics apiMetrics
 
 	// budget is the hourly rate-limit governor (see ratebudget.go): query
 	// admits every request through its priority-reserve ladder and observes
@@ -53,23 +56,14 @@ type Client struct {
 	// (see syncLimiterSize); the construction-time rate is just a seed.
 	limiter         *rate.Limiter
 	limiterMu       gosync.Mutex
-	limiterSizedFor float64 // last request limit applied to limiter/stats
+	limiterSizedFor float64 // last request limit applied to the limiter
 
 	// Circuit breaker: stop burning rate limiter tokens during connectivity loss
 	consecutiveErrors atomic.Int32
 	circuitOpenUntil  atomic.Int64 // unix timestamp; 0 = closed
 }
 
-// ClientOptions configures the API client.
-type ClientOptions struct {
-	APIStatsEnabled bool // Enable periodic stats logging
-}
-
 func NewClient(apiKey string) *Client {
-	return NewClientWithOptions(apiKey, ClientOptions{})
-}
-
-func NewClientWithOptions(apiKey string, opts ClientOptions) *Client {
 	// The limiter is a micro-burst smoother, not the budget: hourly
 	// governance lives in rateBudget (both axes, limits read from response
 	// headers). The seed rate here is replaced by the observed request
@@ -82,16 +76,9 @@ func NewClientWithOptions(apiKey string, opts ClientOptions) *Client {
 		apiKey:     apiKey,
 		apiURL:     defaultAPIURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		metrics:    newAPIMetrics(),
 		budget:     newRateBudget(time.Now),
 		limiter:    limiter,
-		stats:      NewAPIStats(opts.APIStatsEnabled),
-	}
-}
-
-// Close shuts down the client and stops any background goroutines.
-func (c *Client) Close() {
-	if c.stats != nil {
-		c.stats.Close()
 	}
 }
 
@@ -164,13 +151,17 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	adm, dec := c.budget.admit(opName, tier)
 	if adm == nil && tier == pWrite && dec.retryAfter > 0 && dec.retryAfter <= maxWriteWait {
 		log.Printf("[ratelimit] mutation %s waiting %s for budget window reset", opName, dec.retryAfter.Round(time.Second))
+		c.budget.metrics.recordDecision(tier, "wait")
+		waitStart := time.Now()
 		timer := time.NewTimer(dec.retryAfter)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			c.budget.metrics.recordWait(time.Since(waitStart))
 			return fmt.Errorf("rate limit wait cancelled: %w", ctx.Err())
 		case <-timer.C:
 		}
+		c.budget.metrics.recordWait(time.Since(waitStart))
 		adm, dec = c.budget.admit(opName, tier)
 	}
 	if adm == nil {
@@ -206,20 +197,20 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	}
 	rateLimitWait := time.Since(rateLimitStart)
 	if rateLimitWait > time.Millisecond {
-		c.stats.RecordRateLimitWait(rateLimitWait)
+		c.budget.metrics.recordWait(rateLimitWait)
 	}
 	// Always log noisy rate limit waits (no env var required)
 	if rateLimitWait > 100*time.Millisecond {
-		hourly, pct := c.stats.BudgetSnapshot()
+		hourly, pct := c.BudgetSnapshot()
 		log.Printf("[ratelimit] %s waited %s (budget: %d requests this hour, %.0f%% of limit)",
 			opName, rateLimitWait.Round(time.Millisecond), hourly, pct)
 	}
 
-	// Track request duration for stats
+	// Record the request count (by outcome) and duration once it completes.
 	reqStart := time.Now()
 	var queryErr error
 	defer func() {
-		c.stats.Record(opName, time.Since(reqStart), queryErr)
+		c.metrics.record(ctx, opName, time.Since(reqStart), queryErr)
 	}()
 
 	reqBody := graphQLRequest{
@@ -324,10 +315,52 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	return nil
 }
 
-// syncLimiterSize re-sizes the micro-burst limiter (and the stats
-// denominator) to the server-reported hourly request limit once the budget
-// has observed it. No-op until the first response and after that only on
-// change; the construction-time seed is never trusted past first contact.
+// extractOpName extracts the GraphQL operation name from a query string —
+// the "op" attribute on every api instrument and the rate budget's cost-
+// predictor key (~30 stable values; the cardinality guard for op-attributed
+// metrics). It finds the first word before '{' or '(' after
+// "query"/"mutation".
+func extractOpName(query string) string {
+	if len(query) == 0 {
+		return "unknown"
+	}
+
+	// Simple extraction: find first { or ( and take word before it
+	for i, ch := range query {
+		if ch == '{' || ch == '(' {
+			if i == 0 {
+				return "unknown"
+			}
+			// Walk backwards to find operation name
+			end := i - 1
+			for end > 0 && (query[end] == ' ' || query[end] == '\n') {
+				end--
+			}
+			if end < 0 {
+				return "unknown"
+			}
+			start := end
+			for start > 0 && query[start-1] != ' ' && query[start-1] != '\n' {
+				start--
+			}
+			if start <= end && end >= 0 {
+				name := query[start : end+1]
+				// Skip "query" or "mutation" keywords
+				if name == "query" || name == "mutation" {
+					return "unknown"
+				}
+				return name
+			}
+			break
+		}
+	}
+	return "unknown"
+}
+
+// syncLimiterSize re-sizes the micro-burst limiter to the server-reported
+// hourly request limit once the budget has observed it. No-op until the
+// first response and after that only on change; the construction-time seed
+// is never trusted past first contact.
 func (c *Client) syncLimiterSize() {
 	lim := c.budget.requestsLimit()
 	if lim <= 0 {
@@ -340,7 +373,6 @@ func (c *Client) syncLimiterSize() {
 	}
 	c.limiterSizedFor = lim
 	c.limiter.SetLimit(rate.Limit(lim / 3600.0))
-	c.stats.SetHourlyLimit(int(lim))
 	log.Printf("[ratelimit] observed request limit %.0f/hr; limiter re-sized", lim)
 }
 
@@ -352,9 +384,22 @@ func (c *Client) RateLimitResetAt() time.Time {
 	return c.budget.resetAt()
 }
 
-// Stats returns the client's API stats tracker for external inspection.
-func (c *Client) Stats() *APIStats {
-	return c.stats
+// BudgetSnapshot reports hourly request usage as (requests used, percent of
+// limit), from the budget's server-reported requests axis — (0, 0) until the
+// first response has been observed. It satisfies the sync worker's
+// BudgetReporter seam, the role the deleted APIStats' local rolling window
+// used to play, now on server truth (so it also counts other consumers of
+// the same API key).
+func (c *Client) BudgetSnapshot() (count int, pct float64) {
+	_, rq := c.budget.snapshot()
+	if !rq.seen || rq.limit <= 0 {
+		return 0, 0
+	}
+	used := rq.limit - rq.remaining
+	if used < 0 {
+		used = 0
+	}
+	return int(used), used / rq.limit * 100
 }
 
 // GetTeams fetches all teams the user has access to

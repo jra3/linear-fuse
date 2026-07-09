@@ -215,6 +215,38 @@ log:
 	}
 }
 
+// TestLoadToleratesRemovedAPIStatsKey: existing user config files may still
+// carry log.api_stats (the field died with APIStats); yaml.v3 ignores
+// unknown keys, so such a file must keep parsing.
+func TestLoadToleratesRemovedAPIStatsKey(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "linearfs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("Failed to create config dir: %v", err)
+	}
+	configContent := `
+api_key: "key_with_stale_field"
+log:
+  level: debug
+  api_stats: true
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadWithEnv(mockEnv(map[string]string{"XDG_CONFIG_HOME": tmpDir}))
+	if err != nil {
+		t.Fatalf("LoadWithEnv() error with stale api_stats key: %v", err)
+	}
+	if cfg.APIKey != "key_with_stale_field" {
+		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "key_with_stale_field")
+	}
+	if cfg.Log.Level != "debug" {
+		t.Errorf("Log.Level = %q, want debug", cfg.Log.Level)
+	}
+}
+
 func TestLoadEnvOverridesFile(t *testing.T) {
 	t.Parallel()
 	// Create a config file with an API key

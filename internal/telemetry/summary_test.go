@@ -81,6 +81,55 @@ func TestRenderSummary(t *testing.T) {
 	}
 }
 
+// TestRenderSummaryProjectsHighCardinalityAttrs: the summary line keeps only
+// summaryAttrKeys and merges the datapoints that collide — per-op series
+// (~30 op names across three api instruments) must not blow up the one-line
+// journald summary. The full-cardinality data lives in the JSONL export.
+func TestRenderSummaryProjectsHighCardinalityAttrs(t *testing.T) {
+	t.Parallel()
+	rm := &metricdata.ResourceMetrics{
+		ScopeMetrics: []metricdata.ScopeMetrics{
+			{
+				Metrics: []metricdata.Metrics{
+					{
+						Name: "linearfs.api.requests",
+						Data: metricdata.Sum[int64]{
+							DataPoints: []metricdata.DataPoint[int64]{
+								{Attributes: attribute.NewSet(attribute.String("op", "Viewer"), attribute.String("outcome", "ok")), Value: 5},
+								{Attributes: attribute.NewSet(attribute.String("op", "Teams"), attribute.String("outcome", "ok")), Value: 2},
+								{Attributes: attribute.NewSet(attribute.String("op", "Teams"), attribute.String("outcome", "error")), Value: 1},
+							},
+						},
+					},
+					{
+						Name: "linearfs.api.duration",
+						Data: metricdata.Histogram[float64]{
+							DataPoints: []metricdata.HistogramDataPoint[float64]{
+								{Attributes: attribute.NewSet(attribute.String("op", "Viewer")), Count: 5, Sum: 1.25},
+								{Attributes: attribute.NewSet(attribute.String("op", "Teams")), Count: 3, Sum: 0.75},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	line := renderSummary(rm)
+	if strings.Contains(line, "op=") {
+		t.Errorf("summary %q leaked the op attribute", line)
+	}
+	for _, want := range []string{
+		"linearfs.api.requests{outcome=ok}=7",
+		"linearfs.api.requests{outcome=error}=1",
+		"linearfs.api.duration=count:8,sum:2", // merged across ops
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("summary %q missing %q", line, want)
+		}
+	}
+}
+
 func TestRenderSummaryEmpty(t *testing.T) {
 	t.Parallel()
 	line := renderSummary(&metricdata.ResourceMetrics{})

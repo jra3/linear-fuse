@@ -993,6 +993,16 @@ the test seam: `ratebudget_test.go` drives the ladder, reconcile, semaphore,
 rollover, and RATELIMITED paths with a fake clock and synthetic headers — no
 HTTP, no live API.
 
+The budget is also the telemetry source for its own layer (phase 2 of the
+metrics design): `snapshot()` — one read under the existing mutex, no new
+locks — feeds the `linearfs.budget.*` observable gauges; `admit` records the
+`decisions` counter where the verdict resolves (and a settled `rateLimited`
+records its own `ratelimited` decision); reconcile records
+`linearfs.api.complexity` at the ONE place `X-Complexity` is parsed. The
+worker's `BudgetReporter` is now `Client.BudgetSnapshot`, computed from the
+requests axis (`limit − remaining`, server truth) — the deleted APIStats'
+local rolling window is gone.
+
 An unseen axis doesn't gate, so a fresh process would burst un-gated before
 the first response lands. The **cold-start probe** closes that hole:
 `Worker.probeBudget` (`internal/sync/worker.go`) fires one cheap
@@ -1027,12 +1037,24 @@ cap first renames the file to `path.1` — replacing any previous `.1`, never
 accumulating — then truncates; disk bounded at ~2× cap, output stays jq-able
 JSONL). Failure is never fatal: file-export setup trouble degrades to
 summary-only, and cmd treats an `Init` error as log-and-continue — telemetry
-must never block mounting. Phase 1 ships only the heartbeat
+must never block mounting. Instruments so far: the phase-1 heartbeat
 (`linearfs.process.uptime_seconds` + `linearfs.build.info{version,commit}`)
-to make the pipeline verifiable end-to-end; **APIStats
-(`internal/api/stats.go`) still owns the api journald summary until phase 2
-deletes it** and lands the api+budget instruments; phase 3 adds sync + SWR.
-Spec: `docs/plans/2026-07-08-otel-metrics-design.md`.
+plus the phase-2 api + budget set (`internal/api/metrics.go`):
+`linearfs.api.requests{op,outcome}` / `.duration{op}` / `.complexity{op}`,
+and `linearfs.budget.remaining`/`.limit`/`.inflight`/`.reset_seconds{axis}`
+(observable gauges over `rateBudget.snapshot()`), `.decisions{tier,decision}`,
+`.wait_duration`. Instruments bind at Client/rateBudget **construction** via
+`otel.Meter` (no provider registered = free no-ops, so tests and library use
+cost nothing); cardinality is capped by design — op names (~30
+`extractOpName` values), the 5 tier names, closed outcome/decision enums,
+nothing else becomes an attribute. **APIStats is deleted** (phase 2): the
+always-on summary line is now the api journald observability, and because
+per-op series would blow up one line, `renderSummary` projects every
+attribute set onto a keep-list (`summaryAttrKeys`:
+outcome/decision/tier/axis/… — `op` is projected away and the collided
+series merged); the full-cardinality data is the JSONL export's job. Phase 3
+(sync + SWR instruments) still pending. Spec:
+`docs/plans/2026-07-08-otel-metrics-design.md`.
 
 ### Repository read path (deliberately concrete — no interface)
 The read path is the concrete `*repo.SQLiteRepository`; there is **no
