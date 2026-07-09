@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"time"
@@ -50,6 +51,14 @@ func runMount(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("mountpoint required: linearfs mount /path/to/mount")
 	}
 
+	// Preflight the mountpoint before touching it. Heals the wedged-mount
+	// incident (a dead FUSE mount — "Transport endpoint is not connected" —
+	// left by a crash made mkdir fail and sent systemd into a restart loop);
+	// refuses a healthy live mount rather than kill a concurrent instance.
+	if err := fs.PreflightMountpoint(mountpoint); err != nil {
+		return fmt.Errorf("mountpoint preflight: %w", err)
+	}
+
 	// Ensure mountpoint exists
 	if err := os.MkdirAll(mountpoint, 0755); err != nil {
 		return fmt.Errorf("failed to create mountpoint: %w", err)
@@ -65,16 +74,26 @@ func runMount(cmd *cobra.Command, args []string) error {
 	// Telemetry first, so instruments registered during filesystem/worker
 	// construction land on the real provider. Failure must never block
 	// mounting — log and continue without it.
+	//
+	// flushTelemetry is idempotent (sync.Once): called explicitly after
+	// server.Wait() — BEFORE lfs.Close(), because the final export's
+	// observable callbacks (e.g. sync.pending_depth) read the store — and
+	// kept as a defer so early error returns still flush.
+	flushTelemetry := func() {}
 	if shutdownTelemetry, err := telemetry.Init(cfg.Telemetry, Version, GitCommit); err != nil {
 		fmt.Printf("Warning: telemetry disabled: %v\n", err)
 	} else {
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := shutdownTelemetry(shutdownCtx); err != nil {
-				fmt.Printf("Warning: telemetry shutdown failed: %v\n", err)
-			}
-		}()
+		var once sync.Once
+		flushTelemetry = func() {
+			once.Do(func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := shutdownTelemetry(shutdownCtx); err != nil {
+					fmt.Printf("Warning: telemetry shutdown failed: %v\n", err)
+				}
+			})
+		}
+		defer flushTelemetry()
 	}
 
 	// Create LinearFS instance
@@ -110,7 +129,10 @@ func runMount(cmd *cobra.Command, args []string) error {
 	fmt.Println("Filesystem mounted. Press Ctrl+C to unmount.")
 	server.Wait()
 
-	// Stop background cache goroutines
+	// Shutdown ordering matters: flush telemetry while the store is still
+	// open (the final export's observable callbacks collect from it), THEN
+	// stop background goroutines and close the store.
+	flushTelemetry()
 	lfs.Close()
 
 	return nil

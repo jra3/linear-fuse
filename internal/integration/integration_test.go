@@ -34,13 +34,23 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	// Refuse to run over a stale mount from a killed prior run: its dead FUSE
-	// connection makes this run's kernel I/O fail with roaming EIO errors —
-	// the whole-suite flakiness this preflight exists to prevent. Fail loud
-	// with the cleanup command instead.
-	if mounts, err := os.ReadFile("/proc/mounts"); err == nil && strings.Contains(string(mounts), "linearfs-test-") {
-		log.Fatal("stale linearfs-test-* mount detected; clean it first:\n" +
-			"  fusermount3 -uz <mountpoint> && rm -rf <mountpoint>   (see /proc/mounts)")
+	// Preflight stale mounts from a killed prior run: their dead FUSE
+	// connections make this run's kernel I/O fail with roaming EIO errors —
+	// the whole-suite flakiness this exists to prevent. The product's
+	// fs.PreflightMountpoint carries the policy now: dead test mounts are
+	// self-healed (lazy unmount), a healthy one (concurrent test run) fails
+	// loud rather than getting yanked out from under the other run.
+	if mounts, err := os.ReadFile("/proc/self/mounts"); err == nil {
+		for _, line := range strings.Split(string(mounts), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 || !strings.Contains(fields[1], "linearfs-test-") {
+				continue
+			}
+			if err := fs.PreflightMountpoint(fields[1]); err != nil {
+				log.Fatalf("stale linearfs-test mount at %s: %v", fields[1], err)
+			}
+			_ = os.RemoveAll(fields[1])
+		}
 	}
 
 	apiKey := os.Getenv("LINEAR_API_KEY")

@@ -2,15 +2,29 @@
 Description=LinearFS - Linear issues as a FUSE filesystem
 After=network-online.target
 Wants=network-online.target
+# Stop a genuinely broken start from restart-looping forever (the incident:
+# a wedged FUSE mount made ExecStartPre's mkdir fail on every attempt).
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/linearfs/env
+# Belt to the binary's suspenders: the binary preflights the mountpoint
+# itself (heals dead mounts, refuses live ones), but a stale wedged mount
+# would fail the mkdir below before the binary ever runs — and this line
+# also covers old-binary/new-unit skew. Lazy unmount is a no-op when
+# nothing is mounted.
+ExecStartPre=/bin/sh -c 'fusermount3 -uz "${LINEARFS_MOUNT}" 2>/dev/null || true'
 ExecStartPre=/usr/bin/mkdir -p ${LINEARFS_MOUNT}
 ExecStart=%h/.local/bin/linearfs mount -f ${LINEARFS_MOUNT}
-ExecStop=/usr/bin/fusermount3 -u ${LINEARFS_MOUNT}
+ExecStop=/usr/bin/fusermount3 -uz ${LINEARFS_MOUNT}
 Restart=on-failure
 RestartSec=5
+SyslogIdentifier=linearfs
+# Deliberately NO sandboxing directives (ProtectHome/ProtectSystem/
+# PrivateTmp/...): the mount lives in $HOME and the config + SQLite cache
+# live under ~/.config/linearfs — hardening those away breaks the service.
 
 [Install]
 WantedBy=default.target
