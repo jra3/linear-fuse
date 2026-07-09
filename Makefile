@@ -45,6 +45,10 @@ fmt:
 lint:
 	golangci-lint run
 
+# Pinned; the CI lint gate runs exactly this (no local install needed)
+staticcheck:
+	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
+
 # Pinned so regeneration doesn't churn version comments in generated files
 sqlc:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate

@@ -28,6 +28,22 @@ jobs:
           go test -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tail -20
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: staticcheck
+        run: make staticcheck
+
   integration-tests-read:
     name: Integration Tests (Read-Only)
     runs-on: ubuntu-latest

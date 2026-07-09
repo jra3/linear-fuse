@@ -352,9 +352,11 @@ func TestEditInitiativeProjectsInvalidSlug(t *testing.T) {
 		t.Fatalf("Failed to modify frontmatter: %v", err)
 	}
 
-	// Write should fail (EINVAL) but we can't easily check errno in Go
-	// The write will succeed but flush will fail
-	err = os.WriteFile(initiativeFile, modified, 0644)
+	// The write error is deliberately ignored: the kernel buffers the write
+	// and the EINVAL surfaces at flush/close, which os.WriteFile may or may
+	// not report depending on timing — the real assertion is the re-read
+	// below showing the original content survived.
+	_ = os.WriteFile(initiativeFile, modified, 0644)
 
 	// Writing the file doesn't fail (it's buffered), but the change won't be persisted
 	// After a short wait, re-reading should show original content
