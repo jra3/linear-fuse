@@ -465,7 +465,16 @@ func (c *Client) ArchiveIssue(ctx context.Context, issueID string) error {
 // the paginated GetTeamProjects (too complexity-expensive to share the
 // combined query; see queryTeamMetadata). The returned sets are complete:
 // the sync worker prunes against them.
+//
+// The LowBudget preflight refuses BEFORE paying the combined query: the
+// query itself admits at a lower reserve than the drains and the projects
+// fetchAll behind it, so without the preflight a budget between the two
+// floors buys the combined result and then discards it when a follow-up
+// refuses (ErrBudget's burn-and-discard, observed live, one level up).
 func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetadata, error) {
+	if c.LowBudget() {
+		return nil, fmt.Errorf("team metadata %s: %w", teamID, ErrBudget)
+	}
 	var result struct {
 		Team struct {
 			States struct {
@@ -551,7 +560,14 @@ func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetad
 // initiative_projects junction rows against it, so a truncated list would
 // read as removals. Every returned Initiative has a complete Projects.Nodes
 // and a nil Projects.PageInfo.
+//
+// LowBudget preflight for the same reason as GetTeamMetadata: refuse before
+// paying the combined query rather than after, when a per-initiative drain
+// would refuse and discard it.
 func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
+	if c.LowBudget() {
+		return nil, fmt.Errorf("workspace: %w", ErrBudget)
+	}
 	var result struct {
 		Users       conn[User]       `json:"users"`
 		Initiatives conn[Initiative] `json:"initiatives"`
