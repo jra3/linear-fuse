@@ -48,6 +48,8 @@ func TestInodeNamespaceDistinct(t *testing.T) {
 		"attachmentsDirIno":       attachmentsDirIno(id),
 		"embeddedFileIno":         embeddedFileIno(id),
 		"externalAttachmentIno":   externalAttachmentIno(id),
+		"linksDirIno":             linksDirIno(id),
+		"externalLinkIno":         externalLinkIno(id),
 		"relationsDirIno":         relationsDirIno(id),
 		"relationIno":             relationIno(id),
 		"labelsDirIno":            labelsDirIno(id),

@@ -666,6 +666,50 @@ DELETE FROM attachments WHERE issue_id = ? AND synced_at < ?;
 DELETE FROM attachments WHERE issue_id = ?;
 
 -- =============================================================================
+-- Entity external links queries (project/initiative "Links / Resources")
+-- =============================================================================
+
+-- name: ListProjectLinks :many
+-- The id tiebreaker keeps the order deterministic on equal sort_order, so
+-- linkListing dedup suffixes stay stable across calls.
+SELECT * FROM entity_external_links WHERE project_id = ? ORDER BY sort_order, id;
+
+-- name: ListInitiativeLinks :many
+SELECT * FROM entity_external_links WHERE initiative_id = ? ORDER BY sort_order, id;
+
+-- name: GetProjectLinksSyncedAt :one
+SELECT MAX(synced_at) FROM entity_external_links WHERE project_id = ?;
+
+-- name: GetInitiativeLinksSyncedAt :one
+SELECT MAX(synced_at) FROM entity_external_links WHERE initiative_id = ?;
+
+-- name: UpsertEntityExternalLink :exec
+INSERT INTO entity_external_links (id, project_id, initiative_id, label, url, sort_order, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    project_id = excluded.project_id,
+    initiative_id = excluded.initiative_id,
+    label = excluded.label,
+    url = excluded.url,
+    sort_order = excluded.sort_order,
+    creator_id = excluded.creator_id,
+    creator_name = excluded.creator_name,
+    creator_email = excluded.creator_email,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data;
+
+-- name: DeleteEntityExternalLink :exec
+DELETE FROM entity_external_links WHERE id = ?;
+
+-- name: DeleteProjectLinks :exec
+DELETE FROM entity_external_links WHERE project_id = ?;
+
+-- name: DeleteInitiativeLinks :exec
+DELETE FROM entity_external_links WHERE initiative_id = ?;
+
+-- =============================================================================
 -- Embedded Files queries (images, PDFs from Linear CDN)
 -- =============================================================================
 

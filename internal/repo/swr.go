@@ -25,6 +25,8 @@ const (
 	kindInitiativeDocs    refreshKind = "initiative-docs"
 	kindProjectUpdates    refreshKind = "project-updates"
 	kindInitiativeUpdates refreshKind = "initiative-updates"
+	kindProjectLinks      refreshKind = "project-links"
+	kindInitiativeLinks   refreshKind = "initiative-links"
 )
 
 // key is the one factory for a refresh's dedup-map key.

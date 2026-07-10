@@ -394,6 +394,31 @@ CREATE INDEX IF NOT EXISTS idx_attachments_issue ON attachments(issue_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_url ON attachments(url);
 
 -- =============================================================================
+-- Entity external links (project/initiative "Links / Resources")
+-- A distinct Linear entity from attachments (which are issue-only): the parent
+-- is a project or initiative (exactly one of the two id columns is set), and
+-- the display field is `label` rather than `title`.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS entity_external_links (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,     -- set for project links (NULL for initiative links)
+    initiative_id TEXT,  -- set for initiative links (NULL for project links)
+    label TEXT NOT NULL,
+    url TEXT NOT NULL,
+    sort_order REAL,
+    creator_id TEXT,
+    creator_name TEXT,
+    creator_email TEXT,
+    created_at DATETIME,
+    updated_at DATETIME,
+    synced_at DATETIME NOT NULL,
+    data JSON NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_external_links_project ON entity_external_links(project_id);
+CREATE INDEX IF NOT EXISTS idx_entity_external_links_initiative ON entity_external_links(initiative_id);
+
+-- =============================================================================
 -- Embedded Files (images, PDFs uploaded to Linear CDN)
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS embedded_files (

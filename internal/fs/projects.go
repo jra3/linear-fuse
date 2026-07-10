@@ -296,6 +296,9 @@ func (p *ProjectNode) manifest() *dirManifest {
 	m.subdir("milestones", milestonesDirIno(project.ID), func() dirChild {
 		return &MilestonesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: project.ID}
 	})
+	m.subdir("links", linksDirIno(project.ID), func() dirChild {
+		return &LinksNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: project.ID}
+	})
 
 	return m
 }

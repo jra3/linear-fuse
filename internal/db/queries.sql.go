@@ -50,6 +50,15 @@ func (q *Queries) DeleteDocument(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteEntityExternalLink = `-- name: DeleteEntityExternalLink :exec
+DELETE FROM entity_external_links WHERE id = ?
+`
+
+func (q *Queries) DeleteEntityExternalLink(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteEntityExternalLink, id)
+	return err
+}
+
 const deleteInitiative = `-- name: DeleteInitiative :exec
 DELETE FROM initiatives WHERE id = ?
 `
@@ -65,6 +74,15 @@ DELETE FROM documents WHERE initiative_id = ?
 
 func (q *Queries) DeleteInitiativeDocuments(ctx context.Context, initiativeID sql.NullString) error {
 	_, err := q.db.ExecContext(ctx, deleteInitiativeDocuments, initiativeID)
+	return err
+}
+
+const deleteInitiativeLinks = `-- name: DeleteInitiativeLinks :exec
+DELETE FROM entity_external_links WHERE initiative_id = ?
+`
+
+func (q *Queries) DeleteInitiativeLinks(ctx context.Context, initiativeID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteInitiativeLinks, initiativeID)
 	return err
 }
 
@@ -217,6 +235,15 @@ func (q *Queries) DeleteProjectDocuments(ctx context.Context, projectID sql.Null
 	return err
 }
 
+const deleteProjectLinks = `-- name: DeleteProjectLinks :exec
+DELETE FROM entity_external_links WHERE project_id = ?
+`
+
+func (q *Queries) DeleteProjectLinks(ctx context.Context, projectID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectLinks, projectID)
+	return err
+}
+
 const deleteProjectMilestone = `-- name: DeleteProjectMilestone :exec
 DELETE FROM project_milestones WHERE id = ?
 `
@@ -290,6 +317,17 @@ SELECT MAX(synced_at) FROM documents WHERE initiative_id = ?
 
 func (q *Queries) GetInitiativeDocumentsSyncedAt(ctx context.Context, initiativeID sql.NullString) (interface{}, error) {
 	row := q.db.QueryRowContext(ctx, getInitiativeDocumentsSyncedAt, initiativeID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
+const getInitiativeLinksSyncedAt = `-- name: GetInitiativeLinksSyncedAt :one
+SELECT MAX(synced_at) FROM entity_external_links WHERE initiative_id = ?
+`
+
+func (q *Queries) GetInitiativeLinksSyncedAt(ctx context.Context, initiativeID sql.NullString) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getInitiativeLinksSyncedAt, initiativeID)
 	var max interface{}
 	err := row.Scan(&max)
 	return max, err
@@ -539,6 +577,17 @@ SELECT MAX(synced_at) FROM documents WHERE project_id = ?
 
 func (q *Queries) GetProjectDocumentsSyncedAt(ctx context.Context, projectID sql.NullString) (interface{}, error) {
 	row := q.db.QueryRowContext(ctx, getProjectDocumentsSyncedAt, projectID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
+const getProjectLinksSyncedAt = `-- name: GetProjectLinksSyncedAt :one
+SELECT MAX(synced_at) FROM entity_external_links WHERE project_id = ?
+`
+
+func (q *Queries) GetProjectLinksSyncedAt(ctx context.Context, projectID sql.NullString) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getProjectLinksSyncedAt, projectID)
 	var max interface{}
 	err := row.Scan(&max)
 	return max, err
@@ -812,6 +861,47 @@ func (q *Queries) ListInitiativeDocuments(ctx context.Context, initiativeID sql.
 			&i.InitiativeID,
 			&i.CreatorID,
 			&i.Url,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInitiativeLinks = `-- name: ListInitiativeLinks :many
+SELECT id, project_id, initiative_id, label, url, sort_order, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM entity_external_links WHERE initiative_id = ? ORDER BY sort_order, id
+`
+
+func (q *Queries) ListInitiativeLinks(ctx context.Context, initiativeID sql.NullString) ([]EntityExternalLink, error) {
+	rows, err := q.db.QueryContext(ctx, listInitiativeLinks, initiativeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EntityExternalLink{}
+	for rows.Next() {
+		var i EntityExternalLink
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.InitiativeID,
+			&i.Label,
+			&i.Url,
+			&i.SortOrder,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.CreatorEmail,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SyncedAt,
@@ -1336,6 +1426,53 @@ func (q *Queries) ListProjectLabels(ctx context.Context) ([]ProjectLabel, error)
 			&i.IsGroup,
 			&i.ParentID,
 			&i.RetiredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectLinks = `-- name: ListProjectLinks :many
+
+SELECT id, project_id, initiative_id, label, url, sort_order, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM entity_external_links WHERE project_id = ? ORDER BY sort_order, id
+`
+
+// =============================================================================
+// Entity external links queries (project/initiative "Links / Resources")
+// =============================================================================
+// The id tiebreaker keeps the order deterministic on equal sort_order, so
+// linkListing dedup suffixes stay stable across calls.
+func (q *Queries) ListProjectLinks(ctx context.Context, projectID sql.NullString) ([]EntityExternalLink, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectLinks, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []EntityExternalLink{}
+	for rows.Next() {
+		var i EntityExternalLink
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.InitiativeID,
+			&i.Label,
+			&i.Url,
+			&i.SortOrder,
+			&i.CreatorID,
+			&i.CreatorName,
+			&i.CreatorEmail,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SyncedAt,
@@ -2768,6 +2905,59 @@ func (q *Queries) UpsertEmbeddedFile(ctx context.Context, arg UpsertEmbeddedFile
 		arg.Source,
 		arg.CreatedAt,
 		arg.SyncedAt,
+	)
+	return err
+}
+
+const upsertEntityExternalLink = `-- name: UpsertEntityExternalLink :exec
+INSERT INTO entity_external_links (id, project_id, initiative_id, label, url, sort_order, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    project_id = excluded.project_id,
+    initiative_id = excluded.initiative_id,
+    label = excluded.label,
+    url = excluded.url,
+    sort_order = excluded.sort_order,
+    creator_id = excluded.creator_id,
+    creator_name = excluded.creator_name,
+    creator_email = excluded.creator_email,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    synced_at = excluded.synced_at,
+    data = excluded.data
+`
+
+type UpsertEntityExternalLinkParams struct {
+	ID           string          `json:"id"`
+	ProjectID    sql.NullString  `json:"project_id"`
+	InitiativeID sql.NullString  `json:"initiative_id"`
+	Label        string          `json:"label"`
+	Url          string          `json:"url"`
+	SortOrder    sql.NullFloat64 `json:"sort_order"`
+	CreatorID    sql.NullString  `json:"creator_id"`
+	CreatorName  sql.NullString  `json:"creator_name"`
+	CreatorEmail sql.NullString  `json:"creator_email"`
+	CreatedAt    sql.NullTime    `json:"created_at"`
+	UpdatedAt    sql.NullTime    `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
+}
+
+func (q *Queries) UpsertEntityExternalLink(ctx context.Context, arg UpsertEntityExternalLinkParams) error {
+	_, err := q.db.ExecContext(ctx, upsertEntityExternalLink,
+		arg.ID,
+		arg.ProjectID,
+		arg.InitiativeID,
+		arg.Label,
+		arg.Url,
+		arg.SortOrder,
+		arg.CreatorID,
+		arg.CreatorName,
+		arg.CreatorEmail,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.SyncedAt,
+		arg.Data,
 	)
 	return err
 }

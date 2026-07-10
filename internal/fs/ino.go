@@ -47,6 +47,11 @@ func attachmentsDirIno(issueID string) uint64          { return ino("attachments
 func embeddedFileIno(fileID string) uint64             { return ino("file", fileID) }
 func externalAttachmentIno(attachmentID string) uint64 { return ino("extatt", attachmentID) }
 
+// External links (project/initiative "Links / Resources") ------------------
+
+func linksDirIno(parentID string) uint64   { return ino("links", parentID) }
+func externalLinkIno(linkID string) uint64 { return ino("extlink", linkID) }
+
 // Relations ----------------------------------------------------------------
 
 func relationsDirIno(issueID string) uint64 { return ino("relations", issueID) }
