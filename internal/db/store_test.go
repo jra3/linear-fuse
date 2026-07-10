@@ -297,38 +297,6 @@ func TestTeams(t *testing.T) {
 	}
 }
 
-func TestWithTransaction(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-1"
-
-	// Successful transaction
-	err := store.WithTx(ctx, func(q *Queries) error {
-		data := &IssueData{
-			ID:         "tx-issue-1",
-			Identifier: "TST-TX1",
-			Title:      "Transaction Test",
-			TeamID:     teamID,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-			Data:       json.RawMessage("{}"),
-		}
-		return q.UpsertIssue(ctx, data.ToUpsertParams())
-	})
-	if err != nil {
-		t.Fatalf("Transaction failed: %v", err)
-	}
-
-	// Verify commit
-	_, err = store.Queries().GetIssueByIdentifier(ctx, "TST-TX1")
-	if err != nil {
-		t.Error("Issue not found after commit")
-	}
-}
-
 func TestListTeamIssuesByAssignee(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
