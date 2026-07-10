@@ -72,7 +72,14 @@ type APIClient interface {
 	RateLimitResetAt() time.Time
 }
 
-const detailsBatchSize = 15 // Number of issues to fetch details for in one API call (Linear has 10k complexity limit; 20 was 80-90% of budget)
+// detailsBatchSize is the number of issues per batched details fetch. Linear
+// caps a SINGLE query at 10k complexity, and the per-issue details selection
+// has grown to ~860 points (measured live 2026-07-10: a batch of 15 scored
+// 12,897 and was rejected with "Query too complex" — silently unnoticed for
+// days because the budget ladder was starving detail sync entirely, #239).
+// 10 × ~860 ≈ 8.6k leaves headroom for the selection to grow a little; if a
+// batch is ever rejected again, this constant is the first suspect.
+const detailsBatchSize = 10
 
 // Budget thresholds for rate limit awareness.
 // Detail batches (~2001 complexity each) are expensive; we defer them when budget is tight.
