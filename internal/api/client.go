@@ -677,12 +677,12 @@ func (c *Client) UpdateProjectMilestone(ctx context.Context, milestoneID string,
 	return execMutation[ProjectMilestone](ctx, c, mutationUpdateProjectMilestone, map[string]any{"id": milestoneID, "input": input}, "projectMilestoneUpdate", "projectMilestone")
 }
 
-// UpdateProject updates a project's mutable fields (name, description).
+// UpdateProject updates a project's mutable fields (name, content).
 func (c *Client) UpdateProject(ctx context.Context, projectID string, input ProjectUpdateInput) error {
 	return execMutationOK(ctx, c, mutationUpdateProject, map[string]any{"id": projectID, "input": input}, "projectUpdate")
 }
 
-// UpdateInitiative updates an initiative's mutable fields (name, description).
+// UpdateInitiative updates an initiative's mutable fields (name, content).
 func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, input InitiativeUpdateInput) error {
 	return execMutationOK(ctx, c, mutationUpdateInitiative, map[string]any{"id": initiativeID, "input": input}, "initiativeUpdate")
 }

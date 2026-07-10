@@ -130,11 +130,13 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 // This is the single owner of the write failure model the generated README
 // documents — shared by the create and delete tails and by every edit-mutation
 // site (issue/comment/label/document/milestone flushes and renames, the
-// project/initiative scalar+reconcile paths): bad input -> EINVAL, missing
-// reference -> ENOENT, transient -> EAGAIN, backend failure -> EIO — either
-// way the reason lands in .error. Rate-limit/not-found detection delegates to
+// project/initiative scalar+reconcile paths): bad input -> EINVAL, a field
+// over its length cap -> EMSGSIZE, missing reference -> ENOENT, transient ->
+// EAGAIN, backend failure -> EIO — either way the reason lands in .error, and
+// the errno itself hints where a specific one exists. Rate-limit/not-found and
+// too-long detection delegate to
 // the api package's predicates (api.IsRateLimited via retryableCreateErr,
-// api.IsNotFound via the delete tail's remoteAlreadyGone).
+// api.IsNotFound via the delete tail's remoteAlreadyGone, api.IsFieldTooLong).
 func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {
@@ -157,6 +159,12 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 		msg := gqlErr.UserPresentableMessage
 		if msg == "" {
 			msg = gqlErr.Message
+		}
+		// A length-cap rejection is a size error, not merely malformed input:
+		// EMSGSIZE makes the errno itself a hint (the reason still lands in
+		// .error). See api.IsFieldTooLong.
+		if api.IsFieldTooLong(err) {
+			return "Operation: " + op + "\nError: " + msg, syscall.EMSGSIZE
 		}
 		return "Operation: " + op + "\nError: " + msg, syscall.EINVAL
 	}

@@ -58,3 +58,26 @@ func IsNotFound(err error) bool {
 	}
 	return strings.Contains(err.Error(), "Entity not found")
 }
+
+// IsFieldTooLong reports whether err is Linear rejecting a field for exceeding
+// its length cap — e.g. "description must be shorter than or equal to 255
+// characters." This is a size limit, not merely malformed input, so callers
+// (classifyMutationErr) can surface EMSGSIZE instead of a bare EINVAL, making
+// the errno itself a hint. Structured check first (the phrasing rides in
+// Message/UserPresentableMessage), with a plain-string fallback. The two
+// substrings are the phrasings Linear uses for a max-length validation.
+func IsFieldTooLong(err error) bool {
+	if err == nil {
+		return false
+	}
+	has := func(s string) bool {
+		s = strings.ToLower(s)
+		return strings.Contains(s, "shorter than or equal to") ||
+			strings.Contains(s, "must be at most")
+	}
+	var gqlErr *GraphQLError
+	if errors.As(err, &gqlErr) && (has(gqlErr.Message) || has(gqlErr.UserPresentableMessage)) {
+		return true
+	}
+	return has(err.Error())
+}

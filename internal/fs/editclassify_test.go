@@ -117,3 +117,29 @@ func TestLabelEditFlush_BackendFailureStaysEIO(t *testing.T) {
 		t.Fatalf("Flush errno = %v, want EIO for an unclassified backend failure", errno)
 	}
 }
+
+// TestClassifyMutationErr_TooLongIsEMSGSIZE pins KNOWN_ISSUES #6: a length-cap
+// rejection is a size error, so the errno itself hints (EMSGSIZE) rather than a
+// bare EINVAL — while the reason still lands in .error. A userError that is NOT
+// a length limit stays EINVAL.
+func TestClassifyMutationErr_TooLongIsEMSGSIZE(t *testing.T) {
+	tooLong := &api.GraphQLError{
+		Message:                "description must be shorter than or equal to 255 characters.",
+		Code:                   "INPUT_ERROR",
+		UserError:              true,
+		UserPresentableMessage: "description must be shorter than or equal to 255 characters.",
+	}
+	msg, errno := classifyMutationErr("update project", tooLong)
+	if errno != syscall.EMSGSIZE {
+		t.Fatalf("errno = %v, want EMSGSIZE for a length-cap rejection", errno)
+	}
+	if !strings.Contains(msg, "shorter than or equal to") {
+		t.Errorf(".error = %q, want the server's length message", msg)
+	}
+
+	// A non-length userError must remain EINVAL (the errno hint is specific).
+	other := &api.GraphQLError{Message: "bad enum value", Code: "INPUT_ERROR", UserError: true}
+	if _, errno := classifyMutationErr("update project", other); errno != syscall.EINVAL {
+		t.Fatalf("errno = %v, want EINVAL for a non-length userError", errno)
+	}
+}

@@ -303,6 +303,9 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 	if input.Name != nil {
 		proj.Name = *input.Name
 	}
+	if input.Content != nil { // the editable body maps here (#5)
+		proj.Content = *input.Content
+	}
 	if input.Description != nil {
 		proj.Description = *input.Description
 	}
@@ -355,6 +358,9 @@ func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, inpu
 	init := c.currentInitiativeLocked(ctx, initiativeID)
 	if input.Name != nil {
 		init.Name = *input.Name
+	}
+	if input.Content != nil { // the editable body maps here (#5)
+		init.Content = *input.Content
 	}
 	if input.Description != nil {
 		init.Description = *input.Description

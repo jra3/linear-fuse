@@ -16,18 +16,19 @@ import (
 // Content Round-Trip Tests
 // =============================================================================
 
-// TestInitiativeContentBodyRoundTripsDescription guards against the description
-// "heading fold" bug: generateContent() must emit the description as the bare
-// body — exactly like project.md — so Flush's body->description mapping is
-// idempotent. Previously the body carried a rendered "# <Name>" H1 heading that
-// Flush (comparing TrimSpace(body) against initiative.Description) folded into
-// the description on every write, doubling the heading with each save.
-func TestInitiativeContentBodyRoundTripsDescription(t *testing.T) {
+// TestInitiativeContentBodyRoundTripsContent guards against the "heading fold"
+// bug: generateContent() must emit the content as the bare body — exactly like
+// project.md — so Flush's body->content mapping is idempotent. Previously the
+// body carried a rendered "# <Name>" H1 heading that Flush (comparing
+// TrimSpace(body) against the field) folded into the value on every write,
+// doubling the heading with each save. (The body maps to Linear's long
+// `content` field, not the ≤255 `description` — see KNOWN_ISSUES #5.)
+func TestInitiativeContentBodyRoundTripsContent(t *testing.T) {
 	node := &InitiativeInfoNode{
 		initiative: api.Initiative{
-			ID:          "init-1",
-			Name:        "Activate users in the webapp",
-			Description: "Increase webapp adoption to improve the feedback flywheel.",
+			ID:      "init-1",
+			Name:    "Activate users in the webapp",
+			Content: "Increase webapp adoption to improve the feedback flywheel.",
 		},
 	}
 
@@ -36,10 +37,10 @@ func TestInitiativeContentBodyRoundTripsDescription(t *testing.T) {
 		t.Fatalf("parse generated initiative.md: %v", err)
 	}
 
-	// The body Flush would read back must equal the description it would write —
-	// i.e. a no-op save must not mutate the description.
-	if got := strings.TrimSpace(doc.Body); got != node.initiative.Description {
-		t.Fatalf("body does not round-trip to description:\n got: %q\nwant: %q", got, node.initiative.Description)
+	// The body Flush would read back must equal the content it would write —
+	// i.e. a no-op save must not mutate the content.
+	if got := strings.TrimSpace(doc.Body); got != node.initiative.Content {
+		t.Fatalf("body does not round-trip to content:\n got: %q\nwant: %q", got, node.initiative.Content)
 	}
 
 	// The rendered name heading must not appear in the body; its presence is the

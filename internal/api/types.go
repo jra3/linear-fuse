@@ -122,6 +122,7 @@ type Project struct {
 	Name        string              `json:"name"`
 	Slug        string              `json:"slugId"`
 	Description string              `json:"description"`
+	Content     string              `json:"content"`
 	URL         string              `json:"url"`
 	State       string              `json:"state"`
 	StartDate   *string             `json:"startDate"`
@@ -188,7 +189,11 @@ type ProjectMilestone struct {
 
 // ProjectUpdateInput is the input for updating a project's mutable fields.
 type ProjectUpdateInput struct {
-	Name        *string `json:"name,omitempty"`
+	Name *string `json:"name,omitempty"`
+	// Content is the long markdown body (Linear's uncapped `content` field);
+	// the editable project.md body maps here. Description (the ≤255 short
+	// field) is server-owned and rendered read-only in project.meta.
+	Content     *string `json:"content,omitempty"`
 	Description *string `json:"description,omitempty"`
 	// LabelIds is a full-set write (no removedLabelIds analog exists).
 	// nil = untouched; &[]string{} = clear all labels.
@@ -197,7 +202,10 @@ type ProjectUpdateInput struct {
 
 // InitiativeUpdateInput is the input for updating an initiative's mutable fields.
 type InitiativeUpdateInput struct {
-	Name        *string `json:"name,omitempty"`
+	Name *string `json:"name,omitempty"`
+	// Content is the long markdown body; the editable initiative.md body maps
+	// here. Description (≤255) is read-only in initiative.meta.
+	Content     *string `json:"content,omitempty"`
 	Description *string `json:"description,omitempty"`
 }
 
@@ -285,6 +293,7 @@ type Initiative struct {
 	Name        string             `json:"name"`
 	Slug        string             `json:"slugId"`
 	Description string             `json:"description"`
+	Content     string             `json:"content"`
 	Status      string             `json:"status"`
 	Color       string             `json:"color"`
 	Icon        string             `json:"icon"`

@@ -331,11 +331,12 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		return errno
 	}
 
-	// Persist editable scalar fields (name in frontmatter, description in body).
-	// The body maps to the initiative's description, matching generateContent().
-	// scalarEdit owns the diff, name coercion, and the divergence compare below.
-	edit := newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Description)
-	initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Description: edit.desc}
+	// Persist editable scalar fields (name in frontmatter, content in the body).
+	// The body maps to Linear's uncapped `content`, not the ≤255 `description`
+	// (see #5), matching generateContent(). scalarEdit owns the diff, name
+	// coercion, and the divergence compare below.
+	edit := newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Content)
+	initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Content: edit.desc}
 	if edit.changed() {
 		if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
 			msg, errno := classifyMutationErr("update initiative", err)
@@ -359,7 +360,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			return i.lfs.UpsertInitiative(ctx, *fresh)
 		},
 		compare: func(fresh *api.Initiative) []writeBackResult {
-			return edit.divergences(fresh.Name, fresh.Description)
+			return edit.divergences(fresh.Name, fresh.Content)
 		},
 	})
 	if fresh != nil {

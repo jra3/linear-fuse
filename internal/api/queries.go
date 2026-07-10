@@ -200,6 +200,7 @@ fragment InitiativeFields on Initiative {
   name
   slugId
   description
+  content
   status
   color
   icon
@@ -418,6 +419,7 @@ fragment ProjectFields on Project {
   name
   slugId
   description
+  content
   url
   state
   startDate

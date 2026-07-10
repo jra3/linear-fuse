@@ -106,15 +106,26 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	}
 
 	// The create tail unified the failure model and closed the .last gap: the
-	// README must document EAGAIN/ENOENT alongside EINVAL/EIO, and must not
-	// resurrect the "attachments and relations don't report to .last" carve-out.
-	for _, want := range []string{"EAGAIN", "ENOENT"} {
+	// README must document EAGAIN/ENOENT/EMSGSIZE alongside EINVAL/EIO, and must
+	// not resurrect the "attachments and relations don't report to .last" carve-out.
+	for _, want := range []string{"EAGAIN", "ENOENT", "EMSGSIZE"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README failure model does not mention %q", want)
 		}
 	}
 	if strings.Contains(readme, "instead surface the result") {
 		t.Error("README carves attachments/relations out of .last, but every create surface reports to .last now")
+	}
+
+	// #5: project/initiative bodies map to the long content field, not the ≤255
+	// description; the README must not tell writers the body is the description
+	// (which silently rejected any real write-up), and must place description in
+	// the read-only .meta.
+	if !strings.Contains(readme, "the body maps to the long content") {
+		t.Error("README does not document that project/initiative bodies map to content")
+	}
+	if strings.Contains(readme, "the body maps to the description)") {
+		t.Error("README still claims a project/initiative body maps to the ≤255 description field (#5)")
 	}
 
 	// Project labels (#130): the README must teach the catalog surface and the

@@ -97,3 +97,42 @@ func TestIsNotFound(t *testing.T) {
 		})
 	}
 }
+
+func TestIsFieldTooLong(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			"typed GraphQLError, shorter-than-or-equal phrasing",
+			&GraphQLError{Message: "description must be shorter than or equal to 255 characters."},
+			true,
+		},
+		{
+			"phrasing only in UserPresentableMessage",
+			&GraphQLError{Message: "Argument Validation Error", UserPresentableMessage: "name must be at most 80 characters"},
+			true,
+		},
+		{
+			"typed error wrapped via %w",
+			fmt.Errorf("update failed: %w", &GraphQLError{Message: "title must be shorter than or equal to 255 characters"}),
+			true,
+		},
+		{
+			"plain string carrying the envelope (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"description must be shorter than or equal to 255 characters."}]}`),
+			true,
+		},
+		{"unrelated userError", &GraphQLError{Message: "labelIds contain parent labels"}, false},
+		{"not-found is not too-long", errors.New("Entity not found: Project"), false},
+		{"nil error", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsFieldTooLong(tc.err); got != tc.want {
+				t.Errorf("IsFieldTooLong(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

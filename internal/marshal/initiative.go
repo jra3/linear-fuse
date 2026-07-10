@@ -7,11 +7,13 @@ import (
 )
 
 // InitiativeToMarkdown renders the editable-only initiative.md: name, linked
-// project slugs, and the description body. Server-managed fields live in
-// initiative.meta (see InitiativeMetaToMarkdown), so a successful write never
-// rewrites the bytes the writer wrote. The parse side is
-// MarkdownToInitiativeEdit below; the diffs stay with internal/fs's scalarEdit
-// (name/description) and reconcileLinks (the projects list).
+// project slugs, and the content body. The body maps to Linear's long
+// `content` field (uncapped markdown), NOT the ≤255 short `description`, which
+// is server-owned and rendered read-only in initiative.meta (see
+// InitiativeMetaToMarkdown), so a successful write never rewrites the bytes
+// the writer wrote. The parse side is MarkdownToInitiativeEdit below; the
+// diffs stay with internal/fs's scalarEdit (name/content) and reconcileLinks
+// (the projects list).
 func InitiativeToMarkdown(initiative *api.Initiative) ([]byte, error) {
 	fm := map[string]any{"name": initiative.Name}
 
@@ -23,12 +25,13 @@ func InitiativeToMarkdown(initiative *api.Initiative) ([]byte, error) {
 		fm["projects"] = slugs
 	}
 
-	return Render(&Document{Frontmatter: fm, Body: initiative.Description})
+	return Render(&Document{Frontmatter: fm, Body: initiative.Content})
 }
 
 // InitiativeMetaToMarkdown renders the read-only initiative.meta:
-// server-managed identity, status, owner, appearance, and timestamps as a
-// frontmatter-only block.
+// server-managed identity, the short description, status, owner, appearance,
+// and timestamps as a frontmatter-only block. (description is the ≤255 summary
+// field, distinct from the editable content body in initiative.md.)
 func InitiativeMetaToMarkdown(initiative *api.Initiative) ([]byte, error) {
 	fm := map[string]any{
 		"id":      initiative.ID,
@@ -37,6 +40,9 @@ func InitiativeMetaToMarkdown(initiative *api.Initiative) ([]byte, error) {
 		"status":  initiative.Status,
 		"created": initiative.CreatedAt.Format(time.RFC3339),
 		"updated": initiative.UpdatedAt.Format(time.RFC3339),
+	}
+	if initiative.Description != "" {
+		fm["description"] = initiative.Description
 	}
 	if initiative.Color != "" {
 		fm["color"] = initiative.Color

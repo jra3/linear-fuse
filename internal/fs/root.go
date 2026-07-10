@@ -134,7 +134,7 @@ teams/{KEY}/
     .last                           [read-only: recent project creations]
   projects/{slug}/
     project.md                      [read/write: editable fields + body ONLY]
-    project.meta                    [read-only: id, slug, url, status, lead, dates]
+    project.meta                    [read-only: id, slug, url, status, lead, description, dates]
     .error                          [read-only: last failed write here]
     docs/                           [same as issues]
     updates/                        [status updates]
@@ -162,7 +162,7 @@ project-labels.md                   [read-only: workspace project-label catalog 
 
 initiatives/{slug}/
   initiative.md                     [read/write: editable fields + body ONLY]
-  initiative.meta                   [read-only: id, slug, url, status, owner, dates]
+  initiative.meta                   [read-only: id, slug, url, status, owner, description, dates]
   .error                            [read-only: last failed write here]
   docs/                             [_create=trigger, .error=feedback]
     {slug}.md                       [read/write: title, icon, color + body]
@@ -230,9 +230,9 @@ Description body (editable)
 </issue_frontmatter>
 
 <project_frontmatter>
-project.md holds only editable fields (below) + the description body. Read-only
-identity/status/lead/dates live in the sibling project.meta. A successful write
-never rewrites project.md.
+project.md holds only editable fields (below) + the content body. Read-only
+identity/status/lead/dates AND the short description live in the sibling
+project.meta. A successful write never rewrites project.md.
 ---
 name: "API Gateway"                         [editable]
 initiatives: ["Platform Modernization"]     [names; see initiatives/]
@@ -241,14 +241,16 @@ labels: [Backend, Q3-Bet]                   [must match project-labels.md; group
                                              group; retired = existing-only; raw
                                              label IDs also accepted]
 ---
-Project description (editable - the body maps to the description)
+Project content in markdown (editable - the body maps to the long content
+field; no length limit). The short one-line description is read-only in
+project.meta.
 </project_frontmatter>
 
 <initiative_frontmatter>
-initiative.md holds only editable fields (below) + the description body. Read-only
-identity/status/owner/dates live in the sibling initiative.meta (id, slug, status,
-url, owner, targetDate, created, updated). A successful write never rewrites
-initiative.md.
+initiative.md holds only editable fields (below) + the content body. Read-only
+identity/status/owner/dates AND the short description live in the sibling
+initiative.meta (id, slug, status, url, owner, targetDate, description, created,
+updated). A successful write never rewrites initiative.md.
 ---
 name: "Platform Modernization"              [editable]
 projects:                                   [editable - project slugs]
@@ -256,14 +258,16 @@ projects:                                   [editable - project slugs]
   - "auth-service"
   - "data-pipeline"
 ---
-Initiative description (editable - the body maps to the description)
+Initiative content in markdown (editable - the body maps to the long content
+field; no length limit). The short one-line description is read-only in
+initiative.meta.
 
 Usage:
-- Edit name (frontmatter) and description (body); they sync to Linear
+- Edit name (frontmatter) and content (body); they sync to Linear
 - Edit projects: list to link/unlink projects (use project slugs)
 - Projects are resolved workspace-wide across all teams
 - Changes sync immediately to Linear API and SQLite cache
-- Read-only server fields (id, slug, status, owner, dates) live in initiative.meta
+- Read-only server fields (id, slug, status, owner, description, dates) live in initiative.meta
 </initiative_frontmatter>
 
 <permissions>
@@ -307,10 +311,13 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
 
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
+- A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - Rate-limited or timed out (the write did not take effect; retry shortly) -> EAGAIN
 - Backend/API failure -> EIO
-- Whatever the errno, the reason lands in .error; success clears it.
+- Whatever the errno, the reason lands in .error; success clears it. Always read
+  .error after any failed write (including an atomic-save rename that returns
+  EINVAL/EMSGSIZE) — the errno alone cannot carry the reason.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
 Stale-catalog self-healing: a name that resolves nowhere locally (a status,

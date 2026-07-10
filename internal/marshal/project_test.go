@@ -3,6 +3,7 @@ package marshal
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,9 +25,9 @@ func frontmatterKeys(t *testing.T, content []byte) ([]string, *Document) {
 }
 
 // TestProjectToMarkdown pins the editable-only contract for project.md: name,
-// the initiatives list, the labels list, and the description body — and
-// nothing server-managed (id/url/status live in project.meta), so a successful
-// write never rewrites the bytes the writer wrote.
+// the initiatives list, the labels list, and the content body — and nothing
+// server-managed (id/url/status live in project.meta), so a successful write
+// never rewrites the bytes the writer wrote.
 func TestProjectToMarkdown(t *testing.T) {
 	t.Parallel()
 	project := &api.Project{
@@ -34,7 +35,8 @@ func TestProjectToMarkdown(t *testing.T) {
 		Name:        "API Gateway",
 		Slug:        "api-gateway",
 		URL:         "https://linear.app/projects/api-gateway",
-		Description: "The gateway project.",
+		Description: "Short summary (read-only, in .meta).",
+		Content:     "The gateway project.",
 		Initiatives: &api.ProjectInitiatives{Nodes: []api.ProjectInitiative{{Name: "Platform"}, {Name: "Modernization"}}},
 	}
 
@@ -46,8 +48,9 @@ func TestProjectToMarkdown(t *testing.T) {
 	if want := []string{"initiatives", "labels", "name"}; !reflect.DeepEqual(keys, want) {
 		t.Errorf("project.md frontmatter keys = %v, want %v (editable-only)", keys, want)
 	}
-	if doc.Body != project.Description {
-		t.Errorf("body = %q, want the description", doc.Body)
+	// The body maps to the long content field, NOT the ≤255 description (#5).
+	if doc.Body != project.Content {
+		t.Errorf("body = %q, want the content", doc.Body)
 	}
 	if got := StringSliceFromYAML(doc.Frontmatter["labels"]); !reflect.DeepEqual(got, []string{"Backend", "Q3-Bet"}) {
 		t.Errorf("labels = %v, want the caller-resolved names", got)
@@ -79,16 +82,17 @@ func TestProjectMetaToMarkdown(t *testing.T) {
 	t.Parallel()
 	start, target := "2026-01-01", "2026-06-30"
 	project := &api.Project{
-		ID:         "proj-1",
-		Name:       "API Gateway",
-		Slug:       "api-gateway",
-		URL:        "https://linear.app/projects/api-gateway",
-		Status:     &api.Status{Name: "In Progress"},
-		Lead:       &api.User{ID: "u1", Name: "Ada", Email: "ada@example.com"},
-		StartDate:  &start,
-		TargetDate: &target,
-		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		UpdatedAt:  time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		ID:          "proj-1",
+		Name:        "API Gateway",
+		Slug:        "api-gateway",
+		URL:         "https://linear.app/projects/api-gateway",
+		Description: "Short summary (read-only here, distinct from content).",
+		Status:      &api.Status{Name: "In Progress"},
+		Lead:        &api.User{ID: "u1", Name: "Ada", Email: "ada@example.com"},
+		StartDate:   &start,
+		TargetDate:  &target,
+		CreatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
 	}
 
 	content, err := ProjectMetaToMarkdown(project)
@@ -96,9 +100,13 @@ func TestProjectMetaToMarkdown(t *testing.T) {
 		t.Fatalf("ProjectMetaToMarkdown: %v", err)
 	}
 	keys, doc := frontmatterKeys(t, content)
-	want := []string{"created", "id", "lead", "slug", "startDate", "status", "targetDate", "updated", "url"}
+	// The short description is read-only here (#5); content is the editable body.
+	want := []string{"created", "description", "id", "lead", "slug", "startDate", "status", "targetDate", "updated", "url"}
 	if !reflect.DeepEqual(keys, want) {
 		t.Errorf("project.meta frontmatter keys = %v, want %v", keys, want)
+	}
+	if doc.Frontmatter["description"] != project.Description {
+		t.Errorf("description = %v, want %q", doc.Frontmatter["description"], project.Description)
 	}
 	if doc.Frontmatter["status"] != "In Progress" {
 		t.Errorf("status = %v, want In Progress", doc.Frontmatter["status"])
@@ -119,14 +127,15 @@ func TestProjectMetaToMarkdown(t *testing.T) {
 }
 
 // TestInitiativeToMarkdown pins the editable-only contract for initiative.md:
-// name, the linked project slugs, and the description body.
+// name, the linked project slugs, and the content body.
 func TestInitiativeToMarkdown(t *testing.T) {
 	t.Parallel()
 	initiative := &api.Initiative{
 		ID:          "init-1",
 		Name:        "Platform Modernization",
 		Slug:        "platform-modernization",
-		Description: "Modernize all the things.",
+		Description: "Short summary (read-only, in .meta).",
+		Content:     "Modernize all the things.",
 	}
 	initiative.Projects.Nodes = []api.InitiativeProject{{ID: "p1", Slug: "api-gateway"}, {ID: "p2", Slug: "auth-service"}}
 
@@ -138,8 +147,9 @@ func TestInitiativeToMarkdown(t *testing.T) {
 	if want := []string{"name", "projects"}; !reflect.DeepEqual(keys, want) {
 		t.Errorf("initiative.md frontmatter keys = %v, want %v (editable-only)", keys, want)
 	}
-	if doc.Body != initiative.Description {
-		t.Errorf("body = %q, want the description", doc.Body)
+	// The body maps to the long content field, NOT the ≤255 description (#5).
+	if doc.Body != initiative.Content {
+		t.Errorf("body = %q, want the content", doc.Body)
 	}
 }
 
@@ -148,17 +158,18 @@ func TestInitiativeMetaToMarkdown(t *testing.T) {
 	t.Parallel()
 	target := "2026-12-31"
 	initiative := &api.Initiative{
-		ID:         "init-1",
-		Name:       "Platform Modernization",
-		Slug:       "platform-modernization",
-		URL:        "https://linear.app/initiatives/platform-modernization",
-		Status:     "Active",
-		Color:      "#00ff00",
-		Icon:       "Rocket",
-		Owner:      &api.User{ID: "u1", Name: "Ada", Email: "ada@example.com"},
-		TargetDate: &target,
-		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		UpdatedAt:  time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		ID:          "init-1",
+		Name:        "Platform Modernization",
+		Slug:        "platform-modernization",
+		URL:         "https://linear.app/initiatives/platform-modernization",
+		Description: "Short summary (read-only here, distinct from content).",
+		Status:      "Active",
+		Color:       "#00ff00",
+		Icon:        "Rocket",
+		Owner:       &api.User{ID: "u1", Name: "Ada", Email: "ada@example.com"},
+		TargetDate:  &target,
+		CreatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
 	}
 
 	content, err := InitiativeMetaToMarkdown(initiative)
@@ -166,9 +177,13 @@ func TestInitiativeMetaToMarkdown(t *testing.T) {
 		t.Fatalf("InitiativeMetaToMarkdown: %v", err)
 	}
 	keys, doc := frontmatterKeys(t, content)
-	want := []string{"color", "created", "icon", "id", "owner", "slug", "status", "targetDate", "updated", "url"}
+	// The short description is read-only here (#5); content is the editable body.
+	want := []string{"color", "created", "description", "icon", "id", "owner", "slug", "status", "targetDate", "updated", "url"}
 	if !reflect.DeepEqual(keys, want) {
 		t.Errorf("initiative.meta frontmatter keys = %v, want %v", keys, want)
+	}
+	if doc.Frontmatter["description"] != initiative.Description {
+		t.Errorf("description = %v, want %q", doc.Frontmatter["description"], initiative.Description)
 	}
 	if doc.Body != "" {
 		t.Errorf("meta must be frontmatter-only, got body %q", doc.Body)
@@ -183,7 +198,7 @@ func TestMarkdownToProjectEditRoundTrip(t *testing.T) {
 	t.Parallel()
 	project := &api.Project{
 		Name:        "API Gateway",
-		Description: "The gateway project.",
+		Content:     "The gateway project.",
 		Initiatives: &api.ProjectInitiatives{Nodes: []api.ProjectInitiative{{Name: "Platform"}, {Name: "Modernization"}}},
 	}
 	content, err := ProjectToMarkdown(project, []string{"Backend", "Q3-Bet"})
@@ -197,8 +212,8 @@ func TestMarkdownToProjectEditRoundTrip(t *testing.T) {
 	if edit.Name != project.Name {
 		t.Errorf("Name = %q, want %q", edit.Name, project.Name)
 	}
-	if edit.Body != project.Description {
-		t.Errorf("Body = %q, want %q", edit.Body, project.Description)
+	if edit.Body != project.Content {
+		t.Errorf("Body = %q, want %q", edit.Body, project.Content)
 	}
 	if !edit.LabelsPresent {
 		t.Error("LabelsPresent = false, want true (labels were rendered)")
@@ -228,6 +243,32 @@ func TestMarkdownToProjectEditRoundTrip(t *testing.T) {
 	}
 }
 
+// TestProjectContentBodyIsNotLengthCapped pins KNOWN_ISSUES #5: the project
+// body maps to Linear's uncapped `content`, so a multi-paragraph write-up far
+// longer than the ≤255 `description` limit round-trips through render→parse
+// intact (previously it was routed to `description` and rejected by the API).
+// The same guarantee holds for initiatives (symmetric marshal code).
+func TestProjectContentBodyIsNotLengthCapped(t *testing.T) {
+	t.Parallel()
+	longBody := strings.Repeat("A real project write-up paragraph. ", 40) // ~1400 chars, >> 255
+	project := &api.Project{Name: "Big Writeup", Content: longBody}
+
+	content, err := ProjectToMarkdown(project, nil)
+	if err != nil {
+		t.Fatalf("ProjectToMarkdown: %v", err)
+	}
+	edit, err := MarkdownToProjectEdit(content)
+	if err != nil {
+		t.Fatalf("MarkdownToProjectEdit: %v", err)
+	}
+	if len(edit.Body) <= 255 {
+		t.Fatalf("body length = %d, want > 255 (the #5 regression)", len(edit.Body))
+	}
+	if strings.TrimSpace(edit.Body) != strings.TrimSpace(longBody) {
+		t.Errorf("long body did not round-trip intact:\n got %d chars\nwant %d chars", len(edit.Body), len(longBody))
+	}
+}
+
 // TestMarkdownToProjectEditCoercion pins the ScalarToString name coercion (a
 // numeric name arrives as its string form, not a silent drop) and that an
 // unclosed frontmatter surfaces as a parse error.
@@ -251,8 +292,8 @@ func TestMarkdownToProjectEditCoercion(t *testing.T) {
 func TestMarkdownToInitiativeEditRoundTrip(t *testing.T) {
 	t.Parallel()
 	initiative := &api.Initiative{
-		Name:        "Platform Modernization",
-		Description: "Modernize all the things.",
+		Name:    "Platform Modernization",
+		Content: "Modernize all the things.",
 	}
 	initiative.Projects.Nodes = []api.InitiativeProject{{ID: "p1", Slug: "api-gateway"}, {ID: "p2", Slug: "auth-service"}}
 
@@ -267,8 +308,8 @@ func TestMarkdownToInitiativeEditRoundTrip(t *testing.T) {
 	if edit.Name != initiative.Name {
 		t.Errorf("Name = %q, want %q", edit.Name, initiative.Name)
 	}
-	if edit.Body != initiative.Description {
-		t.Errorf("Body = %q, want %q", edit.Body, initiative.Description)
+	if edit.Body != initiative.Content {
+		t.Errorf("Body = %q, want %q", edit.Body, initiative.Content)
 	}
 	if !reflect.DeepEqual(edit.Projects, []string{"api-gateway", "auth-service"}) {
 		t.Errorf("Projects = %v, want the rendered slugs", edit.Projects)

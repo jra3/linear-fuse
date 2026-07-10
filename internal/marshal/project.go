@@ -7,10 +7,12 @@ import (
 )
 
 // ProjectToMarkdown renders the editable-only project.md: name, initiatives,
-// labels, and the description body. Server-managed fields live in project.meta
-// (see ProjectMetaToMarkdown), so a successful write never rewrites the bytes
+// labels, and the content body. The body maps to Linear's long `content`
+// field (uncapped markdown), NOT the ≤255 short `description`, which is
+// server-owned and rendered read-only in project.meta (see
+// ProjectMetaToMarkdown), so a successful write never rewrites the bytes
 // the writer wrote. The parse side is MarkdownToProjectEdit below; the diffs
-// stay with internal/fs's scalarEdit (name/description), reconcileLinks (the
+// stay with internal/fs's scalarEdit (name/content), reconcileLinks (the
 // initiatives list), and labelsEdit (the labels list). labelNames is the
 // project's labelIds mapped to catalog names by the caller — an unknown ID
 // arrives verbatim (round-trip invariant); the key is omitted when empty
@@ -29,11 +31,13 @@ func ProjectToMarkdown(project *api.Project, labelNames []string) ([]byte, error
 		fm["labels"] = labelNames
 	}
 
-	return Render(&Document{Frontmatter: fm, Body: project.Description})
+	return Render(&Document{Frontmatter: fm, Body: project.Content})
 }
 
 // ProjectMetaToMarkdown renders the read-only project.meta: server-managed
-// identity, status, lead, dates, and timestamps as a frontmatter-only block.
+// identity, the short description, status, lead, dates, and timestamps as a
+// frontmatter-only block. (description is the ≤255 summary field, distinct
+// from the editable content body in project.md.)
 func ProjectMetaToMarkdown(project *api.Project) ([]byte, error) {
 	status := "unknown"
 	if project.Status != nil {
@@ -46,6 +50,9 @@ func ProjectMetaToMarkdown(project *api.Project) ([]byte, error) {
 		"status":  status,
 		"created": project.CreatedAt.Format(time.RFC3339),
 		"updated": project.UpdatedAt.Format(time.RFC3339),
+	}
+	if project.Description != "" {
+		fm["description"] = project.Description
 	}
 	if project.Lead != nil {
 		fm["lead"] = map[string]any{

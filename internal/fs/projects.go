@@ -496,12 +496,13 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return errno
 	}
 
-	// Persist editable scalar fields (name in frontmatter, description in
-	// body) plus the label set, in ONE UpdateProject call. Each edit module
-	// maps itself onto the input pointer-or-omit; labelsEdit.applyTo owns the
-	// full-set labels semantics (see projectlabels.go).
-	edit := newScalarEdit(parsed.Name, parsed.Body, p.project.Name, p.project.Description)
-	projectInput := api.ProjectUpdateInput{Name: edit.name, Description: edit.desc}
+	// Persist editable scalar fields (name in frontmatter, content in the
+	// body) plus the label set, in ONE UpdateProject call. The body maps to
+	// Linear's uncapped `content`, not the ≤255 `description` (see #5). Each
+	// edit module maps itself onto the input pointer-or-omit; labelsEdit.applyTo
+	// owns the full-set labels semantics (see projectlabels.go).
+	edit := newScalarEdit(parsed.Name, parsed.Body, p.project.Name, p.project.Content)
+	projectInput := api.ProjectUpdateInput{Name: edit.name, Content: edit.desc}
 	labels.applyTo(&projectInput)
 	if edit.changed() || labels.changed() {
 		if err := p.lfs.mutator().UpdateProject(ctx, p.project.ID, projectInput); err != nil {
@@ -524,7 +525,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)
 		},
 		compare: func(fresh *api.Project) []writeBackResult {
-			return append(edit.divergences(fresh.Name, fresh.Description), labels.divergences(fresh.LabelIds)...)
+			return append(edit.divergences(fresh.Name, fresh.Content), labels.divergences(fresh.LabelIds)...)
 		},
 	})
 	if fresh != nil {
