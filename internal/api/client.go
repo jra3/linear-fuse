@@ -915,9 +915,25 @@ func (c *Client) DeleteDocument(ctx context.Context, documentID string) error {
 	return execMutationOK(ctx, c, mutationDeleteDocument, map[string]any{"id": documentID}, "documentDelete")
 }
 
-// GetInitiative fetches a single initiative by ID
+// GetInitiative fetches a single initiative by ID, with its projects
+// connection drained — same contract as GetWorkspace's initiatives: the
+// result is persisted whole (the initiative.md edit tail upserts it, and
+// the projects list rides in the data blob that backs the FUSE view), so a
+// truncated list would clobber a previously complete one. Complete
+// Projects.Nodes, nil Projects.PageInfo.
 func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*Initiative, error) {
-	return fetchOne[Initiative](ctx, c, queryInitiative, map[string]any{"id": initiativeID}, "initiative")
+	init, err := fetchOne[Initiative](ctx, c, queryInitiative, map[string]any{"id": initiativeID}, "initiative")
+	if err != nil {
+		return nil, err
+	}
+	moreProjects, err := drain[InitiativeProject](ctx, c, queryInitiativeProjectsPage,
+		map[string]any{"id": initiativeID}, init.Projects.PageInfo, "initiative", "projects")
+	if err != nil {
+		return nil, fmt.Errorf("drain initiative %s projects: %w", init.Slug, err)
+	}
+	init.Projects.Nodes = append(init.Projects.Nodes, moreProjects...)
+	init.Projects.PageInfo = nil
+	return init, nil
 }
 
 // =============================================================================

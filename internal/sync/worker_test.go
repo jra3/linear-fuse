@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	gosync "sync"
 	"sync/atomic"
 	"testing"
@@ -794,6 +795,34 @@ func TestWorkerSyncWorkspace(t *testing.T) {
 	}
 	if len(initiatives) != 1 {
 		t.Errorf("Expected 1 initiative, got %d", len(initiatives))
+	}
+}
+
+// TestWorkerSyncWorkspaceSurfacesUpsertFailure: a workspace pass whose
+// upserts fail must return an error, not report success (the errs
+// aggregation was once dead code — every failure path logged and continued,
+// so a fully-failed pass returned nil).
+func TestWorkerSyncWorkspaceSurfacesUpsertFailure(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.users = []api.User{{ID: "user-1", Email: "alice@test.com", Name: "Alice", Active: true}}
+	mock.initiatives = []api.Initiative{{ID: "init-1", Slug: "q1-goals", Name: "Q1 Goals"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	// Closing the store makes every upsert fail while the fetch succeeds.
+	store.Close()
+
+	err := worker.syncWorkspace(ctx)
+	if err == nil {
+		t.Fatal("syncWorkspace returned nil with every upsert failing")
+	}
+	for _, want := range []string{"upsert user alice@test.com", "upsert initiative q1-goals"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
 	}
 }
 

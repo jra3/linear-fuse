@@ -498,15 +498,16 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 
 	var errs []error
 
-	// Process users
+	// Process users. Failures accumulate into errs so the pass reports them
+	// (the caller logs and continues); processing still covers every item.
 	for _, user := range data.Users {
 		params, err := db.APIUserToDBUser(user)
 		if err != nil {
-			log.Printf("[sync] convert user %s failed: %v", user.Email, err)
+			errs = append(errs, fmt.Errorf("convert user %s: %w", user.Email, err))
 			continue
 		}
 		if err := w.store.Queries().UpsertUser(ctx, params); err != nil {
-			log.Printf("[sync] upsert user %s failed: %v", user.Email, err)
+			errs = append(errs, fmt.Errorf("upsert user %s: %w", user.Email, err))
 		}
 	}
 	log.Printf("[sync] synced %d users", len(data.Users))
@@ -515,11 +516,11 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 	for _, initiative := range data.Initiatives {
 		params, err := db.APIInitiativeToDBInitiative(initiative)
 		if err != nil {
-			log.Printf("[sync] convert initiative %s failed: %v", initiative.Slug, err)
+			errs = append(errs, fmt.Errorf("convert initiative %s: %w", initiative.Slug, err))
 			continue
 		}
 		if err := w.store.Queries().UpsertInitiative(ctx, params); err != nil {
-			log.Printf("[sync] upsert initiative %s failed: %v", initiative.Slug, err)
+			errs = append(errs, fmt.Errorf("upsert initiative %s: %w", initiative.Slug, err))
 			continue
 		}
 

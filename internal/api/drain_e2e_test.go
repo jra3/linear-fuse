@@ -153,6 +153,54 @@ func TestGetWorkspaceDrainsNestedInitiativeProjects(t *testing.T) {
 	}
 }
 
+func TestGetInitiativeDrainsNestedProjects(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	mock.SetResponse("Initiative", map[string]any{
+		"initiative": map[string]any{
+			"id": "init-1", "name": "Big Initiative", "slugId": "big",
+			"projects": connOf(pf(true, "proj-cursor"),
+				map[string]any{"id": "p1", "name": "One", "slugId": "one"}),
+		},
+	})
+	mock.SetResponse("InitiativeProjectsPage", map[string]any{
+		"initiative": map[string]any{
+			"projects": connOf(pf(false, ""),
+				map[string]any{"id": "p2", "name": "Two", "slugId": "two"}),
+		},
+	})
+
+	c := NewClient("test")
+	c.SetAPIURL(mock.URL())
+
+	init, err := c.GetInitiative(context.Background(), "init-1")
+	if err != nil {
+		t.Fatalf("GetInitiative: %v", err)
+	}
+	if len(init.Projects.Nodes) != 2 || init.Projects.Nodes[0].ID != "p1" || init.Projects.Nodes[1].ID != "p2" {
+		t.Fatalf("initiative projects = %+v, want [p1 p2]", init.Projects.Nodes)
+	}
+	if init.Projects.PageInfo != nil {
+		t.Error("initiative Projects.PageInfo should be cleared after drain")
+	}
+
+	// The drain must resume from the first page's cursor.
+	var drainCall *testutil.GraphQLCall
+	for i, call := range mock.Calls() {
+		if call.Operation == "InitiativeProjectsPage" {
+			drainCall = &mock.Calls()[i]
+		}
+	}
+	if drainCall == nil {
+		t.Fatal("no InitiativeProjectsPage drain call recorded")
+	}
+	if drainCall.Variables["after"] != "proj-cursor" {
+		t.Errorf("drain after = %v, want proj-cursor", drainCall.Variables["after"])
+	}
+}
+
 func TestGetWorkspaceProjectIDsPaginates(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()

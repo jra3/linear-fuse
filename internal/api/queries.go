@@ -870,7 +870,8 @@ query Initiative($id: String!) {
       name
       email
     }
-    projects {
+    projects(first: 250) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         id
         name
