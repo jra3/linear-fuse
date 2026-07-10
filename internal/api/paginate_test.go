@@ -86,6 +86,44 @@ func TestDrainFromStalledCursorFailsLoudly(t *testing.T) {
 	}
 }
 
+func TestDrainFromAlternatingCursorFailsLoudly(t *testing.T) {
+	// A cursor cycle longer than one (A→B→A→…) advances `after` every
+	// iteration, so the previous-cursor-only guard never fired — the loop
+	// ran toward maxDrainPages (10000 paid requests). The seen-set stops it
+	// at the first revisit.
+	var afters []string
+	fetch := func(_ context.Context, after string) (conn[int], error) {
+		afters = append(afters, after)
+		next := "A"
+		if after == "A" {
+			next = "B"
+		}
+		return conn[int]{PageInfo: pi(true, next), Nodes: []int{1}}, nil
+	}
+	got, err := drainFrom(context.Background(), NewClient("test"), "", fetch)
+	if !errors.Is(err, errStalledCursor) {
+		t.Fatalf("err = %v, want errStalledCursor", err)
+	}
+	if got != nil {
+		t.Errorf("nodes = %v, want nil (all-or-nothing)", got)
+	}
+	// "", A, B — the revisit of A is detected without a third paid fetch of it.
+	if want := []string{"", "A", "B"}; !equalStrings(afters, want) {
+		t.Errorf("cursors fetched = %v, want %v (stop at first revisit)", afters, want)
+	}
+}
+
+func TestDrainRejectsAfterVarOnEveryCall(t *testing.T) {
+	// The vars contract must fail on single-page connections too — not ship
+	// latently and detonate on the first page overflow.
+	c := NewClient("test")
+	_, err := drain[int](context.Background(), c, "query", map[string]any{"after": "x"},
+		pi(false, ""), "things")
+	if err == nil || !strings.Contains(err.Error(), `vars must not contain "after"`) {
+		t.Fatalf("err = %v, want vars-after contract error on a complete connection", err)
+	}
+}
+
 func TestDrainFromMissingPageInfoIsError(t *testing.T) {
 	fetch := func(_ context.Context, _ string) (conn[int], error) {
 		return conn[int]{Nodes: []int{1}}, nil // no pageInfo selected
@@ -144,6 +182,41 @@ func TestDrainFromBudgetRefusesToStart(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Errorf("fetch calls = %d, want 0 (refusal spends nothing)", calls)
+	}
+}
+
+func TestCompositeFetchesRefuseBeforePayingCombinedQuery(t *testing.T) {
+	// GetTeamMetadata/GetWorkspace pay a combined query and then drain; the
+	// combined query alone admits below the drains' reserve, so without a
+	// preflight a low budget bought the combined result and discarded it
+	// when a follow-up drain refused (burn-and-discard, observed live).
+	for _, tc := range []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{"GetTeamMetadata", func(c *Client) error {
+			_, err := c.GetTeamMetadata(context.Background(), "team-1")
+			return err
+		}},
+		{"GetWorkspace", func(c *Client) error {
+			_, err := c.GetWorkspace(context.Background())
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := testutil.NewMockLinearServer()
+			defer mock.Close()
+			c := NewClient("test")
+			c.SetAPIURL(mock.URL())
+			drainClientBudget(c)
+
+			if err := tc.call(c); !errors.Is(err, ErrBudget) {
+				t.Fatalf("err = %v, want ErrBudget", err)
+			}
+			if n := len(mock.Calls()); n != 0 {
+				t.Errorf("API calls = %d, want 0 (refusal must precede the paid combined query)", n)
+			}
+		})
 	}
 }
 

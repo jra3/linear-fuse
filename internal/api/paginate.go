@@ -32,13 +32,20 @@ import (
 // discard pages already paid for, and observed live it burned one token
 // per cycle on a page-1 fetch it then threw away, forever. The transport's
 // own gate (the rateBudget priority-reserve ladder in Client.query) remains
-// the hard floor under a running drain. Exported so schedulers (the reconcile pass
-// in internal/repo) can distinguish "retry later" from "broken" with
-// errors.Is; treating it as an ordinary error is always safe.
+// the hard floor under a running drain. The composite fetches
+// (GetTeamMetadata, GetWorkspace) return it from their own LowBudget
+// preflight too, for the same reason: refusing before the paid combined
+// query beats discarding it when a follow-up drain refuses. Exported so
+// callers can distinguish "retry later" from "broken" with errors.Is;
+// treating it as an ordinary error is always safe. (The reconcile pass in
+// internal/repo preflights with LowBudget directly instead of matching
+// this error.)
 var ErrBudget = errors.New("pagination deferred: rate-limit budget low")
 
 // errStalledCursor reports a connection that claims more pages but supplies
-// no advancing cursor — returned rather than looping forever.
+// no genuinely advancing cursor — empty, repeated, or revisiting any cursor
+// already consumed this drain (an A→B→A cycle would otherwise run to
+// maxDrainPages before erroring) — returned rather than looping forever.
 var errStalledCursor = errors.New("pagination stalled: hasNextPage with non-advancing endCursor")
 
 // maxDrainPages is a defence-in-depth backstop behind the stall guard; no
@@ -72,13 +79,15 @@ type pageFetch[N any] func(ctx context.Context, after string) (conn[N], error)
 //     fetch (nothing is spent; a started drain runs to completion);
 //   - any error from fetch, wrapped with the page number and cursor;
 //   - a missing pageInfo (the query did not select it);
-//   - errStalledCursor if a page reports hasNextPage with an empty or
-//     non-advancing endCursor;
+//   - errStalledCursor if a page reports hasNextPage with an empty endCursor
+//     or one already consumed this drain (immediate repeats and longer
+//     cycles alike);
 //   - ctx cancellation between pages.
 func drainFrom[N any](ctx context.Context, c *Client, after string, fetch pageFetch[N]) ([]N, error) {
 	if c.LowBudget() {
 		return nil, fmt.Errorf("paginate: %w", ErrBudget)
 	}
+	seen := map[string]bool{after: true}
 	var all []N
 	for page := 1; ; page++ {
 		if page > maxDrainPages {
@@ -101,9 +110,10 @@ func drainFrom[N any](ctx context.Context, c *Client, after string, fetch pageFe
 			return all, nil
 		}
 		next := cn.PageInfo.EndCursor
-		if next == "" || next == after {
+		if next == "" || seen[next] {
 			return nil, fmt.Errorf("paginate: page %d (cursor %q): %w", page, next, errStalledCursor)
 		}
+		seen[next] = true
 		after = next
 	}
 }
@@ -140,6 +150,12 @@ func fetchAll[N any](ctx context.Context, c *Client, query string, vars map[stri
 // Same query contract, vars rules, ordering, all-or-nothing result, and
 // error modes as fetchAll.
 func drain[N any](ctx context.Context, c *Client, query string, vars map[string]any, pi *PageInfo, path ...string) ([]N, error) {
+	// The vars contract is checked before the !HasNextPage short-circuit: a
+	// violation is a programming bug and must fail on every call, not ship
+	// latently and detonate the first time the connection overflows a page.
+	if _, ok := vars["after"]; ok {
+		return nil, fmt.Errorf("paginate: vars must not contain %q (owned by the module)", "after")
+	}
 	if pi == nil {
 		return nil, fmt.Errorf("paginate: connection %q missing pageInfo (query must select it)", strings.Join(path, "."))
 	}
@@ -148,9 +164,6 @@ func drain[N any](ctx context.Context, c *Client, query string, vars map[string]
 	}
 	if pi.EndCursor == "" {
 		return nil, fmt.Errorf("paginate: connection %q: %w", strings.Join(path, "."), errStalledCursor)
-	}
-	if _, ok := vars["after"]; ok {
-		return nil, fmt.Errorf("paginate: vars must not contain %q (owned by the module)", "after")
 	}
 	return drainFrom(ctx, c, pi.EndCursor, connFetch[N](c, query, vars, path))
 }
