@@ -674,6 +674,19 @@ func (q *Queries) GetSyncMeta(ctx context.Context, teamID string) (SyncMetum, er
 	return i, err
 }
 
+const getSyncSchedule = `-- name: GetSyncSchedule :one
+
+SELECT last_run FROM sync_schedule WHERE key = ?
+`
+
+// Sync schedule queries
+func (q *Queries) GetSyncSchedule(ctx context.Context, key string) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getSyncSchedule, key)
+	var last_run time.Time
+	err := row.Scan(&last_run)
+	return last_run, err
+}
+
 const getTeamIssueCount = `-- name: GetTeamIssueCount :one
 SELECT COUNT(*) FROM issues WHERE team_id = ?
 `
@@ -3447,6 +3460,22 @@ func (q *Queries) UpsertSyncMeta(ctx context.Context, arg UpsertSyncMetaParams) 
 		arg.LastIssueUpdatedAt,
 		arg.IssueCount,
 	)
+	return err
+}
+
+const upsertSyncSchedule = `-- name: UpsertSyncSchedule :exec
+INSERT INTO sync_schedule (key, last_run)
+VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET last_run = excluded.last_run
+`
+
+type UpsertSyncScheduleParams struct {
+	Key     string    `json:"key"`
+	LastRun time.Time `json:"last_run"`
+}
+
+func (q *Queries) UpsertSyncSchedule(ctx context.Context, arg UpsertSyncScheduleParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSyncSchedule, arg.Key, arg.LastRun)
 	return err
 }
 

@@ -116,7 +116,7 @@ type mockAPIClient struct {
 	viewerErr        error                        // if set, GetViewer (the cold-start budget probe) fails with this
 	getViewerCalls   int32
 	opMu             gosync.Mutex
-	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeams (probe-sequencing tests)
+	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams (probe-sequencing + lean/full cycle tests)
 }
 
 // recordOp appends op to the observed call order.
@@ -204,6 +204,7 @@ func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cu
 }
 
 func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*api.TeamMetadata, error) {
+	m.recordOp("GetTeamMetadata")
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -1433,6 +1434,234 @@ func TestRunLoopTickFiresSyncCycle(t *testing.T) {
 	if calls := atomic.LoadInt32(&mock.getTeamsCalls); calls != 2 {
 		t.Errorf("GetTeams calls = %d, want exactly 2 (initial sync + the injected tick)", calls)
 	}
+}
+
+// =============================================================================
+// Lean/Full Cycle Taxonomy Tests (#242)
+// =============================================================================
+
+// opsDuring runs fn and returns only the ops the mock recorded during it —
+// the per-cycle window the lean/full assertions are made against.
+func opsDuring(m *mockAPIClient, fn func()) []string {
+	before := len(m.callOrder())
+	fn()
+	return m.callOrder()[before:]
+}
+
+// containsOp reports whether op appears in ops.
+func containsOp(ops []string, op string) bool {
+	for _, o := range ops {
+		if o == op {
+			return true
+		}
+	}
+	return false
+}
+
+// assertCycleOps asserts one cycle's fetch classes: a full cycle issues both
+// GetWorkspace and GetTeamMetadata, a lean cycle issues neither; every
+// non-skipped cycle issues GetTeams (the cheap team enumeration the issues
+// sync needs either way).
+func assertCycleOps(t *testing.T, label string, ops []string, wantFull bool) {
+	t.Helper()
+	if !containsOp(ops, "GetTeams") {
+		t.Errorf("%s: ops = %v, want GetTeams in every non-skipped cycle", label, ops)
+	}
+	for _, op := range []string{"GetWorkspace", "GetTeamMetadata"} {
+		if got := containsOp(ops, op); got != wantFull {
+			t.Errorf("%s: ops = %v, %s present = %v, want %v", label, ops, op, got, wantFull)
+		}
+	}
+}
+
+// cycleTestWorker builds the standard lean/full-cycle fixture: one team with
+// metadata, a fake clock, a 2-minute cycle interval and a 10-minute full-sync
+// interval.
+func cycleTestWorker(t *testing.T, store *db.Store) (*Worker, *mockAPIClient, *fakeClock) {
+	t.Helper()
+	clock := newFakeClock()
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+	mock.statesByTeam["team-1"] = []api.State{{ID: "state-1", Name: "Todo", Type: "unstarted"}}
+	worker := NewWorker(mock, store, Config{Interval: 2 * time.Minute, FullSyncInterval: 10 * time.Minute})
+	clock.install(worker)
+	return worker, mock, clock
+}
+
+// TestScheduledCyclesLeanUntilFullIntervalElapses scripts the steady-state
+// cadence: a cold-start full cycle, then lean cycles (no workspace or
+// team-metadata fetches) every 2 minutes until 10 minutes have elapsed since
+// the persisted full-cycle timestamp, at which point the cycle runs full
+// again and re-arms the window.
+func TestScheduledCyclesLeanUntilFullIntervalElapses(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, clock := cycleTestWorker(t, store)
+
+	// Cycle 1: cold start — no persisted timestamp — runs full.
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("cycle 1: %v", err)
+		}
+	})
+	assertCycleOps(t, "cycle 1 (cold start)", ops, true)
+
+	// The full cycle persisted its timestamp — at the fake clock's now, via
+	// the clock seam, readable from the store.
+	stamped, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyFullCycle)
+	if err != nil {
+		t.Fatalf("GetSyncSchedule after full cycle: %v", err)
+	}
+	if !stamped.Equal(clock.now()) {
+		t.Errorf("persisted full-cycle timestamp = %v, want %v (w.now() at stamp time)", stamped, clock.now())
+	}
+
+	// Cycles 2-5 (+2m…+8m): inside the window — lean, issues only.
+	for i := 2; i <= 5; i++ {
+		clock.advance(2 * time.Minute)
+		ops := opsDuring(mock, func() {
+			if err := worker.syncAllTeams(ctx); err != nil {
+				t.Fatalf("cycle %d: %v", i, err)
+			}
+		})
+		assertCycleOps(t, fmt.Sprintf("cycle %d (in-window)", i), ops, false)
+	}
+
+	// Cycle 6 (+10m): the full-sync interval has elapsed — full again.
+	clock.advance(2 * time.Minute)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("cycle 6: %v", err)
+		}
+	})
+	assertCycleOps(t, "cycle 6 (interval elapsed)", ops, true)
+
+	// Cycle 7 (+12m): the full cycle re-armed the window — lean again.
+	clock.advance(2 * time.Minute)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("cycle 7: %v", err)
+		}
+	})
+	assertCycleOps(t, "cycle 7 (window re-armed)", ops, false)
+}
+
+// TestSyncNowAlwaysRunsFull: an explicit sync request runs full even when the
+// persisted full-cycle timestamp is fresh (a scheduled cycle at the same
+// instant would run lean).
+func TestSyncNowAlwaysRunsFull(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, clock := cycleTestWorker(t, store)
+
+	// Arm the window with a cold-start full cycle, then move barely inside it.
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("arming full cycle: %v", err)
+	}
+	clock.advance(2 * time.Minute)
+
+	// A scheduled cycle here is lean…
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("scheduled cycle: %v", err)
+		}
+	})
+	assertCycleOps(t, "scheduled cycle mid-window", ops, false)
+
+	// …but SyncNow at the very same instant is full, unconditionally.
+	ops = opsDuring(mock, func() {
+		if err := worker.SyncNow(ctx); err != nil {
+			t.Fatalf("SyncNow: %v", err)
+		}
+	})
+	assertCycleOps(t, "SyncNow mid-window", ops, true)
+}
+
+// TestRestartHonorsPersistedFullCycleTimestamp: the persistence requirement.
+// A fresh Worker over a store carrying a fresh full-cycle timestamp starts
+// lean (a restart mid-window must not force an extra full cycle), while a
+// fresh Worker over a fresh store starts full (cold start).
+func TestRestartHonorsPersistedFullCycleTimestamp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("fresh store starts full", func(t *testing.T) {
+		t.Parallel()
+		store := openTestStore(t)
+		defer store.Close()
+
+		worker, mock, _ := cycleTestWorker(t, store)
+		ops := opsDuring(mock, func() {
+			if err := worker.syncAllTeams(ctx); err != nil {
+				t.Fatalf("cold-start cycle: %v", err)
+			}
+		})
+		assertCycleOps(t, "cold start", ops, true)
+	})
+
+	t.Run("fresh persisted timestamp starts lean", func(t *testing.T) {
+		t.Parallel()
+		store := openTestStore(t)
+		defer store.Close()
+
+		// "Previous process": a full cycle stamps the schedule, then exits.
+		prev, _, prevClock := cycleTestWorker(t, store)
+		if err := prev.syncAllTeams(ctx); err != nil {
+			t.Fatalf("previous process full cycle: %v", err)
+		}
+
+		// "Restart" 2 minutes later: a brand-new Worker over the same store.
+		worker, mock, clock := cycleTestWorker(t, store)
+		clock.advance(prevClock.now().Sub(clock.now()) + 2*time.Minute)
+		ops := opsDuring(mock, func() {
+			if err := worker.syncAllTeams(ctx); err != nil {
+				t.Fatalf("post-restart cycle: %v", err)
+			}
+		})
+		assertCycleOps(t, "restart mid-window", ops, false)
+	})
+}
+
+// TestBudgetSkippedCycleLeavesFullCycleDue: a budget-skipped cycle runs
+// nothing, so it must not stamp the persisted timestamp — the full sync stays
+// due and fires on the next unblocked cycle rather than silently stretching
+// the metadata staleness bound.
+func TestBudgetSkippedCycleLeavesFullCycleDue(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, _ := cycleTestWorker(t, store)
+	budget := &mockBudgetReporter{count: 1300, pct: 87.0} // >80% — skip
+	worker.SetBudgetReporter(budget)
+
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("budget-skipped cycle: %v", err)
+		}
+	})
+	if len(ops) != 0 {
+		t.Errorf("budget-skipped cycle issued ops %v, want none", ops)
+	}
+	if _, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("GetSyncSchedule after skipped cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
+	}
+
+	// Budget recovers — the still-due full cycle fires.
+	budget.count, budget.pct = 100, 10.0
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("unblocked cycle: %v", err)
+		}
+	})
+	assertCycleOps(t, "first unblocked cycle", ops, true)
 }
 
 // =============================================================================

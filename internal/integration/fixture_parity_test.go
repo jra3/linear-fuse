@@ -25,6 +25,7 @@ import (
 // render, or it is written only by machinery the fixture harness bypasses.
 var fixtureExcludedTables = map[string]string{
 	"sync_meta":           "sync-worker bookkeeping (last-sync watermarks); no mount-visible render",
+	"sync_schedule":       "sync-worker bookkeeping (persisted schedule timestamps, e.g. last full cycle); no mount-visible render",
 	"pending_detail_sync": "sync-worker retry ledger for failed detail fetches; no mount-visible render",
 }
 

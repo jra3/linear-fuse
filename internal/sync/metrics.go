@@ -24,7 +24,7 @@ import (
 
 // syncMetrics holds the Worker-bound sync instruments (meter "linearfs/sync").
 type syncMetrics struct {
-	cycleDuration  metric.Float64Histogram // linearfs.sync.cycle_duration, seconds
+	cycleDuration  metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
 	detailOutcomes metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
 }
 
@@ -33,15 +33,19 @@ func newSyncMetrics() syncMetrics {
 	return syncMetrics{
 		cycleDuration: telemetry.MustFloat64Histogram(m, "linearfs.sync.cycle_duration",
 			metric.WithUnit("s"),
-			metric.WithDescription("Duration of one syncAllTeams cycle (budget-skipped cycles record ~0)")),
+			metric.WithDescription("Duration of one sync cycle, by mode (lean|full); budget-skipped cycles record ~0")),
 		detailOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.detail_outcomes",
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
 	}
 }
 
-// recordCycle records one sync cycle's duration.
-func (sm syncMetrics) recordCycle(d time.Duration) {
-	sm.cycleDuration.Record(context.Background(), d.Seconds())
+// recordCycle records one sync cycle's duration, attributed with the cycle's
+// mode (lean|full) — the histogram's per-mode sample counts double as the
+// cycle-mode counter, so lean/full cadence is visible without a second
+// instrument.
+func (sm syncMetrics) recordCycle(d time.Duration, mode cycleMode) {
+	sm.cycleDuration.Record(context.Background(), d.Seconds(),
+		metric.WithAttributes(attribute.String("mode", string(mode))))
 }
 
 // recordDetailOutcomes counts issues leaving syncDetails' ledger. Every issue

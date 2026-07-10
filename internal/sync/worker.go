@@ -76,19 +76,21 @@ type CatchUpModeToggler interface {
 
 // Worker handles background synchronization of Linear issues to SQLite
 type Worker struct {
-	client    APIClient
-	store     *db.Store
-	extractor *reconcile.Extractor // embedded-file extraction (HEAD + upsert)
-	interval  time.Duration
-	stopCh    chan struct{}
-	doneCh    chan struct{}
-	mu        sync.RWMutex
-	running   bool
-	lastSync  time.Time
-	budget    BudgetReporter     // optional: for rate limit budget logging
-	catchUp   CatchUpModeToggler // optional: controls repo staleness during catch-up
-	cycle     atomic.Int64       // sync-cycle counter; rotates the team order
-	metrics   syncMetrics        // sync-layer instruments, bound at construction
+	client           APIClient
+	store            *db.Store
+	extractor        *reconcile.Extractor // embedded-file extraction (HEAD + upsert)
+	interval         time.Duration
+	fullSyncInterval time.Duration // minimum time between full cycles (see cycleMode)
+
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	mu       sync.RWMutex
+	running  bool
+	lastSync time.Time
+	budget   BudgetReporter     // optional: for rate limit budget logging
+	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
+	cycle    atomic.Int64       // sync-cycle counter; rotates the team order
+	metrics  syncMetrics        // sync-layer instruments, bound at construction
 
 	// Clock seam: EVERY timing decision in this file goes through these
 	// three fields — no bare time-package clock calls (Now/Since/Until/
@@ -109,6 +111,11 @@ type Worker struct {
 type Config struct {
 	// Interval between sync cycles (default: 2 minutes)
 	Interval time.Duration
+	// FullSyncInterval is the minimum time between full cycles — the cycles
+	// that run the workspace and team-metadata drains with their prune
+	// licenses (default: 10 minutes). Cycles in between are lean: per-team
+	// incremental issues sync only. See cycleMode.
+	FullSyncInterval time.Duration
 	// PageSize for API pagination (default: 100)
 	PageSize int
 }
@@ -116,8 +123,9 @@ type Config struct {
 // DefaultConfig returns a Config with default values
 func DefaultConfig() Config {
 	return Config{
-		Interval: 2 * time.Minute,
-		PageSize: 100,
+		Interval:         2 * time.Minute,
+		FullSyncInterval: 10 * time.Minute,
+		PageSize:         100,
 	}
 }
 
@@ -126,20 +134,24 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 	if cfg.Interval == 0 {
 		cfg.Interval = 2 * time.Minute
 	}
+	if cfg.FullSyncInterval == 0 {
+		cfg.FullSyncInterval = 10 * time.Minute
+	}
 	// The observable pending-depth gauge registers here too: construction is
 	// the sync layer's one binding point (phase-2 pattern).
 	registerPendingDepthGauge(store.Queries())
 	return &Worker{
-		client:    client,
-		store:     store,
-		extractor: &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader},
-		interval:  cfg.Interval,
-		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
-		metrics:   newSyncMetrics(),
-		now:       realNow,
-		newTimer:  realNewTimer,
-		newTicker: realNewTicker,
+		client:           client,
+		store:            store,
+		extractor:        &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader},
+		interval:         cfg.Interval,
+		fullSyncInterval: cfg.FullSyncInterval,
+		stopCh:           make(chan struct{}),
+		doneCh:           make(chan struct{}),
+		metrics:          newSyncMetrics(),
+		now:              realNow,
+		newTimer:         realNewTimer,
+		newTicker:        realNewTicker,
 	}
 }
 
@@ -194,9 +206,10 @@ func (w *Worker) LastSync() time.Time {
 	return w.lastSync
 }
 
-// SyncNow triggers an immediate sync cycle
+// SyncNow triggers an immediate sync cycle. An explicit sync request always
+// runs full — "sync now" means everything, unconditionally.
 func (w *Worker) SyncNow(ctx context.Context) error {
-	return w.syncAllTeams(ctx)
+	return w.syncCycle(ctx, cycleFull)
 }
 
 func (w *Worker) run(ctx context.Context) {
@@ -213,7 +226,9 @@ func (w *Worker) run(ctx context.Context) {
 		return
 	}
 
-	// Initial sync
+	// Initial sync — full on cold start (no persisted full-cycle timestamp),
+	// lean when a restart lands mid-window with a fresh persisted timestamp
+	// (nextCycleMode honors the stamp; no spurious full cycle on restart).
 	if err := w.syncAllTeams(ctx); err != nil {
 		log.Printf("[sync] initial sync failed: %v", err)
 	}
@@ -235,13 +250,68 @@ func (w *Worker) run(ctx context.Context) {
 	}
 }
 
+// cycleMode names the two speeds of a sync cycle. A full cycle is the
+// complete workspace + per-team metadata + issues sync with every prune
+// license; a lean cycle (the steady-state default) runs only the per-team
+// incremental issues sync — no GetWorkspace, no GetTeamMetadata — which is
+// where ~90% of a quiet cycle's complexity went (#238). The string values
+// double as the metric attribute (linearfs.sync.cycle_duration {mode}).
+type cycleMode string
+
+const (
+	cycleLean cycleMode = "lean"
+	cycleFull cycleMode = "full"
+)
+
+// scheduleKeyFullCycle keys the persisted last-full-cycle timestamp in the
+// sync_schedule table. The timestamp is persisted — not an in-memory counter
+// — so restarts and skipped cycles cannot silently stretch the metadata
+// staleness bound past FullSyncInterval.
+const scheduleKeyFullCycle = "full_cycle"
+
+// nextCycleMode decides the speed of the next scheduled cycle from the
+// persisted schedule: full when the last-full-cycle timestamp is missing
+// (cold start — a fresh store must populate exactly as fast as today) or
+// ≥ fullSyncInterval old, lean otherwise. A restart mid-window reads the
+// fresh persisted timestamp and correctly starts lean. SyncNow bypasses this
+// entirely (always full).
+func (w *Worker) nextCycleMode(ctx context.Context) cycleMode {
+	lastRun, err := w.store.Queries().GetSyncSchedule(ctx, scheduleKeyFullCycle)
+	if err != nil || lastRun.IsZero() {
+		// Cold start (no row yet) — or an unreadable schedule, where
+		// over-syncing is the safe direction.
+		return cycleFull
+	}
+	if w.now().Sub(lastRun) >= w.fullSyncInterval {
+		return cycleFull
+	}
+	return cycleLean
+}
+
+// syncAllTeams runs one scheduled sync cycle at whatever speed the persisted
+// schedule calls for. run's initial sync and the ticker come through here;
+// SyncNow calls syncCycle directly with cycleFull.
 func (w *Worker) syncAllTeams(ctx context.Context) error {
+	return w.syncCycle(ctx, w.nextCycleMode(ctx))
+}
+
+// syncCycle runs one sync cycle in the given mode. Full mode is the complete
+// pre-#242 syncAllTeams behavior verbatim: workspace sync (users +
+// initiatives + project-label catalog, with their prune licenses), then per
+// team the metadata sync (states/labels/cycles/projects/members, with their
+// prune licenses) and the incremental issues sync. Lean mode skips the
+// workspace and team-metadata fetches entirely and runs only the (cheap)
+// teams list plus each team's incremental issues sync; nothing prunes in a
+// lean cycle beyond what the issues path always did. A completed full cycle
+// stamps the persisted last-full-cycle timestamp; a budget-skipped or failed
+// cycle does not, so the full sync stays due.
+func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
 	// invoked it (run's initial sync, the ticker, SyncNow). A budget-skipped
 	// cycle records its ~0s duration too — a burst of near-zero samples IS
 	// the signature of budget-gated skipping.
 	start := w.now()
-	defer func() { w.metrics.recordCycle(w.now().Sub(start)) }()
+	defer func() { w.metrics.recordCycle(w.now().Sub(start), mode) }()
 
 	// Skip entire sync cycle when budget is critically high
 	if w.budgetExceeds(budgetSkipSyncPct) {
@@ -257,10 +327,13 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 	// H-5: Drain any issues that were queued during a previous rate-limit backoff
 	w.drainPendingDetailSync(ctx)
 
-	// First, sync workspace-level entities
-	if err := w.syncWorkspace(ctx); err != nil {
-		log.Printf("[sync] workspace sync failed: %v", err)
-		// Continue with teams even if workspace sync fails
+	// First, sync workspace-level entities (full cycles only — the workspace
+	// drain is one of the two fetch classes the lean cycle exists to skip)
+	if mode == cycleFull {
+		if err := w.syncWorkspace(ctx); err != nil {
+			log.Printf("[sync] workspace sync failed: %v", err)
+			// Continue with teams even if workspace sync fails
+		}
 	}
 
 	// Sync teams list
@@ -289,15 +362,30 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 			log.Printf("[sync] upsert team %s failed: %v", team.Key, err)
 		}
 
-		// Sync team metadata (states, labels, cycles, projects, members)
-		if err := w.syncTeamMetadata(ctx, team); err != nil {
-			log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
+		// Sync team metadata (states, labels, cycles, projects, members) —
+		// full cycles only, the other fetch class the lean cycle skips
+		if mode == cycleFull {
+			if err := w.syncTeamMetadata(ctx, team); err != nil {
+				log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
+			}
 		}
 
 		// Sync team issues
 		if err := w.syncTeam(ctx, team); err != nil {
 			log.Printf("[sync] sync team %s failed: %v", team.Key, err)
 			// Continue with other teams
+		}
+	}
+
+	// A full cycle that ran to completion stamps the persisted schedule so
+	// the next fullSyncInterval's worth of cycles run lean. Stamped through
+	// the clock seam: the next cycle's nextCycleMode compares against w.now().
+	if mode == cycleFull {
+		if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+			Key:     scheduleKeyFullCycle,
+			LastRun: w.now(),
+		}); err != nil {
+			log.Printf("[sync] persist full-cycle timestamp failed: %v", err)
 		}
 	}
 

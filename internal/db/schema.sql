@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS sync_meta (
     issue_count INTEGER DEFAULT 0
 );
 
+-- Sync schedule: persisted last-run timestamps for scheduled sync work, one
+-- row per schedule key (e.g. full_cycle for the lean/full cycle taxonomy).
+-- Persisting the timestamp -- rather than an in-memory counter -- means a
+-- restart or a skipped cycle cannot silently stretch a staleness bound.
+-- Later slices reuse this table for other schedule keys (probe watermarks,
+-- the hourly ID-reconcile sweep).
+CREATE TABLE IF NOT EXISTS sync_schedule (
+    key TEXT PRIMARY KEY,
+    last_run DATETIME NOT NULL
+);
+
 -- Teams table: cache team info
 CREATE TABLE IF NOT EXISTS teams (
     id TEXT PRIMARY KEY,
