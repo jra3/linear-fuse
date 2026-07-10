@@ -160,6 +160,61 @@ fragment LabelFields on IssueLabel {
 }
 `
 
+// UserFields is the shared projection for a user, wherever whole users are
+// listed: team members + drain page, workspace users + drain page, viewer.
+// (Issue assignees and entity owners select their own narrower inline sets.)
+const userFieldsFragment = `
+fragment UserFields on User {
+  id
+  name
+  email
+  displayName
+  active
+}
+`
+
+// CycleFields is the shared projection for a cycle: the combined team
+// metadata query and its drain page. A combined query and its drain twin
+// MUST project identically — a field added to one but not the other means
+// nodes past page one silently carry zero values.
+const cycleFieldsFragment = `
+fragment CycleFields on Cycle {
+  id
+  number
+  name
+  startsAt
+  endsAt
+  completedIssueCountHistory
+  issueCountHistory
+}
+`
+
+// InitiativeFields is the shared projection for an initiative's scalar
+// fields: queryWorkspace, its initiatives drain page, and queryInitiative.
+// The nested projects connection stays inline per query — page sizes differ
+// (the workspace pair keeps nesting cheap at 50; the single-initiative
+// query drains at 250).
+const initiativeFieldsFragment = `
+fragment InitiativeFields on Initiative {
+  id
+  name
+  slugId
+  description
+  status
+  color
+  icon
+  targetDate
+  url
+  createdAt
+  updatedAt
+  owner {
+    id
+    name
+    email
+  }
+}
+`
+
 // ProjectLabelFields is the shared projection for a workspace project label.
 // Defined mutation-less in this slice so future catalog CRUD mutations project
 // through it (see CLAUDE.md: mutations must project through the entity's
@@ -260,25 +315,11 @@ query TeamMetadata($teamId: String!) {
     }
     cycles(first: 250) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        number
-        name
-        startsAt
-        endsAt
-        completedIssueCountHistory
-        issueCountHistory
-      }
+      nodes { ...CycleFields }
     }
     members(first: 250) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-        email
-        displayName
-        active
-      }
+      nodes { ...UserFields }
     }
   }
   issueLabels(first: 250) {
@@ -286,7 +327,7 @@ query TeamMetadata($teamId: String!) {
     nodes { ...LabelFields }
   }
 }
-` + labelFieldsFragment
+` + labelFieldsFragment + cycleFieldsFragment + userFieldsFragment
 
 // Per-connection drain queries: resumed from the combined query's endCursor
 // when a connection reports hasNextPage (see the paginate module).
@@ -302,41 +343,27 @@ query TeamLabelsPage($teamId: String!, $after: String) {
 }
 ` + labelFieldsFragment
 
-const queryTeamCyclesPage = `
+var queryTeamCyclesPage = `
 query TeamCyclesPage($teamId: String!, $after: String) {
   team(id: $teamId) {
     cycles(first: 250, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        number
-        name
-        startsAt
-        endsAt
-        completedIssueCountHistory
-        issueCountHistory
-      }
+      nodes { ...CycleFields }
     }
   }
 }
-`
+` + cycleFieldsFragment
 
-const queryTeamMembersPage = `
+var queryTeamMembersPage = `
 query TeamMembersPage($teamId: String!, $after: String) {
   team(id: $teamId) {
     members(first: 250, after: $after) {
       pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        name
-        email
-        displayName
-        active
-      }
+      nodes { ...UserFields }
     }
   }
 }
-`
+` + userFieldsFragment
 
 var queryWorkspaceLabelsPage = `
 query WorkspaceLabelsPage($after: String) {
@@ -553,37 +580,16 @@ mutation InitiativeToProjectDelete($initiativeId: String!, $projectId: String!) 
 // and GetWorkspace drains it per initiative (an initiative's junction rows
 // feed a prune, so its project list must be provably complete — a
 // truncated list would read as removals).
-const queryWorkspace = `
+var queryWorkspace = `
 query Workspace {
   users(first: 250) {
     pageInfo { hasNextPage endCursor }
-    nodes {
-      id
-      name
-      email
-      displayName
-      active
-    }
+    nodes { ...UserFields }
   }
   initiatives(first: 50) {
     pageInfo { hasNextPage endCursor }
     nodes {
-      id
-      name
-      slugId
-      description
-      status
-      color
-      icon
-      targetDate
-      url
-      createdAt
-      updatedAt
-      owner {
-        id
-        name
-        email
-      }
+      ...InitiativeFields
       projects(first: 50) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -595,44 +601,23 @@ query Workspace {
     }
   }
 }
-`
+` + userFieldsFragment + initiativeFieldsFragment
 
-const queryWorkspaceUsersPage = `
+var queryWorkspaceUsersPage = `
 query WorkspaceUsersPage($after: String) {
   users(first: 250, after: $after) {
     pageInfo { hasNextPage endCursor }
-    nodes {
-      id
-      name
-      email
-      displayName
-      active
-    }
+    nodes { ...UserFields }
   }
 }
-`
+` + userFieldsFragment
 
-const queryWorkspaceInitiativesPage = `
+var queryWorkspaceInitiativesPage = `
 query WorkspaceInitiativesPage($after: String) {
   initiatives(first: 50, after: $after) {
     pageInfo { hasNextPage endCursor }
     nodes {
-      id
-      name
-      slugId
-      description
-      status
-      color
-      icon
-      targetDate
-      url
-      createdAt
-      updatedAt
-      owner {
-        id
-        name
-        email
-      }
+      ...InitiativeFields
       projects(first: 50) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -644,7 +629,7 @@ query WorkspaceInitiativesPage($after: String) {
     }
   }
 }
-`
+` + initiativeFieldsFragment
 
 const queryInitiativeProjectsPage = `
 query InitiativeProjectsPage($id: String!, $after: String) {
@@ -661,17 +646,11 @@ query InitiativeProjectsPage($id: String!, $after: String) {
 }
 `
 
-const queryViewer = `
+var queryViewer = `
 query Viewer {
-  viewer {
-    id
-    name
-    email
-    displayName
-    active
-  }
+  viewer { ...UserFields }
 }
-`
+` + userFieldsFragment
 
 const mutationUpdateIssue = `
 mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
@@ -851,25 +830,10 @@ mutation DeleteLabel($id: String!) {
 }
 `
 
-const queryInitiative = `
+var queryInitiative = `
 query Initiative($id: String!) {
   initiative(id: $id) {
-    id
-    name
-    slugId
-    description
-    status
-    color
-    icon
-    targetDate
-    url
-    createdAt
-    updatedAt
-    owner {
-      id
-      name
-      email
-    }
+    ...InitiativeFields
     projects(first: 250) {
       pageInfo { hasNextPage endCursor }
       nodes {
@@ -880,7 +844,7 @@ query Initiative($id: String!) {
     }
   }
 }
-`
+` + initiativeFieldsFragment
 
 // =============================================================================
 // Issue Relations

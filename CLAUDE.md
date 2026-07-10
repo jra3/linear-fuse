@@ -224,6 +224,13 @@ Available fragments:
 - `AttachmentFields` - Attachment fields (detail query, create, link)
 - `ProjectMilestoneFields` - Milestone fields (nested in project queries, milestone query, create, update)
 - `ProjectUpdateFields` / `InitiativeUpdateFields` - Status-update fields (query + create)
+- `UserFields` - User fields wherever whole users are listed (team members + drain page, workspace users + drain page, viewer); assignees/owners keep narrower inline sets
+- `CycleFields` - Cycle fields (combined team metadata query + drain page)
+- `InitiativeFields` - Initiative scalar fields (workspace query + drain page, single-initiative query); the nested projects connection stays inline per query (page sizes differ)
+
+A combined query and its drain-page twin MUST project through the same
+fragment — a field added to one but not the other means nodes past page one
+silently carry zero values.
 
 **Every mutation that returns an entity must project it through the entity's
 fragment, not an inlined field list** — an inlined copy silently drifts when the
