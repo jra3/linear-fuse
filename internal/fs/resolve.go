@@ -40,7 +40,9 @@ func resolveByName[T any](items []T, name, label string, nameOf, idOf func(T) st
 			return idOf(it), nil
 		}
 	}
-	return "", fmt.Errorf("unknown %s: %s", label, name)
+	// Typed local-miss marker: same message as the old fmt.Errorf, but it is
+	// what arms the refresh-and-retry (see catalogrefresh.go).
+	return "", &unknownNameError{label: label, name: name}
 }
 
 // Name→ID resolution for issue edits.

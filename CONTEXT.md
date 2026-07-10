@@ -131,6 +131,27 @@ shared primitives (also used singly by initiatives and projects).
 resolver — same `FieldError` contract, but a pure function over a catalog slice
 rather than a method on the resolver seam.
 
+**Catalog refresh-and-retry (#246):** a `Resolve*` miss against the locally-cached
+catalog (state/label/project/milestone/cycle/user/initiative) is not necessarily a
+bad name — the catalog rides a minutes-long sync cadence, so a name a teammate
+created moments ago is a *local* miss. Each resolver therefore routes its lookup
+through `resolveWithRefresh` (`internal/fs/catalogrefresh.go`): on an
+`unknownNameError` — the typed local-miss marker `resolveByName` mints, message
+byte-identical to the old `fmt.Errorf` — it triggers exactly ONE targeted refresh
+of that catalog and retries the resolution ONCE, then surfaces the original error
+unchanged. The seam is `LinearFS.catalogRefreshImpl` (injectable via
+`InjectTestCatalogRefresher`); the default reuses the sync worker's complete-drain
+machinery (`Worker.RefreshTeamCatalogs` for team-scoped kinds,
+`RefreshWorkspaceCatalogs` for users/initiatives; milestones map project→team
+locally via `GetProjectPrimaryTeamKey` first), so budget gates and prune licensing
+apply unchanged. Without a worker (fixture mode) the default declines and the miss
+surfaces as before — offline suites are network-free by construction. API-side
+rejections (`classifyMutationErr` territory) never reach this path: the refresh
+arms only on the typed local miss, before any mutation is attempted.
+`ResolveProjectSlugToID` (initiative.md's workspace-wide slug resolution) is
+deliberately outside: scoping its refresh would mean draining every team's
+projects for one miss.
+
 ### Project-label selection (`projectlabels.go`)
 The workspace project-label surface (#130). Linear's `ProjectLabel` is
 **workspace-scoped** — the schema has no team edge at all (contrast `IssueLabel`'s

@@ -603,6 +603,25 @@ func (w *Worker) syncInitiativeProjects(ctx context.Context, initiative api.Init
 // Team Metadata Sync
 // =============================================================================
 
+// RefreshTeamCatalogs synchronously re-syncs one team's catalog metadata —
+// states, labels, cycles, projects (with milestones), and members — on demand.
+// It backs the write path's validation-failure refresh (#246): a frontmatter
+// write that fails name→ID resolution against the local catalog triggers
+// exactly one of these before its single retry. Reuses the background cycle's
+// complete-drain machinery, so budget gates (GetTeamMetadata's LowBudget
+// preflight) and prune licensing apply unchanged.
+func (w *Worker) RefreshTeamCatalogs(ctx context.Context, teamID string) error {
+	return w.syncTeamMetadata(ctx, api.Team{ID: teamID})
+}
+
+// RefreshWorkspaceCatalogs synchronously re-syncs the workspace-level catalogs
+// (users, initiatives with their project links, project labels) on demand —
+// the workspace-scoped sibling of RefreshTeamCatalogs (#246). Budget-gated by
+// GetWorkspace's LowBudget preflight.
+func (w *Worker) RefreshWorkspaceCatalogs(ctx context.Context) error {
+	return w.syncWorkspace(ctx)
+}
+
 // syncTeamMetadata syncs all metadata for a team: states, labels, cycles,
 // projects (with milestones), and members. GetTeamMetadata drains every
 // unbounded connection, so meta is the complete server-side truth — which

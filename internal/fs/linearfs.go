@@ -30,7 +30,14 @@ type LinearFS struct {
 	client       *api.Client    // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
 	mutatorImpl  MutationClient // Mutations only; defaults to client, swappable for tests
 	verifierImpl verifyReader   // Read-your-writes re-fetch; defaults to client, swappable for tests
-	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl (handlers read while tests swap)
+	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl + catalogRefreshImpl (handlers read while tests swap)
+
+	// catalogRefreshImpl is the validation-failure catalog-refresh seam (#246):
+	// how a name→ID resolution miss refreshes its catalog before the one retry
+	// (see catalogrefresh.go). nil selects the default, sync-worker-backed
+	// refreshCatalogViaSync; tests swap in a stub via InjectTestCatalogRefresher
+	// so offline suites stay network-free.
+	catalogRefreshImpl func(ctx context.Context, kind CatalogKind, scopeID string) error
 
 	repo       *repo.SQLiteRepository // For all read operations
 	store      *db.Store              // SQLite store (owned by repo, kept for sync worker)
@@ -536,8 +543,17 @@ func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, inpu
 	return lfs.mutator().UpdateDocument(ctx, documentID, input)
 }
 
-// ResolveUserID converts an email or name to a user ID
+// ResolveUserID converts an email or name to a user ID. A local catalog miss
+// triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveUserID(ctx context.Context, identifier string) (string, error) {
+	return lfs.resolveWithRefresh(ctx, CatalogUsers, "", func() (string, error) {
+		return lfs.lookupUserID(ctx, identifier)
+	})
+}
+
+// lookupUserID is ResolveUserID's local half: one pass over the cached users,
+// exact email → case-insensitive email → name → case-insensitive name.
+func (lfs *LinearFS) lookupUserID(ctx context.Context, identifier string) (string, error) {
 	users, err := lfs.repo.GetUsers(ctx)
 	if err != nil {
 		return "", err
@@ -572,7 +588,7 @@ func (lfs *LinearFS) ResolveUserID(ctx context.Context, identifier string) (stri
 		}
 	}
 
-	return "", fmt.Errorf("unknown user: %s", identifier)
+	return "", &unknownNameError{label: "user", name: identifier}
 }
 
 // ResolveIssueID converts an issue identifier (e.g., "ENG-123") to its UUID
@@ -587,19 +603,38 @@ func (lfs *LinearFS) ResolveIssueID(ctx context.Context, identifier string) (str
 	return issue.ID, nil
 }
 
-// ResolveStateID converts a state name to its ID for a given team
+// ResolveStateID converts a state name to its ID for a given team. A local
+// catalog miss triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateName string) (string, error) {
-	states, err := lfs.repo.GetTeamStates(ctx, teamID)
-	if err != nil {
-		return "", err
-	}
-	return resolveByName(states, stateName, "state",
-		func(s api.State) string { return s.Name }, func(s api.State) string { return s.ID })
+	return lfs.resolveWithRefresh(ctx, CatalogStates, teamID, func() (string, error) {
+		states, err := lfs.repo.GetTeamStates(ctx, teamID)
+		if err != nil {
+			return "", err
+		}
+		return resolveByName(states, stateName, "state",
+			func(s api.State) string { return s.Name }, func(s api.State) string { return s.ID })
+	})
 }
 
-// ResolveLabelIDs converts label names to their IDs for a given team
-// Returns the list of label IDs and any labels that couldn't be resolved
+// ResolveLabelIDs converts label names to their IDs for a given team.
+// Returns the list of label IDs and any labels that couldn't be resolved.
+// Local misses may just be a stale catalog, so one targeted refresh + one
+// retry runs before the misses are reported (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveLabelIDs(ctx context.Context, teamID string, labelNames []string) ([]string, []string, error) {
+	ids, notFound, err := lfs.lookupLabelIDs(ctx, teamID, labelNames)
+	if err != nil || len(notFound) == 0 {
+		return ids, notFound, err
+	}
+	if refreshErr := lfs.refreshCatalog(ctx, CatalogLabels, teamID); refreshErr != nil {
+		log.Printf("[fs] labels catalog refresh after resolution miss (%v) failed: %v", notFound, refreshErr)
+		return ids, notFound, nil
+	}
+	return lfs.lookupLabelIDs(ctx, teamID, labelNames)
+}
+
+// lookupLabelIDs is ResolveLabelIDs' local half: one case-insensitive pass
+// over the cached team labels.
+func (lfs *LinearFS) lookupLabelIDs(ctx context.Context, teamID string, labelNames []string) ([]string, []string, error) {
 	labels, err := lfs.repo.GetTeamLabels(ctx, teamID)
 	if err != nil {
 		return nil, nil, err
@@ -625,14 +660,17 @@ func (lfs *LinearFS) ResolveLabelIDs(ctx context.Context, teamID string, labelNa
 	return ids, notFound, nil
 }
 
-// ResolveProjectID converts a project name to its ID for a given team
+// ResolveProjectID converts a project name to its ID for a given team. A local
+// catalog miss triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projectName string) (string, error) {
-	projects, err := lfs.repo.GetTeamProjects(ctx, teamID)
-	if err != nil {
-		return "", err
-	}
-	return resolveByName(projects, projectName, "project",
-		func(p api.Project) string { return p.Name }, func(p api.Project) string { return p.ID })
+	return lfs.resolveWithRefresh(ctx, CatalogProjects, teamID, func() (string, error) {
+		projects, err := lfs.repo.GetTeamProjects(ctx, teamID)
+		if err != nil {
+			return "", err
+		}
+		return resolveByName(projects, projectName, "project",
+			func(p api.Project) string { return p.Name }, func(p api.Project) string { return p.ID })
+	})
 }
 
 // ResolveProjectSlugToID converts a project slug to its ID by searching all teams.
@@ -659,14 +697,17 @@ func (lfs *LinearFS) ResolveProjectSlugToID(ctx context.Context, projectSlug str
 	return "", fmt.Errorf("unknown project slug: %s", projectSlug)
 }
 
-// ResolveMilestoneID converts a milestone name to its ID for a given project
+// ResolveMilestoneID converts a milestone name to its ID for a given project.
+// A local catalog miss triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, milestoneName string) (string, error) {
-	milestones, err := lfs.repo.GetProjectMilestones(ctx, projectID)
-	if err != nil {
-		return "", err
-	}
-	return resolveByName(milestones, milestoneName, "milestone",
-		func(m api.ProjectMilestone) string { return m.Name }, func(m api.ProjectMilestone) string { return m.ID })
+	return lfs.resolveWithRefresh(ctx, CatalogMilestones, projectID, func() (string, error) {
+		milestones, err := lfs.repo.GetProjectMilestones(ctx, projectID)
+		if err != nil {
+			return "", err
+		}
+		return resolveByName(milestones, milestoneName, "milestone",
+			func(m api.ProjectMilestone) string { return m.Name }, func(m api.ProjectMilestone) string { return m.ID })
+	})
 }
 
 // UpdateProjectMilestone updates an existing milestone via the mutation seam,
@@ -689,24 +730,30 @@ func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID str
 	return milestone, nil
 }
 
-// ResolveCycleID resolves a cycle name to its ID
+// ResolveCycleID resolves a cycle name to its ID. A local catalog miss
+// triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleName string) (string, error) {
-	cycles, err := lfs.repo.GetTeamCycles(ctx, teamID)
-	if err != nil {
-		return "", err
-	}
-	return resolveByName(cycles, cycleName, "cycle",
-		func(c api.Cycle) string { return c.Name }, func(c api.Cycle) string { return c.ID })
+	return lfs.resolveWithRefresh(ctx, CatalogCycles, teamID, func() (string, error) {
+		cycles, err := lfs.repo.GetTeamCycles(ctx, teamID)
+		if err != nil {
+			return "", err
+		}
+		return resolveByName(cycles, cycleName, "cycle",
+			func(c api.Cycle) string { return c.Name }, func(c api.Cycle) string { return c.ID })
+	})
 }
 
-// ResolveInitiativeID converts an initiative name to its ID
+// ResolveInitiativeID converts an initiative name to its ID. A local catalog
+// miss triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName string) (string, error) {
-	initiatives, err := lfs.repo.GetInitiatives(ctx)
-	if err != nil {
-		return "", err
-	}
-	return resolveByName(initiatives, initiativeName, "initiative",
-		func(i api.Initiative) string { return i.Name }, func(i api.Initiative) string { return i.ID })
+	return lfs.resolveWithRefresh(ctx, CatalogInitiatives, "", func() (string, error) {
+		initiatives, err := lfs.repo.GetInitiatives(ctx)
+		if err != nil {
+			return "", err
+		}
+		return resolveByName(initiatives, initiativeName, "initiative",
+			func(i api.Initiative) string { return i.Name }, func(i api.Initiative) string { return i.ID })
+	})
 }
 
 // UpdateLabel updates a label

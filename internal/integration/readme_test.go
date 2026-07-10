@@ -32,7 +32,9 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	// "creates one item" pins the per-write-cycle semantics (each write to
 	// _create creates another item — the old node-level buffers silently
 	// swallowed the second write, so nothing documented it).
-	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item"} {
+	// "targeted catalog refresh" pins the stale-catalog self-healing doc (#246):
+	// a local name→ID miss refreshes the catalog once and retries before .error.
+	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item", "targeted catalog refresh"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not mention %q", want)
 		}
