@@ -26,6 +26,7 @@ import (
 type syncMetrics struct {
 	cycleDuration  metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
 	detailOutcomes metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
+	probeOutcomes  metric.Int64Counter     // linearfs.sync.probe_outcomes {kind, outcome}
 }
 
 func newSyncMetrics() syncMetrics {
@@ -36,6 +37,8 @@ func newSyncMetrics() syncMetrics {
 			metric.WithDescription("Duration of one sync cycle, by mode (lean|full); budget-skipped cycles record ~0")),
 		detailOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.detail_outcomes",
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
+		probeOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.probe_outcomes",
+			metric.WithDescription("Lean-cycle change-detection probe outcomes, by kind (initiatives) and outcome (unchanged|changed|error)")),
 	}
 }
 
@@ -59,6 +62,19 @@ func (sm syncMetrics) recordDetailOutcomes(ctx context.Context, synced, deferred
 		sm.detailOutcomes.Add(ctx, int64(deferred), metric.WithAttributes(
 			attribute.String("outcome", "deferred")))
 	}
+}
+
+// recordProbeOutcome counts one lean-cycle change-detection probe result.
+// Every probe run lands in exactly one outcome: "unchanged" (newest
+// updatedAt ≤ watermark — the fetch the probe exists to skip was skipped),
+// "changed" (the on-change full sync was triggered — whether or not that
+// sync then succeeded; its failures are its own), or "error" (the probe
+// query itself failed). A probe that never fires shows up as a missing
+// kind in this series.
+func (sm syncMetrics) recordProbeOutcome(ctx context.Context, kind, outcome string) {
+	sm.probeOutcomes.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("kind", kind),
+		attribute.String("outcome", outcome)))
 }
 
 // registerPendingDepthGauge installs the linearfs.sync.pending_depth

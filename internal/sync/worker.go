@@ -31,6 +31,12 @@ type APIClient interface {
 	// Consolidated workspace data (users + initiatives in one call)
 	GetWorkspace(ctx context.Context) (*api.WorkspaceData, error)
 
+	// Initiatives change-detection probe: the newest few initiatives by
+	// updatedAt, scalars only (no nested projects — a few hundred
+	// complexity vs GetWorkspace's ~7.2K). Lean cycles compare its max
+	// updatedAt against the persisted watermark; see probeInitiatives.
+	GetInitiativesProbe(ctx context.Context) ([]api.Initiative, error)
+
 	// Workspace project-label catalog (complete drain, retired included —
 	// completeness licenses the prune in syncProjectLabels)
 	GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error)
@@ -269,6 +275,13 @@ const (
 // staleness bound past FullSyncInterval.
 const scheduleKeyFullCycle = "full_cycle"
 
+// scheduleKeyInitiativesProbe keys the initiatives-probe watermark in the
+// sync_schedule table: the max initiative updatedAt the last successful
+// workspace fetch observed. Lean cycles' probeInitiatives compares the
+// probe's newest updatedAt against it; syncWorkspace advances it from the
+// complete fetch (so full cycles keep it current too).
+const scheduleKeyInitiativesProbe = "initiatives_probe"
+
 // nextCycleMode decides the speed of the next scheduled cycle from the
 // persisted schedule: full when the last-full-cycle timestamp is missing
 // (cold start — a fresh store must populate exactly as fast as today) or
@@ -332,12 +345,16 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	w.drainPendingDetailSync(ctx)
 
 	// First, sync workspace-level entities (full cycles only — the workspace
-	// drain is one of the two fetch classes the lean cycle exists to skip)
+	// drain is one of the two fetch classes the lean cycle exists to skip).
+	// Lean cycles run the cheap initiatives probe instead, which escalates
+	// to the same workspace sync only when something actually changed.
 	if mode == cycleFull {
 		if err := w.syncWorkspace(ctx); err != nil {
 			log.Printf("[sync] workspace sync failed: %v", err)
 			// Continue with teams even if workspace sync fails
 		}
+	} else {
+		w.probeInitiatives(ctx)
 	}
 
 	// Sync teams list
@@ -573,6 +590,65 @@ func (w *Worker) CleanupArchivedIssues(ctx context.Context, teamID string) (int6
 // Workspace-Level Sync
 // =============================================================================
 
+// probeInitiatives is the lean cycle's initiatives change-detection probe
+// (#244, diet slice 3 of #238). It fetches the newest few initiatives'
+// scalars (a few hundred complexity vs the full workspace query's ~7.2K)
+// and compares the newest updatedAt against the persisted watermark
+// (sync_schedule key initiatives_probe). Not newer → done. Newer → run the
+// EXISTING full workspace sync (syncWorkspace: users + initiatives with
+// nested project drains and the junction-prune licenses — the correct,
+// already-tested on-change action), which advances the watermark from what
+// the complete fetch saw. The probe itself never prunes anything; pruning
+// stays licensed exclusively by syncWorkspace's complete drains. Failures
+// log and the cycle continues — the issues sync must not be blocked by a
+// probe hiccup.
+//
+// A missing or unreadable watermark reads as changed — over-syncing is the
+// safe direction (the same policy as nextCycleMode) — and self-heals: the
+// on-change syncWorkspace stamps the watermark once its fetch succeeds.
+//
+// Link-timestamp live check (2026-07-10, recorded on issue #244): linking
+// or unlinking a project bumps NEITHER Initiative.updatedAt nor
+// Project.updatedAt, so initiative-link changes are structurally invisible
+// to this probe — link freshness is bounded by the full cycle
+// (FullSyncInterval, default 10m), the PRD's accepted fallback. Scalar
+// changes (rename, status, description, targetDate, owner) are
+// probe-visible at the lean cadence.
+func (w *Worker) probeInitiatives(ctx context.Context) {
+	initiatives, err := w.client.GetInitiativesProbe(ctx)
+	if err != nil {
+		log.Printf("[sync] initiatives probe failed: %v", err)
+		w.metrics.recordProbeOutcome(ctx, "initiatives", "error")
+		return
+	}
+
+	var newest time.Time
+	for _, initiative := range initiatives {
+		if initiative.UpdatedAt.After(newest) {
+			newest = initiative.UpdatedAt
+		}
+	}
+
+	watermark, err := w.store.Queries().GetSyncSchedule(ctx, scheduleKeyInitiativesProbe)
+	if err == nil && !newest.After(watermark) {
+		w.metrics.recordProbeOutcome(ctx, "initiatives", "unchanged")
+		return
+	}
+
+	// Changed (or no watermark yet): run the full workspace sync — it
+	// upserts everything the probe saw plus what it didn't (users, nested
+	// project links) and advances the watermark from the complete fetch.
+	// The outcome counts as "changed" either way: the metric reports what
+	// the probe detected. A workspace FETCH failure leaves the watermark
+	// unstamped, so the next lean cycle retries; per-item upsert failures
+	// stamp and wait for the next full cycle (see the stamp in
+	// syncWorkspace for why).
+	w.metrics.recordProbeOutcome(ctx, "initiatives", "changed")
+	if err := w.syncWorkspace(ctx); err != nil {
+		log.Printf("[sync] on-change workspace sync failed: %v", err)
+	}
+}
+
 // syncWorkspace syncs workspace-level entities (users + initiatives).
 // GetWorkspace drains every connection — including each initiative's
 // nested projects — so the junction prune in syncInitiativeProjects runs
@@ -620,6 +696,29 @@ func (w *Worker) syncWorkspace(ctx context.Context) error {
 		w.syncInitiativeProjects(ctx, initiative, pruneCutoff)
 	}
 	log.Printf("[sync] synced %d initiatives", len(data.Initiatives))
+
+	// Advance the initiatives-probe watermark to the newest updatedAt this
+	// complete fetch observed (#244). Stamped whenever the fetch succeeded,
+	// even with per-item convert/upsert errors above — the same policy as
+	// the full-cycle stamp: re-running the expensive workspace drain every
+	// lean cycle over a persistent per-item failure is the burn pattern the
+	// diet exists to stop (the full cycle retries it every FullSyncInterval
+	// regardless). A fetch failure returned early and did NOT stamp, so the
+	// probe keeps reading change until a fetch lands. Zero initiatives
+	// stamps the zero time: the row exists, and an empty workspace probes
+	// as unchanged until a first initiative's updatedAt exceeds it.
+	var newestInitiative time.Time
+	for _, initiative := range data.Initiatives {
+		if initiative.UpdatedAt.After(newestInitiative) {
+			newestInitiative = initiative.UpdatedAt
+		}
+	}
+	if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+		Key:     scheduleKeyInitiativesProbe,
+		LastRun: newestInitiative,
+	}); err != nil {
+		log.Printf("[sync] persist initiatives-probe watermark failed: %v", err)
+	}
 
 	// Project-label catalog (workspace-scoped; see CONTEXT.md "Project-label
 	// selection"). Isolated log-and-continue: a catalog failure must not block

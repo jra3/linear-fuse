@@ -226,7 +226,7 @@ Available fragments:
 - `ProjectUpdateFields` / `InitiativeUpdateFields` - Status-update fields (query + create)
 - `UserFields` - User fields wherever whole users are listed (team members + drain page, workspace users + drain page, viewer); assignees/owners keep narrower inline sets
 - `CycleFields` - Cycle fields (combined team metadata query + drain page)
-- `InitiativeFields` - Initiative scalar fields (workspace query + drain page, single-initiative query); the nested projects connection stays inline per query (page sizes differ)
+- `InitiativeFields` - Initiative scalar fields (workspace query + drain page, single-initiative query, lean-cycle initiatives probe); the nested projects connection stays inline per query (page sizes differ; the probe deliberately selects none)
 
 A combined query and its drain-page twin MUST project through the same
 fragment — a field added to one but not the other means nodes past page one

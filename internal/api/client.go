@@ -554,6 +554,18 @@ func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetad
 	}, nil
 }
 
+// GetInitiativesProbe fetches the newest few initiatives by updatedAt,
+// scalars only — each returned Initiative carries an empty Projects (the
+// probe query selects no nested projects connection). It is the lean
+// cycle's change-detection probe (#244): the caller compares the max
+// UpdatedAt against a persisted watermark and runs the full GetWorkspace
+// sync only on change. See queryInitiativesProbe for the cost rationale
+// and the link-timestamp live-check finding (link/unlink bumps neither
+// side's updatedAt, so link changes are not probe-visible).
+func (c *Client) GetInitiativesProbe(ctx context.Context) ([]Initiative, error) {
+	return fetchNodes[Initiative](ctx, c, queryInitiativesProbe, nil, "initiatives")
+}
+
 // GetWorkspace fetches workspace-level entities (users and initiatives),
 // drained to completion — including each initiative's nested projects
 // connection, whose completeness is load-bearing: the sync worker prunes

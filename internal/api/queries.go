@@ -631,6 +631,34 @@ query WorkspaceInitiativesPage($after: String) {
 }
 ` + initiativeFieldsFragment
 
+// queryInitiativesProbe is the lean cycle's initiatives change-detection
+// probe (#244, diet slice 3 of #238): the newest few initiatives by
+// updatedAt, scalars only via InitiativeFields. Deliberately NO nested
+// projects connection — the nested first: arguments are what make
+// queryWorkspace cost ~7.2K regardless of data volume; the scalars-only
+// probe costs a few hundred. Deliberately NO pageInfo — the probe never
+// paginates (fetchNodes tolerates its absence); it exists only to compare
+// the newest updatedAt against a persisted watermark. orderBy: updatedAt
+// returns most-recently-updated first (PaginationOrderBy), the same
+// contract the incremental issues sync relies on.
+//
+// Link-timestamp live check (2026-07-10, recorded on issue #244): linking
+// or unlinking a project (initiativeToProjectCreate/Delete) bumps NEITHER
+// Initiative.updatedAt NOR Project.updatedAt — verified with a throwaway
+// TST project + initiative; both timestamps were identical before the
+// link, after the link, and after the unlink. Initiative-link changes are
+// therefore NOT probe-visible: link freshness is bounded by the full
+// cycle (FullSyncInterval, default 10m), the PRD's accepted fallback.
+// Scalar changes (rename, status, description, targetDate, owner) are
+// probe-visible at the lean cadence.
+var queryInitiativesProbe = `
+query InitiativesProbe {
+  initiatives(first: 5, orderBy: updatedAt) {
+    nodes { ...InitiativeFields }
+  }
+}
+` + initiativeFieldsFragment
+
 const queryInitiativeProjectsPage = `
 query InitiativeProjectsPage($id: String!, $after: String) {
   initiative(id: $id) {
