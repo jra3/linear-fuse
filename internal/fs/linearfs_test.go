@@ -144,13 +144,6 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 			iss.Identifier, iss.StateName, iss.Priority, iss.AssigneeID)
 	}
 
-	// Direct query test to verify SQLite query works
-	directIssues, err := store.Queries().ListTeamIssuesByStateName(ctx, db.ListTeamIssuesByStateNameParams{
-		TeamID:    "team-1",
-		StateName: sql.NullString{String: "Todo", Valid: true},
-	})
-	t.Logf("Direct ListTeamIssuesByStateName 'Todo' result: %d issues, err=%v", len(directIssues), err)
-
 	t.Run("GetFilteredIssuesByStatus", func(t *testing.T) {
 		issues, err := lfs.GetFilteredIssuesByStatus(ctx, "team-1", "Todo")
 		if err != nil {

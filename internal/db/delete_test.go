@@ -34,9 +34,9 @@ func TestDeleteComment(t *testing.T) {
 	}
 
 	// Verify it exists
-	_, err = store.Queries().GetComment(ctx, "comment-1")
-	if err != nil {
-		t.Fatalf("Comment should exist: %v", err)
+	comments, err := store.Queries().ListIssueComments(ctx, "issue-1")
+	if err != nil || len(comments) != 1 {
+		t.Fatalf("Comment should exist: err=%v n=%d", err, len(comments))
 	}
 
 	// Delete it
@@ -45,8 +45,8 @@ func TestDeleteComment(t *testing.T) {
 	}
 
 	// Verify it's gone
-	_, err = store.Queries().GetComment(ctx, "comment-1")
-	if err == nil {
+	comments, _ = store.Queries().ListIssueComments(ctx, "issue-1")
+	if len(comments) != 0 {
 		t.Error("Comment should be deleted")
 	}
 }
@@ -63,42 +63,6 @@ func TestDeleteComment_NonExistent(t *testing.T) {
 	}
 }
 
-func TestDeleteCycle(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-	err := store.Queries().UpsertCycle(ctx, UpsertCycleParams{
-		ID:       "cycle-1",
-		TeamID:   "team-1",
-		Number:   1,
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	})
-	if err != nil {
-		t.Fatalf("UpsertCycle failed: %v", err)
-	}
-
-	// Verify it exists
-	_, err = store.Queries().GetCycle(ctx, "cycle-1")
-	if err != nil {
-		t.Fatalf("Cycle should exist: %v", err)
-	}
-
-	// Delete it
-	if err := store.Queries().DeleteCycle(ctx, "cycle-1"); err != nil {
-		t.Fatalf("DeleteCycle failed: %v", err)
-	}
-
-	// Verify it's gone
-	_, err = store.Queries().GetCycle(ctx, "cycle-1")
-	if err == nil {
-		t.Error("Cycle should be deleted")
-	}
-}
-
 func TestDeleteDocument(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -106,10 +70,12 @@ func TestDeleteDocument(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now()
+	issueID := sql.NullString{String: "issue-1", Valid: true}
 	err := store.Queries().UpsertDocument(ctx, UpsertDocumentParams{
 		ID:       "doc-1",
 		SlugID:   "test-doc",
 		Title:    "Test Document",
+		IssueID:  issueID,
 		SyncedAt: now,
 		Data:     json.RawMessage("{}"),
 	})
@@ -118,9 +84,9 @@ func TestDeleteDocument(t *testing.T) {
 	}
 
 	// Verify it exists
-	_, err = store.Queries().GetDocument(ctx, "doc-1")
-	if err != nil {
-		t.Fatalf("Document should exist: %v", err)
+	docs, err := store.Queries().ListIssueDocuments(ctx, issueID)
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("Document should exist: err=%v n=%d", err, len(docs))
 	}
 
 	// Delete it
@@ -129,8 +95,8 @@ func TestDeleteDocument(t *testing.T) {
 	}
 
 	// Verify it's gone
-	_, err = store.Queries().GetDocument(ctx, "doc-1")
-	if err == nil {
+	docs, _ = store.Queries().ListIssueDocuments(ctx, issueID)
+	if len(docs) != 0 {
 		t.Error("Document should be deleted")
 	}
 }
@@ -275,81 +241,6 @@ func TestDeleteProject(t *testing.T) {
 	}
 }
 
-func TestDeleteState(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-	err := store.Queries().UpsertState(ctx, UpsertStateParams{
-		ID:       "state-1",
-		TeamID:   "team-1",
-		Name:     "Todo",
-		Type:     "unstarted",
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	})
-	if err != nil {
-		t.Fatalf("UpsertState failed: %v", err)
-	}
-
-	// Verify it exists
-	_, err = store.Queries().GetState(ctx, "state-1")
-	if err != nil {
-		t.Fatalf("State should exist: %v", err)
-	}
-
-	// Delete it
-	if err := store.Queries().DeleteState(ctx, "state-1"); err != nil {
-		t.Fatalf("DeleteState failed: %v", err)
-	}
-
-	// Verify it's gone
-	_, err = store.Queries().GetState(ctx, "state-1")
-	if err == nil {
-		t.Error("State should be deleted")
-	}
-}
-
-func TestDeleteUser(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-	err := store.Queries().UpsertUser(ctx, UpsertUserParams{
-		ID:       "user-1",
-		Email:    "test@example.com",
-		Name:     "Test User",
-		Active:   1,
-		Admin:    0,
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	})
-	if err != nil {
-		t.Fatalf("UpsertUser failed: %v", err)
-	}
-
-	// Verify it exists
-	_, err = store.Queries().GetUser(ctx, "user-1")
-	if err != nil {
-		t.Fatalf("User should exist: %v", err)
-	}
-
-	// Delete it
-	if err := store.Queries().DeleteUser(ctx, "user-1"); err != nil {
-		t.Fatalf("DeleteUser failed: %v", err)
-	}
-
-	// Verify it's gone
-	_, err = store.Queries().GetUser(ctx, "user-1")
-	if err == nil {
-		t.Error("User should be deleted")
-	}
-}
-
 // =============================================================================
 // Cascade Delete Tests (Parent Entity Deletion)
 // =============================================================================
@@ -429,159 +320,10 @@ func TestDeleteIssueDocuments(t *testing.T) {
 		t.Fatalf("DeleteIssueDocuments failed: %v", err)
 	}
 
-	// Verify documents are gone by trying to get them
-	_, err := store.Queries().GetDocument(ctx, "doc-a")
-	if err == nil {
-		t.Error("Document doc-a should be deleted")
-	}
-}
-
-func TestDeleteTeamIssues(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-to-clear"
-
-	// Insert issues for the team
-	for i := 0; i < 3; i++ {
-		data := &IssueData{
-			ID:         "issue-" + string(rune('a'+i)),
-			Identifier: "TST-" + string(rune('1'+i)),
-			Title:      "Issue " + string(rune('1'+i)),
-			TeamID:     teamID,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-			Data:       json.RawMessage("{}"),
-		}
-		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
-			t.Fatalf("Insert failed: %v", err)
-		}
-	}
-
-	// Verify issues exist
-	issues, _ := store.Queries().ListTeamIssues(ctx, teamID)
-	if len(issues) != 3 {
-		t.Fatalf("Expected 3 issues, got %d", len(issues))
-	}
-
-	// Delete all team issues
-	if err := store.Queries().DeleteTeamIssues(ctx, teamID); err != nil {
-		t.Fatalf("DeleteTeamIssues failed: %v", err)
-	}
-
-	// Verify all gone
-	issues, _ = store.Queries().ListTeamIssues(ctx, teamID)
-	if len(issues) != 0 {
-		t.Errorf("Expected 0 issues after delete, got %d", len(issues))
-	}
-}
-
-func TestDeleteTeamLabels(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-with-labels"
-	now := time.Now()
-
-	// Insert labels for the team
-	for i := 0; i < 3; i++ {
-		err := store.Queries().UpsertLabel(ctx, UpsertLabelParams{
-			ID:       "label-" + string(rune('a'+i)),
-			TeamID:   sql.NullString{String: teamID, Valid: true},
-			Name:     "Label " + string(rune('1'+i)),
-			SyncedAt: now,
-			Data:     json.RawMessage("{}"),
-		})
-		if err != nil {
-			t.Fatalf("UpsertLabel failed: %v", err)
-		}
-	}
-
-	// Delete all team labels
-	if err := store.Queries().DeleteTeamLabels(ctx, sql.NullString{String: teamID, Valid: true}); err != nil {
-		t.Fatalf("DeleteTeamLabels failed: %v", err)
-	}
-
-	// Verify labels are gone
-	labels, _ := store.Queries().ListTeamLabels(ctx, sql.NullString{String: teamID, Valid: true})
-	if len(labels) != 0 {
-		t.Errorf("Expected 0 labels after delete, got %d", len(labels))
-	}
-}
-
-func TestDeleteTeamStates(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-with-states"
-	now := time.Now()
-
-	// Insert states for the team
-	stateTypes := []string{"unstarted", "started", "completed"}
-	for i, st := range stateTypes {
-		err := store.Queries().UpsertState(ctx, UpsertStateParams{
-			ID:       "state-" + string(rune('a'+i)),
-			TeamID:   teamID,
-			Name:     "State " + string(rune('1'+i)),
-			Type:     st,
-			SyncedAt: now,
-			Data:     json.RawMessage("{}"),
-		})
-		if err != nil {
-			t.Fatalf("UpsertState failed: %v", err)
-		}
-	}
-
-	// Delete all team states
-	if err := store.Queries().DeleteTeamStates(ctx, teamID); err != nil {
-		t.Fatalf("DeleteTeamStates failed: %v", err)
-	}
-
-	// Verify states are gone
-	states, _ := store.Queries().ListTeamStates(ctx, teamID)
-	if len(states) != 0 {
-		t.Errorf("Expected 0 states after delete, got %d", len(states))
-	}
-}
-
-func TestDeleteTeamCycles(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-with-cycles"
-	now := time.Now()
-
-	// Insert cycles for the team
-	for i := 0; i < 3; i++ {
-		err := store.Queries().UpsertCycle(ctx, UpsertCycleParams{
-			ID:       "cycle-" + string(rune('a'+i)),
-			TeamID:   teamID,
-			Number:   int64(i + 1),
-			SyncedAt: now,
-			Data:     json.RawMessage("{}"),
-		})
-		if err != nil {
-			t.Fatalf("UpsertCycle failed: %v", err)
-		}
-	}
-
-	// Delete all team cycles
-	if err := store.Queries().DeleteTeamCycles(ctx, teamID); err != nil {
-		t.Fatalf("DeleteTeamCycles failed: %v", err)
-	}
-
-	// Verify cycles are gone
-	cycles, _ := store.Queries().ListTeamCycles(ctx, teamID)
-	if len(cycles) != 0 {
-		t.Errorf("Expected 0 cycles after delete, got %d", len(cycles))
+	// Verify documents are gone
+	docs, _ := store.Queries().ListIssueDocuments(ctx, sql.NullString{String: issueID, Valid: true})
+	if len(docs) != 0 {
+		t.Errorf("Expected 0 documents after delete, got %d", len(docs))
 	}
 }
 
@@ -684,54 +426,6 @@ func TestDeleteInitiativeProjects(t *testing.T) {
 	}
 }
 
-func TestDeleteProjectTeam(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-
-	// Create project and team
-	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
-		ID:       "proj-pt",
-		SlugID:   "proj-pt",
-		Name:     "Project",
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
-		ID:        "team-pt",
-		Key:       "TPT",
-		Name:      "Team",
-		CreatedAt: sql.NullTime{Time: now, Valid: true},
-		UpdatedAt: sql.NullTime{Time: now, Valid: true},
-		SyncedAt:  now,
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Create association
-	if err := store.Queries().UpsertProjectTeam(ctx, UpsertProjectTeamParams{
-		ProjectID: "proj-pt",
-		TeamID:    "team-pt",
-		SyncedAt:  now,
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Delete specific association
-	err := store.Queries().DeleteProjectTeam(ctx, DeleteProjectTeamParams{
-		ProjectID: "proj-pt",
-		TeamID:    "team-pt",
-	})
-	if err != nil {
-		t.Fatalf("DeleteProjectTeam failed: %v", err)
-	}
-}
-
 func TestDeleteProjectTeams(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -780,152 +474,9 @@ func TestDeleteProjectTeams(t *testing.T) {
 	}
 }
 
-func TestDeleteTeamMember(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-
-	// Create team and user
-	if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
-		ID:        "team-tm",
-		Key:       "TTM",
-		Name:      "Team",
-		CreatedAt: sql.NullTime{Time: now, Valid: true},
-		UpdatedAt: sql.NullTime{Time: now, Valid: true},
-		SyncedAt:  now,
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-	if err := store.Queries().UpsertUser(ctx, UpsertUserParams{
-		ID:       "user-tm",
-		Email:    "user@example.com",
-		Name:     "User",
-		Active:   1,
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Create membership
-	if err := store.Queries().UpsertTeamMember(ctx, UpsertTeamMemberParams{
-		TeamID:   "team-tm",
-		UserID:   "user-tm",
-		SyncedAt: now,
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Delete specific membership
-	err := store.Queries().DeleteTeamMember(ctx, DeleteTeamMemberParams{
-		TeamID: "team-tm",
-		UserID: "user-tm",
-	})
-	if err != nil {
-		t.Fatalf("DeleteTeamMember failed: %v", err)
-	}
-}
-
-func TestDeleteTeamMembers(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-	teamID := "team-all-members"
-
-	// Create team
-	if err := store.Queries().UpsertTeam(ctx, UpsertTeamParams{
-		ID:        teamID,
-		Key:       "TAM",
-		Name:      "Team",
-		CreatedAt: sql.NullTime{Time: now, Valid: true},
-		UpdatedAt: sql.NullTime{Time: now, Valid: true},
-		SyncedAt:  now,
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Create users and memberships
-	for i := 0; i < 3; i++ {
-		userID := "user-" + string(rune('a'+i))
-		if err := store.Queries().UpsertUser(ctx, UpsertUserParams{
-			ID:       userID,
-			Email:    "user" + string(rune('1'+i)) + "@example.com",
-			Name:     "User " + string(rune('1'+i)),
-			Active:   1,
-			SyncedAt: now,
-			Data:     json.RawMessage("{}"),
-		}); err != nil {
-			t.Fatalf("setup: %v", err)
-		}
-		if err := store.Queries().UpsertTeamMember(ctx, UpsertTeamMemberParams{
-			TeamID:   teamID,
-			UserID:   userID,
-			SyncedAt: now,
-		}); err != nil {
-			t.Fatalf("setup: %v", err)
-		}
-	}
-
-	// Delete all members for team
-	if err := store.Queries().DeleteTeamMembers(ctx, teamID); err != nil {
-		t.Fatalf("DeleteTeamMembers failed: %v", err)
-	}
-}
-
 // =============================================================================
 // Update/Initiative Delete Tests
 // =============================================================================
-
-func TestDeleteInitiativeUpdate(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-
-	// Create initiative first
-	if err := store.Queries().UpsertInitiative(ctx, UpsertInitiativeParams{
-		ID:       "init-update",
-		SlugID:   "init-update",
-		Name:     "Initiative",
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Create update
-	err := store.Queries().UpsertInitiativeUpdate(ctx, UpsertInitiativeUpdateParams{
-		ID:           "init-upd-1",
-		InitiativeID: "init-update",
-		Body:         "Update body",
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		SyncedAt:     now,
-		Data:         json.RawMessage("{}"),
-	})
-	if err != nil {
-		t.Fatalf("UpsertInitiativeUpdate failed: %v", err)
-	}
-
-	// Delete update
-	if err := store.Queries().DeleteInitiativeUpdate(ctx, "init-upd-1"); err != nil {
-		t.Fatalf("DeleteInitiativeUpdate failed: %v", err)
-	}
-
-	// Verify it's gone
-	_, err = store.Queries().GetInitiativeUpdate(ctx, "init-upd-1")
-	if err == nil {
-		t.Error("Initiative update should be deleted")
-	}
-}
 
 func TestDeleteInitiativeUpdates(t *testing.T) {
 	t.Parallel()
@@ -971,51 +522,6 @@ func TestDeleteInitiativeUpdates(t *testing.T) {
 	updates, _ := store.Queries().ListInitiativeUpdates(ctx, initiativeID)
 	if len(updates) != 0 {
 		t.Errorf("Expected 0 updates after delete, got %d", len(updates))
-	}
-}
-
-func TestDeleteProjectUpdate(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	now := time.Now()
-
-	// Create project first
-	if err := store.Queries().UpsertProject(ctx, UpsertProjectParams{
-		ID:       "proj-update",
-		SlugID:   "proj-update",
-		Name:     "Project",
-		SyncedAt: now,
-		Data:     json.RawMessage("{}"),
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Create update
-	err := store.Queries().UpsertProjectUpdate(ctx, UpsertProjectUpdateParams{
-		ID:        "proj-upd-1",
-		ProjectID: "proj-update",
-		Body:      "Update body",
-		CreatedAt: now,
-		UpdatedAt: now,
-		SyncedAt:  now,
-		Data:      json.RawMessage("{}"),
-	})
-	if err != nil {
-		t.Fatalf("UpsertProjectUpdate failed: %v", err)
-	}
-
-	// Delete update
-	if err := store.Queries().DeleteProjectUpdate(ctx, "proj-upd-1"); err != nil {
-		t.Fatalf("DeleteProjectUpdate failed: %v", err)
-	}
-
-	// Verify it's gone
-	_, err = store.Queries().GetProjectUpdate(ctx, "proj-upd-1")
-	if err == nil {
-		t.Error("Project update should be deleted")
 	}
 }
 
@@ -1194,8 +700,8 @@ func TestDeleteProjectDocuments(t *testing.T) {
 	}
 
 	// Verify documents are gone
-	_, err := store.Queries().GetDocument(ctx, "pdoc-a")
-	if err == nil {
-		t.Error("Document pdoc-a should be deleted")
+	docs, _ := store.Queries().ListProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true})
+	if len(docs) != 0 {
+		t.Errorf("Expected 0 documents after delete, got %d", len(docs))
 	}
 }

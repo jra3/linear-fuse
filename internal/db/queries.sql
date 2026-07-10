@@ -10,35 +10,11 @@ SELECT * FROM issues WHERE team_id = ? ORDER BY updated_at DESC;
 -- name: ListTeamIssuesByState :many
 SELECT * FROM issues WHERE team_id = ? AND state_id = ? ORDER BY updated_at DESC;
 
--- name: ListTeamIssuesByStateName :many
-SELECT * FROM issues WHERE team_id = ? AND state_name = ? ORDER BY updated_at DESC;
-
--- name: ListTeamIssuesByStateType :many
-SELECT * FROM issues WHERE team_id = ? AND state_type = ? ORDER BY updated_at DESC;
-
 -- name: ListTeamIssuesByAssignee :many
 SELECT * FROM issues WHERE team_id = ? AND assignee_id = ? ORDER BY updated_at DESC;
 
--- name: ListTeamIssuesByAssigneeEmail :many
-SELECT * FROM issues WHERE team_id = ? AND assignee_email = ? ORDER BY updated_at DESC;
-
 -- name: ListTeamUnassignedIssues :many
 SELECT * FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC;
-
--- name: ListTeamIssuesByPriority :many
-SELECT * FROM issues WHERE team_id = ? AND priority = ? ORDER BY updated_at DESC;
-
--- name: ListTeamIssuesByProject :many
-SELECT * FROM issues WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC;
-
--- name: ListTeamIssuesByProjectName :many
-SELECT * FROM issues WHERE team_id = ? AND project_name = ? ORDER BY updated_at DESC;
-
--- name: ListTeamIssuesByCycle :many
-SELECT * FROM issues WHERE team_id = ? AND cycle_id = ? ORDER BY updated_at DESC;
-
--- name: ListTeamIssuesByCycleName :many
-SELECT * FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DESC;
 
 -- name: ListTeamIssuesByParent :many
 SELECT * FROM issues WHERE parent_id = ? ORDER BY updated_at DESC;
@@ -48,9 +24,6 @@ UPDATE issues SET parent_id = ? WHERE id = ?;
 
 -- name: ListUserAssignedIssues :many
 SELECT * FROM issues WHERE assignee_id = ? ORDER BY updated_at DESC;
-
--- name: ListUserAssignedIssuesByEmail :many
-SELECT * FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC;
 
 -- name: ListUserActiveIssues :many
 SELECT * FROM issues WHERE assignee_id = ? AND state_type NOT IN ('completed', 'canceled') ORDER BY updated_at DESC;
@@ -119,14 +92,8 @@ INSERT INTO issues (
 -- name: DeleteIssue :exec
 DELETE FROM issues WHERE id = ?;
 
--- name: DeleteIssueByIdentifier :exec
-DELETE FROM issues WHERE identifier = ?;
-
 -- name: GetTeamIssueCount :one
 SELECT COUNT(*) FROM issues WHERE team_id = ?;
-
--- name: GetTotalIssueCount :one
-SELECT COUNT(*) FROM issues;
 
 -- name: GetLatestTeamIssueUpdatedAt :one
 SELECT MAX(updated_at) FROM issues WHERE team_id = ?;
@@ -144,16 +111,7 @@ ON CONFLICT(team_id) DO UPDATE SET
     last_issue_updated_at = excluded.last_issue_updated_at,
     issue_count = excluded.issue_count;
 
--- name: ListSyncMeta :many
-SELECT * FROM sync_meta;
-
 -- Teams queries
-
--- name: GetTeam :one
-SELECT * FROM teams WHERE id = ?;
-
--- name: GetTeamByKey :one
-SELECT * FROM teams WHERE key = ?;
 
 -- name: ListTeams :many
 SELECT * FROM teams ORDER BY name;
@@ -194,18 +152,9 @@ DELETE FROM issue_history_cache WHERE issue_id = ?;
 -- name: ListTeamIssueIDs :many
 SELECT id, updated_at FROM issues WHERE team_id = ? ORDER BY updated_at DESC;
 
--- name: DeleteTeamIssues :exec
-DELETE FROM issues WHERE team_id = ?;
-
 -- Label-based queries (labels stored in JSON data column)
 -- These require extracting from JSON - keeping simple queries here,
 -- complex label queries will be done in Go code
-
--- name: ListAllIdentifiers :many
-SELECT identifier, team_id FROM issues ORDER BY identifier;
-
--- name: ListTeamIdentifiers :many
-SELECT identifier FROM issues WHERE team_id = ? ORDER BY identifier;
 
 -- =============================================================================
 -- States queries
@@ -219,9 +168,6 @@ SELECT * FROM states WHERE team_id = ? AND name = ?;
 
 -- name: ListTeamStates :many
 SELECT * FROM states WHERE team_id = ? ORDER BY position;
-
--- name: ListTeamStatesByType :many
-SELECT * FROM states WHERE team_id = ? AND type = ? ORDER BY position;
 
 -- name: UpsertState :exec
 INSERT INTO states (id, team_id, name, type, color, position, created_at, updated_at, synced_at, data)
@@ -237,12 +183,6 @@ ON CONFLICT(id) DO UPDATE SET
     synced_at = excluded.synced_at,
     data = excluded.data;
 
--- name: DeleteState :exec
-DELETE FROM states WHERE id = ?;
-
--- name: DeleteTeamStates :exec
-DELETE FROM states WHERE team_id = ?;
-
 -- =============================================================================
 -- Labels queries
 -- =============================================================================
@@ -255,9 +195,6 @@ SELECT * FROM labels WHERE (team_id = ? OR team_id IS NULL) AND name = ?;
 
 -- name: ListTeamLabels :many
 SELECT * FROM labels WHERE team_id = ? OR team_id IS NULL ORDER BY name;
-
--- name: ListWorkspaceLabels :many
-SELECT * FROM labels WHERE team_id IS NULL ORDER BY name;
 
 -- name: UpsertLabel :exec
 INSERT INTO labels (id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data)
@@ -275,9 +212,6 @@ ON CONFLICT(id) DO UPDATE SET
 
 -- name: DeleteLabel :exec
 DELETE FROM labels WHERE id = ?;
-
--- name: DeleteTeamLabels :exec
-DELETE FROM labels WHERE team_id = ?;
 
 -- =============================================================================
 -- Project labels queries (workspace-scoped catalog; see schema.sql)
@@ -315,14 +249,8 @@ DELETE FROM project_labels WHERE synced_at < ?;
 -- name: GetUser :one
 SELECT * FROM users WHERE id = ?;
 
--- name: GetUserByEmail :one
-SELECT * FROM users WHERE email = ?;
-
 -- name: ListUsers :many
 SELECT * FROM users WHERE active = 1 ORDER BY name;
-
--- name: ListAllUsers :many
-SELECT * FROM users ORDER BY name;
 
 -- name: UpsertUser :exec
 INSERT INTO users (id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data)
@@ -338,9 +266,6 @@ ON CONFLICT(id) DO UPDATE SET
     updated_at = excluded.updated_at,
     synced_at = excluded.synced_at,
     data = excluded.data;
-
--- name: DeleteUser :exec
-DELETE FROM users WHERE id = ?;
 
 -- =============================================================================
 -- Team Members queries
@@ -358,30 +283,12 @@ VALUES (?, ?, ?)
 ON CONFLICT(team_id, user_id) DO UPDATE SET
     synced_at = excluded.synced_at;
 
--- name: DeleteTeamMember :exec
-DELETE FROM team_members WHERE team_id = ? AND user_id = ?;
-
--- name: DeleteTeamMembers :exec
-DELETE FROM team_members WHERE team_id = ?;
-
 -- =============================================================================
 -- Cycles queries
 -- =============================================================================
 
--- name: GetCycle :one
-SELECT * FROM cycles WHERE id = ?;
-
--- name: GetCycleByNumber :one
-SELECT * FROM cycles WHERE team_id = ? AND number = ?;
-
--- name: GetCycleByName :one
-SELECT * FROM cycles WHERE team_id = ? AND name = ?;
-
 -- name: ListTeamCycles :many
 SELECT * FROM cycles WHERE team_id = ? ORDER BY number DESC;
-
--- name: ListTeamActiveCycles :many
-SELECT * FROM cycles WHERE team_id = ? AND ends_at > datetime('now') ORDER BY starts_at;
 
 -- name: UpsertCycle :exec
 INSERT INTO cycles (id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data)
@@ -400,12 +307,6 @@ ON CONFLICT(id) DO UPDATE SET
     synced_at = excluded.synced_at,
     data = excluded.data;
 
--- name: DeleteCycle :exec
-DELETE FROM cycles WHERE id = ?;
-
--- name: DeleteTeamCycles :exec
-DELETE FROM cycles WHERE team_id = ?;
-
 -- =============================================================================
 -- Projects queries
 -- =============================================================================
@@ -413,14 +314,8 @@ DELETE FROM cycles WHERE team_id = ?;
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = ?;
 
--- name: GetProjectBySlug :one
-SELECT * FROM projects WHERE slug_id = ?;
-
 -- name: ListProjects :many
 SELECT * FROM projects ORDER BY name;
-
--- name: ListProjectsByState :many
-SELECT * FROM projects WHERE state = ? ORDER BY name;
 
 -- name: ListTeamProjects :many
 SELECT p.* FROM projects p
@@ -482,14 +377,8 @@ DELETE FROM cycles WHERE team_id = ? AND synced_at < ?;
 -- name: PruneTeamMembers :exec
 DELETE FROM team_members WHERE team_id = ? AND synced_at < ?;
 
--- name: DeleteProjectTeam :exec
-DELETE FROM project_teams WHERE project_id = ? AND team_id = ?;
-
 -- name: DeleteProjectTeams :exec
 DELETE FROM project_teams WHERE project_id = ?;
-
--- name: ListProjectTeamIDs :many
-SELECT team_id FROM project_teams WHERE project_id = ?;
 
 -- name: GetProjectPrimaryTeamKey :one
 -- The canonical team for a project that spans teams: first by key order.
@@ -510,9 +399,6 @@ SELECT * FROM project_milestones WHERE id = ?;
 
 -- name: ListProjectMilestones :many
 SELECT * FROM project_milestones WHERE project_id = ? ORDER BY sort_order;
-
--- name: GetMilestoneByName :one
-SELECT * FROM project_milestones WHERE project_id = ? AND name = ?;
 
 -- name: UpsertProjectMilestone :exec
 INSERT INTO project_milestones (id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data)
@@ -537,9 +423,6 @@ DELETE FROM project_milestones WHERE project_id = ?;
 -- =============================================================================
 -- Comments queries
 -- =============================================================================
-
--- name: GetComment :one
-SELECT * FROM comments WHERE id = ?;
 
 -- name: ListIssueComments :many
 SELECT * FROM comments WHERE issue_id = ? ORDER BY created_at;
@@ -576,12 +459,6 @@ DELETE FROM comments WHERE issue_id = ? AND synced_at < ?;
 -- =============================================================================
 -- Documents queries
 -- =============================================================================
-
--- name: GetDocument :one
-SELECT * FROM documents WHERE id = ?;
-
--- name: GetDocumentBySlug :one
-SELECT * FROM documents WHERE slug_id = ?;
 
 -- name: ListIssueDocuments :many
 SELECT * FROM documents WHERE issue_id = ? ORDER BY title;
@@ -640,9 +517,6 @@ SELECT MAX(synced_at) FROM documents WHERE initiative_id = ?;
 -- name: GetInitiative :one
 SELECT * FROM initiatives WHERE id = ?;
 
--- name: GetInitiativeBySlug :one
-SELECT * FROM initiatives WHERE slug_id = ?;
-
 -- name: ListInitiatives :many
 SELECT * FROM initiatives ORDER BY sort_order, name;
 
@@ -695,24 +569,9 @@ DELETE FROM initiative_projects WHERE initiative_id = ?;
 -- name: DeleteInitiativeProjectsByProject :exec
 DELETE FROM initiative_projects WHERE project_id = ?;
 
--- name: ListInitiativeProjectIDs :many
-SELECT project_id FROM initiative_projects WHERE initiative_id = ?;
-
--- name: ListInitiativeProjects :many
-SELECT p.* FROM projects p
-JOIN initiative_projects ip ON p.id = ip.project_id
-WHERE ip.initiative_id = ?
-ORDER BY p.name;
-
--- name: ListProjectInitiativeIDs :many
-SELECT initiative_id FROM initiative_projects WHERE project_id = ?;
-
 -- =============================================================================
 -- Project Updates queries
 -- =============================================================================
-
--- name: GetProjectUpdate :one
-SELECT * FROM project_updates WHERE id = ?;
 
 -- name: ListProjectUpdates :many
 SELECT * FROM project_updates WHERE project_id = ? ORDER BY created_at DESC;
@@ -734,9 +593,6 @@ ON CONFLICT(id) DO UPDATE SET
     synced_at = excluded.synced_at,
     data = excluded.data;
 
--- name: DeleteProjectUpdate :exec
-DELETE FROM project_updates WHERE id = ?;
-
 -- name: DeleteProjectUpdates :exec
 DELETE FROM project_updates WHERE project_id = ?;
 
@@ -746,9 +602,6 @@ SELECT MAX(synced_at) FROM project_updates WHERE project_id = ?;
 -- =============================================================================
 -- Initiative Updates queries
 -- =============================================================================
-
--- name: GetInitiativeUpdate :one
-SELECT * FROM initiative_updates WHERE id = ?;
 
 -- name: ListInitiativeUpdates :many
 SELECT * FROM initiative_updates WHERE initiative_id = ? ORDER BY created_at DESC;
@@ -770,9 +623,6 @@ ON CONFLICT(id) DO UPDATE SET
     synced_at = excluded.synced_at,
     data = excluded.data;
 
--- name: DeleteInitiativeUpdate :exec
-DELETE FROM initiative_updates WHERE id = ?;
-
 -- name: DeleteInitiativeUpdates :exec
 DELETE FROM initiative_updates WHERE initiative_id = ?;
 
@@ -782,9 +632,6 @@ SELECT MAX(synced_at) FROM initiative_updates WHERE initiative_id = ?;
 -- =============================================================================
 -- Attachments queries (external links: GitHub PRs, Slack, etc.)
 -- =============================================================================
-
--- name: GetAttachment :one
-SELECT * FROM attachments WHERE id = ?;
 
 -- name: ListIssueAttachments :many
 -- The id tiebreaker keeps the order deterministic on equal created_at, so
@@ -822,12 +669,6 @@ DELETE FROM attachments WHERE issue_id = ?;
 -- Embedded Files queries (images, PDFs from Linear CDN)
 -- =============================================================================
 
--- name: GetEmbeddedFile :one
-SELECT * FROM embedded_files WHERE id = ?;
-
--- name: GetEmbeddedFileByURL :one
-SELECT * FROM embedded_files WHERE url = ?;
-
 -- name: ListIssueEmbeddedFiles :many
 -- The id tiebreaker keeps the order deterministic on equal filenames (the
 -- dedup case), so which duplicate gets the (2) suffix stays stable.
@@ -849,27 +690,15 @@ ON CONFLICT(id) DO UPDATE SET
 -- name: UpdateEmbeddedFileCache :exec
 UPDATE embedded_files SET cache_path = ?, file_size = ? WHERE id = ?;
 
--- name: DeleteEmbeddedFile :exec
-DELETE FROM embedded_files WHERE id = ?;
-
 -- name: DeleteIssueEmbeddedFiles :exec
 DELETE FROM embedded_files WHERE issue_id = ?;
-
--- name: ListCachedEmbeddedFiles :many
-SELECT * FROM embedded_files WHERE cache_path IS NOT NULL;
 
 -- =============================================================================
 -- Issue Relations queries
 -- =============================================================================
 
--- name: GetIssueRelation :one
-SELECT * FROM issue_relations WHERE id = ?;
-
 -- name: ListIssueRelations :many
 SELECT * FROM issue_relations WHERE issue_id = ? ORDER BY type, related_issue_id;
-
--- name: ListIssueRelationsByType :many
-SELECT * FROM issue_relations WHERE issue_id = ? AND type = ? ORDER BY related_issue_id;
 
 -- name: ListIssueInverseRelations :many
 SELECT * FROM issue_relations WHERE related_issue_id = ? ORDER BY type, issue_id;
@@ -911,9 +740,6 @@ ON CONFLICT(issue_id) DO UPDATE SET
 -- name: GetIssueHistoryCache :one
 SELECT issue_id, synced_at, data FROM issue_history_cache WHERE issue_id = ?;
 
--- name: GetIssueHistorySyncedAt :one
-SELECT synced_at FROM issue_history_cache WHERE issue_id = ?;
-
 -- =============================================================================
 -- Viewer Cache
 -- =============================================================================
@@ -945,6 +771,3 @@ SELECT issue_id, identifier FROM pending_detail_sync ORDER BY queued_at;
 
 -- name: CountPendingDetailSync :one
 SELECT COUNT(*) FROM pending_detail_sync;
-
--- name: ClearPendingDetailSync :exec
-DELETE FROM pending_detail_sync;

@@ -283,16 +283,6 @@ func TestTeams(t *testing.T) {
 		t.Fatalf("UpsertTeam failed: %v", err)
 	}
 
-	// Get by key
-	got, err := store.Queries().GetTeamByKey(ctx, "TST")
-	if err != nil {
-		t.Fatalf("GetTeamByKey failed: %v", err)
-	}
-
-	if got.Name != team.Name {
-		t.Errorf("Name mismatch: got %s, want %s", got.Name, team.Name)
-	}
-
 	// List all
 	teams, err := store.Queries().ListTeams(ctx)
 	if err != nil {
@@ -302,37 +292,8 @@ func TestTeams(t *testing.T) {
 	if len(teams) != 1 {
 		t.Errorf("Expected 1 team, got %d", len(teams))
 	}
-}
-
-func TestWithTransaction(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-1"
-
-	// Successful transaction
-	err := store.WithTx(ctx, func(q *Queries) error {
-		data := &IssueData{
-			ID:         "tx-issue-1",
-			Identifier: "TST-TX1",
-			Title:      "Transaction Test",
-			TeamID:     teamID,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-			Data:       json.RawMessage("{}"),
-		}
-		return q.UpsertIssue(ctx, data.ToUpsertParams())
-	})
-	if err != nil {
-		t.Fatalf("Transaction failed: %v", err)
-	}
-
-	// Verify commit
-	_, err = store.Queries().GetIssueByIdentifier(ctx, "TST-TX1")
-	if err != nil {
-		t.Error("Issue not found after commit")
+	if teams[0].Name != team.Name {
+		t.Errorf("Name mismatch: got %s, want %s", teams[0].Name, team.Name)
 	}
 }
 
@@ -379,18 +340,6 @@ func TestListTeamIssuesByAssignee(t *testing.T) {
 	if len(issues) != 2 {
 		t.Errorf("Expected 2 issues for assignee, got %d", len(issues))
 	}
-
-	// Query by assignee email
-	issuesByEmail, err := store.Queries().ListTeamIssuesByAssigneeEmail(ctx, ListTeamIssuesByAssigneeEmailParams{
-		TeamID:        teamID,
-		AssigneeEmail: toNullString(&assigneeEmail),
-	})
-	if err != nil {
-		t.Fatalf("ListTeamIssuesByAssigneeEmail failed: %v", err)
-	}
-	if len(issuesByEmail) != 2 {
-		t.Errorf("Expected 2 issues for assignee email, got %d", len(issuesByEmail))
-	}
 }
 
 func TestListTeamUnassignedIssues(t *testing.T) {
@@ -428,45 +377,6 @@ func TestListTeamUnassignedIssues(t *testing.T) {
 	}
 	if len(issues) != 2 {
 		t.Errorf("Expected 2 unassigned issues, got %d", len(issues))
-	}
-}
-
-func TestListTeamIssuesByPriority(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	teamID := "team-1"
-
-	// Insert issues with different priorities
-	priorities := []int{1, 2, 2, 3, 0} // 1=urgent, 2=high, 3=medium, 0=none
-	for i, p := range priorities {
-		data := &IssueData{
-			ID:         "issue-" + string(rune('a'+i)),
-			Identifier: "TST-" + string(rune('1'+i)),
-			Title:      "Issue " + string(rune('1'+i)),
-			TeamID:     teamID,
-			Priority:   p,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
-			Data:       json.RawMessage("{}"),
-		}
-		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
-			t.Fatalf("Insert failed: %v", err)
-		}
-	}
-
-	// Query by priority 2 (high)
-	issues, err := store.Queries().ListTeamIssuesByPriority(ctx, ListTeamIssuesByPriorityParams{
-		TeamID:   teamID,
-		Priority: toNullInt64(2),
-	})
-	if err != nil {
-		t.Fatalf("ListTeamIssuesByPriority failed: %v", err)
-	}
-	if len(issues) != 2 {
-		t.Errorf("Expected 2 high priority issues, got %d", len(issues))
 	}
 }
 
@@ -716,44 +626,6 @@ func TestDefaultDBPath(t *testing.T) {
 	}
 }
 
-func TestDeleteIssue(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-	ctx := context.Background()
-
-	// Insert an issue
-	data := &IssueData{
-		ID:         "to-delete",
-		Identifier: "TST-DEL",
-		Title:      "To Delete",
-		TeamID:     "team-1",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-		Data:       json.RawMessage("{}"),
-	}
-	if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
-		t.Fatalf("Insert failed: %v", err)
-	}
-
-	// Verify it exists
-	_, err := store.Queries().GetIssueByIdentifier(ctx, "TST-DEL")
-	if err != nil {
-		t.Fatalf("Issue should exist: %v", err)
-	}
-
-	// Delete by identifier
-	if err := store.Queries().DeleteIssueByIdentifier(ctx, "TST-DEL"); err != nil {
-		t.Fatalf("DeleteIssueByIdentifier failed: %v", err)
-	}
-
-	// Verify it's gone
-	_, err = store.Queries().GetIssueByIdentifier(ctx, "TST-DEL")
-	if err == nil {
-		t.Error("Issue should be deleted")
-	}
-}
-
 func TestGetTeamIssueCount(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -978,8 +850,4 @@ func strPtr(s string) *string {
 
 func float64Ptr(f float64) *float64 {
 	return &f
-}
-
-func toNullInt64(i int) sql.NullInt64 {
-	return sql.NullInt64{Int64: int64(i), Valid: true}
 }

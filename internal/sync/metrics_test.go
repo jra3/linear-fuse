@@ -201,8 +201,10 @@ func TestPendingDepthGauge(t *testing.T) {
 	}
 
 	// Draining the queue is visible on the next collect.
-	if err := store.Queries().ClearPendingDetailSync(ctx); err != nil {
-		t.Fatalf("clear pending: %v", err)
+	for _, id := range []string{"issue-1", "issue-2"} {
+		if err := store.Queries().DeletePendingDetailSync(ctx, id); err != nil {
+			t.Fatalf("clear pending %s: %v", id, err)
+		}
 	}
 	rm = collectMetrics(t, reader)
 	m, ok = findMetric(rm, "linearfs.sync.pending_depth")

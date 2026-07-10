@@ -548,7 +548,7 @@ relation's `createdAt`/`updatedAt` end-to-end, which nothing did. The
 took them — the gap was above the DB: `api.IssueRelation` gained the two fields,
 the `CreateIssueRelation` mutation (and the issue fragment) now select
 `createdAt`/`updatedAt`, the create-persist writes the server's times (not
-`now()`), and `GetIssueRelations`/`GetIssueInverseRelations`/`GetIssueRelationByID`
+`now()`), and `GetIssueRelations`/`GetIssueInverseRelations`
 map them back onto the struct. (The orthogonal gap noted here at the time —
 relations populated **only** by the local create handler, so UI-made relations
 never appeared as `.rel` files — was closed in round 14: relations are now the

@@ -100,11 +100,6 @@ func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository 
 	return r
 }
 
-// SetStalenessThreshold sets how long before on-demand data is considered stale
-func (r *SQLiteRepository) SetStalenessThreshold(d time.Duration) {
-	r.stalenessThreshold = d
-}
-
 // catchUpStaleness is the staleness threshold used during catch-up syncs.
 // Suppresses on-demand refreshes while the sync worker is already fetching the same data.
 const catchUpStaleness = 30 * time.Minute
@@ -375,12 +370,6 @@ func (r *SQLiteRepository) GetTeams(ctx context.Context) ([]api.Team, error) {
 	return db.DBTeamsToAPITeams(teams), nil
 }
 
-func (r *SQLiteRepository) GetTeamByKey(ctx context.Context, key string) (*api.Team, error) {
-	return queryOne("get team by key",
-		func() (db.Team, error) { return r.store.Queries().GetTeamByKey(ctx, key) },
-		pure(db.DBTeamToAPITeam))
-}
-
 // =============================================================================
 // Issues
 // =============================================================================
@@ -459,8 +448,7 @@ func (r *SQLiteRepository) GetIssuesByLabel(ctx context.Context, teamID, labelID
 
 // NB: GetIssuesByPriority was deleted (round 19) — it had no production
 // caller (there is no by/priority/ view). Its sqlc query
-// (ListTeamIssuesByPriority) is inert generated code awaiting removal at the
-// next `sqlc generate` (sqlc is not installed on this machine).
+// (ListTeamIssuesByPriority) was removed in the round-20 dead-code prune.
 
 func (r *SQLiteRepository) GetUnassignedIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
 	issues, err := r.store.Queries().ListTeamUnassignedIssues(ctx, teamID)
@@ -623,18 +611,6 @@ func (r *SQLiteRepository) GetUsers(ctx context.Context) ([]api.User, error) {
 	return db.DBUsersToAPIUsers(users), nil
 }
 
-func (r *SQLiteRepository) GetUserByID(ctx context.Context, id string) (*api.User, error) {
-	return queryOne("get user by id",
-		func() (db.User, error) { return r.store.Queries().GetUser(ctx, id) },
-		pure(db.DBUserToAPIUser))
-}
-
-func (r *SQLiteRepository) GetUserByEmail(ctx context.Context, email string) (*api.User, error) {
-	return queryOne("get user by email",
-		func() (db.User, error) { return r.store.Queries().GetUserByEmail(ctx, email) },
-		pure(db.DBUserToAPIUser))
-}
-
 func (r *SQLiteRepository) GetCurrentUser(ctx context.Context) (*api.User, error) {
 	// Return cached user if set (via SetCurrentUser)
 	if r.currentUser != nil {
@@ -666,17 +642,6 @@ func (r *SQLiteRepository) GetTeamCycles(ctx context.Context, teamID string) ([]
 	return db.DBCyclesToAPICycles(cycles), nil
 }
 
-func (r *SQLiteRepository) GetCycleByName(ctx context.Context, teamID, name string) (*api.Cycle, error) {
-	return queryOne("get cycle by name",
-		func() (db.Cycle, error) {
-			return r.store.Queries().GetCycleByName(ctx, db.GetCycleByNameParams{
-				TeamID: teamID,
-				Name:   sql.NullString{String: name, Valid: true},
-			})
-		},
-		pure(db.DBCycleToAPICycle))
-}
-
 // =============================================================================
 // Projects
 // =============================================================================
@@ -687,12 +652,6 @@ func (r *SQLiteRepository) GetTeamProjects(ctx context.Context, teamID string) (
 		return nil, fmt.Errorf("list team projects: %w", err)
 	}
 	return db.DBProjectsToAPIProjects(projects)
-}
-
-func (r *SQLiteRepository) GetProjectBySlug(ctx context.Context, slug string) (*api.Project, error) {
-	return queryOne("get project by slug",
-		func() (db.Project, error) { return r.store.Queries().GetProjectBySlug(ctx, slug) },
-		db.DBProjectToAPIProject)
 }
 
 func (r *SQLiteRepository) GetProjectByID(ctx context.Context, id string) (*api.Project, error) {
@@ -722,89 +681,6 @@ func (r *SQLiteRepository) GetProjectMilestones(ctx context.Context, projectID s
 		return nil, fmt.Errorf("list project milestones: %w", err)
 	}
 	return db.DBMilestonesToAPIProjectMilestones(milestones), nil
-}
-
-func (r *SQLiteRepository) GetMilestoneByName(ctx context.Context, projectID, name string) (*api.ProjectMilestone, error) {
-	return queryOne("get milestone by name",
-		func() (db.ProjectMilestone, error) {
-			return r.store.Queries().GetMilestoneByName(ctx, db.GetMilestoneByNameParams{ProjectID: projectID, Name: name})
-		},
-		pure(db.DBMilestoneToAPIProjectMilestone))
-}
-
-func (r *SQLiteRepository) GetMilestoneByID(ctx context.Context, id string) (*api.ProjectMilestone, error) {
-	return queryOne("get milestone by id",
-		func() (db.ProjectMilestone, error) { return r.store.Queries().GetProjectMilestone(ctx, id) },
-		pure(db.DBMilestoneToAPIProjectMilestone))
-}
-
-func (r *SQLiteRepository) CreateProjectMilestone(ctx context.Context, projectID, name, description string) (*api.ProjectMilestone, error) {
-	if r.client == nil {
-		return nil, fmt.Errorf("API client not available")
-	}
-
-	// Create via API
-	milestone, err := r.client.CreateProjectMilestone(ctx, projectID, name, description)
-	if err != nil {
-		return nil, fmt.Errorf("create milestone: %w", err)
-	}
-
-	// Upsert to SQLite for immediate visibility. Route through the forward
-	// converter so the full milestone lands in `data` — a hand-built params with
-	// Data:"{}" would round-trip to a milestone stripped of any JSON-only field.
-	if params, cerr := db.APIProjectMilestoneToDBMilestone(*milestone, projectID); cerr != nil {
-		log.Printf("[repo] convert milestone %s failed: %v", milestone.ID, cerr)
-	} else if err := r.store.Queries().UpsertProjectMilestone(ctx, params); err != nil {
-		log.Printf("[repo] upsert milestone %s failed: %v", milestone.ID, err)
-	}
-
-	return milestone, nil
-}
-
-func (r *SQLiteRepository) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
-	if r.client == nil {
-		return nil, fmt.Errorf("API client not available")
-	}
-
-	// Get the current milestone to find the project ID
-	existing, err := r.store.Queries().GetProjectMilestone(ctx, milestoneID)
-	if err != nil {
-		return nil, fmt.Errorf("get milestone: %w", err)
-	}
-
-	// Update via API
-	milestone, err := r.client.UpdateProjectMilestone(ctx, milestoneID, input)
-	if err != nil {
-		return nil, fmt.Errorf("update milestone: %w", err)
-	}
-
-	// Upsert to SQLite for immediate visibility (see CreateProjectMilestone: the
-	// full milestone must land in `data`, not "{}").
-	if params, cerr := db.APIProjectMilestoneToDBMilestone(*milestone, existing.ProjectID); cerr != nil {
-		log.Printf("[repo] convert milestone %s failed: %v", milestone.ID, cerr)
-	} else if err := r.store.Queries().UpsertProjectMilestone(ctx, params); err != nil {
-		log.Printf("[repo] upsert milestone %s failed: %v", milestone.ID, err)
-	}
-
-	return milestone, nil
-}
-
-func (r *SQLiteRepository) DeleteProjectMilestone(ctx context.Context, milestoneID string) error {
-	if r.client == nil {
-		return fmt.Errorf("API client not available")
-	}
-
-	// Delete via API
-	if err := r.client.DeleteProjectMilestone(ctx, milestoneID); err != nil {
-		return fmt.Errorf("delete milestone: %w", err)
-	}
-
-	// Delete from SQLite
-	if err := r.store.Queries().DeleteProjectMilestone(ctx, milestoneID); err != nil {
-		log.Printf("[repo] delete milestone %s from DB failed: %v", milestoneID, err)
-	}
-
-	return nil
 }
 
 // =============================================================================
@@ -1000,12 +876,6 @@ func parseTime(v interface{}) time.Time {
 	return db.ParseSQLiteTimeAny(v)
 }
 
-func (r *SQLiteRepository) GetCommentByID(ctx context.Context, id string) (*api.Comment, error) {
-	return queryOne("get comment by id",
-		func() (db.Comment, error) { return r.store.Queries().GetComment(ctx, id) },
-		db.DBCommentToAPIComment)
-}
-
 // =============================================================================
 // Documents
 // =============================================================================
@@ -1107,12 +977,6 @@ func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initi
 	return nil
 }
 
-func (r *SQLiteRepository) GetDocumentBySlug(ctx context.Context, slug string) (*api.Document, error) {
-	return queryOne("get document by slug",
-		func() (db.Document, error) { return r.store.Queries().GetDocumentBySlug(ctx, slug) },
-		db.DBDocumentToAPIDocument)
-}
-
 // =============================================================================
 // Initiatives
 // =============================================================================
@@ -1123,20 +987,6 @@ func (r *SQLiteRepository) GetInitiatives(ctx context.Context) ([]api.Initiative
 		return nil, fmt.Errorf("list initiatives: %w", err)
 	}
 	return db.DBInitiativesToAPIInitiatives(initiatives)
-}
-
-func (r *SQLiteRepository) GetInitiativeBySlug(ctx context.Context, slug string) (*api.Initiative, error) {
-	return queryOne("get initiative by slug",
-		func() (db.Initiative, error) { return r.store.Queries().GetInitiativeBySlug(ctx, slug) },
-		db.DBInitiativeToAPIInitiative)
-}
-
-func (r *SQLiteRepository) GetInitiativeProjects(ctx context.Context, initiativeID string) ([]api.Project, error) {
-	projects, err := r.store.Queries().ListInitiativeProjects(ctx, initiativeID)
-	if err != nil {
-		return nil, fmt.Errorf("list initiative projects: %w", err)
-	}
-	return db.DBProjectsToAPIProjects(projects)
 }
 
 // =============================================================================
@@ -1231,15 +1081,6 @@ func (r *SQLiteRepository) refreshInitiativeUpdates(ctx context.Context, initiat
 	return nil
 }
 
-// =============================================================================
-// Store Access (for sync worker)
-// =============================================================================
-
-// Store returns the underlying database store for direct access (e.g., sync worker)
-func (r *SQLiteRepository) Store() *db.Store {
-	return r.store
-}
-
 // SetCurrentUser sets the cached current user (useful for testing)
 func (r *SQLiteRepository) SetCurrentUser(user *api.User) {
 	r.currentUser = user
@@ -1272,13 +1113,6 @@ func (r *SQLiteRepository) UpdateEmbeddedFileCache(ctx context.Context, id, cach
 		FileSize:  sql.NullInt64{Int64: size, Valid: true},
 		ID:        id,
 	})
-}
-
-// GetAttachmentByID returns an attachment by ID
-func (r *SQLiteRepository) GetAttachmentByID(ctx context.Context, id string) (*api.Attachment, error) {
-	return queryOne("get attachment",
-		func() (db.Attachment, error) { return r.store.Queries().GetAttachment(ctx, id) },
-		db.DBAttachmentToAPIAttachment)
 }
 
 // =============================================================================
@@ -1367,8 +1201,8 @@ const (
 
 // relationView maps one stored db.IssueRelation to an api.IssueRelation, placing
 // the other end in the field the direction dictates and enriching it with the
-// issue's identifier/title. It is the one converter behind all three relation
-// reads (outgoing, inverse, by-id), which were byte-identical but for this
+// issue's identifier/title. It is the one converter behind both relation
+// reads (outgoing, inverse), which were byte-identical but for this
 // direction — so a field added to the mapping now lives in exactly one place.
 func (r *SQLiteRepository) relationView(ctx context.Context, rel db.IssueRelation, dir relationDir) api.IssueRelation {
 	view := api.IssueRelation{
@@ -1417,11 +1251,4 @@ func (r *SQLiteRepository) GetIssueInverseRelations(ctx context.Context, issueID
 		result[i] = r.relationView(ctx, rel, relIncoming)
 	}
 	return result, nil
-}
-
-// GetIssueRelationByID returns a relation by ID
-func (r *SQLiteRepository) GetIssueRelationByID(ctx context.Context, id string) (*api.IssueRelation, error) {
-	return queryOne("get issue relation",
-		func() (db.IssueRelation, error) { return r.store.Queries().GetIssueRelation(ctx, id) },
-		pure(func(rel db.IssueRelation) api.IssueRelation { return r.relationView(ctx, rel, relOutgoing) }))
 }

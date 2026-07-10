@@ -149,24 +149,10 @@ func (s *Store) Queries() *Queries {
 	return s.queries
 }
 
-// DB returns the underlying database connection for raw queries
+// DB returns the underlying database connection. Test seam only: no
+// production code calls it — tests and fixture loaders use it for raw SQL.
 func (s *Store) DB() *sql.DB {
 	return s.db
-}
-
-// WithTx executes a function within a transaction
-func (s *Store) WithTx(ctx context.Context, fn func(*Queries) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := fn(s.queries.WithTx(tx)); err != nil {
-		return err
-	}
-
-	return tx.Commit()
 }
 
 // ListIssuesByLabel returns issues that have a specific label

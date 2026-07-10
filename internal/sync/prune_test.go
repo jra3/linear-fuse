@@ -44,22 +44,36 @@ func seedInitiativeProject(t *testing.T, store *db.Store, initiativeID, projectI
 	}
 }
 
-func projectTeamIDs(t *testing.T, store *db.Store, projectID string) []string {
+// projectTeamIDs and initiativeProjectIDs observe the junction tables through
+// the raw-SQL test seam (store.DB()) — no production query lists these link
+// IDs, and the prune tests only need to see the rows.
+func linkIDs(t *testing.T, store *db.Store, query, id string) []string {
 	t.Helper()
-	ids, err := store.Queries().ListProjectTeamIDs(context.Background(), projectID)
+	rows, err := store.DB().Query(query, id)
 	if err != nil {
-		t.Fatalf("list project teams: %v", err)
+		t.Fatalf("list links: %v", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var linked string
+		if err := rows.Scan(&linked); err != nil {
+			t.Fatalf("scan link: %v", err)
+		}
+		ids = append(ids, linked)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate links: %v", err)
 	}
 	return ids
 }
 
+func projectTeamIDs(t *testing.T, store *db.Store, projectID string) []string {
+	return linkIDs(t, store, "SELECT team_id FROM project_teams WHERE project_id = ? ORDER BY team_id", projectID)
+}
+
 func initiativeProjectIDs(t *testing.T, store *db.Store, initiativeID string) []string {
-	t.Helper()
-	ids, err := store.Queries().ListInitiativeProjectIDs(context.Background(), initiativeID)
-	if err != nil {
-		t.Fatalf("list initiative projects: %v", err)
-	}
-	return ids
+	return linkIDs(t, store, "SELECT project_id FROM initiative_projects WHERE initiative_id = ? ORDER BY project_id", initiativeID)
 }
 
 // TestTeamMetadataSyncPrunesStaleProjectTeams: an association the (complete)
