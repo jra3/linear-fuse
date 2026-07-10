@@ -25,6 +25,70 @@ func (m *mockBudgetReporter) BudgetSnapshot() (int, float64) {
 	return m.count, m.pct
 }
 
+// fakeClock drives the Worker's clock seam (now/newTimer/newTicker) in tests
+// — the worker-side analogue of ratebudget_test.go's fakeClock, plus recorded
+// timer/ticker channels the test fires explicitly. The time is mutex'd
+// because the run loop reads now() from its own goroutine.
+type fakeClock struct {
+	mu gosync.Mutex
+	t  time.Time
+
+	timerCh  chan time.Time // handed out by newTimer; the test fires it
+	tickerCh chan time.Time // handed out by newTicker; the test feeds ticks
+	tickerD  time.Duration  // duration requested by the last newTicker call
+
+	// Each newTimer call reports its requested duration here (buffered, so
+	// the worker never blocks on it). A receive doubles as the handshake
+	// that the worker has reached — and parked on — the timer.
+	timerSet chan time.Duration
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{
+		t:        time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC),
+		timerCh:  make(chan time.Time),
+		tickerCh: make(chan time.Time),
+		timerSet: make(chan time.Duration, 4),
+	}
+}
+
+func (f *fakeClock) now() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.t
+}
+
+func (f *fakeClock) advance(d time.Duration) {
+	f.mu.Lock()
+	f.t = f.t.Add(d)
+	f.mu.Unlock()
+}
+
+func (f *fakeClock) newTimer(d time.Duration) (<-chan time.Time, func() bool) {
+	f.timerSet <- d
+	return f.timerCh, func() bool { return true }
+}
+
+func (f *fakeClock) newTicker(d time.Duration) (<-chan time.Time, func()) {
+	f.mu.Lock()
+	f.tickerD = d
+	f.mu.Unlock()
+	return f.tickerCh, func() {}
+}
+
+func (f *fakeClock) tickerInterval() time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tickerD
+}
+
+// install wires the fake into a worker's clock seam.
+func (f *fakeClock) install(w *Worker) {
+	w.now = f.now
+	w.newTimer = f.newTimer
+	w.newTicker = f.newTicker
+}
+
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
 	teams            []api.Team
@@ -240,10 +304,9 @@ func TestWorkerStartStop(t *testing.T) {
 		t.Error("Worker should be running after Start()")
 	}
 
-	// Wait for initial sync
-	time.Sleep(50 * time.Millisecond)
-
-	// Stop worker
+	// Stop worker. Stop blocks on run()'s doneCh, and run() always completes
+	// the probe and the initial sync cycle before it can observe stopCh — so
+	// GetTeams has fired by the time Stop returns, no settling sleep needed.
 	worker.Stop()
 	if worker.Running() {
 		t.Error("Worker should not be running after Stop()")
@@ -494,17 +557,13 @@ func TestWorkerContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	worker.Start(ctx)
-	time.Sleep(20 * time.Millisecond)
 
-	// Cancel context should stop worker. Poll with a deadline rather than a
-	// fixed grace: the worker only observes cancellation between sync steps,
-	// and on a loaded CI runner the in-flight initial sync can take well over
-	// the old 100ms (observed flaking on the shared runners).
+	// Cancel context should stop worker. run() closes doneCh on every exit
+	// (after clearing running), so a blocking read is the synchronization
+	// point — the old deadline poll flaked on loaded CI runners where the
+	// in-flight initial sync outlived the grace period.
 	cancel()
-	deadline := time.Now().Add(10 * time.Second)
-	for worker.Running() && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	<-worker.doneCh
 
 	if worker.Running() {
 		t.Error("Worker should stop when context is cancelled")
@@ -1056,58 +1115,86 @@ func TestDetailsSyncPrunesStaleDocsAndAttachments(t *testing.T) {
 }
 
 // TestSetRateLimitedAdaptiveBackoff verifies M-3: when the API client reports a non-zero
-// RateLimitResetAt(), setRateLimited() uses that time (+ 5s buffer) instead of the 15-min default.
+// future RateLimitResetAt(), setRateLimited() uses that time (+ 5s buffer) instead of the
+// 15-min default. The pinned fake clock makes the arithmetic exact — no tolerance window.
 func TestSetRateLimitedAdaptiveBackoff(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 
+	clock := newFakeClock()
 	mock := newMockAPIClient()
-	serverResetAt := time.Now().Add(30 * time.Minute)
+	serverResetAt := clock.now().Add(30 * time.Minute)
 	mock.rateLimitResetAt = serverResetAt
 
-	cfg := Config{Interval: time.Hour}
-	worker := NewWorker(mock, store, cfg)
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	clock.install(worker)
 
 	worker.setRateLimited()
 
-	expected := serverResetAt.Add(5 * time.Second)
-	got := worker.rateLimitExpiry
-
-	diff := got.Sub(expected)
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > 2*time.Second {
-		t.Errorf("rateLimitExpiry = %v, want ~%v (diff %v)", got, expected, diff)
+	if want := serverResetAt.Add(5 * time.Second); !worker.rateLimitExpiry.Equal(want) {
+		t.Errorf("rateLimitExpiry = %v, want exactly %v (server reset + 5s buffer)", worker.rateLimitExpiry, want)
 	}
 }
 
-// TestSetRateLimitedFallback verifies M-3: when no server reset time is available,
-// setRateLimited() falls back to the 15-minute fixed backoff.
+// TestSetRateLimitedFallback verifies M-3: with no usable server reset —
+// zero (never reported) or already past — setRateLimited() falls back to the
+// 15-minute fixed backoff, exactly, on the pinned fake clock.
 func TestSetRateLimitedFallback(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]func(now time.Time) time.Time{
+		"zero reset": func(time.Time) time.Time { return time.Time{} },
+		"past reset": func(now time.Time) time.Time { return now.Add(-time.Minute) },
+	}
+	for name, resetAt := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := openTestStore(t)
+			defer store.Close()
+
+			clock := newFakeClock()
+			mock := newMockAPIClient()
+			mock.rateLimitResetAt = resetAt(clock.now())
+
+			worker := NewWorker(mock, store, Config{Interval: time.Hour})
+			clock.install(worker)
+
+			worker.setRateLimited()
+
+			if want := clock.now().Add(15 * time.Minute); !worker.rateLimitExpiry.Equal(want) {
+				t.Errorf("rateLimitExpiry = %v, want exactly %v (the 15-minute fallback)", worker.rateLimitExpiry, want)
+			}
+		})
+	}
+}
+
+// TestIsRateLimitedFlipsWhenClockCrossesExpiry: the seam's most basic win —
+// isRateLimited() is a pure now-vs-expiry comparison, so advancing the fake
+// clock across rateLimitExpiry must flip it false with zero real waiting.
+func TestIsRateLimitedFlipsWhenClockCrossesExpiry(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 
-	mock := newMockAPIClient()
-	// rateLimitResetAt is zero (the default)
+	clock := newFakeClock()
+	mock := newMockAPIClient() // zero reset → the 15-minute fallback backoff
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	clock.install(worker)
 
-	cfg := Config{Interval: time.Hour}
-	worker := NewWorker(mock, store, cfg)
-
-	before := time.Now()
 	worker.setRateLimited()
-
-	expected := before.Add(15 * time.Minute)
-	got := worker.rateLimitExpiry
-
-	diff := got.Sub(expected)
-	if diff < 0 {
-		diff = -diff
+	if !worker.isRateLimited() {
+		t.Fatal("isRateLimited() = false immediately after setRateLimited()")
 	}
-	if diff > 2*time.Second {
-		t.Errorf("rateLimitExpiry = %v, want ~%v (diff %v)", got, expected, diff)
+
+	clock.advance(15*time.Minute - time.Second)
+	if !worker.isRateLimited() {
+		t.Error("isRateLimited() = false one second before expiry, want true")
+	}
+
+	clock.advance(2 * time.Second)
+	if worker.isRateLimited() {
+		t.Error("isRateLimited() = true after the clock crossed expiry, want false")
 	}
 }
 
@@ -1132,15 +1219,13 @@ func TestProbeSeedsBudgetBeforeFirstSync(t *testing.T) {
 	defer cancel()
 
 	worker.Start(ctx)
-	defer worker.Stop()
+	// Stop blocks on run()'s doneCh, and run() completes the probe and the
+	// initial sync cycle before it can observe stopCh — so by the time Stop
+	// returns, GetTeams has fired and the call order is settled (no poll).
+	worker.Stop()
 
-	// Wait for the initial sync cycle to reach GetTeams.
-	deadline := time.Now().Add(5 * time.Second)
-	for atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("initial sync never called GetTeams")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
+		t.Fatal("initial sync never called GetTeams")
 	}
 
 	order := mock.callOrder()
@@ -1162,21 +1247,28 @@ func TestProbeRateLimitedDelaysSyncStart(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 
+	clock := newFakeClock()
 	mock := newMockAPIClient()
 	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
 	mock.viewerErr = errors.New("GraphQL error: RATELIMITED: rate limit exceeded")
 	// The budget's server-reported reset (seeded by the probe response's
 	// headers in production) is an hour out.
-	mock.rateLimitResetAt = time.Now().Add(time.Hour)
+	mock.rateLimitResetAt = clock.now().Add(time.Hour)
 
 	worker := NewWorker(mock, store, Config{Interval: 10 * time.Millisecond})
+	clock.install(worker)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	worker.Start(ctx)
 
-	// Give the worker ample time to (incorrectly) start syncing.
-	time.Sleep(200 * time.Millisecond)
+	// The probe parks on the injected delay timer — the handshake that
+	// replaced the old 200ms "ample time to misbehave" sleep. Nothing ever
+	// fires the fake timer, so any sync activity from here IS the bug. With
+	// the clock pinned the requested delay is exact: reset − now + 5s buffer.
+	if got, want := <-clock.timerSet, time.Hour+5*time.Second; got != want {
+		t.Errorf("probe delay = %v, want exactly %v", got, want)
+	}
 
 	if got := atomic.LoadInt32(&mock.getTeamsCalls); got != 0 {
 		t.Errorf("GetTeams calls during rate-limited probe delay = %d, want 0", got)
@@ -1209,17 +1301,108 @@ func TestProbeFailureProceeds(t *testing.T) {
 	defer cancel()
 
 	worker.Start(ctx)
-	defer worker.Stop()
+	// Stop blocks until run() exits; a probe failure that (correctly)
+	// proceeds will have completed the initial sync by then.
+	worker.Stop()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("sync never proceeded past a non-rate-limit probe failure")
-		}
-		time.Sleep(5 * time.Millisecond)
+	if atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
+		t.Fatal("sync never proceeded past a non-rate-limit probe failure")
 	}
 	if worker.isRateLimited() {
 		t.Error("a non-rate-limit probe failure must not mark the worker rate-limited")
+	}
+}
+
+// TestProbeBudgetRateLimitedWaitAndResume drives probeBudget's RATELIMITED
+// path directly on the fake timer: the requested wait must be exactly the
+// backoff-to-expiry duration, and firing the timer resumes sync (returns
+// true) — zero real waiting.
+func TestProbeBudgetRateLimitedWaitAndResume(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	clock := newFakeClock()
+	mock := newMockAPIClient()
+	mock.viewerErr = errors.New("GraphQL error: RATELIMITED: rate limit exceeded")
+	mock.rateLimitResetAt = clock.now().Add(30 * time.Minute)
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	clock.install(worker)
+
+	result := make(chan bool, 1)
+	go func() { result <- worker.probeBudget(context.Background()) }()
+
+	// The probe parked on the fake timer; the clock is pinned, so the
+	// requested wait is exactly reset − now + 5s buffer.
+	if got, want := <-clock.timerSet, 30*time.Minute+5*time.Second; got != want {
+		t.Errorf("probe wait = %v, want exactly %v", got, want)
+	}
+
+	// Fire the timer: the backoff "elapsed", sync must proceed.
+	clock.timerCh <- time.Time{}
+	if !<-result {
+		t.Error("probeBudget = false after the delay timer fired, want true (sync proceeds)")
+	}
+}
+
+// TestProbeBudgetStopInterruptsWait: Stop (stopCh closing) must interrupt the
+// probe's backoff wait and return false so run() exits without firing a
+// post-stop sync cycle. The fake timer never fires — the only way out is the
+// stop channel.
+func TestProbeBudgetStopInterruptsWait(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	clock := newFakeClock()
+	mock := newMockAPIClient()
+	mock.viewerErr = errors.New("GraphQL error: RATELIMITED: rate limit exceeded")
+	mock.rateLimitResetAt = clock.now().Add(30 * time.Minute)
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	clock.install(worker)
+
+	result := make(chan bool, 1)
+	go func() { result <- worker.probeBudget(context.Background()) }()
+
+	<-clock.timerSet     // the probe is parked on the fake timer
+	close(worker.stopCh) // what Stop() does (in-package; run() isn't live here)
+	if <-result {
+		t.Error("probeBudget = true, want false when Stop interrupts the backoff wait")
+	}
+}
+
+// TestRunLoopTickFiresSyncCycle: the run loop's cadence rides the injected
+// ticker — feeding one tick on the fake channel fires a full sync cycle, no
+// real interval elapses.
+func TestRunLoopTickFiresSyncCycle(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+
+	clock := newFakeClock()
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	clock.install(worker)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	worker.Start(ctx)
+	// The unbuffered send completes only once the loop is parked in its
+	// select — i.e. after the initial sync — and hands it exactly one tick.
+	clock.tickerCh <- time.Time{}
+	// Stop blocks until run() exits, and the tick's sync cycle runs to
+	// completion before the loop can re-enter the select and observe stopCh.
+	worker.Stop()
+
+	if d := clock.tickerInterval(); d != time.Hour {
+		t.Errorf("run loop ticker constructed with %v, want the configured interval %v", d, time.Hour)
+	}
+	if calls := atomic.LoadInt32(&mock.getTeamsCalls); calls != 2 {
+		t.Errorf("GetTeams calls = %d, want exactly 2 (initial sync + the injected tick)", calls)
 	}
 }
 

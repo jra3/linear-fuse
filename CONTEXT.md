@@ -1067,6 +1067,30 @@ raw `SELECT *` positional scans would misalign on one layout — every issue
 scan uses an explicit column list (sqlc expands `*` itself;
 `ListIssuesByLabel` was made explicit by hand).
 
+### Worker clock seam (`Worker.now`/`newTimer`/`newTicker`)
+The sync worker's timing goes through three unexported function fields on
+`Worker` (`internal/sync/worker.go`) — `now func() time.Time`, `newTimer
+func(d) (<-chan time.Time, func() bool)`, `newTicker func(d) (<-chan
+time.Time, func())` — the worker-side sibling of rateBudget's injected
+`now` (closures, not an interface or a clock library). `NewWorker` defaults
+them to the real clock via `realNow`/`realNewTimer`/`realNewTicker` in
+`clock.go` — deliberately a separate file, because the load-bearing rule is
+**no bare `time.` clock calls in worker.go**: every
+`Now/Since/Until/NewTimer/NewTicker/Sleep/After` goes through the seam
+(`time.Duration` arithmetic and `time.RFC3339` formatting are not clock
+calls and stay), the same greppable discipline as the ino namespace's
+no-bare-hashes rule — `grep 'time\.\(Now\|Since\|Until\|NewTimer\|NewTicker\|Sleep\|After\)'
+internal/sync/worker.go` must return nothing. What the seam bought
+(`worker_test.go`, all with zero real waiting): `isRateLimited` flipping as
+the fake clock crosses expiry, `setRateLimited`'s exact backoff arithmetic
+(no more ±2s tolerance windows), `probeBudget`'s RATELIMITED delay — assert
+the exact requested wait on the fake timer, fire it to resume, or close
+stopCh to interrupt — and the run loop's cadence (feed a tick on the fake
+ticker channel, a sync cycle fires). The fake (`fakeClock` in
+`worker_test.go`) is a mutex'd time plus recorded timer/ticker channels; its
+buffered `timerSet` doubles as the handshake that the worker has parked on
+the timer, which is what replaced the old `time.Sleep` grace periods.
+
 ### Reverse conversion contract (hydrate-then-overlay)
 Every DB→API reverse conversion in `internal/db/convert.go` **starts from the
 `data` blob and overlays its queryable columns** (canonical statement at
