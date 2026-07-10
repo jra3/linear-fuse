@@ -297,10 +297,11 @@ type Initiative struct {
 }
 
 type InitiativeProjects struct {
-	// PageInfo is populated by queries that select it (queryWorkspace and
-	// its drain pages) and consumed by GetWorkspace, which drains any
-	// remainder and then clears it — callers downstream of GetWorkspace
-	// always see a complete Nodes list and a nil PageInfo.
+	// PageInfo is populated by queries that select it (queryWorkspace,
+	// queryInitiative, and their drain pages) and consumed by GetWorkspace
+	// and GetInitiative, which drain any remainder and then clear it —
+	// callers downstream always see a complete Nodes list and a nil
+	// PageInfo.
 	PageInfo *PageInfo           `json:"pageInfo,omitempty"`
 	Nodes    []InitiativeProject `json:"nodes"`
 }
