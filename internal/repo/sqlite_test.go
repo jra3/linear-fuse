@@ -53,27 +53,6 @@ func TestSQLiteRepository_Teams(t *testing.T) {
 	if len(teams) != 2 {
 		t.Errorf("Expected 2 teams, got %d", len(teams))
 	}
-
-	// Test GetTeamByKey
-	team, err := repo.GetTeamByKey(ctx, "ENG")
-	if err != nil {
-		t.Fatalf("GetTeamByKey failed: %v", err)
-	}
-	if team == nil {
-		t.Fatal("Expected team, got nil")
-	}
-	if team.Name != "Engineering" {
-		t.Errorf("Expected team name 'Engineering', got %q", team.Name)
-	}
-
-	// Test GetTeamByKey - not found
-	team, err = repo.GetTeamByKey(ctx, "NOTFOUND")
-	if err != nil {
-		t.Fatalf("GetTeamByKey failed: %v", err)
-	}
-	if team != nil {
-		t.Error("Expected nil for non-existent team")
-	}
 }
 
 func TestSQLiteRepository_Issues(t *testing.T) {
@@ -335,30 +314,6 @@ func TestSQLiteRepository_Users(t *testing.T) {
 	if len(result) != 2 {
 		t.Errorf("Expected 2 users, got %d", len(result))
 	}
-
-	// Test GetUserByID
-	user, err := repo.GetUserByID(ctx, "u1")
-	if err != nil {
-		t.Fatalf("GetUserByID failed: %v", err)
-	}
-	if user == nil {
-		t.Fatal("Expected user, got nil")
-	}
-	if user.Name != "Alice" {
-		t.Errorf("Expected name 'Alice', got %q", user.Name)
-	}
-
-	// Test GetUserByEmail
-	user, err = repo.GetUserByEmail(ctx, "bob@example.com")
-	if err != nil {
-		t.Fatalf("GetUserByEmail failed: %v", err)
-	}
-	if user == nil {
-		t.Fatal("Expected user, got nil")
-	}
-	if user.ID != "u2" {
-		t.Errorf("Expected ID 'u2', got %q", user.ID)
-	}
 }
 
 func TestSQLiteRepository_Cycles(t *testing.T) {
@@ -388,18 +343,6 @@ func TestSQLiteRepository_Cycles(t *testing.T) {
 	}
 	if len(result) != 2 {
 		t.Errorf("Expected 2 cycles, got %d", len(result))
-	}
-
-	// Test GetCycleByName
-	cycle, err := repo.GetCycleByName(ctx, "team-1", "Sprint 1")
-	if err != nil {
-		t.Fatalf("GetCycleByName failed: %v", err)
-	}
-	if cycle == nil {
-		t.Fatal("Expected cycle, got nil")
-	}
-	if cycle.Number != 1 {
-		t.Errorf("Expected number 1, got %d", cycle.Number)
 	}
 }
 
@@ -440,20 +383,8 @@ func TestSQLiteRepository_Projects(t *testing.T) {
 		t.Errorf("Expected 2 projects, got %d", len(result))
 	}
 
-	// Test GetProjectBySlug
-	project, err := repo.GetProjectBySlug(ctx, "alpha")
-	if err != nil {
-		t.Fatalf("GetProjectBySlug failed: %v", err)
-	}
-	if project == nil {
-		t.Fatal("Expected project, got nil")
-	}
-	if project.Name != "Project Alpha" {
-		t.Errorf("Expected name 'Project Alpha', got %q", project.Name)
-	}
-
 	// Test GetProjectByID
-	project, err = repo.GetProjectByID(ctx, "p2")
+	project, err := repo.GetProjectByID(ctx, "p2")
 	if err != nil {
 		t.Fatalf("GetProjectByID failed: %v", err)
 	}
@@ -1010,27 +941,6 @@ func TestSQLiteRepository_Milestones(t *testing.T) {
 	if len(milestones) != 2 {
 		t.Errorf("Expected 2 milestones, got %d", len(milestones))
 	}
-
-	// Test GetMilestoneByName
-	milestone, err := repo.GetMilestoneByName(ctx, "project-1", "Alpha")
-	if err != nil {
-		t.Fatalf("GetMilestoneByName failed: %v", err)
-	}
-	if milestone == nil {
-		t.Fatal("Expected milestone, got nil")
-	}
-	if milestone.Name != "Alpha" {
-		t.Errorf("Expected milestone name 'Alpha', got %q", milestone.Name)
-	}
-
-	// Test not found
-	milestone, err = repo.GetMilestoneByName(ctx, "project-1", "NotFound")
-	if err != nil {
-		t.Fatalf("GetMilestoneByName failed: %v", err)
-	}
-	if milestone != nil {
-		t.Error("Expected nil for non-existent milestone")
-	}
 }
 
 func TestSQLiteRepository_Comments(t *testing.T) {
@@ -1082,27 +992,6 @@ func TestSQLiteRepository_Comments(t *testing.T) {
 	}
 	if len(comments) != 2 {
 		t.Errorf("Expected 2 comments, got %d", len(comments))
-	}
-
-	// Test GetCommentByID
-	comment, err := repo.GetCommentByID(ctx, "comment-1")
-	if err != nil {
-		t.Fatalf("GetCommentByID failed: %v", err)
-	}
-	if comment == nil {
-		t.Fatal("Expected comment, got nil")
-	}
-	if comment.Body != "First comment" {
-		t.Errorf("Expected body 'First comment', got %q", comment.Body)
-	}
-
-	// Test not found
-	comment, err = repo.GetCommentByID(ctx, "not-found")
-	if err != nil {
-		t.Fatalf("GetCommentByID failed: %v", err)
-	}
-	if comment != nil {
-		t.Error("Expected nil for non-existent comment")
 	}
 }
 
@@ -1158,18 +1047,6 @@ func TestSQLiteRepository_IssueDocuments(t *testing.T) {
 	}
 	if len(docs) != 1 {
 		t.Errorf("Expected 1 document, got %d", len(docs))
-	}
-
-	// Test GetDocumentBySlug
-	doc2, err := repo.GetDocumentBySlug(ctx, "test-doc")
-	if err != nil {
-		t.Fatalf("GetDocumentBySlug failed: %v", err)
-	}
-	if doc2 == nil {
-		t.Fatal("Expected document, got nil")
-	}
-	if doc2.Title != "Test Doc" {
-		t.Errorf("Expected title 'Test Doc', got %q", doc2.Title)
 	}
 }
 
@@ -1246,75 +1123,6 @@ func TestSQLiteRepository_Initiatives(t *testing.T) {
 	}
 	if len(initiatives) != 1 {
 		t.Errorf("Expected 1 initiative, got %d", len(initiatives))
-	}
-
-	// Test GetInitiativeBySlug
-	init, err := repo.GetInitiativeBySlug(ctx, "test-initiative")
-	if err != nil {
-		t.Fatalf("GetInitiativeBySlug failed: %v", err)
-	}
-	if init == nil {
-		t.Fatal("Expected initiative, got nil")
-	}
-	if init.Name != "Test Initiative" {
-		t.Errorf("Expected name 'Test Initiative', got %q", init.Name)
-	}
-
-	// Test not found
-	init, err = repo.GetInitiativeBySlug(ctx, "not-found")
-	if err != nil {
-		t.Fatalf("GetInitiativeBySlug failed: %v", err)
-	}
-	if init != nil {
-		t.Error("Expected nil for non-existent initiative")
-	}
-}
-
-func TestSQLiteRepository_InitiativeProjects(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Insert initiative
-	initiative := api.Initiative{
-		ID:        "init-1",
-		Name:      "Test Initiative",
-		Slug:      "test-initiative",
-		Status:    "active",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	initParams, _ := db.APIInitiativeToDBInitiative(initiative)
-	if err := store.Queries().UpsertInitiative(ctx, initParams); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Insert project
-	project := api.Project{ID: "project-1", Name: "Project", Slug: "project", State: "started", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	projectParams, _ := db.APIProjectToDBProject(project)
-	if err := store.Queries().UpsertProject(ctx, projectParams); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Link project to initiative
-	if err := store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
-		InitiativeID: "init-1",
-		ProjectID:    "project-1",
-		SyncedAt:     time.Now(),
-	}); err != nil {
-		t.Fatalf("setup: %v", err)
-	}
-
-	// Test GetInitiativeProjects
-	projects, err := repo.GetInitiativeProjects(ctx, "init-1")
-	if err != nil {
-		t.Fatalf("GetInitiativeProjects failed: %v", err)
-	}
-	if len(projects) != 1 {
-		t.Errorf("Expected 1 project, got %d", len(projects))
 	}
 }
 
@@ -1408,47 +1216,20 @@ func TestSQLiteRepository_InitiativeUpdates(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_StoreAndClose(t *testing.T) {
+func TestSQLiteRepository_Close(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	repo := NewSQLiteRepository(store, nil)
-
-	// Test Store returns the store
-	s := repo.Store()
-	if s != store {
-		t.Error("Store() should return the underlying store")
-	}
-
-	// Test Close (doesn't return error)
-	repo.Close()
-}
-
-func TestSQLiteRepository_SetStalenessThreshold(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	defer repo.Close()
 
 	// Default threshold should be 5 minutes (2.5× the 2-minute sync interval)
 	if repo.stalenessThreshold != 5*time.Minute {
 		t.Errorf("Expected default threshold of 5m, got %v", repo.stalenessThreshold)
 	}
 
-	// Set custom threshold
-	repo.SetStalenessThreshold(10 * time.Minute)
-	if repo.stalenessThreshold != 10*time.Minute {
-		t.Errorf("Expected threshold of 10m, got %v", repo.stalenessThreshold)
-	}
-
-	// Set to 0
-	repo.SetStalenessThreshold(0)
-	if repo.stalenessThreshold != 0 {
-		t.Errorf("Expected threshold of 0, got %v", repo.stalenessThreshold)
-	}
+	// Test Close (doesn't return error)
+	repo.Close()
 }
 
 func TestSQLiteRepository_ParseTime(t *testing.T) {
@@ -1516,24 +1297,6 @@ func TestSQLiteRepository_GetIssueByIdentifier_NotFound(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_GetProjectBySlug_NotFound(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Test not found
-	project, err := repo.GetProjectBySlug(ctx, "nonexistent")
-	if err != nil {
-		t.Fatalf("GetProjectBySlug should not error on not found: %v", err)
-	}
-	if project != nil {
-		t.Error("Expected nil for non-existent project")
-	}
-}
-
 func TestSQLiteRepository_GetProjectByID_NotFound(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
@@ -1552,24 +1315,6 @@ func TestSQLiteRepository_GetProjectByID_NotFound(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepository_GetDocumentBySlug_NotFound(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Test not found
-	doc, err := repo.GetDocumentBySlug(ctx, "nonexistent")
-	if err != nil {
-		t.Fatalf("GetDocumentBySlug should not error on not found: %v", err)
-	}
-	if doc != nil {
-		t.Error("Expected nil for non-existent document")
-	}
-}
-
 func TestSQLiteRepository_GetLabelByName_NotFound(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
@@ -1585,60 +1330,6 @@ func TestSQLiteRepository_GetLabelByName_NotFound(t *testing.T) {
 	}
 	if label != nil {
 		t.Error("Expected nil for non-existent label")
-	}
-}
-
-func TestSQLiteRepository_GetUserByID_NotFound(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Test not found
-	user, err := repo.GetUserByID(ctx, "nonexistent")
-	if err != nil {
-		t.Fatalf("GetUserByID should not error on not found: %v", err)
-	}
-	if user != nil {
-		t.Error("Expected nil for non-existent user")
-	}
-}
-
-func TestSQLiteRepository_GetUserByEmail_NotFound(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Test not found
-	user, err := repo.GetUserByEmail(ctx, "nonexistent@example.com")
-	if err != nil {
-		t.Fatalf("GetUserByEmail should not error on not found: %v", err)
-	}
-	if user != nil {
-		t.Error("Expected nil for non-existent user")
-	}
-}
-
-func TestSQLiteRepository_GetCycleByName_NotFound(t *testing.T) {
-	t.Parallel()
-	store, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	repo := NewSQLiteRepository(store, nil)
-	ctx := context.Background()
-
-	// Test not found
-	cycle, err := repo.GetCycleByName(ctx, "team-1", "NonexistentCycle")
-	if err != nil {
-		t.Fatalf("GetCycleByName should not error on not found: %v", err)
-	}
-	if cycle != nil {
-		t.Error("Expected nil for non-existent cycle")
 	}
 }
 
@@ -2746,7 +2437,7 @@ func TestReconcileAgainst_LocalQueryErrorDeletesNothing(t *testing.T) {
 	}
 }
 
-// TestIssueRelationView covers the one converter behind all three relation
+// TestIssueRelationView covers the one converter behind both relation
 // reads: outgoing fills RelatedIssue from related_issue_id, inverse fills Issue
 // from issue_id, and both enrich the other end with its identifier/title.
 func TestIssueRelationView(t *testing.T) {
@@ -2820,14 +2511,5 @@ func TestIssueRelationView(t *testing.T) {
 	}
 	if inv[0].Issue.Identifier != "ENG-1" || inv[0].Issue.Title != "Source" {
 		t.Errorf("inverse end not enriched: %+v", inv[0].Issue)
-	}
-
-	// By-id resolves as an outgoing view.
-	byID, err := repo.GetIssueRelationByID(ctx, "rel-1")
-	if err != nil {
-		t.Fatalf("GetIssueRelationByID: %v", err)
-	}
-	if byID == nil || byID.RelatedIssue == nil || byID.RelatedIssue.ID != dst.ID {
-		t.Fatalf("by-id RelatedIssue = %+v, want id %q", byID, dst.ID)
 	}
 }
