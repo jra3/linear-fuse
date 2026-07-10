@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-const clearPendingDetailSync = `-- name: ClearPendingDetailSync :exec
-DELETE FROM pending_detail_sync
-`
-
-func (q *Queries) ClearPendingDetailSync(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, clearPendingDetailSync)
-	return err
-}
-
 const countPendingDetailSync = `-- name: CountPendingDetailSync :one
 SELECT COUNT(*) FROM pending_detail_sync
 `
@@ -50,30 +41,12 @@ func (q *Queries) DeleteComment(ctx context.Context, id string) error {
 	return err
 }
 
-const deleteCycle = `-- name: DeleteCycle :exec
-DELETE FROM cycles WHERE id = ?
-`
-
-func (q *Queries) DeleteCycle(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteCycle, id)
-	return err
-}
-
 const deleteDocument = `-- name: DeleteDocument :exec
 DELETE FROM documents WHERE id = ?
 `
 
 func (q *Queries) DeleteDocument(ctx context.Context, id string) error {
 	_, err := q.db.ExecContext(ctx, deleteDocument, id)
-	return err
-}
-
-const deleteEmbeddedFile = `-- name: DeleteEmbeddedFile :exec
-DELETE FROM embedded_files WHERE id = ?
-`
-
-func (q *Queries) DeleteEmbeddedFile(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteEmbeddedFile, id)
 	return err
 }
 
@@ -127,15 +100,6 @@ func (q *Queries) DeleteInitiativeProjectsByProject(ctx context.Context, project
 	return err
 }
 
-const deleteInitiativeUpdate = `-- name: DeleteInitiativeUpdate :exec
-DELETE FROM initiative_updates WHERE id = ?
-`
-
-func (q *Queries) DeleteInitiativeUpdate(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteInitiativeUpdate, id)
-	return err
-}
-
 const deleteInitiativeUpdates = `-- name: DeleteInitiativeUpdates :exec
 DELETE FROM initiative_updates WHERE initiative_id = ?
 `
@@ -160,15 +124,6 @@ DELETE FROM attachments WHERE issue_id = ?
 
 func (q *Queries) DeleteIssueAttachments(ctx context.Context, issueID string) error {
 	_, err := q.db.ExecContext(ctx, deleteIssueAttachments, issueID)
-	return err
-}
-
-const deleteIssueByIdentifier = `-- name: DeleteIssueByIdentifier :exec
-DELETE FROM issues WHERE identifier = ?
-`
-
-func (q *Queries) DeleteIssueByIdentifier(ctx context.Context, identifier string) error {
-	_, err := q.db.ExecContext(ctx, deleteIssueByIdentifier, identifier)
 	return err
 }
 
@@ -280,35 +235,12 @@ func (q *Queries) DeleteProjectMilestones(ctx context.Context, projectID string)
 	return err
 }
 
-const deleteProjectTeam = `-- name: DeleteProjectTeam :exec
-DELETE FROM project_teams WHERE project_id = ? AND team_id = ?
-`
-
-type DeleteProjectTeamParams struct {
-	ProjectID string `json:"project_id"`
-	TeamID    string `json:"team_id"`
-}
-
-func (q *Queries) DeleteProjectTeam(ctx context.Context, arg DeleteProjectTeamParams) error {
-	_, err := q.db.ExecContext(ctx, deleteProjectTeam, arg.ProjectID, arg.TeamID)
-	return err
-}
-
 const deleteProjectTeams = `-- name: DeleteProjectTeams :exec
 DELETE FROM project_teams WHERE project_id = ?
 `
 
 func (q *Queries) DeleteProjectTeams(ctx context.Context, projectID string) error {
 	_, err := q.db.ExecContext(ctx, deleteProjectTeams, projectID)
-	return err
-}
-
-const deleteProjectUpdate = `-- name: DeleteProjectUpdate :exec
-DELETE FROM project_updates WHERE id = ?
-`
-
-func (q *Queries) DeleteProjectUpdate(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteProjectUpdate, id)
 	return err
 }
 
@@ -319,338 +251,6 @@ DELETE FROM project_updates WHERE project_id = ?
 func (q *Queries) DeleteProjectUpdates(ctx context.Context, projectID string) error {
 	_, err := q.db.ExecContext(ctx, deleteProjectUpdates, projectID)
 	return err
-}
-
-const deleteState = `-- name: DeleteState :exec
-DELETE FROM states WHERE id = ?
-`
-
-func (q *Queries) DeleteState(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteState, id)
-	return err
-}
-
-const deleteTeamCycles = `-- name: DeleteTeamCycles :exec
-DELETE FROM cycles WHERE team_id = ?
-`
-
-func (q *Queries) DeleteTeamCycles(ctx context.Context, teamID string) error {
-	_, err := q.db.ExecContext(ctx, deleteTeamCycles, teamID)
-	return err
-}
-
-const deleteTeamIssues = `-- name: DeleteTeamIssues :exec
-DELETE FROM issues WHERE team_id = ?
-`
-
-func (q *Queries) DeleteTeamIssues(ctx context.Context, teamID string) error {
-	_, err := q.db.ExecContext(ctx, deleteTeamIssues, teamID)
-	return err
-}
-
-const deleteTeamLabels = `-- name: DeleteTeamLabels :exec
-DELETE FROM labels WHERE team_id = ?
-`
-
-func (q *Queries) DeleteTeamLabels(ctx context.Context, teamID sql.NullString) error {
-	_, err := q.db.ExecContext(ctx, deleteTeamLabels, teamID)
-	return err
-}
-
-const deleteTeamMember = `-- name: DeleteTeamMember :exec
-DELETE FROM team_members WHERE team_id = ? AND user_id = ?
-`
-
-type DeleteTeamMemberParams struct {
-	TeamID string `json:"team_id"`
-	UserID string `json:"user_id"`
-}
-
-func (q *Queries) DeleteTeamMember(ctx context.Context, arg DeleteTeamMemberParams) error {
-	_, err := q.db.ExecContext(ctx, deleteTeamMember, arg.TeamID, arg.UserID)
-	return err
-}
-
-const deleteTeamMembers = `-- name: DeleteTeamMembers :exec
-DELETE FROM team_members WHERE team_id = ?
-`
-
-func (q *Queries) DeleteTeamMembers(ctx context.Context, teamID string) error {
-	_, err := q.db.ExecContext(ctx, deleteTeamMembers, teamID)
-	return err
-}
-
-const deleteTeamStates = `-- name: DeleteTeamStates :exec
-DELETE FROM states WHERE team_id = ?
-`
-
-func (q *Queries) DeleteTeamStates(ctx context.Context, teamID string) error {
-	_, err := q.db.ExecContext(ctx, deleteTeamStates, teamID)
-	return err
-}
-
-const deleteUser = `-- name: DeleteUser :exec
-DELETE FROM users WHERE id = ?
-`
-
-func (q *Queries) DeleteUser(ctx context.Context, id string) error {
-	_, err := q.db.ExecContext(ctx, deleteUser, id)
-	return err
-}
-
-const getAttachment = `-- name: GetAttachment :one
-
-SELECT id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM attachments WHERE id = ?
-`
-
-// =============================================================================
-// Attachments queries (external links: GitHub PRs, Slack, etc.)
-// =============================================================================
-func (q *Queries) GetAttachment(ctx context.Context, id string) (Attachment, error) {
-	row := q.db.QueryRowContext(ctx, getAttachment, id)
-	var i Attachment
-	err := row.Scan(
-		&i.ID,
-		&i.IssueID,
-		&i.Title,
-		&i.Subtitle,
-		&i.Url,
-		&i.SourceType,
-		&i.Metadata,
-		&i.CreatorID,
-		&i.CreatorName,
-		&i.CreatorEmail,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getComment = `-- name: GetComment :one
-
-SELECT id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data FROM comments WHERE id = ?
-`
-
-// =============================================================================
-// Comments queries
-// =============================================================================
-func (q *Queries) GetComment(ctx context.Context, id string) (Comment, error) {
-	row := q.db.QueryRowContext(ctx, getComment, id)
-	var i Comment
-	err := row.Scan(
-		&i.ID,
-		&i.IssueID,
-		&i.Body,
-		&i.BodyData,
-		&i.UserID,
-		&i.UserName,
-		&i.UserEmail,
-		&i.EditedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getCycle = `-- name: GetCycle :one
-
-SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE id = ?
-`
-
-// =============================================================================
-// Cycles queries
-// =============================================================================
-func (q *Queries) GetCycle(ctx context.Context, id string) (Cycle, error) {
-	row := q.db.QueryRowContext(ctx, getCycle, id)
-	var i Cycle
-	err := row.Scan(
-		&i.ID,
-		&i.TeamID,
-		&i.Number,
-		&i.Name,
-		&i.Description,
-		&i.StartsAt,
-		&i.EndsAt,
-		&i.CompletedAt,
-		&i.Progress,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getCycleByName = `-- name: GetCycleByName :one
-SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? AND name = ?
-`
-
-type GetCycleByNameParams struct {
-	TeamID string         `json:"team_id"`
-	Name   sql.NullString `json:"name"`
-}
-
-func (q *Queries) GetCycleByName(ctx context.Context, arg GetCycleByNameParams) (Cycle, error) {
-	row := q.db.QueryRowContext(ctx, getCycleByName, arg.TeamID, arg.Name)
-	var i Cycle
-	err := row.Scan(
-		&i.ID,
-		&i.TeamID,
-		&i.Number,
-		&i.Name,
-		&i.Description,
-		&i.StartsAt,
-		&i.EndsAt,
-		&i.CompletedAt,
-		&i.Progress,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getCycleByNumber = `-- name: GetCycleByNumber :one
-SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? AND number = ?
-`
-
-type GetCycleByNumberParams struct {
-	TeamID string `json:"team_id"`
-	Number int64  `json:"number"`
-}
-
-func (q *Queries) GetCycleByNumber(ctx context.Context, arg GetCycleByNumberParams) (Cycle, error) {
-	row := q.db.QueryRowContext(ctx, getCycleByNumber, arg.TeamID, arg.Number)
-	var i Cycle
-	err := row.Scan(
-		&i.ID,
-		&i.TeamID,
-		&i.Number,
-		&i.Name,
-		&i.Description,
-		&i.StartsAt,
-		&i.EndsAt,
-		&i.CompletedAt,
-		&i.Progress,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getDocument = `-- name: GetDocument :one
-
-SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE id = ?
-`
-
-// =============================================================================
-// Documents queries
-// =============================================================================
-func (q *Queries) GetDocument(ctx context.Context, id string) (Document, error) {
-	row := q.db.QueryRowContext(ctx, getDocument, id)
-	var i Document
-	err := row.Scan(
-		&i.ID,
-		&i.SlugID,
-		&i.Title,
-		&i.Icon,
-		&i.Color,
-		&i.Content,
-		&i.ContentData,
-		&i.IssueID,
-		&i.ProjectID,
-		&i.InitiativeID,
-		&i.CreatorID,
-		&i.Url,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getDocumentBySlug = `-- name: GetDocumentBySlug :one
-SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE slug_id = ?
-`
-
-func (q *Queries) GetDocumentBySlug(ctx context.Context, slugID string) (Document, error) {
-	row := q.db.QueryRowContext(ctx, getDocumentBySlug, slugID)
-	var i Document
-	err := row.Scan(
-		&i.ID,
-		&i.SlugID,
-		&i.Title,
-		&i.Icon,
-		&i.Color,
-		&i.Content,
-		&i.ContentData,
-		&i.IssueID,
-		&i.ProjectID,
-		&i.InitiativeID,
-		&i.CreatorID,
-		&i.Url,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getEmbeddedFile = `-- name: GetEmbeddedFile :one
-
-SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE id = ?
-`
-
-// =============================================================================
-// Embedded Files queries (images, PDFs from Linear CDN)
-// =============================================================================
-func (q *Queries) GetEmbeddedFile(ctx context.Context, id string) (EmbeddedFile, error) {
-	row := q.db.QueryRowContext(ctx, getEmbeddedFile, id)
-	var i EmbeddedFile
-	err := row.Scan(
-		&i.ID,
-		&i.IssueID,
-		&i.Url,
-		&i.Filename,
-		&i.MimeType,
-		&i.FileSize,
-		&i.CachePath,
-		&i.Source,
-		&i.CreatedAt,
-		&i.SyncedAt,
-	)
-	return i, err
-}
-
-const getEmbeddedFileByURL = `-- name: GetEmbeddedFileByURL :one
-SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE url = ?
-`
-
-func (q *Queries) GetEmbeddedFileByURL(ctx context.Context, url string) (EmbeddedFile, error) {
-	row := q.db.QueryRowContext(ctx, getEmbeddedFileByURL, url)
-	var i EmbeddedFile
-	err := row.Scan(
-		&i.ID,
-		&i.IssueID,
-		&i.Url,
-		&i.Filename,
-		&i.MimeType,
-		&i.FileSize,
-		&i.CachePath,
-		&i.Source,
-		&i.CreatedAt,
-		&i.SyncedAt,
-	)
-	return i, err
 }
 
 const getInitiative = `-- name: GetInitiative :one
@@ -684,33 +284,6 @@ func (q *Queries) GetInitiative(ctx context.Context, id string) (Initiative, err
 	return i, err
 }
 
-const getInitiativeBySlug = `-- name: GetInitiativeBySlug :one
-SELECT id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data FROM initiatives WHERE slug_id = ?
-`
-
-func (q *Queries) GetInitiativeBySlug(ctx context.Context, slugID string) (Initiative, error) {
-	row := q.db.QueryRowContext(ctx, getInitiativeBySlug, slugID)
-	var i Initiative
-	err := row.Scan(
-		&i.ID,
-		&i.SlugID,
-		&i.Name,
-		&i.Description,
-		&i.Icon,
-		&i.Color,
-		&i.Status,
-		&i.SortOrder,
-		&i.TargetDate,
-		&i.OwnerID,
-		&i.Url,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
 const getInitiativeDocumentsSyncedAt = `-- name: GetInitiativeDocumentsSyncedAt :one
 SELECT MAX(synced_at) FROM documents WHERE initiative_id = ?
 `
@@ -720,35 +293,6 @@ func (q *Queries) GetInitiativeDocumentsSyncedAt(ctx context.Context, initiative
 	var max interface{}
 	err := row.Scan(&max)
 	return max, err
-}
-
-const getInitiativeUpdate = `-- name: GetInitiativeUpdate :one
-
-SELECT id, initiative_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM initiative_updates WHERE id = ?
-`
-
-// =============================================================================
-// Initiative Updates queries
-// =============================================================================
-func (q *Queries) GetInitiativeUpdate(ctx context.Context, id string) (InitiativeUpdate, error) {
-	row := q.db.QueryRowContext(ctx, getInitiativeUpdate, id)
-	var i InitiativeUpdate
-	err := row.Scan(
-		&i.ID,
-		&i.InitiativeID,
-		&i.Body,
-		&i.BodyData,
-		&i.Health,
-		&i.UserID,
-		&i.UserName,
-		&i.Url,
-		&i.EditedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
 }
 
 const getInitiativeUpdatesSyncedAt = `-- name: GetInitiativeUpdatesSyncedAt :one
@@ -877,40 +421,6 @@ func (q *Queries) GetIssueHistoryCache(ctx context.Context, issueID string) (Iss
 	return i, err
 }
 
-const getIssueHistorySyncedAt = `-- name: GetIssueHistorySyncedAt :one
-SELECT synced_at FROM issue_history_cache WHERE issue_id = ?
-`
-
-func (q *Queries) GetIssueHistorySyncedAt(ctx context.Context, issueID string) (time.Time, error) {
-	row := q.db.QueryRowContext(ctx, getIssueHistorySyncedAt, issueID)
-	var synced_at time.Time
-	err := row.Scan(&synced_at)
-	return synced_at, err
-}
-
-const getIssueRelation = `-- name: GetIssueRelation :one
-
-SELECT id, issue_id, related_issue_id, type, created_at, updated_at, synced_at FROM issue_relations WHERE id = ?
-`
-
-// =============================================================================
-// Issue Relations queries
-// =============================================================================
-func (q *Queries) GetIssueRelation(ctx context.Context, id string) (IssueRelation, error) {
-	row := q.db.QueryRowContext(ctx, getIssueRelation, id)
-	var i IssueRelation
-	err := row.Scan(
-		&i.ID,
-		&i.IssueID,
-		&i.RelatedIssueID,
-		&i.Type,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-	)
-	return i, err
-}
-
 const getIssueUpdatedAt = `-- name: GetIssueUpdatedAt :one
 
 
@@ -991,33 +501,6 @@ func (q *Queries) GetLatestTeamIssueUpdatedAt(ctx context.Context, teamID string
 	return max, err
 }
 
-const getMilestoneByName = `-- name: GetMilestoneByName :one
-SELECT id, project_id, name, description, target_date, sort_order, created_at, updated_at, synced_at, data FROM project_milestones WHERE project_id = ? AND name = ?
-`
-
-type GetMilestoneByNameParams struct {
-	ProjectID string `json:"project_id"`
-	Name      string `json:"name"`
-}
-
-func (q *Queries) GetMilestoneByName(ctx context.Context, arg GetMilestoneByNameParams) (ProjectMilestone, error) {
-	row := q.db.QueryRowContext(ctx, getMilestoneByName, arg.ProjectID, arg.Name)
-	var i ProjectMilestone
-	err := row.Scan(
-		&i.ID,
-		&i.ProjectID,
-		&i.Name,
-		&i.Description,
-		&i.TargetDate,
-		&i.SortOrder,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
 const getProject = `-- name: GetProject :one
 
 SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects WHERE id = ?
@@ -1028,34 +511,6 @@ SELECT id, slug_id, name, description, icon, color, state, progress, start_date,
 // =============================================================================
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 	row := q.db.QueryRowContext(ctx, getProject, id)
-	var i Project
-	err := row.Scan(
-		&i.ID,
-		&i.SlugID,
-		&i.Name,
-		&i.Description,
-		&i.Icon,
-		&i.Color,
-		&i.State,
-		&i.Progress,
-		&i.StartDate,
-		&i.TargetDate,
-		&i.LeadID,
-		&i.Url,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
-const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects WHERE slug_id = ?
-`
-
-func (q *Queries) GetProjectBySlug(ctx context.Context, slugID string) (Project, error) {
-	row := q.db.QueryRowContext(ctx, getProjectBySlug, slugID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -1133,35 +588,6 @@ func (q *Queries) GetProjectPrimaryTeamKey(ctx context.Context, projectID string
 	return key, err
 }
 
-const getProjectUpdate = `-- name: GetProjectUpdate :one
-
-SELECT id, project_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM project_updates WHERE id = ?
-`
-
-// =============================================================================
-// Project Updates queries
-// =============================================================================
-func (q *Queries) GetProjectUpdate(ctx context.Context, id string) (ProjectUpdate, error) {
-	row := q.db.QueryRowContext(ctx, getProjectUpdate, id)
-	var i ProjectUpdate
-	err := row.Scan(
-		&i.ID,
-		&i.ProjectID,
-		&i.Body,
-		&i.BodyData,
-		&i.Health,
-		&i.UserID,
-		&i.UserName,
-		&i.Url,
-		&i.EditedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
 const getProjectUpdatesSyncedAt = `-- name: GetProjectUpdatesSyncedAt :one
 SELECT MAX(synced_at) FROM project_updates WHERE project_id = ?
 `
@@ -1175,9 +601,13 @@ func (q *Queries) GetProjectUpdatesSyncedAt(ctx context.Context, projectID strin
 
 const getState = `-- name: GetState :one
 
+
 SELECT id, team_id, name, type, color, position, created_at, updated_at, synced_at, data FROM states WHERE id = ?
 `
 
+// Label-based queries (labels stored in JSON data column)
+// These require extracting from JSON - keeping simple queries here,
+// complex label queries will be done in Go code
 // =============================================================================
 // States queries
 // =============================================================================
@@ -1244,63 +674,12 @@ func (q *Queries) GetSyncMeta(ctx context.Context, teamID string) (SyncMetum, er
 	return i, err
 }
 
-const getTeam = `-- name: GetTeam :one
-
-SELECT id, "key", name, icon, created_at, updated_at, synced_at FROM teams WHERE id = ?
-`
-
-// Teams queries
-func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
-	row := q.db.QueryRowContext(ctx, getTeam, id)
-	var i Team
-	err := row.Scan(
-		&i.ID,
-		&i.Key,
-		&i.Name,
-		&i.Icon,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-	)
-	return i, err
-}
-
-const getTeamByKey = `-- name: GetTeamByKey :one
-SELECT id, "key", name, icon, created_at, updated_at, synced_at FROM teams WHERE key = ?
-`
-
-func (q *Queries) GetTeamByKey(ctx context.Context, key string) (Team, error) {
-	row := q.db.QueryRowContext(ctx, getTeamByKey, key)
-	var i Team
-	err := row.Scan(
-		&i.ID,
-		&i.Key,
-		&i.Name,
-		&i.Icon,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-	)
-	return i, err
-}
-
 const getTeamIssueCount = `-- name: GetTeamIssueCount :one
 SELECT COUNT(*) FROM issues WHERE team_id = ?
 `
 
 func (q *Queries) GetTeamIssueCount(ctx context.Context, teamID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, getTeamIssueCount, teamID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const getTotalIssueCount = `-- name: GetTotalIssueCount :one
-SELECT COUNT(*) FROM issues
-`
-
-func (q *Queries) GetTotalIssueCount(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, getTotalIssueCount)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1333,29 +712,6 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 	return i, err
 }
 
-const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users WHERE email = ?
-`
-
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
-	row := q.db.QueryRowContext(ctx, getUserByEmail, email)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Email,
-		&i.Name,
-		&i.DisplayName,
-		&i.AvatarUrl,
-		&i.Active,
-		&i.Admin,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.SyncedAt,
-		&i.Data,
-	)
-	return i, err
-}
-
 const getViewerUserID = `-- name: GetViewerUserID :one
 
 SELECT user_id FROM viewer_cache LIMIT 1
@@ -1369,119 +725,6 @@ func (q *Queries) GetViewerUserID(ctx context.Context) (string, error) {
 	var user_id string
 	err := row.Scan(&user_id)
 	return user_id, err
-}
-
-const listAllIdentifiers = `-- name: ListAllIdentifiers :many
-
-SELECT identifier, team_id FROM issues ORDER BY identifier
-`
-
-type ListAllIdentifiersRow struct {
-	Identifier string `json:"identifier"`
-	TeamID     string `json:"team_id"`
-}
-
-// Label-based queries (labels stored in JSON data column)
-// These require extracting from JSON - keeping simple queries here,
-// complex label queries will be done in Go code
-func (q *Queries) ListAllIdentifiers(ctx context.Context) ([]ListAllIdentifiersRow, error) {
-	rows, err := q.db.QueryContext(ctx, listAllIdentifiers)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListAllIdentifiersRow{}
-	for rows.Next() {
-		var i ListAllIdentifiersRow
-		if err := rows.Scan(&i.Identifier, &i.TeamID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAllUsers = `-- name: ListAllUsers :many
-SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users ORDER BY name
-`
-
-func (q *Queries) ListAllUsers(ctx context.Context) ([]User, error) {
-	rows, err := q.db.QueryContext(ctx, listAllUsers)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []User{}
-	for rows.Next() {
-		var i User
-		if err := rows.Scan(
-			&i.ID,
-			&i.Email,
-			&i.Name,
-			&i.DisplayName,
-			&i.AvatarUrl,
-			&i.Active,
-			&i.Admin,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCachedEmbeddedFiles = `-- name: ListCachedEmbeddedFiles :many
-SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE cache_path IS NOT NULL
-`
-
-func (q *Queries) ListCachedEmbeddedFiles(ctx context.Context) ([]EmbeddedFile, error) {
-	rows, err := q.db.QueryContext(ctx, listCachedEmbeddedFiles)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []EmbeddedFile{}
-	for rows.Next() {
-		var i EmbeddedFile
-		if err := rows.Scan(
-			&i.ID,
-			&i.IssueID,
-			&i.Url,
-			&i.Filename,
-			&i.MimeType,
-			&i.FileSize,
-			&i.CachePath,
-			&i.Source,
-			&i.CreatedAt,
-			&i.SyncedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listCycleIssues = `-- name: ListCycleIssues :many
@@ -1587,84 +830,14 @@ func (q *Queries) ListInitiativeDocuments(ctx context.Context, initiativeID sql.
 	return items, nil
 }
 
-const listInitiativeProjectIDs = `-- name: ListInitiativeProjectIDs :many
-SELECT project_id FROM initiative_projects WHERE initiative_id = ?
-`
-
-func (q *Queries) ListInitiativeProjectIDs(ctx context.Context, initiativeID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listInitiativeProjectIDs, initiativeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var project_id string
-		if err := rows.Scan(&project_id); err != nil {
-			return nil, err
-		}
-		items = append(items, project_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listInitiativeProjects = `-- name: ListInitiativeProjects :many
-SELECT p.id, p.slug_id, p.name, p.description, p.icon, p.color, p.state, p.progress, p.start_date, p.target_date, p.lead_id, p.url, p.created_at, p.updated_at, p.synced_at, p.data FROM projects p
-JOIN initiative_projects ip ON p.id = ip.project_id
-WHERE ip.initiative_id = ?
-ORDER BY p.name
-`
-
-func (q *Queries) ListInitiativeProjects(ctx context.Context, initiativeID string) ([]Project, error) {
-	rows, err := q.db.QueryContext(ctx, listInitiativeProjects, initiativeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Project{}
-	for rows.Next() {
-		var i Project
-		if err := rows.Scan(
-			&i.ID,
-			&i.SlugID,
-			&i.Name,
-			&i.Description,
-			&i.Icon,
-			&i.Color,
-			&i.State,
-			&i.Progress,
-			&i.StartDate,
-			&i.TargetDate,
-			&i.LeadID,
-			&i.Url,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listInitiativeUpdates = `-- name: ListInitiativeUpdates :many
+
 SELECT id, initiative_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM initiative_updates WHERE initiative_id = ? ORDER BY created_at DESC
 `
 
+// =============================================================================
+// Initiative Updates queries
+// =============================================================================
 func (q *Queries) ListInitiativeUpdates(ctx context.Context, initiativeID string) ([]InitiativeUpdate, error) {
 	rows, err := q.db.QueryContext(ctx, listInitiativeUpdates, initiativeID)
 	if err != nil {
@@ -1746,9 +919,13 @@ func (q *Queries) ListInitiatives(ctx context.Context) ([]Initiative, error) {
 }
 
 const listIssueAttachments = `-- name: ListIssueAttachments :many
+
 SELECT id, issue_id, title, subtitle, url, source_type, metadata, creator_id, creator_name, creator_email, created_at, updated_at, synced_at, data FROM attachments WHERE issue_id = ? ORDER BY created_at, id
 `
 
+// =============================================================================
+// Attachments queries (external links: GitHub PRs, Slack, etc.)
+// =============================================================================
 // The id tiebreaker keeps the order deterministic on equal created_at, so
 // attachmentListing dedup suffixes stay stable across calls.
 func (q *Queries) ListIssueAttachments(ctx context.Context, issueID string) ([]Attachment, error) {
@@ -1790,9 +967,13 @@ func (q *Queries) ListIssueAttachments(ctx context.Context, issueID string) ([]A
 }
 
 const listIssueComments = `-- name: ListIssueComments :many
+
 SELECT id, issue_id, body, body_data, user_id, user_name, user_email, edited_at, created_at, updated_at, synced_at, data FROM comments WHERE issue_id = ? ORDER BY created_at
 `
 
+// =============================================================================
+// Comments queries
+// =============================================================================
 func (q *Queries) ListIssueComments(ctx context.Context, issueID string) ([]Comment, error) {
 	rows, err := q.db.QueryContext(ctx, listIssueComments, issueID)
 	if err != nil {
@@ -1830,9 +1011,13 @@ func (q *Queries) ListIssueComments(ctx context.Context, issueID string) ([]Comm
 }
 
 const listIssueDocuments = `-- name: ListIssueDocuments :many
+
 SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE issue_id = ? ORDER BY title
 `
 
+// =============================================================================
+// Documents queries
+// =============================================================================
 func (q *Queries) ListIssueDocuments(ctx context.Context, issueID sql.NullString) ([]Document, error) {
 	rows, err := q.db.QueryContext(ctx, listIssueDocuments, issueID)
 	if err != nil {
@@ -1874,9 +1059,13 @@ func (q *Queries) ListIssueDocuments(ctx context.Context, issueID sql.NullString
 }
 
 const listIssueEmbeddedFiles = `-- name: ListIssueEmbeddedFiles :many
+
 SELECT id, issue_id, url, filename, mime_type, file_size, cache_path, source, created_at, synced_at FROM embedded_files WHERE issue_id = ? ORDER BY filename, id
 `
 
+// =============================================================================
+// Embedded Files queries (images, PDFs from Linear CDN)
+// =============================================================================
 // The id tiebreaker keeps the order deterministic on equal filenames (the
 // dedup case), so which duplicate gets the (2) suffix stays stable.
 func (q *Queries) ListIssueEmbeddedFiles(ctx context.Context, issueID string) ([]EmbeddedFile, error) {
@@ -1949,51 +1138,15 @@ func (q *Queries) ListIssueInverseRelations(ctx context.Context, relatedIssueID 
 }
 
 const listIssueRelations = `-- name: ListIssueRelations :many
+
 SELECT id, issue_id, related_issue_id, type, created_at, updated_at, synced_at FROM issue_relations WHERE issue_id = ? ORDER BY type, related_issue_id
 `
 
+// =============================================================================
+// Issue Relations queries
+// =============================================================================
 func (q *Queries) ListIssueRelations(ctx context.Context, issueID string) ([]IssueRelation, error) {
 	rows, err := q.db.QueryContext(ctx, listIssueRelations, issueID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []IssueRelation{}
-	for rows.Next() {
-		var i IssueRelation
-		if err := rows.Scan(
-			&i.ID,
-			&i.IssueID,
-			&i.RelatedIssueID,
-			&i.Type,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listIssueRelationsByType = `-- name: ListIssueRelationsByType :many
-SELECT id, issue_id, related_issue_id, type, created_at, updated_at, synced_at FROM issue_relations WHERE issue_id = ? AND type = ? ORDER BY related_issue_id
-`
-
-type ListIssueRelationsByTypeParams struct {
-	IssueID string `json:"issue_id"`
-	Type    string `json:"type"`
-}
-
-func (q *Queries) ListIssueRelationsByType(ctx context.Context, arg ListIssueRelationsByTypeParams) ([]IssueRelation, error) {
-	rows, err := q.db.QueryContext(ctx, listIssueRelationsByType, arg.IssueID, arg.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -2089,33 +1242,6 @@ func (q *Queries) ListProjectDocuments(ctx context.Context, projectID sql.NullSt
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listProjectInitiativeIDs = `-- name: ListProjectInitiativeIDs :many
-SELECT initiative_id FROM initiative_projects WHERE project_id = ?
-`
-
-func (q *Queries) ListProjectInitiativeIDs(ctx context.Context, projectID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectInitiativeIDs, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var initiative_id string
-		if err := rows.Scan(&initiative_id); err != nil {
-			return nil, err
-		}
-		items = append(items, initiative_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -2266,37 +1392,14 @@ func (q *Queries) ListProjectMilestones(ctx context.Context, projectID string) (
 	return items, nil
 }
 
-const listProjectTeamIDs = `-- name: ListProjectTeamIDs :many
-SELECT team_id FROM project_teams WHERE project_id = ?
-`
-
-func (q *Queries) ListProjectTeamIDs(ctx context.Context, projectID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectTeamIDs, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var team_id string
-		if err := rows.Scan(&team_id); err != nil {
-			return nil, err
-		}
-		items = append(items, team_id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listProjectUpdates = `-- name: ListProjectUpdates :many
+
 SELECT id, project_id, body, body_data, health, user_id, user_name, url, edited_at, created_at, updated_at, synced_at, data FROM project_updates WHERE project_id = ? ORDER BY created_at DESC
 `
 
+// =============================================================================
+// Project Updates queries
+// =============================================================================
 func (q *Queries) ListProjectUpdates(ctx context.Context, projectID string) ([]ProjectUpdate, error) {
 	rows, err := q.db.QueryContext(ctx, listProjectUpdates, projectID)
 	if err != nil {
@@ -2378,127 +1481,14 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	return items, nil
 }
 
-const listProjectsByState = `-- name: ListProjectsByState :many
-SELECT id, slug_id, name, description, icon, color, state, progress, start_date, target_date, lead_id, url, created_at, updated_at, synced_at, data FROM projects WHERE state = ? ORDER BY name
-`
-
-func (q *Queries) ListProjectsByState(ctx context.Context, state sql.NullString) ([]Project, error) {
-	rows, err := q.db.QueryContext(ctx, listProjectsByState, state)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Project{}
-	for rows.Next() {
-		var i Project
-		if err := rows.Scan(
-			&i.ID,
-			&i.SlugID,
-			&i.Name,
-			&i.Description,
-			&i.Icon,
-			&i.Color,
-			&i.State,
-			&i.Progress,
-			&i.StartDate,
-			&i.TargetDate,
-			&i.LeadID,
-			&i.Url,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listSyncMeta = `-- name: ListSyncMeta :many
-SELECT team_id, last_synced_at, last_issue_updated_at, issue_count FROM sync_meta
-`
-
-func (q *Queries) ListSyncMeta(ctx context.Context) ([]SyncMetum, error) {
-	rows, err := q.db.QueryContext(ctx, listSyncMeta)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []SyncMetum{}
-	for rows.Next() {
-		var i SyncMetum
-		if err := rows.Scan(
-			&i.TeamID,
-			&i.LastSyncedAt,
-			&i.LastIssueUpdatedAt,
-			&i.IssueCount,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamActiveCycles = `-- name: ListTeamActiveCycles :many
-SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? AND ends_at > datetime('now') ORDER BY starts_at
-`
-
-func (q *Queries) ListTeamActiveCycles(ctx context.Context, teamID string) ([]Cycle, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamActiveCycles, teamID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Cycle{}
-	for rows.Next() {
-		var i Cycle
-		if err := rows.Scan(
-			&i.ID,
-			&i.TeamID,
-			&i.Number,
-			&i.Name,
-			&i.Description,
-			&i.StartsAt,
-			&i.EndsAt,
-			&i.CompletedAt,
-			&i.Progress,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTeamCycles = `-- name: ListTeamCycles :many
+
 SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? ORDER BY number DESC
 `
 
+// =============================================================================
+// Cycles queries
+// =============================================================================
 func (q *Queries) ListTeamCycles(ctx context.Context, teamID string) ([]Cycle, error) {
 	rows, err := q.db.QueryContext(ctx, listTeamCycles, teamID)
 	if err != nil {
@@ -2526,33 +1516,6 @@ func (q *Queries) ListTeamCycles(ctx context.Context, teamID string) ([]Cycle, e
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIdentifiers = `-- name: ListTeamIdentifiers :many
-SELECT identifier FROM issues WHERE team_id = ? ORDER BY identifier
-`
-
-func (q *Queries) ListTeamIdentifiers(ctx context.Context, teamID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIdentifiers, teamID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []string{}
-	for rows.Next() {
-		var identifier string
-		if err := rows.Scan(&identifier); err != nil {
-			return nil, err
-		}
-		items = append(items, identifier)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -2718,396 +1681,12 @@ func (q *Queries) ListTeamIssuesByAssignee(ctx context.Context, arg ListTeamIssu
 	return items, nil
 }
 
-const listTeamIssuesByAssigneeEmail = `-- name: ListTeamIssuesByAssigneeEmail :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND assignee_email = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByAssigneeEmailParams struct {
-	TeamID        string         `json:"team_id"`
-	AssigneeEmail sql.NullString `json:"assignee_email"`
-}
-
-func (q *Queries) ListTeamIssuesByAssigneeEmail(ctx context.Context, arg ListTeamIssuesByAssigneeEmailParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByAssigneeEmail, arg.TeamID, arg.AssigneeEmail)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByCycle = `-- name: ListTeamIssuesByCycle :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND cycle_id = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByCycleParams struct {
-	TeamID  string         `json:"team_id"`
-	CycleID sql.NullString `json:"cycle_id"`
-}
-
-func (q *Queries) ListTeamIssuesByCycle(ctx context.Context, arg ListTeamIssuesByCycleParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByCycle, arg.TeamID, arg.CycleID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByCycleName = `-- name: ListTeamIssuesByCycleName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND cycle_name = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByCycleNameParams struct {
-	TeamID    string         `json:"team_id"`
-	CycleName sql.NullString `json:"cycle_name"`
-}
-
-func (q *Queries) ListTeamIssuesByCycleName(ctx context.Context, arg ListTeamIssuesByCycleNameParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByCycleName, arg.TeamID, arg.CycleName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTeamIssuesByParent = `-- name: ListTeamIssuesByParent :many
 SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE parent_id = ? ORDER BY updated_at DESC
 `
 
 func (q *Queries) ListTeamIssuesByParent(ctx context.Context, parentID sql.NullString) ([]Issue, error) {
 	rows, err := q.db.QueryContext(ctx, listTeamIssuesByParent, parentID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByPriority = `-- name: ListTeamIssuesByPriority :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND priority = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByPriorityParams struct {
-	TeamID   string        `json:"team_id"`
-	Priority sql.NullInt64 `json:"priority"`
-}
-
-func (q *Queries) ListTeamIssuesByPriority(ctx context.Context, arg ListTeamIssuesByPriorityParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByPriority, arg.TeamID, arg.Priority)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByProject = `-- name: ListTeamIssuesByProject :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND project_id = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByProjectParams struct {
-	TeamID    string         `json:"team_id"`
-	ProjectID sql.NullString `json:"project_id"`
-}
-
-func (q *Queries) ListTeamIssuesByProject(ctx context.Context, arg ListTeamIssuesByProjectParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByProject, arg.TeamID, arg.ProjectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByProjectName = `-- name: ListTeamIssuesByProjectName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND project_name = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByProjectNameParams struct {
-	TeamID      string         `json:"team_id"`
-	ProjectName sql.NullString `json:"project_name"`
-}
-
-func (q *Queries) ListTeamIssuesByProjectName(ctx context.Context, arg ListTeamIssuesByProjectNameParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByProjectName, arg.TeamID, arg.ProjectName)
 	if err != nil {
 		return nil, err
 	}
@@ -3172,134 +1751,6 @@ type ListTeamIssuesByStateParams struct {
 
 func (q *Queries) ListTeamIssuesByState(ctx context.Context, arg ListTeamIssuesByStateParams) ([]Issue, error) {
 	rows, err := q.db.QueryContext(ctx, listTeamIssuesByState, arg.TeamID, arg.StateID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByStateName = `-- name: ListTeamIssuesByStateName :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND state_name = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByStateNameParams struct {
-	TeamID    string         `json:"team_id"`
-	StateName sql.NullString `json:"state_name"`
-}
-
-func (q *Queries) ListTeamIssuesByStateName(ctx context.Context, arg ListTeamIssuesByStateNameParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByStateName, arg.TeamID, arg.StateName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listTeamIssuesByStateType = `-- name: ListTeamIssuesByStateType :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND state_type = ? ORDER BY updated_at DESC
-`
-
-type ListTeamIssuesByStateTypeParams struct {
-	TeamID    string         `json:"team_id"`
-	StateType sql.NullString `json:"state_type"`
-}
-
-func (q *Queries) ListTeamIssuesByStateType(ctx context.Context, arg ListTeamIssuesByStateTypeParams) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamIssuesByStateType, arg.TeamID, arg.StateType)
 	if err != nil {
 		return nil, err
 	}
@@ -3522,49 +1973,6 @@ func (q *Queries) ListTeamStates(ctx context.Context, teamID string) ([]State, e
 	return items, nil
 }
 
-const listTeamStatesByType = `-- name: ListTeamStatesByType :many
-SELECT id, team_id, name, type, color, position, created_at, updated_at, synced_at, data FROM states WHERE team_id = ? AND type = ? ORDER BY position
-`
-
-type ListTeamStatesByTypeParams struct {
-	TeamID string `json:"team_id"`
-	Type   string `json:"type"`
-}
-
-func (q *Queries) ListTeamStatesByType(ctx context.Context, arg ListTeamStatesByTypeParams) ([]State, error) {
-	rows, err := q.db.QueryContext(ctx, listTeamStatesByType, arg.TeamID, arg.Type)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []State{}
-	for rows.Next() {
-		var i State
-		if err := rows.Scan(
-			&i.ID,
-			&i.TeamID,
-			&i.Name,
-			&i.Type,
-			&i.Color,
-			&i.Position,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listTeamUnassignedIssues = `-- name: ListTeamUnassignedIssues :many
 SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE team_id = ? AND assignee_id IS NULL ORDER BY updated_at DESC
 `
@@ -3625,9 +2033,11 @@ func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) (
 }
 
 const listTeams = `-- name: ListTeams :many
+
 SELECT id, "key", name, icon, created_at, updated_at, synced_at FROM teams ORDER BY name
 `
 
+// Teams queries
 func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 	rows, err := q.db.QueryContext(ctx, listTeams)
 	if err != nil {
@@ -3777,65 +2187,6 @@ func (q *Queries) ListUserAssignedIssues(ctx context.Context, assigneeID sql.Nul
 	return items, nil
 }
 
-const listUserAssignedIssuesByEmail = `-- name: ListUserAssignedIssuesByEmail :many
-SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE assignee_email = ? ORDER BY updated_at DESC
-`
-
-func (q *Queries) ListUserAssignedIssuesByEmail(ctx context.Context, assigneeEmail sql.NullString) ([]Issue, error) {
-	rows, err := q.db.QueryContext(ctx, listUserAssignedIssuesByEmail, assigneeEmail)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.Identifier,
-			&i.TeamID,
-			&i.Title,
-			&i.Description,
-			&i.StateID,
-			&i.StateName,
-			&i.StateType,
-			&i.AssigneeID,
-			&i.AssigneeEmail,
-			&i.CreatorID,
-			&i.CreatorEmail,
-			&i.Priority,
-			&i.ProjectID,
-			&i.ProjectName,
-			&i.CycleID,
-			&i.CycleName,
-			&i.ParentID,
-			&i.DueDate,
-			&i.Estimate,
-			&i.Url,
-			&i.BranchName,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.StartedAt,
-			&i.CompletedAt,
-			&i.CanceledAt,
-			&i.ArchivedAt,
-			&i.SyncedAt,
-			&i.DetailSyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUserCreatedIssues = `-- name: ListUserCreatedIssues :many
 SELECT id, identifier, team_id, title, description, state_id, state_name, state_type, assignee_id, assignee_email, creator_id, creator_email, priority, project_id, project_name, cycle_id, cycle_name, parent_id, due_date, estimate, url, branch_name, created_at, updated_at, started_at, completed_at, canceled_at, archived_at, synced_at, detail_synced_at, data FROM issues WHERE creator_id = ? ORDER BY updated_at DESC
 `
@@ -3916,44 +2267,6 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.AvatarUrl,
 			&i.Active,
 			&i.Admin,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.SyncedAt,
-			&i.Data,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listWorkspaceLabels = `-- name: ListWorkspaceLabels :many
-SELECT id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data FROM labels WHERE team_id IS NULL ORDER BY name
-`
-
-func (q *Queries) ListWorkspaceLabels(ctx context.Context) ([]Label, error) {
-	rows, err := q.db.QueryContext(ctx, listWorkspaceLabels)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Label{}
-	for rows.Next() {
-		var i Label
-		if err := rows.Scan(
-			&i.ID,
-			&i.TeamID,
-			&i.Name,
-			&i.Color,
-			&i.Description,
-			&i.ParentID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SyncedAt,

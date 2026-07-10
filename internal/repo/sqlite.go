@@ -448,8 +448,7 @@ func (r *SQLiteRepository) GetIssuesByLabel(ctx context.Context, teamID, labelID
 
 // NB: GetIssuesByPriority was deleted (round 19) — it had no production
 // caller (there is no by/priority/ view). Its sqlc query
-// (ListTeamIssuesByPriority) is inert generated code awaiting removal at the
-// next `sqlc generate` (sqlc is not installed on this machine).
+// (ListTeamIssuesByPriority) was removed in the round-20 dead-code prune.
 
 func (r *SQLiteRepository) GetUnassignedIssues(ctx context.Context, teamID string) ([]api.Issue, error) {
 	issues, err := r.store.Queries().ListTeamUnassignedIssues(ctx, teamID)

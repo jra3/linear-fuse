@@ -1695,17 +1695,19 @@ func TestDetailsSyncPersistsAndPrunesRelations(t *testing.T) {
 	}
 
 	// Inverse: stored from its owner's perspective (issue_id = the other side).
-	inv, err := store.Queries().GetIssueRelation(ctx, "rel-inverse")
-	if err != nil {
-		t.Fatalf("inverse relation not persisted: %v", err)
+	invRels, err := store.Queries().ListIssueRelations(ctx, "issue-3")
+	if err != nil || len(invRels) != 1 {
+		t.Fatalf("inverse relation not persisted: err=%v n=%d", err, len(invRels))
 	}
-	if inv.IssueID != "issue-3" || inv.RelatedIssueID != "issue-1" {
-		t.Errorf("inverse row stored as %s->%s, want issue-3->issue-1", inv.IssueID, inv.RelatedIssueID)
+	if invRels[0].ID != "rel-inverse" || invRels[0].RelatedIssueID != "issue-1" {
+		t.Errorf("inverse row stored as %s (%s->%s), want rel-inverse issue-3->issue-1",
+			invRels[0].ID, invRels[0].IssueID, invRels[0].RelatedIssueID)
 	}
 
 	// The stale row owned by issue-4 is outside issue-1's completeness set.
-	if _, err := store.Queries().GetIssueRelation(ctx, "rel-other"); err != nil {
-		t.Errorf("issue-1's sync pruned a row owned by issue-4: %v", err)
+	otherRels, err := store.Queries().ListIssueRelations(ctx, "issue-4")
+	if err != nil || len(otherRels) != 1 || otherRels[0].ID != "rel-other" {
+		t.Errorf("issue-1's sync pruned a row owned by issue-4: err=%v rels=%v", err, otherRels)
 	}
 }
 
@@ -1734,7 +1736,8 @@ func TestDetailsSyncRelationUpsertFailureSuppressesPrune(t *testing.T) {
 
 	worker.syncDetails(ctx, []issueRef{{ID: "issue-1", Identifier: "TST-1"}})
 
-	if _, err := store.Queries().GetIssueRelation(ctx, "rel-stale"); err != nil {
-		t.Errorf("unclean relation sync must suppress the prune, but rel-stale is gone: %v", err)
+	rels, err := store.Queries().ListIssueRelations(ctx, "issue-1")
+	if err != nil || len(rels) != 1 || rels[0].ID != "rel-stale" {
+		t.Errorf("unclean relation sync must suppress the prune, but rel-stale is gone: err=%v rels=%v", err, rels)
 	}
 }

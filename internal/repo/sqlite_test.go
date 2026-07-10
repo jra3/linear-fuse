@@ -2066,6 +2066,17 @@ func TestDeleteOrphanIssue(t *testing.T) {
 	}
 }
 
+// linkCount counts junction-table rows through the raw-SQL test seam
+// (store.DB()) — no production query lists these link IDs.
+func linkCount(t *testing.T, store *db.Store, query, id string) int {
+	t.Helper()
+	var n int
+	if err := store.DB().QueryRow(query, id).Scan(&n); err != nil {
+		t.Fatalf("count links: %v", err)
+	}
+	return n
+}
+
 func TestDeleteOrphanProject(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
@@ -2127,8 +2138,8 @@ func TestDeleteOrphanProject(t *testing.T) {
 	if _, err := q.GetProject(ctx, projectID); err != sql.ErrNoRows {
 		t.Errorf("orphan project not deleted: err=%v", err)
 	}
-	if got, _ := q.ListProjectTeamIDs(ctx, projectID); len(got) != 0 {
-		t.Errorf("orphan project-team links not deleted: %d remain", len(got))
+	if got := linkCount(t, store, "SELECT COUNT(*) FROM project_teams WHERE project_id = ?", projectID); got != 0 {
+		t.Errorf("orphan project-team links not deleted: %d remain", got)
 	}
 	if got, _ := q.ListProjectDocuments(ctx, sql.NullString{String: projectID, Valid: true}); len(got) != 0 {
 		t.Errorf("orphan project docs not deleted: %d remain", len(got))
@@ -2139,8 +2150,8 @@ func TestDeleteOrphanProject(t *testing.T) {
 	if got, _ := q.ListProjectMilestones(ctx, projectID); len(got) != 0 {
 		t.Errorf("orphan milestones not deleted: %d remain", len(got))
 	}
-	if got, _ := q.ListProjectInitiativeIDs(ctx, projectID); len(got) != 0 {
-		t.Errorf("orphan initiative-project links not deleted: %d remain", len(got))
+	if got := linkCount(t, store, "SELECT COUNT(*) FROM initiative_projects WHERE project_id = ?", projectID); got != 0 {
+		t.Errorf("orphan initiative-project links not deleted: %d remain", got)
 	}
 	// Keeper survives.
 	if _, err := q.GetProject(ctx, otherID); err != nil {
@@ -2202,8 +2213,8 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 	if got, _ := q.ListInitiativeUpdates(ctx, initID); len(got) != 0 {
 		t.Errorf("orphan init updates not deleted: %d remain", len(got))
 	}
-	if got, _ := q.ListInitiativeProjectIDs(ctx, initID); len(got) != 0 {
-		t.Errorf("orphan init-project links not deleted: %d remain", len(got))
+	if got := linkCount(t, store, "SELECT COUNT(*) FROM initiative_projects WHERE initiative_id = ?", initID); got != 0 {
+		t.Errorf("orphan init-project links not deleted: %d remain", got)
 	}
 	if _, err := q.GetInitiative(ctx, otherID); err != nil {
 		t.Errorf("keeper initiative was deleted: %v", err)
