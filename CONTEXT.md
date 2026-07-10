@@ -1239,3 +1239,26 @@ unmount ahead of the mkdir (covers old-binary/new-unit skew), `ExecStop -uz`,
 and `StartLimitBurst=5`/`StartLimitIntervalSec=60` so a genuinely broken
 start stops looping; sandboxing directives are deliberately absent (the
 mount lives in `$HOME`, config + cache under `~/.config/linearfs`).
+
+### Mount lifetime (`lifeCtx`/`spawn`)
+`LinearFS` owns the lifecycle context: `NewLinearFS` mints
+`lifeCtx`/`lifeCancel`, and `spawn(fn)` is the **only** way LinearFS launches
+a background goroutine — fn receives `lifeCtx`, is tracked by a WaitGroup,
+and spawn **declines to start fn once Close has begun** (the closed flag and
+`wg.Add` sit under one mutex, which is exactly what orders Add before Close's
+Wait — the classic WaitGroup Add-vs-Wait race). `Close` is therefore a fixed
+sequence: cancel → wait → `syncWorker.Stop()` → `repo.Close()` →
+`store.Close()` → `requestLog.Close()`, so nothing LinearFS spawned can touch
+the store after it closes. Cancelling *before* Stop is deliberate: the
+worker's ctx now derives from `lifeCtx`, so a mid-flight sync cycle aborts
+promptly instead of Stop waiting it out — a shutdown-latency improvement, not
+an accident of ordering. The worker and repo keep their own tested lifetime
+seams (`stopCh`/`doneCh`, `refreshCancel`) **by design** — they merely receive
+lifeCtx-derived contexts; do not rewire them onto spawn. The bug this
+module fixed: `EnableSQLiteCache`'s viewer-refresh goroutine ran on the
+caller's `context.Background()`, so its `<-ctx.Done()` branch could never
+fire and its 60s backoff ladder could outlive `store.Close()`, retrying
+against a closed store. `EnableSQLiteCache` consequently takes no ctx
+parameter at all — its seed queries and `worker.Start` use `lifeCtx`, because
+the work it starts is bounded by the mount's lifetime, not any caller's.
+`TestCloseWaitsForSpawned` pins the ordering contract without sleeps.
