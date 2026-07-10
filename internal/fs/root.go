@@ -302,6 +302,11 @@ Failure model (every writable surface follows this contract):
 - Whatever the errno, the reason lands in .error; success clears it.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
+Stale-catalog self-healing: a name that resolves nowhere locally (a status,
+label, assignee, project, milestone, cycle, or initiative created in Linear
+moments ago) triggers ONE targeted catalog refresh and one retry before the
+write fails — a value that really exists usually just works on first write.
+
 Validated issue fields: status, assignee, labels, priority, project, milestone, cycle, parent
 Validated project fields: initiatives, labels
 Reference files: states.md (valid statuses), labels.md (valid issue labels),
