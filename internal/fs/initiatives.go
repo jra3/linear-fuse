@@ -281,16 +281,17 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)
 	}
 
-	// Parse the modified content
-	doc, err := marshal.Parse(i.content)
+	// Parse the modified content: extraction/coercion only, into the editable
+	// field set. The diffs below own change detection.
+	parsed, err := marshal.MarkdownToInitiativeEdit(i.content)
 	if err != nil {
 		log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
 		i.lfs.SetWriteError(i.initiativeID, "Parse error: "+err.Error())
 		return syscall.EINVAL
 	}
 
-	// Extract projects from frontmatter (coerced via the shared marshal helper)
-	newProjectSlugs := marshal.StringSliceFromYAML(doc.Frontmatter["projects"])
+	// Desired projects, already coerced by the parse (absent ⇒ empty ⇒ unlink all)
+	newProjectSlugs := parsed.Projects
 
 	// Get current project slugs
 	var currentProjectSlugs []string
@@ -330,7 +331,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	// Persist editable scalar fields (name in frontmatter, description in body).
 	// The body maps to the initiative's description, matching generateContent().
 	// scalarEdit owns the diff, name coercion, and the divergence compare below.
-	edit := newScalarEdit(doc, i.initiative.Name, i.initiative.Description)
+	edit := newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Description)
 	initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Description: edit.desc}
 	if edit.changed() {
 		if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
@@ -526,7 +527,7 @@ func (n *InitiativeUpdatesNode) Create(ctx context.Context, name string, flags u
 // lands in .error; only whitespace-with-no-frontmatter is flush noise and
 // no-ops.
 func (n *InitiativeUpdatesNode) createUpdate(ctx context.Context, content []byte) syscall.Errno {
-	body, health, perr := parseUpdateContent(content)
+	body, health, perr := marshal.MarkdownToStatusUpdate(content)
 	if perr == nil && body == "" {
 		return 0
 	}

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // resolveByName finds the id of the item whose name matches — exact first, then
@@ -59,22 +60,10 @@ func resolveByName[T any](items []T, name, label string, nameOf, idOf func(T) st
 // It depends on an issueResolver seam rather than *LinearFS, so the whole
 // resolution path is unit-tested with a fake resolver — no repo, SQLite, or API.
 
-// FieldError describes a single field that could not be resolved. Detail renders
-// the .error payload in the established "Field / Value / Error" format.
-type FieldError struct {
-	Field   string
-	Value   string
-	Message string
-}
-
-func (e *FieldError) Detail() string {
-	if e.Value != "" {
-		return fmt.Sprintf("Field: %s\nValue: %q\nError: %s", e.Field, e.Value, e.Message)
-	}
-	return fmt.Sprintf("Field: %s\nError: %s", e.Field, e.Message)
-}
-
-func (e *FieldError) Error() string { return e.Detail() }
+// FieldError lives in marshal now (the parse family mints it too); the alias —
+// not a new type — keeps every construction site and the errors.As match in
+// classifyMutationErr working unchanged.
+type FieldError = marshal.FieldError
 
 // issueResolver is the minimal set of name→ID lookups resolveIssueUpdate needs.
 // *LinearFS satisfies it through its existing Resolve* methods.

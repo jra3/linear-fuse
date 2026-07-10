@@ -425,22 +425,22 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		log.Printf("Flush: project %s (saving changes)", p.project.Name)
 	}
 
-	// Parse the modified content
-	doc, err := marshal.Parse(p.content)
+	// Parse the modified content: extraction/coercion only, into the editable
+	// field set. The diffs below own change detection.
+	parsed, err := marshal.MarkdownToProjectEdit(p.content)
 	if err != nil {
 		log.Printf("Failed to parse project changes for %s: %v", p.project.Name, err)
 		p.lfs.SetWriteError(p.project.ID, "Parse error: "+err.Error())
 		return syscall.EINVAL
 	}
 
-	// Labels front half: labelsEdit (sibling of scalarEdit) owns the parse,
-	// the stale-blob clobber guard, resolve + validate, and the one change
-	// decision — hoisted before any mutation so a validation failure cannot
-	// leave the initiatives reconcile partially applied. The refresh closure
-	// is interactive-promoted because it is a synchronous read inside a
+	// Labels front half: labelsEdit (sibling of scalarEdit) owns the label
+	// coercion, the stale-blob clobber guard, resolve + validate, and the one
+	// change decision — hoisted before any mutation so a validation failure
+	// cannot leave the initiatives reconcile partially applied. The refresh
+	// closure is interactive-promoted because it is a synchronous read inside a
 	// user-blocking flush; labelsEdit decides when it fires.
-	rawLabels, labelsPresent := doc.Frontmatter["labels"]
-	labels, ferr := newLabelsEdit(ctx, rawLabels, labelsPresent, p.project.LabelIds,
+	labels, ferr := newLabelsEdit(ctx, parsed.LabelsRaw, parsed.LabelsPresent, p.project.LabelIds,
 		p.lfs.repo.GetProjectLabels,
 		func(ctx context.Context) []string {
 			if fresh, err := p.lfs.verify().GetProject(api.WithInteractive(ctx), p.project.ID); err == nil && fresh != nil {
@@ -453,8 +453,8 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		return syscall.EINVAL
 	}
 
-	// Extract initiatives from frontmatter (coerced via the shared marshal helper)
-	newInitiatives := marshal.StringSliceFromYAML(doc.Frontmatter["initiatives"])
+	// Desired initiatives, already coerced by the parse (absent ⇒ empty ⇒ unlink all)
+	newInitiatives := parsed.Initiatives
 
 	// Get current initiatives
 	var currentInitiatives []string
@@ -497,7 +497,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// body) plus the label set, in ONE UpdateProject call. Each edit module
 	// maps itself onto the input pointer-or-omit; labelsEdit.applyTo owns the
 	// full-set labels semantics (see projectlabels.go).
-	edit := newScalarEdit(doc, p.project.Name, p.project.Description)
+	edit := newScalarEdit(parsed.Name, parsed.Body, p.project.Name, p.project.Description)
 	projectInput := api.ProjectUpdateInput{Name: edit.name, Description: edit.desc}
 	labels.applyTo(&projectInput)
 	if edit.changed() || labels.changed() {
@@ -614,7 +614,7 @@ func (n *UpdatesNode) Create(ctx context.Context, name string, flags uint32, mod
 // lands in .error; only whitespace-with-no-frontmatter is flush noise and
 // no-ops.
 func (n *UpdatesNode) createUpdate(ctx context.Context, content []byte) syscall.Errno {
-	body, health, perr := parseUpdateContent(content)
+	body, health, perr := marshal.MarkdownToStatusUpdate(content)
 	if perr == nil && body == "" {
 		return 0
 	}
@@ -644,58 +644,4 @@ func (n *UpdatesNode) createUpdate(ctx context.Context, content []byte) syscall.
 		dir: updatesDirIno(n.projectID),
 	})
 	return errno
-}
-
-// parseUpdateContent extracts body and health from update content (shared by
-// project and initiative updates). Supports plain text or markdown with YAML
-// frontmatter containing a health field; plain text defaults health to onTrack.
-// An explicitly written but unrecognized health value is a *FieldError
-// (-> EINVAL), as is frontmatter whose body is empty — the writer expressed
-// intent, so silently creating an onTrack update (or nothing) would swallow it.
-// Only content with no frontmatter may parse to an empty body; the caller
-// treats that as flush noise and no-ops.
-func parseUpdateContent(content []byte) (body string, health string, err error) {
-	s := string(content)
-	health = "onTrack" // Default health
-
-	// Check for frontmatter
-	if !strings.HasPrefix(s, "---\n") {
-		return strings.TrimSpace(s), health, nil
-	}
-
-	// Find end of frontmatter
-	end := strings.Index(s[4:], "\n---")
-	if end == -1 {
-		return strings.TrimSpace(s), health, nil
-	}
-
-	// Parse frontmatter for health field
-	frontmatter := s[4 : 4+end]
-	for _, line := range strings.Split(frontmatter, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "health:") {
-			h := strings.TrimSpace(strings.TrimPrefix(line, "health:"))
-			h = strings.Trim(h, `"'`)
-			// Normalize health value
-			switch strings.ToLower(h) {
-			case "ontrack", "on track", "on-track":
-				health = "onTrack"
-			case "atrisk", "at risk", "at-risk":
-				health = "atRisk"
-			case "offtrack", "off track", "off-track":
-				health = "offTrack"
-			default:
-				return "", "", &FieldError{Field: "health", Value: h,
-					Message: "invalid health: must be onTrack, atRisk, or offTrack"}
-			}
-		}
-	}
-
-	// Return body after frontmatter
-	body = strings.TrimSpace(s[4+end+4:])
-	if body == "" {
-		return "", "", &FieldError{Field: "body",
-			Message: "update body is required: write the update text after the frontmatter"}
-	}
-	return body, health, nil
 }
