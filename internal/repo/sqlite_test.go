@@ -2125,6 +2125,10 @@ func TestDeleteOrphanProject(t *testing.T) {
 	mustExec("initiative-project link", q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 		InitiativeID: "init-1", ProjectID: projectID, SyncedAt: now,
 	}))
+	mustExec("project link", q.UpsertEntityExternalLink(ctx, db.UpsertEntityExternalLinkParams{
+		ID: "el1", ProjectID: sql.NullString{String: projectID, Valid: true},
+		Label: "Link", Url: "https://example.com", SyncedAt: now, Data: []byte("{}"),
+	}))
 	// Sub-resources on the keeper.
 	mustExec("keeper doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
 		ID: "pd-keep", SlugID: "pd-keep", Title: "Keep",
@@ -2152,6 +2156,9 @@ func TestDeleteOrphanProject(t *testing.T) {
 	}
 	if got := linkCount(t, store, "SELECT COUNT(*) FROM initiative_projects WHERE project_id = ?", projectID); got != 0 {
 		t.Errorf("orphan initiative-project links not deleted: %d remain", got)
+	}
+	if got, _ := q.ListProjectLinks(ctx, sql.NullString{String: projectID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan project external links not deleted: %d remain", len(got))
 	}
 	// Keeper survives.
 	if _, err := q.GetProject(ctx, otherID); err != nil {
@@ -2197,6 +2204,10 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 	mustExec("init-project link", q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 		InitiativeID: initID, ProjectID: "some-proj", SyncedAt: now,
 	}))
+	mustExec("init link", q.UpsertEntityExternalLink(ctx, db.UpsertEntityExternalLinkParams{
+		ID: "el2", InitiativeID: sql.NullString{String: initID, Valid: true},
+		Label: "Link", Url: "https://example.com", SyncedAt: now, Data: []byte("{}"),
+	}))
 	// Keeper sub-resource.
 	mustExec("keeper update", q.UpsertInitiativeUpdate(ctx, db.UpsertInitiativeUpdateParams{
 		ID: "iu-keep", InitiativeID: otherID, Body: "keep", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
@@ -2215,6 +2226,9 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 	}
 	if got := linkCount(t, store, "SELECT COUNT(*) FROM initiative_projects WHERE initiative_id = ?", initID); got != 0 {
 		t.Errorf("orphan init-project links not deleted: %d remain", got)
+	}
+	if got, _ := q.ListInitiativeLinks(ctx, sql.NullString{String: initID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan init external links not deleted: %d remain", len(got))
 	}
 	if _, err := q.GetInitiative(ctx, otherID); err != nil {
 		t.Errorf("keeper initiative was deleted: %v", err)
@@ -2367,6 +2381,103 @@ func TestReconcileIssuesForTeam_DeletesOrphans(t *testing.T) {
 	}
 	if _, err := store.Queries().GetIssueByID(ctx, "alsogone"); err != sql.ErrNoRows {
 		t.Errorf("alsogone issue still present: err=%v", err)
+	}
+}
+
+// TestReconcileIssueIDs_PartialDrainIsIncompletePerTeamAllOrNothing pins the
+// scheduled sweep's contract (#245): a team whose drain failed deletes
+// NOTHING for that team, a team whose drain completed is cleaned, and any
+// failure makes the pass incomplete so the worker withholds its schedule
+// stamp (the sweep stays due).
+func TestReconcileIssueIDs_PartialDrainIsIncompletePerTeamAllOrNothing(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	teams := []api.Team{
+		{ID: "team-1", Key: "AAA", Name: "A", CreatedAt: now, UpdatedAt: now},
+		{ID: "team-2", Key: "BBB", Name: "B", CreatedAt: now, UpdatedAt: now},
+	}
+	for i := range teams {
+		if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(teams[i])); err != nil {
+			t.Fatalf("seed team: %v", err)
+		}
+		issue := api.Issue{
+			ID: "orphan-" + teams[i].ID, Identifier: "orphan-" + teams[i].ID,
+			Title: "orphan", Team: &teams[i],
+			State:     api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+			CreatedAt: now, UpdatedAt: now,
+		}
+		data, _ := db.APIIssueToDBIssue(issue)
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("seed issue: %v", err)
+		}
+	}
+
+	// team-1's drain fails; team-2's completes and reports no issues.
+	drain := func(_ context.Context, teamID string) ([]string, error) {
+		if teamID == "team-1" {
+			return nil, fmt.Errorf("drain: %w", api.ErrBudget)
+		}
+		return []string{}, nil
+	}
+
+	deleted, complete := repo.ReconcileIssueIDs(ctx, drain)
+	if complete {
+		t.Error("complete = true, want false (one team's drain failed)")
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (team-2's orphan only)", deleted)
+	}
+	if _, err := store.Queries().GetIssueByID(ctx, "orphan-team-1"); err != nil {
+		t.Errorf("failed drain deleted team-1's issue: %v", err)
+	}
+	if _, err := store.Queries().GetIssueByID(ctx, "orphan-team-2"); err != sql.ErrNoRows {
+		t.Errorf("complete drain did not delete team-2's orphan: err=%v", err)
+	}
+
+	// A fully successful pass reports complete.
+	deleted, complete = repo.ReconcileIssueIDs(ctx, func(_ context.Context, _ string) ([]string, error) {
+		return []string{"orphan-team-1"}, nil
+	})
+	if !complete {
+		t.Error("complete = false, want true (every drain succeeded)")
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0", deleted)
+	}
+}
+
+// TestReconcileIssueIDs_MutuallyExclusiveWithReactivePass: while the reactive
+// runReconcile is in flight (reconcilePending set), the scheduled sweep backs
+// off without draining anything and reports incomplete — the worker leaves it
+// due and the next cycle retries.
+func TestReconcileIssueIDs_MutuallyExclusiveWithReactivePass(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	repo.reconcilePending.Store(true)
+	defer repo.reconcilePending.Store(false)
+
+	called := false
+	deleted, complete := repo.ReconcileIssueIDs(context.Background(), func(_ context.Context, _ string) ([]string, error) {
+		called = true
+		return nil, nil
+	})
+	if called {
+		t.Error("drain invoked while a reconcile pass was already pending")
+	}
+	if deleted != 0 || complete {
+		t.Errorf("got (deleted=%d, complete=%v), want (0, false)", deleted, complete)
 	}
 }
 

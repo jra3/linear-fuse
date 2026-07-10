@@ -40,6 +40,16 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		}
 	}
 
+	// The project/initiative external-link surface (#249): the README must teach
+	// the links/ directory and its "URL [label]" write contract, and the *.link
+	// files must really be read-only (a documented write-only/read-only surface
+	// that lies is the exact failure this test exists to prevent).
+	for _, want := range []string{"links/", ".link", "URL [label]"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q (project/initiative links surface)", want)
+		}
+	}
+
 	// The meta split moved server fields out of the editable files. The README's
 	// frontmatter templates must not document them as editable-file fields, or an
 	// agent will look for/edit fields that no longer live there (the exact "the

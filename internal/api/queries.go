@@ -251,6 +251,22 @@ fragment AttachmentFields on Attachment {
 }
 `
 
+// EntityExternalLinkFieldsFragment is a GraphQL fragment for external-link
+// fields on a project or initiative ("Links / Resources"). One field set backs
+// the project.externalLinks / initiative.links reads and the create mutation, so
+// a created link carries the same fields a fetched one does.
+const EntityExternalLinkFieldsFragment = `
+fragment EntityExternalLinkFields on EntityExternalLink {
+  id
+  label
+  url
+  sortOrder
+  createdAt
+  updatedAt
+  creator { id name email }
+}
+`
+
 // ProjectMilestoneFields is the shared projection for a project milestone,
 // used by the nested selections in queryTeamProjects/queryProject and the
 // create/update mutations.
@@ -438,6 +454,26 @@ var queryTeamProjects = `
 query TeamProjects($teamId: String!, $after: String) {
   team(id: $teamId) {
     projects(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...ProjectFields }
+    }
+  }
+}
+` + projectFieldsFragment
+
+// queryTeamProjectsByUpdatedAt fetches a team's projects newest-first — the
+// lean cycle's change-detection probe and its resume pages (#243), the
+// projects sibling of queryTeamIssuesByUpdatedAt. $first is a variable, not a
+// constant, because the two callers want different pages: the probe pays for
+// only a handful of nodes (each costs ~187 complexity via the nested
+// milestone/initiative selections), while a resume page uses the full-drain
+// page size. Nodes project through ProjectFields, identical to
+// queryTeamProjects — the fragment rule: a probed project must carry the
+// same fields a drained one does.
+var queryTeamProjectsByUpdatedAt = `
+query TeamProjectsByUpdatedAt($teamId: String!, $first: Int!, $after: String) {
+  team(id: $teamId) {
+    projects(first: $first, after: $after, orderBy: updatedAt) {
       pageInfo { hasNextPage endCursor }
       nodes { ...ProjectFields }
     }
@@ -762,6 +798,32 @@ query IssueAttachments($issueId: String!) {
 }
 ` + AttachmentFieldsFragment
 
+// queryProjectExternalLinks fetches the external links ("Links / Resources") for
+// a project. DELIBERATE cap: first: 100, single page, no drain — same rationale
+// as queryIssueAttachments (this serves the interactive link create re-check, a
+// user-blocking write path fetchAll's LowBudget gate must never sit on).
+var queryProjectExternalLinks = `
+query ProjectExternalLinks($projectId: String!) {
+  project(id: $projectId) {
+    externalLinks(first: 100) {
+      nodes { ...EntityExternalLinkFields }
+    }
+  }
+}
+` + EntityExternalLinkFieldsFragment
+
+// queryInitiativeExternalLinks fetches the external links for an initiative.
+// Same single-page cap and rationale as queryProjectExternalLinks.
+var queryInitiativeExternalLinks = `
+query InitiativeExternalLinks($initiativeId: String!) {
+  initiative(id: $initiativeId) {
+    links(first: 100) {
+      nodes { ...EntityExternalLinkFields }
+    }
+  }
+}
+` + EntityExternalLinkFieldsFragment
+
 var mutationCreateComment = `
 mutation CreateComment($issueId: String!, $body: String!) {
   commentCreate(input: { issueId: $issueId, body: $body }) {
@@ -927,6 +989,27 @@ mutation AttachmentLinkURL($issueId: String!, $url: String!, $title: String) {
 const mutationDeleteAttachment = `
 mutation DeleteAttachment($id: String!) {
   attachmentDelete(id: $id) {
+    success
+  }
+}
+`
+
+// =============================================================================
+// Entity External Links (project/initiative "Links / Resources")
+// =============================================================================
+
+var mutationCreateEntityExternalLink = `
+mutation CreateEntityExternalLink($input: EntityExternalLinkCreateInput!) {
+  entityExternalLinkCreate(input: $input) {
+    success
+    entityExternalLink { ...EntityExternalLinkFields }
+  }
+}
+` + EntityExternalLinkFieldsFragment
+
+const mutationDeleteEntityExternalLink = `
+mutation DeleteEntityExternalLink($id: String!) {
+  entityExternalLinkDelete(id: $id) {
     success
   }
 }

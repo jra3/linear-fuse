@@ -1143,6 +1143,13 @@ pre-diet behavior verbatim: `syncWorkspace` (users + initiatives +
 project-label catalog) and per-team `syncTeamMetadata`
 (states/labels/cycles/projects/members) — with every prune license — plus
 the incremental issues sync. A **lean** cycle (the steady-state default)
+runs only the cheap `GetTeams` enumeration, each team's projects
+change-detection probe (see "Projects probe" below), and each team's
+incremental issues sync: no `GetWorkspace`, no `GetTeamMetadata`, and
+therefore no metadata prunes (pruning stays licensed exclusively by the full
+cycle's complete drains, so the metadata deletion/staleness bound is the
+full-cycle interval). The decision is **time-based off a persisted timestamp**, not an
+
 runs only the cheap `GetTeams` enumeration, each team's incremental
 issues sync, and the change-detection probes (see "Initiatives probe"
 below): no `GetTeamMetadata`, and `GetWorkspace` only when a probe detects
@@ -1169,6 +1176,72 @@ counter). Tested at the worker's API-client seam
 sequences on the fake clock assert per-cycle op windows (`opsDuring`), the
 restart case runs a second Worker over the same store, and the budget-skip
 case asserts the stamp was withheld.
+
+### Projects probe (`probeTeamProjects`, lean cycles)
+The lean cycle's replacement for the per-team projects drain
+(`internal/sync/worker.go`, #243 — slice 2 of the #238 diet; the drain was
+53% of quiet steady-state complexity). Per team, fetch projects
+**newest-first** (`GetTeamProjectsNewestPage`, query
+`TeamProjectsByUpdatedAt` — `orderBy: updatedAt`, the projects sibling of
+`TeamIssuesByUpdatedAt`, nodes through the shared `ProjectFields` fragment)
+with a tiny first page (`probeProjectsPageSize` = 5; a node costs ~187
+complexity via nested milestone/initiative selections, so the
+unchanged-world check is ~1K vs ~9.4K for a drain page). If the newest
+`updatedAt` is not newer than the persisted per-team watermark
+(`sync_schedule` key `projects_probe:<teamID>` — the generic schedule table
+reused as designed), done. Otherwise keep paginating newest-first at the
+full-drain page size (50), upserting every node through
+`upsertTeamProject` — the extracted persist body shared with
+`syncTeamMetadata`'s reconcile pass (project row + `project_teams` junction
++ best-effort milestones), so the probe and drain paths cannot drift —
+until a node at/older than the watermark appears (the issues
+sync-until-unchanged idiom; the probe page doubles as the first resume
+page), then advance the watermark. **The probe NEVER licenses a prune**:
+upsert-only by construction; deletions are the full cycle's job (the
+`FullSyncInterval` bound). The watermark advances only over cleanly
+persisted data — any fetch/upsert failure aborts without advancing, and it
+is data-time (max project `updatedAt`), not clock-time, so the clock seam
+is not involved. A missing watermark (first lean cycle ever) walks all
+pages once, upsert-only, to seed it; full cycles do not touch the watermark
+(the first probe after a full cycle may re-upsert a few rows — harmless).
+Full cycles skip the probe entirely: the metadata drain covers projects and
+a probe page there would be redundant spend. Outcomes are observable as
+`linearfs.sync.probe_outcomes{kind=team_projects,
+outcome=unchanged|changed|error}`. Tested at both seams: worker-seam cycle
+scripts in `probe_test.go` (unchanged world = exactly one probe op,
+changed project = resume + store contents + watermark advance with
+millisecond round-trip fidelity, probe error = cycle continues, deletion
+survives lean cycles) and wire tests through the scripted GraphQL mock
+server (orderBy/first/after shape; resume stops at the watermark instead
+of draining even when `hasNextPage` says more).
+
+### Issue-ID reconcile sweep (`maybeReconcileIssueIDs`, hourly)
+Issues are the one entity class whose sync is always incremental (never a
+complete drain), so a deleted issue that nothing reads would linger forever —
+deletion was caught only reactively (read 404s → orphan delete → the repo's
+cooldown-gated reconcile pass). The scheduled sweep (#245, slice 4 of the
+#238 diet) closes that: `maybeReconcileIssueIDs` rides every sync cycle (any
+speed) and, when the `sync_schedule` row keyed `issue_id_reconcile` is
+missing or ≥1h old (decided through the clock seam, like `full_cycle`),
+calls the repo's issue reconcile — **reused, not copied**:
+`SQLiteRepository.ReconcileIssueIDs` wraps the same `reconcileIssuesWith`
+core the reactive pass runs (per-team bare-ID drain → `setDiff` →
+`deleteOrphanIssue` with its full sub-resource cleanup). The drain is
+injected (`w.client.GetTeamIssueIDs`, now on the worker's `APIClient`
+interface) so the sweep is drivable by the op-recording mock; the repo
+contributes the diff-and-delete. All-or-nothing per team: `fetchAll`
+guarantees complete-or-error, and a team whose drain errored deletes nothing.
+Only a COMPLETE pass (every team drained) stamps the schedule — a failure or
+`ErrBudget` deferral leaves the sweep due for the next cycle. The
+`reconcilePending` CAS makes the sweep and the reactive `runReconcile`
+mutually exclusive and keeps sweep deletions from chaining a reactive pass
+(`maybeScheduleReconcile` no-ops while pending); `lastReconcileAt` is not
+touched, so the reactive cooldown semantics are unchanged for their own
+triggers. Deletions are exported as `linearfs.sync.reconcile_deletions`
+{kind=issue}. Tested at the worker seam (`worker_test.go` "Issue-ID Reconcile
+Sweep": real `SQLiteRepository` over the test store, mock drain, fake clock)
+and at the repo seam (partial-drain per-team all-or-nothing, pending-guard
+mutual exclusion).
 
 ### Initiatives probe (`probeInitiatives`, lean cycles)
 Lean cycles detect initiative changes with a scalars-only probe

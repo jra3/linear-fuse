@@ -90,6 +90,22 @@ type EmbeddedFile struct {
 	SyncedAt  time.Time      `json:"synced_at"`
 }
 
+type EntityExternalLink struct {
+	ID           string          `json:"id"`
+	ProjectID    sql.NullString  `json:"project_id"`
+	InitiativeID sql.NullString  `json:"initiative_id"`
+	Label        string          `json:"label"`
+	Url          string          `json:"url"`
+	SortOrder    sql.NullFloat64 `json:"sort_order"`
+	CreatorID    sql.NullString  `json:"creator_id"`
+	CreatorName  sql.NullString  `json:"creator_name"`
+	CreatorEmail sql.NullString  `json:"creator_email"`
+	CreatedAt    sql.NullTime    `json:"created_at"`
+	UpdatedAt    sql.NullTime    `json:"updated_at"`
+	SyncedAt     time.Time       `json:"synced_at"`
+	Data         json.RawMessage `json:"data"`
+}
+
 type Initiative struct {
 	ID          string          `json:"id"`
 	SlugID      string          `json:"slug_id"`

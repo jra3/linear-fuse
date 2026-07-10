@@ -369,6 +369,20 @@ type Attachment struct {
 	UpdatedAt  time.Time              `json:"updatedAt"`
 }
 
+// EntityExternalLink represents an external link ("Links / Resources") on a
+// project or initiative. It is a distinct Linear entity from Attachment (which
+// is issue-only): its parent is a project or initiative, and its display field
+// is Label rather than Title.
+type EntityExternalLink struct {
+	ID        string    `json:"id"`
+	Label     string    `json:"label"`
+	URL       string    `json:"url"`
+	SortOrder float64   `json:"sortOrder"`
+	Creator   *User     `json:"creator"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
 // EmbeddedFile represents a file uploaded to Linear's CDN (image, PDF, etc.)
 type EmbeddedFile struct {
 	ID        string    // SHA256 hash of URL

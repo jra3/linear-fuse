@@ -24,9 +24,10 @@ import (
 
 // syncMetrics holds the Worker-bound sync instruments (meter "linearfs/sync").
 type syncMetrics struct {
-	cycleDuration  metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
-	detailOutcomes metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
-	probeOutcomes  metric.Int64Counter     // linearfs.sync.probe_outcomes {kind, outcome}
+	cycleDuration      metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
+	detailOutcomes     metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
+	probeOutcomes      metric.Int64Counter     // linearfs.sync.probe_outcomes {kind, outcome}
+	reconcileDeletions metric.Int64Counter     // linearfs.sync.reconcile_deletions {kind}
 }
 
 func newSyncMetrics() syncMetrics {
@@ -38,9 +39,28 @@ func newSyncMetrics() syncMetrics {
 		detailOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.detail_outcomes",
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
 		probeOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.probe_outcomes",
-			metric.WithDescription("Lean-cycle change-detection probe outcomes, by kind (initiatives) and outcome (unchanged|changed|error)")),
+			metric.WithDescription("Lean-cycle change-detection probe runs, by kind (team_projects|initiatives) and outcome (unchanged|changed|error)")),
+		reconcileDeletions: telemetry.MustInt64Counter(m, "linearfs.sync.reconcile_deletions",
+			metric.WithDescription("Local rows deleted by the scheduled ID-reconcile sweep, by kind (issue)")),
 	}
 }
+
+// Probe outcome vocabulary: every probe run records exactly one outcome, so a
+// probe that never fires is detectable as a missing series. probeKind* names
+// the probed entity class ("team_projects" today; the initiatives probe is a
+// later diet slice).
+type probeOutcome string
+
+const (
+	probeUnchanged probeOutcome = "unchanged" // newest page carried nothing past the watermark
+	probeChanged   probeOutcome = "changed"   // at least one node upserted, watermark advanced
+	probeError     probeOutcome = "error"     // fetch/upsert failure or cancellation — watermark untouched
+)
+
+const (
+	probeKindTeamProjects = "team_projects"
+	probeKindInitiatives  = "initiatives"
+)
 
 // recordCycle records one sync cycle's duration, attributed with the cycle's
 // mode (lean|full) — the histogram's per-mode sample counts double as the
@@ -64,17 +84,22 @@ func (sm syncMetrics) recordDetailOutcomes(ctx context.Context, synced, deferred
 	}
 }
 
-// recordProbeOutcome counts one lean-cycle change-detection probe result.
-// Every probe run lands in exactly one outcome: "unchanged" (newest
-// updatedAt ≤ watermark — the fetch the probe exists to skip was skipped),
-// "changed" (the on-change full sync was triggered — whether or not that
-// sync then succeeded; its failures are its own), or "error" (the probe
-// query itself failed). A probe that never fires shows up as a missing
-// kind in this series.
-func (sm syncMetrics) recordProbeOutcome(ctx context.Context, kind, outcome string) {
-	sm.probeOutcomes.Add(ctx, 1, metric.WithAttributes(
+// recordProbeOutcome counts one change-detection probe run, attributed with
+// the probed kind and its outcome.
+func (sm syncMetrics) recordProbeOutcome(kind string, outcome probeOutcome) {
+	sm.probeOutcomes.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("kind", kind),
-		attribute.String("outcome", outcome)))
+		attribute.String("outcome", string(outcome))))
+}
+
+// recordReconcileDeletions counts local rows deleted by the scheduled
+// ID-reconcile sweep (#245). Zero-deletion sweeps record nothing, matching
+// the sibling counters.
+func (sm syncMetrics) recordReconcileDeletions(ctx context.Context, kind string, n int) {
+	if n > 0 {
+		sm.reconcileDeletions.Add(ctx, int64(n), metric.WithAttributes(
+			attribute.String("kind", kind)))
+	}
 }
 
 // registerPendingDepthGauge installs the linearfs.sync.pending_depth

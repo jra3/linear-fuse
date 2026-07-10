@@ -629,6 +629,29 @@ func (c *Client) GetTeamProjects(ctx context.Context, teamID string) ([]Project,
 		map[string]any{"teamId": teamID}, "team", "projects")
 }
 
+// GetTeamProjectsNewestPage fetches a single page of a team's projects
+// ordered by updatedAt DESC — the lean cycle's projects change-detection
+// probe and its resume pages (#243), the projects sibling of
+// GetTeamIssuesPage. Use cursor="" for the first page. The caller chooses the
+// page size: the probe page is small (nested selections cost ~187 complexity
+// per node, so a handful of nodes keeps the unchanged-world check near 1K),
+// resume pages use the full-drain size.
+func (c *Client) GetTeamProjectsNewestPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]Project, PageInfo, error) {
+	vars := map[string]any{
+		"teamId": teamID,
+		"first":  pageSize,
+	}
+	if cursor != "" {
+		vars["after"] = cursor
+	}
+
+	cn, err := fetchConn[Project](ctx, c, queryTeamProjectsByUpdatedAt, vars, "team", "projects")
+	if err != nil {
+		return nil, PageInfo{}, err
+	}
+	return cn.Nodes, *cn.PageInfo, nil
+}
+
 // GetProjectLabels drains the workspace project-label catalog to completion.
 // No filter deliberately: the drain must include retired and group labels —
 // completeness is what licenses the sync pass's full-table prune (see
@@ -903,6 +926,18 @@ func (c *Client) GetIssueAttachments(ctx context.Context, issueID string) ([]Att
 		map[string]any{"issueId": issueID}, "issue", "attachments")
 }
 
+// GetProjectLinks fetches the external links ("Links / Resources") for a project.
+func (c *Client) GetProjectLinks(ctx context.Context, projectID string) ([]EntityExternalLink, error) {
+	return fetchNodes[EntityExternalLink](ctx, c, queryProjectExternalLinks,
+		map[string]any{"projectId": projectID}, "project", "externalLinks")
+}
+
+// GetInitiativeLinks fetches the external links for an initiative.
+func (c *Client) GetInitiativeLinks(ctx context.Context, initiativeID string) ([]EntityExternalLink, error) {
+	return fetchNodes[EntityExternalLink](ctx, c, queryInitiativeExternalLinks,
+		map[string]any{"initiativeId": initiativeID}, "initiative", "links")
+}
+
 // GetIssueHistory fetches the history/audit trail for an issue, drained —
 // it backs history.md live and an old issue's trail outgrows a page.
 func (c *Client) GetIssueHistory(ctx context.Context, issueID string) ([]IssueHistoryEntry, error) {
@@ -1011,6 +1046,23 @@ func (c *Client) LinkURL(ctx context.Context, issueID, url, title string) (*Atta
 // DeleteAttachment deletes an attachment
 func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) error {
 	return execMutationOK(ctx, c, mutationDeleteAttachment, map[string]any{"id": attachmentID}, "attachmentDelete")
+}
+
+// =============================================================================
+// Entity External Links (project/initiative "Links / Resources")
+// =============================================================================
+
+// CreateEntityExternalLink creates an external link on a project or initiative.
+// The input map carries the EntityExternalLinkCreateInput fields — required
+// `url` and `label`, plus exactly one parent id (`projectId` or `initiativeId`).
+func (c *Client) CreateEntityExternalLink(ctx context.Context, input map[string]any) (*EntityExternalLink, error) {
+	return execMutation[EntityExternalLink](ctx, c, mutationCreateEntityExternalLink,
+		map[string]any{"input": input}, "entityExternalLinkCreate", "entityExternalLink")
+}
+
+// DeleteEntityExternalLink deletes an external link by ID.
+func (c *Client) DeleteEntityExternalLink(ctx context.Context, id string) error {
+	return execMutationOK(ctx, c, mutationDeleteEntityExternalLink, map[string]any{"id": id}, "entityExternalLinkDelete")
 }
 
 // LowBudget reports whether a conservatively-priced list-tier request would

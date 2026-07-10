@@ -229,26 +229,71 @@ func (r *SQLiteRepository) runReconcile() {
 // reconcileIssues walks every team in SQLite and, for each, fetches the
 // authoritative issue ID set from Linear, diffs against the local set,
 // and deletes the orphans. Returns the total number of orphans removed.
+// This is the reactive pass's entry point; its LowBudget-defers and
+// per-team-error-skips semantics are unchanged (it ignores completeness).
 func (r *SQLiteRepository) reconcileIssues(ctx context.Context) int {
+	deleted, _ := r.reconcileIssuesWith(ctx, r.client.GetTeamIssueIDs, r.client.LowBudget)
+	return deleted
+}
+
+// ReconcileIssueIDs runs the issues portion of the reconcile pass on behalf
+// of the sync worker's scheduled hourly sweep (#245). The drain is injected
+// (rather than read from r.client) so the sweep flows through the worker's
+// API-client seam — the op-recording mock and fake clock can drive it — while
+// the diff-and-delete machinery (reconcileIssuesForTeam → deleteOrphanIssue,
+// the full sub-resource cleanup) is reused verbatim, not copied.
+//
+// complete reports whether EVERY team's drain succeeded: the caller stamps
+// its persisted schedule only on a complete pass, so a failed or
+// budget-deferred (api.ErrBudget) drain leaves the sweep due. Per-team
+// all-or-nothing still holds regardless: a team whose drain errored deletes
+// nothing for that team, while teams whose drains completed are cleaned.
+//
+// The reconcilePending CAS makes the sweep and the reactive runReconcile
+// mutually exclusive (no concurrent double-drain) and — because
+// maybeScheduleReconcile no-ops while pending is set — keeps the sweep's own
+// deletions from chaining a reactive pass, exactly as deletions inside
+// runReconcile already don't. lastReconcileAt is deliberately NOT touched:
+// the reactive path's cooldown semantics stay unchanged for its own triggers.
+func (r *SQLiteRepository) ReconcileIssueIDs(ctx context.Context, drain func(ctx context.Context, teamID string) ([]string, error)) (deleted int, complete bool) {
+	if !r.reconcilePending.CompareAndSwap(false, true) {
+		// A reactive pass is in flight; stay due and let the next cycle retry.
+		return 0, false
+	}
+	defer r.reconcilePending.Store(false)
+	return r.reconcileIssuesWith(ctx, drain, nil)
+}
+
+// reconcileIssuesWith is the shared core of the two issue-reconcile entry
+// points (the reactive pass above and the worker's scheduled sweep). It walks
+// every team in SQLite, drains that team's authoritative issue ID set, and
+// diffs-and-deletes local orphans. The drain is all-or-nothing per team
+// (fetchAll guarantees complete-or-error), so a drain error deletes nothing
+// for that team. lowBudget, when non-nil, is a preflight that defers all
+// remaining teams (the reactive path's gate; the scheduled path passes nil
+// and relies on the drain's own ErrBudget preflight). complete is true only
+// when every team drained successfully.
+func (r *SQLiteRepository) reconcileIssuesWith(ctx context.Context, drain func(ctx context.Context, teamID string) ([]string, error), lowBudget func() bool) (deleted int, complete bool) {
 	teams, err := r.store.Queries().ListTeams(ctx)
 	if err != nil {
 		log.Printf("[reconcile] list teams: %v", err)
-		return 0
+		return 0, false
 	}
-	deleted := 0
+	complete = true
 	for _, team := range teams {
-		if r.client.LowBudget() {
+		if lowBudget != nil && lowBudget() {
 			log.Printf("[reconcile] budget low; deferring remaining teams")
-			return deleted
+			return deleted, false
 		}
-		apiIDs, err := r.client.GetTeamIssueIDs(ctx, team.ID)
+		apiIDs, err := drain(ctx, team.ID)
 		if err != nil {
 			log.Printf("[reconcile] issues team %s: %v (skipping)", team.Key, err)
+			complete = false
 			continue
 		}
 		deleted += r.reconcileIssuesForTeam(ctx, team.ID, apiIDs)
 	}
-	return deleted
+	return deleted, complete
 }
 
 // reconcileAgainst diffs a provably-complete authoritative ID set (apiIDs)
@@ -804,6 +849,9 @@ func (r *SQLiteRepository) deleteOrphanProject(ctx context.Context, projectID st
 	if err := q.DeleteProjectMilestones(ctx, projectID); err != nil {
 		log.Printf("[repo] orphan cleanup: project milestones for %s: %v", projectID, err)
 	}
+	if err := q.DeleteProjectLinks(ctx, sql.NullString{String: projectID, Valid: true}); err != nil {
+		log.Printf("[repo] orphan cleanup: project links for %s: %v", projectID, err)
+	}
 	if err := q.DeleteInitiativeProjectsByProject(ctx, projectID); err != nil {
 		log.Printf("[repo] orphan cleanup: initiative-project links for %s: %v", projectID, err)
 	}
@@ -826,6 +874,9 @@ func (r *SQLiteRepository) deleteOrphanInitiative(ctx context.Context, initiativ
 	}
 	if err := q.DeleteInitiativeUpdates(ctx, initiativeID); err != nil {
 		log.Printf("[repo] orphan cleanup: initiative updates for %s: %v", initiativeID, err)
+	}
+	if err := q.DeleteInitiativeLinks(ctx, sql.NullString{String: initiativeID, Valid: true}); err != nil {
+		log.Printf("[repo] orphan cleanup: initiative links for %s: %v", initiativeID, err)
 	}
 	if err := q.DeleteInitiativeProjects(ctx, initiativeID); err != nil {
 		log.Printf("[repo] orphan cleanup: initiative-project links for %s: %v", initiativeID, err)
@@ -1097,6 +1148,100 @@ func (r *SQLiteRepository) GetIssueAttachments(ctx context.Context, issueID stri
 	}
 
 	return db.DBAttachmentsToAPIAttachments(attachments)
+}
+
+// GetProjectLinks returns a project's external links ("Links / Resources"),
+// refreshing from the API on read when the local rows are stale (SWR), the same
+// contract as GetProjectDocuments.
+func (r *SQLiteRepository) GetProjectLinks(ctx context.Context, projectID string) ([]api.EntityExternalLink, error) {
+	links, err := r.store.Queries().ListProjectLinks(ctx, sql.NullString{String: projectID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list project links: %w", err)
+	}
+
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindProjectLinks,
+		id:   projectID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetProjectLinksSyncedAt(context.Background(), sql.NullString{String: projectID, Valid: true})
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshProjectLinks(ctx, projectID)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanProject(ctx, projectID) },
+	})
+
+	return db.DBEntityExternalLinksToAPI(links)
+}
+
+// refreshProjectLinks fetches external links from the API and stores them.
+// Upsert-only (nil Prune): mirrors refreshProjectDocuments — nothing licenses a
+// prune for this single-page fetch.
+func (r *SQLiteRepository) refreshProjectLinks(ctx context.Context, projectID string) error {
+	links, err := r.client.GetProjectLinks(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.EntityExternalLink]{
+		Label: "project link " + projectID,
+		Kind:  "attachment",
+		Items: links,
+		Upsert: func(ctx context.Context, link api.EntityExternalLink) error {
+			params, err := db.APIEntityExternalLinkToDB(link, projectID, "")
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertEntityExternalLink(ctx, params)
+		},
+	})
+	return nil
+}
+
+// GetInitiativeLinks returns an initiative's external links, SWR-refreshed on
+// read like GetInitiativeDocuments.
+func (r *SQLiteRepository) GetInitiativeLinks(ctx context.Context, initiativeID string) ([]api.EntityExternalLink, error) {
+	links, err := r.store.Queries().ListInitiativeLinks(ctx, sql.NullString{String: initiativeID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list initiative links: %w", err)
+	}
+
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindInitiativeLinks,
+		id:   initiativeID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetInitiativeLinksSyncedAt(context.Background(), sql.NullString{String: initiativeID, Valid: true})
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshInitiativeLinks(ctx, initiativeID)
+		},
+		orphan: func(ctx context.Context) { r.deleteOrphanInitiative(ctx, initiativeID) },
+	})
+
+	return db.DBEntityExternalLinksToAPI(links)
+}
+
+// refreshInitiativeLinks fetches external links from the API and stores them.
+// Upsert-only (nil Prune), mirroring refreshInitiativeDocuments.
+func (r *SQLiteRepository) refreshInitiativeLinks(ctx context.Context, initiativeID string) error {
+	links, err := r.client.GetInitiativeLinks(ctx, initiativeID)
+	if err != nil {
+		return err
+	}
+
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.EntityExternalLink]{
+		Label: "initiative link " + initiativeID,
+		Kind:  "attachment",
+		Items: links,
+		Upsert: func(ctx context.Context, link api.EntityExternalLink) error {
+			params, err := db.APIEntityExternalLinkToDB(link, "", initiativeID)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertEntityExternalLink(ctx, params)
+		},
+	})
+	return nil
 }
 
 func (r *SQLiteRepository) GetIssueEmbeddedFiles(ctx context.Context, issueID string) ([]api.EmbeddedFile, error) {

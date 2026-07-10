@@ -930,6 +930,61 @@ func DBAttachmentsToAPIAttachments(attachments []Attachment) ([]api.Attachment, 
 }
 
 // =============================================================================
+// Entity External Link Conversion (project/initiative "Links / Resources")
+// =============================================================================
+
+// APIEntityExternalLinkToDB converts an api.EntityExternalLink to
+// UpsertEntityExternalLinkParams. Exactly one of projectID/initiativeID is set
+// (the other empty), matching the entity's polymorphic parent.
+func APIEntityExternalLinkToDB(link api.EntityExternalLink, projectID, initiativeID string) (UpsertEntityExternalLinkParams, error) {
+	data, err := json.Marshal(link)
+	if err != nil {
+		return UpsertEntityExternalLinkParams{}, err
+	}
+
+	params := UpsertEntityExternalLinkParams{
+		ID:           link.ID,
+		ProjectID:    sql.NullString{String: projectID, Valid: projectID != ""},
+		InitiativeID: sql.NullString{String: initiativeID, Valid: initiativeID != ""},
+		Label:        link.Label,
+		Url:          link.URL,
+		SortOrder:    sql.NullFloat64{Float64: link.SortOrder, Valid: true},
+		CreatedAt:    sql.NullTime{Time: link.CreatedAt, Valid: !link.CreatedAt.IsZero()},
+		UpdatedAt:    sql.NullTime{Time: link.UpdatedAt, Valid: !link.UpdatedAt.IsZero()},
+		SyncedAt:     Now(),
+		Data:         data,
+	}
+	if link.Creator != nil {
+		params.CreatorID = sql.NullString{String: link.Creator.ID, Valid: true}
+		params.CreatorName = sql.NullString{String: link.Creator.Name, Valid: true}
+		params.CreatorEmail = sql.NullString{String: link.Creator.Email, Valid: true}
+	}
+	return params, nil
+}
+
+// DBEntityExternalLinkToAPI converts a db.EntityExternalLink to api.EntityExternalLink
+func DBEntityExternalLinkToAPI(link EntityExternalLink) (api.EntityExternalLink, error) {
+	var apiLink api.EntityExternalLink
+	if err := json.Unmarshal(link.Data, &apiLink); err != nil {
+		return api.EntityExternalLink{}, err
+	}
+	return apiLink, nil
+}
+
+// DBEntityExternalLinksToAPI converts a slice of db.EntityExternalLink to api.EntityExternalLink
+func DBEntityExternalLinksToAPI(links []EntityExternalLink) ([]api.EntityExternalLink, error) {
+	result := make([]api.EntityExternalLink, len(links))
+	for i, link := range links {
+		apiLink, err := DBEntityExternalLinkToAPI(link)
+		if err != nil {
+			return nil, err
+		}
+		result[i] = apiLink
+	}
+	return result, nil
+}
+
+// =============================================================================
 // EmbeddedFile Conversion (images, PDFs from Linear CDN)
 // =============================================================================
 

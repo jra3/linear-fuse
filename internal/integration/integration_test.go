@@ -386,6 +386,19 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 		return err
 	}
 
+	// Populate external links for the project and initiative (links/ *.link
+	// files). Distinct IDs: the two share a primary key otherwise, and the
+	// second upsert would clobber the first (ON CONFLICT(id)).
+	projLink := fixtures.FixtureAPIEntityExternalLink()
+	if err := fixtures.PopulateProjectLinks(ctx, store, project.ID, []api.EntityExternalLink{projLink}); err != nil {
+		return err
+	}
+	initLink := fixtures.FixtureAPIEntityExternalLink()
+	initLink.ID = "extlink-2"
+	if err := fixtures.PopulateInitiativeLinks(ctx, store, initiative.ID, []api.EntityExternalLink{initLink}); err != nil {
+		return err
+	}
+
 	// Populate cached history for issue-1 (backs the history.md render)
 	if err := fixtures.PopulateIssueHistory(ctx, store, "issue-1", fixtures.FixtureAPIHistoryEntries()); err != nil {
 		return err

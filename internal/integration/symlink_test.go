@@ -361,10 +361,10 @@ func TestProjectIssueSymlinks(t *testing.T) {
 		t.Fatalf("Failed to read project directory: %v", err)
 	}
 
-	// Check that issue entries (not project.md, .error, docs/, updates/, or milestones/) are symlinks
+	// Check that issue entries (not project.md, .error, docs/, updates/, milestones/, or links/) are symlinks
 	for _, entry := range projectEntries {
 		switch entry.Name() {
-		case "project.md", "project.meta", ".error", ".last", "docs", "updates", "milestones":
+		case "project.md", "project.meta", ".error", ".last", "docs", "updates", "milestones", "links":
 			continue
 		}
 		info, err := entry.Info()
