@@ -90,6 +90,15 @@ type Worker struct {
 	cycle     atomic.Int64       // sync-cycle counter; rotates the team order
 	metrics   syncMetrics        // sync-layer instruments, bound at construction
 
+	// Clock seam: EVERY timing decision in this file goes through these
+	// three fields — no bare time-package clock calls (Now/Since/Until/
+	// NewTimer/NewTicker), the greppable rule; see clock.go and CONTEXT.md
+	// "Worker clock seam". NewWorker defaults them to the real clock; tests
+	// inject a fake.
+	now       func() time.Time
+	newTimer  func(d time.Duration) (<-chan time.Time, func() bool)
+	newTicker func(d time.Duration) (<-chan time.Time, func())
+
 	// Rate limit tracking for issue details sync
 	rateLimitMu     sync.RWMutex
 	rateLimitedAt   time.Time
@@ -128,6 +137,9 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
 		metrics:   newSyncMetrics(),
+		now:       realNow,
+		newTimer:  realNewTimer,
+		newTicker: realNewTicker,
 	}
 }
 
@@ -206,8 +218,8 @@ func (w *Worker) run(ctx context.Context) {
 		log.Printf("[sync] initial sync failed: %v", err)
 	}
 
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
+	tick, stopTicker := w.newTicker(w.interval)
+	defer stopTicker()
 
 	for {
 		select {
@@ -215,7 +227,7 @@ func (w *Worker) run(ctx context.Context) {
 			return
 		case <-w.stopCh:
 			return
-		case <-ticker.C:
+		case <-tick:
 			if err := w.syncAllTeams(ctx); err != nil {
 				log.Printf("[sync] sync failed: %v", err)
 			}
@@ -228,8 +240,8 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 	// invoked it (run's initial sync, the ticker, SyncNow). A budget-skipped
 	// cycle records its ~0s duration too — a burst of near-zero samples IS
 	// the signature of budget-gated skipping.
-	start := time.Now()
-	defer func() { w.metrics.recordCycle(time.Since(start)) }()
+	start := w.now()
+	defer func() { w.metrics.recordCycle(w.now().Sub(start)) }()
 
 	// Skip entire sync cycle when budget is critically high
 	if w.budgetExceeds(budgetSkipSyncPct) {
@@ -290,7 +302,7 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 	}
 
 	w.mu.Lock()
-	w.lastSync = time.Now()
+	w.lastSync = w.now()
 	w.mu.Unlock()
 
 	return nil
@@ -306,7 +318,7 @@ type SyncTeamResult struct {
 }
 
 func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
-	start := time.Now()
+	start := w.now()
 
 	// Get last sync metadata
 	meta, err := w.store.Queries().GetSyncMeta(ctx, team.ID)
@@ -343,7 +355,7 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 		log.Printf("[sync] update sync meta for %s failed: %v", team.Key, err)
 	}
 
-	duration := time.Since(start)
+	duration := w.now().Sub(start)
 	log.Printf("[sync] team %s: added=%d updated=%d pages=%d duration=%s",
 		team.Key, added, updated, pages, duration.Round(time.Millisecond))
 
@@ -770,7 +782,7 @@ func (w *Worker) budgetExceeds(pct float64) bool {
 func (w *Worker) isRateLimited() bool {
 	w.rateLimitMu.RLock()
 	defer w.rateLimitMu.RUnlock()
-	return time.Now().Before(w.rateLimitExpiry)
+	return w.now().Before(w.rateLimitExpiry)
 }
 
 // setRateLimited marks that we've hit a rate limit. The backoff consults
@@ -781,12 +793,12 @@ func (w *Worker) isRateLimited() bool {
 func (w *Worker) setRateLimited() {
 	w.rateLimitMu.Lock()
 	defer w.rateLimitMu.Unlock()
-	w.rateLimitedAt = time.Now()
+	w.rateLimitedAt = w.now()
 
 	// Use the budget's server-provided reset time if it's in the future
 	backoff := 15 * time.Minute
-	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(time.Now()) {
-		backoff = time.Until(resetAt) + 5*time.Second // 5s buffer past the reset
+	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(w.now()) {
+		backoff = resetAt.Sub(w.now()) + 5*time.Second // 5s buffer past the reset
 	}
 	w.rateLimitExpiry = w.rateLimitedAt.Add(backoff)
 
@@ -834,20 +846,20 @@ func (w *Worker) probeBudget(ctx context.Context) bool {
 	expiry := w.rateLimitExpiry
 	w.rateLimitMu.RUnlock()
 
-	wait := time.Until(expiry)
+	wait := expiry.Sub(w.now())
 	log.Printf("[sync] budget probe RATELIMITED; delaying sync start %s (until %s)",
 		wait.Round(time.Second), expiry.Format(time.RFC3339))
 	if wait <= 0 {
 		return true
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
+	timer, stopTimer := w.newTimer(wait)
+	defer stopTimer()
 	select {
 	case <-ctx.Done():
 		return false
 	case <-w.stopCh:
 		return false
-	case <-timer.C:
+	case <-timer:
 		return true
 	}
 }
