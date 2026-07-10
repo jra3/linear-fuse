@@ -24,8 +24,9 @@ import (
 
 // syncMetrics holds the Worker-bound sync instruments (meter "linearfs/sync").
 type syncMetrics struct {
-	cycleDuration  metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
-	detailOutcomes metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
+	cycleDuration      metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
+	detailOutcomes     metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
+	reconcileDeletions metric.Int64Counter     // linearfs.sync.reconcile_deletions {kind}
 }
 
 func newSyncMetrics() syncMetrics {
@@ -36,6 +37,8 @@ func newSyncMetrics() syncMetrics {
 			metric.WithDescription("Duration of one sync cycle, by mode (lean|full); budget-skipped cycles record ~0")),
 		detailOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.detail_outcomes",
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
+		reconcileDeletions: telemetry.MustInt64Counter(m, "linearfs.sync.reconcile_deletions",
+			metric.WithDescription("Local rows deleted by the scheduled ID-reconcile sweep, by kind (issue)")),
 	}
 }
 
@@ -58,6 +61,16 @@ func (sm syncMetrics) recordDetailOutcomes(ctx context.Context, synced, deferred
 	if deferred > 0 {
 		sm.detailOutcomes.Add(ctx, int64(deferred), metric.WithAttributes(
 			attribute.String("outcome", "deferred")))
+	}
+}
+
+// recordReconcileDeletions counts local rows deleted by the scheduled
+// ID-reconcile sweep (#245). Zero-deletion sweeps record nothing, matching
+// the sibling counters.
+func (sm syncMetrics) recordReconcileDeletions(ctx context.Context, kind string, n int) {
+	if n > 0 {
+		sm.reconcileDeletions.Add(ctx, int64(n), metric.WithAttributes(
+			attribute.String("kind", kind)))
 	}
 }
 

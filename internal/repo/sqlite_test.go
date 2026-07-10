@@ -2384,6 +2384,103 @@ func TestReconcileIssuesForTeam_DeletesOrphans(t *testing.T) {
 	}
 }
 
+// TestReconcileIssueIDs_PartialDrainIsIncompletePerTeamAllOrNothing pins the
+// scheduled sweep's contract (#245): a team whose drain failed deletes
+// NOTHING for that team, a team whose drain completed is cleaned, and any
+// failure makes the pass incomplete so the worker withholds its schedule
+// stamp (the sweep stays due).
+func TestReconcileIssueIDs_PartialDrainIsIncompletePerTeamAllOrNothing(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+	ctx := context.Background()
+	now := time.Now()
+
+	teams := []api.Team{
+		{ID: "team-1", Key: "AAA", Name: "A", CreatedAt: now, UpdatedAt: now},
+		{ID: "team-2", Key: "BBB", Name: "B", CreatedAt: now, UpdatedAt: now},
+	}
+	for i := range teams {
+		if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(teams[i])); err != nil {
+			t.Fatalf("seed team: %v", err)
+		}
+		issue := api.Issue{
+			ID: "orphan-" + teams[i].ID, Identifier: "orphan-" + teams[i].ID,
+			Title: "orphan", Team: &teams[i],
+			State:     api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+			CreatedAt: now, UpdatedAt: now,
+		}
+		data, _ := db.APIIssueToDBIssue(issue)
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("seed issue: %v", err)
+		}
+	}
+
+	// team-1's drain fails; team-2's completes and reports no issues.
+	drain := func(_ context.Context, teamID string) ([]string, error) {
+		if teamID == "team-1" {
+			return nil, fmt.Errorf("drain: %w", api.ErrBudget)
+		}
+		return []string{}, nil
+	}
+
+	deleted, complete := repo.ReconcileIssueIDs(ctx, drain)
+	if complete {
+		t.Error("complete = true, want false (one team's drain failed)")
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (team-2's orphan only)", deleted)
+	}
+	if _, err := store.Queries().GetIssueByID(ctx, "orphan-team-1"); err != nil {
+		t.Errorf("failed drain deleted team-1's issue: %v", err)
+	}
+	if _, err := store.Queries().GetIssueByID(ctx, "orphan-team-2"); err != sql.ErrNoRows {
+		t.Errorf("complete drain did not delete team-2's orphan: err=%v", err)
+	}
+
+	// A fully successful pass reports complete.
+	deleted, complete = repo.ReconcileIssueIDs(ctx, func(_ context.Context, _ string) ([]string, error) {
+		return []string{"orphan-team-1"}, nil
+	})
+	if !complete {
+		t.Error("complete = false, want true (every drain succeeded)")
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0", deleted)
+	}
+}
+
+// TestReconcileIssueIDs_MutuallyExclusiveWithReactivePass: while the reactive
+// runReconcile is in flight (reconcilePending set), the scheduled sweep backs
+// off without draining anything and reports incomplete — the worker leaves it
+// due and the next cycle retries.
+func TestReconcileIssueIDs_MutuallyExclusiveWithReactivePass(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
+
+	repo.reconcilePending.Store(true)
+	defer repo.reconcilePending.Store(false)
+
+	called := false
+	deleted, complete := repo.ReconcileIssueIDs(context.Background(), func(_ context.Context, _ string) ([]string, error) {
+		called = true
+		return nil, nil
+	})
+	if called {
+		t.Error("drain invoked while a reconcile pass was already pending")
+	}
+	if deleted != 0 || complete {
+		t.Errorf("got (deleted=%d, complete=%v), want (0, false)", deleted, complete)
+	}
+}
+
 // TestReconcileAgainst_DeletesOrphans drives the shared diff-and-delete seam
 // that reconcileIssuesForTeam, reconcileProjects, and reconcileInitiatives
 // now route through — with closures, no live client or store. This is the
