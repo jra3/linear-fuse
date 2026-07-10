@@ -104,8 +104,7 @@ func runMount(cmd *cobra.Command, args []string) error {
 
 	// Enable SQLite persistent cache and background sync BEFORE mounting
 	// This must complete before the filesystem is accessible to prevent nil repo panics
-	ctx := context.Background()
-	if err := lfs.EnableSQLiteCache(ctx, ""); err != nil {
+	if err := lfs.EnableSQLiteCache(""); err != nil {
 		fmt.Printf("Warning: SQLite cache disabled: %v\n", err)
 	}
 

@@ -41,6 +41,15 @@ type LinearFS struct {
 	gid        uint32 // Owner GID for files/dirs
 	mountPoint string // Filesystem mount path (for README generation)
 
+	// Mount lifetime: every background goroutine LinearFS launches derives its
+	// ctx from lifeCtx via spawn, so Close can cancel + wait before tearing
+	// down the store the goroutines read (see spawn / Close).
+	lifeCtx    context.Context
+	lifeCancel context.CancelFunc
+	lifeWG     gosync.WaitGroup
+	lifeMu     gosync.Mutex // guards lifeClosed vs. spawn's wg.Add (Add-vs-Wait race)
+	lifeClosed bool         // set at the start of Close; spawn declines after this
+
 	// The one coupling to the FUSE server: kernel-cache invalidation (see
 	// invalidate.go). Embedded, so lfs.SetServer / lfs.InvalidateCreated / … promote.
 	kernelNotify
@@ -120,6 +129,9 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		requestLog:   requestLog,
 		debug:        debug,
 	}
+	// Mint the mount-lifetime context. Background is correct here: the mount's
+	// lifetime is bounded by Close, not by any caller's request ctx.
+	lfs.lifeCtx, lfs.lifeCancel = context.WithCancel(context.Background())
 	// Wire the feedback store's kernel-cache seam to this instance. The method
 	// value binds the pointer, so it is safe to set after lfs exists.
 	lfs.writeFeedback = newWriteFeedback(lfs.InvalidateUpdated)
@@ -138,8 +150,39 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	return lfs, nil
 }
 
+// spawn launches fn as a background goroutine bound to the mount lifetime:
+// fn receives lifeCtx (cancelled at the start of Close) and Close waits for it
+// to return before closing the store. Once Close has begun, spawn declines to
+// start fn at all — checking the closed flag and calling wg.Add under the same
+// mutex is what makes Add ordered before Close's Wait (the classic WaitGroup
+// Add-vs-Wait race). This is the ONLY way LinearFS may start a goroutine that
+// outlives its caller.
+func (lfs *LinearFS) spawn(fn func(ctx context.Context)) {
+	lfs.lifeMu.Lock()
+	defer lfs.lifeMu.Unlock()
+	if lfs.lifeClosed || lfs.lifeCtx == nil || lfs.lifeCtx.Err() != nil {
+		return // shutdown has begun; the work would only race the store teardown
+	}
+	lfs.lifeWG.Add(1)
+	go func() {
+		defer lfs.lifeWG.Done()
+		fn(lfs.lifeCtx)
+	}()
+}
+
 // Close stops all background operations and releases resources
 func (lfs *LinearFS) Close() {
+	// Cancel the mount-lifetime ctx and wait for every spawned goroutine.
+	// Cancelling BEFORE syncWorker.Stop is deliberate: the worker's ctx
+	// derives from lifeCtx, so a mid-flight sync cycle aborts promptly
+	// instead of Stop waiting it out.
+	lfs.lifeMu.Lock()
+	lfs.lifeClosed = true
+	if lfs.lifeCancel != nil {
+		lfs.lifeCancel()
+	}
+	lfs.lifeMu.Unlock()
+	lfs.lifeWG.Wait()
 	// Stop sync worker first
 	if lfs.syncWorker != nil {
 		lfs.syncWorker.Stop()
@@ -161,7 +204,10 @@ func (lfs *LinearFS) Close() {
 // EnableSQLiteCache initializes the SQLite backend and starts background sync.
 // This MUST be called after creating LinearFS but before mounting.
 // If dbPath is empty, uses the default path (~/.config/linearfs/cache.db).
-func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error {
+// Everything here runs under lifeCtx (the mount lifetime) — a caller ctx would
+// be wrong, since the background work it starts must outlive the caller and
+// die with Close instead.
+func (lfs *LinearFS) EnableSQLiteCache(dbPath string) error {
 	if dbPath == "" {
 		dbPath = db.DefaultDBPath()
 	}
@@ -177,16 +223,19 @@ func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error
 	lfs.repo = repo.NewSQLiteRepository(store, lfs.client)
 
 	// H-1: Load viewer from SQLite cache immediately for /my views (no API wait)
-	if cachedViewerID, err := store.Queries().GetViewerUserID(ctx); err == nil {
-		if dbUser, err := store.Queries().GetUser(ctx, cachedViewerID); err == nil {
+	if cachedViewerID, err := store.Queries().GetViewerUserID(lfs.lifeCtx); err == nil {
+		if dbUser, err := store.Queries().GetUser(lfs.lifeCtx, cachedViewerID); err == nil {
 			apiUser := db.DBUserToAPIUser(dbUser)
 			lfs.repo.SetCurrentUser(&apiUser)
 			log.Printf("[sqlite] Loaded cached viewer: %s (%s)", apiUser.Email, apiUser.ID)
 		}
 	}
 
-	// Refresh viewer from API in background to keep cache fresh
-	go func() {
+	// Refresh viewer from API in background to keep cache fresh. Spawned under
+	// the mount lifetime so Close cancels + waits for it — with a bare
+	// Background ctx this loop's 60s backoff could outlive store.Close and
+	// retry against a closed store.
+	lfs.spawn(func(ctx context.Context) {
 		delays := []time.Duration{0, 5 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second}
 		for i := 0; ; i++ {
 			delay := delays[min(i, len(delays)-1)]
@@ -222,13 +271,15 @@ func (lfs *LinearFS) EnableSQLiteCache(ctx context.Context, dbPath string) error
 			}
 			return
 		}
-	}()
+	})
 
-	// Create and start sync worker
+	// Create and start sync worker. The worker keeps its own stop mechanism;
+	// it merely derives its ctx from the mount lifetime now, so Close's
+	// cancel aborts a mid-flight sync cycle before Stop is even called.
 	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())
 	lfs.syncWorker.SetBudgetReporter(lfs.client)
 	lfs.syncWorker.SetCatchUpModeToggler(lfs.repo)
-	lfs.syncWorker.Start(ctx)
+	lfs.syncWorker.Start(lfs.lifeCtx)
 
 	log.Printf("[sqlite] Enabled persistent cache at %s", dbPath)
 	return nil

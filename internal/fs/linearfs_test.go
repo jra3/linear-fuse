@@ -320,3 +320,55 @@ func TestFetchIssueByIdentifier(t *testing.T) {
 		}
 	})
 }
+
+// TestCloseWaitsForSpawned proves the mount-lifetime contract: a goroutine
+// launched via spawn sees its ctx cancelled by Close, and Close does not
+// return until the goroutine has. The assertion is pure ordering (no sleeps):
+// completed is written just before the spawned fn returns, and Close's
+// wg.Wait establishes the happens-before that makes the read safe.
+func TestCloseWaitsForSpawned(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{APIKey: "test-key"}
+	lfs, err := NewLinearFS(cfg, false)
+	if err != nil {
+		t.Fatalf("NewLinearFS failed: %v", err)
+	}
+
+	var completed bool
+	started := make(chan struct{})
+	lfs.spawn(func(ctx context.Context) {
+		close(started)
+		<-ctx.Done() // only Close's lifeCancel can fire this
+		completed = true
+	})
+
+	<-started // ensure the goroutine is live and blocked before Close
+	lfs.Close()
+
+	if !completed {
+		t.Error("Close returned before the spawned goroutine completed")
+	}
+}
+
+// TestSpawnAfterCloseDeclines proves the other half of the contract: once
+// Close has begun, spawn refuses to start work at all (this is what prevents
+// a late spawn from racing the store teardown).
+func TestSpawnAfterCloseDeclines(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{APIKey: "test-key"}
+	lfs, err := NewLinearFS(cfg, false)
+	if err != nil {
+		t.Fatalf("NewLinearFS failed: %v", err)
+	}
+
+	lfs.Close()
+
+	var ran bool
+	lfs.spawn(func(ctx context.Context) {
+		ran = true
+	})
+
+	if ran {
+		t.Error("spawn ran fn after Close; it must decline")
+	}
+}
