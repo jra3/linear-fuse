@@ -302,9 +302,13 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 // prune licenses) and the incremental issues sync. Lean mode skips the
 // workspace and team-metadata fetches entirely and runs only the (cheap)
 // teams list plus each team's incremental issues sync; nothing prunes in a
-// lean cycle beyond what the issues path always did. A completed full cycle
-// stamps the persisted last-full-cycle timestamp; a budget-skipped or failed
-// cycle does not, so the full sync stays due.
+// lean cycle beyond what the issues path always did. A full cycle that runs
+// to completion stamps the persisted last-full-cycle timestamp; a
+// budget-skipped or teams-fetch-failed cycle returns early and does not, so
+// the full sync stays due. A cycle whose workspace or per-team metadata sync
+// fails partway DOES stamp (those failures log-and-continue): retrying the
+// full drains every 2 minutes under budget pressure is the burn pattern the
+// diet exists to stop, so a partial failure waits for the next window.
 func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
 	// invoked it (run's initial sync, the ticker, SyncNow). A budget-skipped
