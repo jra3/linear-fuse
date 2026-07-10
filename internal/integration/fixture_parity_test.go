@@ -235,6 +235,32 @@ func TestFixtureAttachmentLinkFile(t *testing.T) {
 	}
 }
 
+// TestFixtureProjectLinkFile: the seeded project/initiative external links (#249)
+// surface as *.link files under links/, carrying label + url.
+func TestFixtureProjectLinkFile(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode: asserts the seeded synthetic external link")
+	}
+
+	for _, dir := range []string{
+		filepath.Join(projectsPath(testTeamKey), "test-project", "links"),
+		filepath.Join(initiativePath("test-initiative"), "links"),
+	} {
+		path := filepath.Join(dir, "Onboarding Notes.link")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("read %s: %v", path, err)
+			continue
+		}
+		content := string(data)
+		for _, want := range []string{"label: Onboarding Notes", "url: https://notes.granola.ai/onboarding-sync"} {
+			if !strings.Contains(content, want) {
+				t.Errorf("%s missing %q:\n%s", path, want, content)
+			}
+		}
+	}
+}
+
 // TestFixtureIssueHistoryRendered: the seeded history cache renders a real
 // change in history.md (not the empty-history placeholder).
 func TestFixtureIssueHistoryRendered(t *testing.T) {

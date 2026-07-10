@@ -397,6 +397,38 @@ func PopulateAttachments(ctx context.Context, store *db.Store, issueID string, a
 	return nil
 }
 
+// PopulateProjectLinks inserts external links for a project into the SQLite
+// store (rendered as *.link files in the project's links/ directory).
+func PopulateProjectLinks(ctx context.Context, store *db.Store, projectID string, links []api.EntityExternalLink) error {
+	q := store.Queries()
+	for _, l := range links {
+		params, err := db.APIEntityExternalLinkToDB(l, projectID, "")
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertEntityExternalLink(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PopulateInitiativeLinks inserts external links for an initiative into the
+// SQLite store (rendered as *.link files in the initiative's links/ directory).
+func PopulateInitiativeLinks(ctx context.Context, store *db.Store, initiativeID string, links []api.EntityExternalLink) error {
+	q := store.Queries()
+	for _, l := range links {
+		params, err := db.APIEntityExternalLinkToDB(l, "", initiativeID)
+		if err != nil {
+			return err
+		}
+		if err := q.UpsertEntityExternalLink(ctx, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // PopulateIssueHistory caches history entries for an issue (the store behind
 // the history.md render).
 func PopulateIssueHistory(ctx context.Context, store *db.Store, issueID string, entries []api.IssueHistoryEntry) error {

@@ -24,9 +24,10 @@ import (
 
 // syncMetrics holds the Worker-bound sync instruments (meter "linearfs/sync").
 type syncMetrics struct {
-	cycleDuration  metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
-	detailOutcomes metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
-	probeOutcomes  metric.Int64Counter     // linearfs.sync.probe_outcomes {kind, outcome}
+	cycleDuration      metric.Float64Histogram // linearfs.sync.cycle_duration {mode}, seconds
+	detailOutcomes     metric.Int64Counter     // linearfs.sync.detail_outcomes {outcome}
+	probeOutcomes      metric.Int64Counter     // linearfs.sync.probe_outcomes {kind, outcome}
+	reconcileDeletions metric.Int64Counter     // linearfs.sync.reconcile_deletions {kind}
 }
 
 func newSyncMetrics() syncMetrics {
@@ -39,6 +40,8 @@ func newSyncMetrics() syncMetrics {
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
 		probeOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.probe_outcomes",
 			metric.WithDescription("Lean-cycle change-detection probe runs, by kind (team_projects) and outcome (unchanged|changed|error)")),
+		reconcileDeletions: telemetry.MustInt64Counter(m, "linearfs.sync.reconcile_deletions",
+			metric.WithDescription("Local rows deleted by the scheduled ID-reconcile sweep, by kind (issue)")),
 	}
 }
 
@@ -84,6 +87,16 @@ func (sm syncMetrics) recordProbeOutcome(kind string, outcome probeOutcome) {
 	sm.probeOutcomes.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("kind", kind),
 		attribute.String("outcome", string(outcome))))
+}
+
+// recordReconcileDeletions counts local rows deleted by the scheduled
+// ID-reconcile sweep (#245). Zero-deletion sweeps record nothing, matching
+// the sibling counters.
+func (sm syncMetrics) recordReconcileDeletions(ctx context.Context, kind string, n int) {
+	if n > 0 {
+		sm.reconcileDeletions.Add(ctx, int64(n), metric.WithAttributes(
+			attribute.String("kind", kind)))
+	}
 }
 
 // registerPendingDepthGauge installs the linearfs.sync.pending_depth

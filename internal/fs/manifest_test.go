@@ -48,12 +48,12 @@ func TestDirManifestRoundTrip(t *testing.T) {
 		{
 			name: "project",
 			m:    projectDir.manifest(),
-			want: []string{"project.md", "project.meta", ".error", "docs", "updates", "milestones"},
+			want: []string{"project.md", "project.meta", ".error", "docs", "updates", "milestones", "links"},
 		},
 		{
 			name: "initiative",
 			m:    initiativeDir.manifest(),
-			want: []string{"initiative.md", "initiative.meta", ".error", "docs", "projects", "updates"},
+			want: []string{"initiative.md", "initiative.meta", ".error", "docs", "projects", "updates", "links"},
 		},
 	}
 

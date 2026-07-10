@@ -16,6 +16,7 @@ import (
 
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
+	"github.com/jra3/linear-fuse/internal/repo"
 )
 
 // mockBudgetReporter implements BudgetReporter for testing
@@ -117,7 +118,9 @@ type mockAPIClient struct {
 	onWorkspace      func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
 	viewerErr        error                        // if set, GetViewer (the cold-start budget probe) fails with this
 	getViewerCalls   int32
-	projectsProbeErr error // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
+	projectsProbeErr error               // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
+	issueIDsByTeam   map[string][]string // teamID -> authoritative bare issue IDs (the reconcile sweep's drain)
+	issueIDsErr      error               // if set, GetTeamIssueIDs fails with this (all-or-nothing drain tests)
 	opMu             gosync.Mutex
 	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams/GetTeamProjectsNewestPage (probe-sequencing + lean/full cycle tests)
 }
@@ -306,6 +309,14 @@ func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []str
 		}
 	}
 	return result, nil
+}
+
+func (m *mockAPIClient) GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, error) {
+	m.recordOp("GetTeamIssueIDs")
+	if m.issueIDsErr != nil {
+		return nil, m.issueIDsErr
+	}
+	return m.issueIDsByTeam[teamID], nil
 }
 
 func (m *mockAPIClient) AuthHeader() string {
@@ -1706,6 +1717,247 @@ func TestBudgetSkippedCycleLeavesFullCycleDue(t *testing.T) {
 		}
 	})
 	assertCycleOps(t, "first unblocked cycle", ops, true)
+}
+
+// =============================================================================
+// Issue-ID Reconcile Sweep Tests (#245)
+// =============================================================================
+
+// issueReconcileFixture builds the sweep fixture on top of cycleTestWorker: a
+// real SQLiteRepository (nil api client — the drain comes through the mock
+// APIClient seam) wired as the worker's IssueIDReconciler, plus two seeded
+// issues on team-1, "issue-keep" (present in the drained ID set) and
+// "issue-gone" (absent — deleted in Linear), with a comment and a document on
+// issue-gone to assert the detail-row cleanup.
+func issueReconcileFixture(t *testing.T, store *db.Store) (*Worker, *mockAPIClient, *fakeClock) {
+	t.Helper()
+	ctx := context.Background()
+	worker, mock, clock := cycleTestWorker(t, store)
+
+	rep := repo.NewSQLiteRepository(store, nil)
+	t.Cleanup(rep.Close)
+	worker.SetIssueIDReconciler(rep)
+
+	team := api.Team{ID: "team-1", Key: "TST", Name: "Test"}
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+	now := clock.now()
+	for _, id := range []string{"issue-keep", "issue-gone"} {
+		issue := api.Issue{
+			ID: id, Identifier: id, Title: id, Team: &team,
+			State:     api.State{ID: "state-1", Name: "Todo", Type: "unstarted"},
+			CreatedAt: now, UpdatedAt: now,
+		}
+		data, err := db.APIIssueToDBIssue(issue)
+		if err != nil {
+			t.Fatalf("convert %s: %v", id, err)
+		}
+		if err := store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	if err := store.Queries().UpsertComment(ctx, db.UpsertCommentParams{
+		ID: "c-gone", IssueID: "issue-gone", Body: "bye",
+		CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+	if err := store.Queries().UpsertDocument(ctx, db.UpsertDocumentParams{
+		ID: "d-gone", SlugID: "d-gone", Title: "Doc",
+		IssueID:  sql.NullString{String: "issue-gone", Valid: true},
+		SyncedAt: now, Data: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+
+	mock.issueIDsByTeam = map[string][]string{"team-1": {"issue-keep"}}
+	return worker, mock, clock
+}
+
+// TestIssueIDReconcileSweepDeletesMissingIssues: the sweep's core promise. An
+// issue present locally but absent from the drained authoritative ID set is
+// deleted (with its detail rows) by the hourly sweep riding the sync cycle,
+// without any read touching it; the schedule then holds the sweep off until
+// the hour elapses.
+func TestIssueIDReconcileSweepDeletesMissingIssues(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	q := store.Queries()
+
+	worker, mock, clock := issueReconcileFixture(t, store)
+
+	// Cycle 1: no persisted sweep timestamp — the sweep is due and runs.
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("cycle 1: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetTeamIssueIDs") {
+		t.Errorf("cycle 1 ops = %v, want GetTeamIssueIDs (sweep due on missing schedule row)", ops)
+	}
+
+	// issue-gone and its detail rows are deleted; issue-keep survives.
+	if _, err := q.GetIssueByID(ctx, "issue-gone"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("issue-gone still present after sweep: err = %v, want sql.ErrNoRows", err)
+	}
+	if got, _ := q.ListIssueComments(ctx, "issue-gone"); len(got) != 0 {
+		t.Errorf("issue-gone comments not cleaned up: %d remain", len(got))
+	}
+	if got, _ := q.ListIssueDocuments(ctx, sql.NullString{String: "issue-gone", Valid: true}); len(got) != 0 {
+		t.Errorf("issue-gone documents not cleaned up: %d remain", len(got))
+	}
+	if _, err := q.GetIssueByID(ctx, "issue-keep"); err != nil {
+		t.Errorf("issue-keep was deleted by the sweep: %v", err)
+	}
+
+	// The complete sweep stamped its schedule at w.now(), via the clock seam.
+	stamped, err := q.GetSyncSchedule(ctx, scheduleKeyIssueIDReconcile)
+	if err != nil {
+		t.Fatalf("GetSyncSchedule after sweep: %v", err)
+	}
+	if !stamped.Equal(clock.now()) {
+		t.Errorf("persisted sweep timestamp = %v, want %v", stamped, clock.now())
+	}
+
+	// Cycles inside the hour don't re-sweep…
+	clock.advance(2 * time.Minute)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("in-window cycle: %v", err)
+		}
+	})
+	if containsOp(ops, "GetTeamIssueIDs") {
+		t.Errorf("in-window cycle ops = %v, want no GetTeamIssueIDs (sweep not due)", ops)
+	}
+
+	// …and the first cycle past the hour does.
+	clock.advance(issueReconcileInterval)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("post-hour cycle: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetTeamIssueIDs") {
+		t.Errorf("post-hour cycle ops = %v, want GetTeamIssueIDs (hourly bound elapsed)", ops)
+	}
+}
+
+// TestIssueIDReconcileDrainFailureDeletesNothingAndStaysDue: the
+// all-or-nothing contract at the worker seam. A failed drain — a plain error
+// or an api.ErrBudget deferral — deletes nothing and withholds the schedule
+// stamp, so the very next cycle retries the sweep.
+func TestIssueIDReconcileDrainFailureDeletesNothingAndStaysDue(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		drainErr error
+	}{
+		{"generic drain error", errors.New("boom")},
+		{"budget deferral", fmt.Errorf("paginate: %w", api.ErrBudget)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := openTestStore(t)
+			defer store.Close()
+			ctx := context.Background()
+			q := store.Queries()
+
+			worker, mock, clock := issueReconcileFixture(t, store)
+			mock.issueIDsErr = tc.drainErr
+
+			// Cycle 1: the sweep runs but its drain fails.
+			ops := opsDuring(mock, func() {
+				if err := worker.syncAllTeams(ctx); err != nil {
+					t.Fatalf("failing cycle: %v", err)
+				}
+			})
+			if !containsOp(ops, "GetTeamIssueIDs") {
+				t.Fatalf("failing cycle ops = %v, want GetTeamIssueIDs attempt", ops)
+			}
+
+			// Nothing deleted, no stamp — the sweep stays due.
+			if _, err := q.GetIssueByID(ctx, "issue-gone"); err != nil {
+				t.Errorf("failed drain deleted issue-gone: %v", err)
+			}
+			if got, _ := q.ListIssueComments(ctx, "issue-gone"); len(got) != 1 {
+				t.Errorf("failed drain touched detail rows: %d comments remain, want 1", len(got))
+			}
+			if _, err := q.GetSyncSchedule(ctx, scheduleKeyIssueIDReconcile); !errors.Is(err, sql.ErrNoRows) {
+				t.Errorf("GetSyncSchedule after failed sweep: err = %v, want sql.ErrNoRows (no stamp)", err)
+			}
+
+			// The drain recovers — the very next cycle retries and deletes.
+			mock.issueIDsErr = nil
+			clock.advance(2 * time.Minute)
+			ops = opsDuring(mock, func() {
+				if err := worker.syncAllTeams(ctx); err != nil {
+					t.Fatalf("retry cycle: %v", err)
+				}
+			})
+			if !containsOp(ops, "GetTeamIssueIDs") {
+				t.Fatalf("retry cycle ops = %v, want GetTeamIssueIDs (sweep still due)", ops)
+			}
+			if _, err := q.GetIssueByID(ctx, "issue-gone"); !errors.Is(err, sql.ErrNoRows) {
+				t.Errorf("issue-gone still present after retry sweep: err = %v", err)
+			}
+			if stamped, err := q.GetSyncSchedule(ctx, scheduleKeyIssueIDReconcile); err != nil || !stamped.Equal(clock.now()) {
+				t.Errorf("retry sweep stamp = %v (err %v), want %v", stamped, err, clock.now())
+			}
+		})
+	}
+}
+
+// TestIssueIDReconcileScheduleHonoredAcrossRestart: persistence. A fresh
+// Worker (and fresh repo) over the same store with a fresh sweep timestamp
+// does not re-sweep; once the hour elapses, it does.
+func TestIssueIDReconcileScheduleHonoredAcrossRestart(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	// "Previous process": one cycle runs the sweep and stamps the schedule.
+	prevWorker, prevMock, prevClock := issueReconcileFixture(t, store)
+	ops := opsDuring(prevMock, func() {
+		if err := prevWorker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("previous process cycle: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetTeamIssueIDs") {
+		t.Fatalf("previous process ops = %v, want GetTeamIssueIDs", ops)
+	}
+
+	// "Restart" 2 minutes later: a brand-new Worker and repo over the same
+	// store. The persisted stamp holds the sweep off.
+	worker, mock, clock := cycleTestWorker(t, store)
+	rep := repo.NewSQLiteRepository(store, nil)
+	t.Cleanup(rep.Close)
+	worker.SetIssueIDReconciler(rep)
+	mock.issueIDsByTeam = map[string][]string{"team-1": {"issue-keep"}}
+
+	clock.advance(prevClock.now().Sub(clock.now()) + 2*time.Minute)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("post-restart cycle: %v", err)
+		}
+	})
+	if containsOp(ops, "GetTeamIssueIDs") {
+		t.Errorf("post-restart cycle ops = %v, want no GetTeamIssueIDs (persisted stamp honored)", ops)
+	}
+
+	// Past the hourly bound the restarted process sweeps again.
+	clock.advance(issueReconcileInterval)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("post-hour cycle: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetTeamIssueIDs") {
+		t.Errorf("post-hour cycle ops = %v, want GetTeamIssueIDs", ops)
+	}
 }
 
 // =============================================================================

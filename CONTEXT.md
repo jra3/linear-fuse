@@ -1206,6 +1206,34 @@ survives lean cycles) and wire tests through the scripted GraphQL mock
 server (orderBy/first/after shape; resume stops at the watermark instead
 of draining even when `hasNextPage` says more).
 
+### Issue-ID reconcile sweep (`maybeReconcileIssueIDs`, hourly)
+Issues are the one entity class whose sync is always incremental (never a
+complete drain), so a deleted issue that nothing reads would linger forever —
+deletion was caught only reactively (read 404s → orphan delete → the repo's
+cooldown-gated reconcile pass). The scheduled sweep (#245, slice 4 of the
+#238 diet) closes that: `maybeReconcileIssueIDs` rides every sync cycle (any
+speed) and, when the `sync_schedule` row keyed `issue_id_reconcile` is
+missing or ≥1h old (decided through the clock seam, like `full_cycle`),
+calls the repo's issue reconcile — **reused, not copied**:
+`SQLiteRepository.ReconcileIssueIDs` wraps the same `reconcileIssuesWith`
+core the reactive pass runs (per-team bare-ID drain → `setDiff` →
+`deleteOrphanIssue` with its full sub-resource cleanup). The drain is
+injected (`w.client.GetTeamIssueIDs`, now on the worker's `APIClient`
+interface) so the sweep is drivable by the op-recording mock; the repo
+contributes the diff-and-delete. All-or-nothing per team: `fetchAll`
+guarantees complete-or-error, and a team whose drain errored deletes nothing.
+Only a COMPLETE pass (every team drained) stamps the schedule — a failure or
+`ErrBudget` deferral leaves the sweep due for the next cycle. The
+`reconcilePending` CAS makes the sweep and the reactive `runReconcile`
+mutually exclusive and keeps sweep deletions from chaining a reactive pass
+(`maybeScheduleReconcile` no-ops while pending); `lastReconcileAt` is not
+touched, so the reactive cooldown semantics are unchanged for their own
+triggers. Deletions are exported as `linearfs.sync.reconcile_deletions`
+{kind=issue}. Tested at the worker seam (`worker_test.go` "Issue-ID Reconcile
+Sweep": real `SQLiteRepository` over the test store, mock drain, fake clock)
+and at the repo seam (partial-drain per-team all-or-nothing, pending-guard
+mutual exclusion).
+
 ### Worker clock seam (`Worker.now`/`newTimer`/`newTicker`)
 The sync worker's timing goes through three unexported function fields on
 `Worker` (`internal/sync/worker.go`) — `now func() time.Time`, `newTimer

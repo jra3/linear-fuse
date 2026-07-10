@@ -247,6 +247,8 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 		"relations":          relationsDir,
 		"project-updates":    projectUpdatesDir,
 		"initiative-updates": filepath.Join(initiativePath("test-initiative"), "updates"),
+		"project-links":      filepath.Join(projectsPath(testTeamKey), "test-project", "links"),
+		"initiative-links":   filepath.Join(initiativePath("test-initiative"), "links"),
 	}
 	for name, dir := range surfaces {
 		t.Run(name, func(t *testing.T) {
@@ -305,6 +307,23 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 	}
 	if !afound {
 		t.Error("attachments/.last has no entry after an attachment create")
+	}
+
+	// A project link create reports its identity to links/.last (the #249
+	// external-link surface, backed by EntityExternalLink rather than Attachment).
+	projectLinksDir := filepath.Join(projectsPath(testTeamKey), "test-project", "links")
+	linkURL := "https://notes.granola.ai/trio-probe/1"
+	if err := os.WriteFile(filepath.Join(projectLinksDir, "_create"), []byte(linkURL+" Trio Link Probe"), 0200); err != nil {
+		t.Fatalf("create project link: %v", err)
+	}
+	lfound := false
+	for _, e := range parseLastSidecar(t, filepath.Join(projectLinksDir, ".last")) {
+		if e["url"] == linkURL {
+			lfound = true
+		}
+	}
+	if !lfound {
+		t.Error("project links/.last has no entry after a link create")
 	}
 
 	// Updates were the last surface hand-rolling the create tail with no

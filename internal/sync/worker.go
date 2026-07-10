@@ -44,6 +44,13 @@ type APIClient interface {
 	// were superseded by the batch.
 	GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error)
 
+	// Bare issue IDs for one team (complete drain, ~1 complexity per node;
+	// all-or-nothing — a partial result surfaces as an error, never a short
+	// list). The worker hands this to the repo's issue-ID reconcile sweep
+	// (see maybeReconcileIssueIDs) so the sweep's fetches flow through this
+	// seam and are mock-drivable in tests.
+	GetTeamIssueIDs(ctx context.Context, teamID string) ([]string, error)
+
 	// Auth
 	AuthHeader() string
 
@@ -78,6 +85,18 @@ type CatchUpModeToggler interface {
 	SetCatchUpMode(active bool)
 }
 
+// IssueIDReconciler runs the issues portion of the repo's reconcile pass:
+// per team, diff the drained authoritative issue ID set against SQLite and
+// delete local orphans (through the same deleteOrphanIssue cleanup the
+// reactive read-triggered path uses). Implemented by
+// repo.SQLiteRepository.ReconcileIssueIDs; the worker schedules it hourly
+// (see maybeReconcileIssueIDs) and supplies the drain from its own API-client
+// seam. complete=false means a drain failed or was budget-deferred — the
+// caller must leave the sweep due rather than stamp its schedule.
+type IssueIDReconciler interface {
+	ReconcileIssueIDs(ctx context.Context, drain func(ctx context.Context, teamID string) ([]string, error)) (deleted int, complete bool)
+}
+
 // Worker handles background synchronization of Linear issues to SQLite
 type Worker struct {
 	client           APIClient
@@ -93,6 +112,7 @@ type Worker struct {
 	lastSync time.Time
 	budget   BudgetReporter     // optional: for rate limit budget logging
 	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
+	idRecon  IssueIDReconciler  // optional: the hourly issue-ID reconcile sweep (#245)
 	cycle    atomic.Int64       // sync-cycle counter; rotates the team order
 	metrics  syncMetrics        // sync-layer instruments, bound at construction
 
@@ -168,6 +188,13 @@ func (w *Worker) SetBudgetReporter(b BudgetReporter) {
 // during large sync operations.
 func (w *Worker) SetCatchUpModeToggler(t CatchUpModeToggler) {
 	w.catchUp = t
+}
+
+// SetIssueIDReconciler sets the repo reference for the hourly issue-ID
+// reconcile sweep. When unset, the sweep never runs (and never stamps its
+// schedule, so it fires on the first cycle after wiring).
+func (w *Worker) SetIssueIDReconciler(r IssueIDReconciler) {
+	w.idRecon = r
 }
 
 // Start begins the background sync process
@@ -273,6 +300,17 @@ const (
 // — so restarts and skipped cycles cannot silently stretch the metadata
 // staleness bound past FullSyncInterval.
 const scheduleKeyFullCycle = "full_cycle"
+
+// scheduleKeyIssueIDReconcile keys the persisted last-run timestamp of the
+// hourly issue-ID reconcile sweep (#245) in the same sync_schedule table —
+// restart-safe for the same reason as the full-cycle stamp.
+const scheduleKeyIssueIDReconcile = "issue_id_reconcile"
+
+// issueReconcileInterval is the cadence of the scheduled issue-ID sweep.
+// Issues are the one entity class whose sync is always incremental (never a
+// complete drain), so a deleted issue that nothing reads would otherwise
+// linger forever; the sweep bounds that staleness at one hour.
+const issueReconcileInterval = time.Hour
 
 // nextCycleMode decides the speed of the next scheduled cycle from the
 // persisted schedule: full when the last-full-cycle timestamp is missing
@@ -396,6 +434,12 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		}
 	}
 
+	// Scheduled issue-ID reconcile sweep: rides the cycle (any speed) and
+	// runs only when its persisted hourly schedule says it's due. Placed
+	// after the team loop so a budget-skipped or teams-fetch-failed cycle
+	// (the early returns above) leaves the sweep due too.
+	w.maybeReconcileIssueIDs(ctx)
+
 	// A full cycle that ran to completion stamps the persisted schedule so
 	// the next fullSyncInterval's worth of cycles run lean. Stamped through
 	// the clock seam: the next cycle's nextCycleMode compares against w.now().
@@ -413,6 +457,46 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	w.mu.Unlock()
 
 	return nil
+}
+
+// maybeReconcileIssueIDs runs the scheduled issue-ID reconcile sweep (#245)
+// when it is due: hourly, off the persisted sync_schedule timestamp, decided
+// through the clock seam like the full-cycle key (restart-safe, no in-memory
+// counters). Missing row (cold start / first cycle after wiring) means due —
+// over-sweeping is the safe direction, and a fresh store's sweep deletes
+// nothing anyway.
+//
+// The sweep itself is the repo's reconcile machinery (ReconcileIssueIDs →
+// reconcileIssuesForTeam → deleteOrphanIssue): the worker contributes only
+// the schedule and the drain from its API-client seam. Only a COMPLETE pass
+// (every team's ID drain succeeded) stamps the schedule; a failed or
+// budget-deferred (api.ErrBudget) drain leaves the sweep due so the next
+// cycle retries — per-team all-or-nothing already guaranteed nothing was
+// deleted for the failed team.
+func (w *Worker) maybeReconcileIssueIDs(ctx context.Context) {
+	if w.idRecon == nil {
+		return
+	}
+	lastRun, err := w.store.Queries().GetSyncSchedule(ctx, scheduleKeyIssueIDReconcile)
+	if err == nil && !lastRun.IsZero() && w.now().Sub(lastRun) < issueReconcileInterval {
+		return
+	}
+
+	deleted, complete := w.idRecon.ReconcileIssueIDs(ctx, w.client.GetTeamIssueIDs)
+	if deleted > 0 {
+		w.metrics.recordReconcileDeletions(ctx, "issue", deleted)
+	}
+	if !complete {
+		log.Printf("[sync] issue-ID reconcile incomplete (deleted=%d); sweep stays due", deleted)
+		return
+	}
+	log.Printf("[sync] issue-ID reconcile complete: deleted=%d", deleted)
+	if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+		Key:     scheduleKeyIssueIDReconcile,
+		LastRun: w.now(),
+	}); err != nil {
+		log.Printf("[sync] persist issue-ID reconcile timestamp failed: %v", err)
+	}
 }
 
 // SyncTeamResult contains the results of syncing a single team
