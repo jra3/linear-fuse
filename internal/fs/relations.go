@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"syscall"
 	"time"
@@ -26,36 +25,36 @@ var _ fs.NodeLookuper = (*RelationsNode)(nil)
 var _ fs.NodeGetattrer = (*RelationsNode)(nil)
 
 func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Get both outgoing and incoming relations
-	relations, err := n.lfs.repo.GetIssueRelations(ctx, n.issueID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-	inverseRelations, err := n.lfs.repo.GetIssueInverseRelations(ctx, n.issueID)
-	if err != nil {
+	// Unlike attachments' best-effort Readdir (two independent sources), both
+	// fetches here hit the same table — a failure in either fails the whole
+	// directory.
+	var fetchErr error
+	listing := n.listing(ctx, &fetchErr)
+	if fetchErr != nil {
 		return nil, syscall.EIO
 	}
 
 	entries := n.trio().entries()
-
-	// Add outgoing relations (e.g., "blocks-ENG-123.rel")
-	for _, rel := range relations {
-		if rel.RelatedIssue != nil && rel.RelatedIssue.Identifier != "" {
-			name := fmt.Sprintf("%s-%s.rel", rel.Type, rel.RelatedIssue.Identifier)
-			entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFREG})
-		}
+	for _, e := range listing.entries() {
+		entries = append(entries, fuse.DirEntry{Name: e.name, Mode: syscall.S_IFREG})
 	}
-
-	// Add incoming relations (e.g., "blocked-by-ENG-456.rel")
-	for _, rel := range inverseRelations {
-		if rel.Issue != nil && rel.Issue.Identifier != "" {
-			inverseName := inverseRelationType(rel.Type)
-			name := fmt.Sprintf("%s-%s.rel", inverseName, rel.Issue.Identifier)
-			entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFREG})
-		}
-	}
-
 	return fs.NewListDirStream(entries), 0
+}
+
+// listing fetches both direction slices and builds the name-derivation module.
+// When fetchErr is non-nil the first fetch error is also recorded there
+// (Lookup distinguishes "not found" from "couldn't look").
+func (n *RelationsNode) listing(ctx context.Context, fetchErr *error) relationListing {
+	outgoing, oerr := n.lfs.repo.GetIssueRelations(ctx, n.issueID)
+	inverse, ierr := n.lfs.repo.GetIssueInverseRelations(ctx, n.issueID)
+	if fetchErr != nil {
+		if oerr != nil {
+			*fetchErr = oerr
+		} else if ierr != nil {
+			*fetchErr = ierr
+		}
+	}
+	return relationListing{outgoing: outgoing, inverse: inverse}
 }
 
 // trio declares the relations collection's writable surfaces.
@@ -68,36 +67,21 @@ func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 		return inode, 0
 	}
 
-	// Parse relation filename: "type-IDENTIFIER.rel"
+	// Every relation file is named "{type}-{IDENTIFIER}.rel"; skip the repo
+	// fetches for anything else.
 	if !strings.HasSuffix(name, ".rel") {
 		return nil, syscall.ENOENT
 	}
 
-	baseName := strings.TrimSuffix(name, ".rel")
-	// Find the relation
-	relations, _ := n.lfs.repo.GetIssueRelations(ctx, n.issueID)
-	for _, rel := range relations {
-		if rel.RelatedIssue != nil && rel.RelatedIssue.Identifier != "" {
-			expectedName := fmt.Sprintf("%s-%s", rel.Type, rel.RelatedIssue.Identifier)
-			if baseName == expectedName {
-				return n.createRelationFileNode(ctx, name, rel, false, out)
-			}
+	var fetchErr error
+	entry, ok := n.listing(ctx, &fetchErr).find(name)
+	if !ok {
+		if fetchErr != nil {
+			return nil, syscall.EIO
 		}
+		return nil, syscall.ENOENT
 	}
-
-	// Check inverse relations
-	inverseRelations, _ := n.lfs.repo.GetIssueInverseRelations(ctx, n.issueID)
-	for _, rel := range inverseRelations {
-		if rel.Issue != nil && rel.Issue.Identifier != "" {
-			inverseName := inverseRelationType(rel.Type)
-			expectedName := fmt.Sprintf("%s-%s", inverseName, rel.Issue.Identifier)
-			if baseName == expectedName {
-				return n.createRelationFileNode(ctx, name, rel, true, out)
-			}
-		}
-	}
-
-	return nil, syscall.ENOENT
+	return n.createRelationFileNode(ctx, name, entry.relation, entry.isInverse, out)
 }
 
 func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string, rel api.IssueRelation, isInverse bool, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -124,22 +108,6 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string,
 	return n.newRenderInode(ctx, out, name, node, relationIno(inoKey), 30*time.Second), 0
 }
 
-// inverseRelationType returns the inverse relation type name
-func inverseRelationType(relType string) string {
-	switch relType {
-	case "blocks":
-		return "blocked-by"
-	case "duplicate":
-		return "duplicated-by"
-	case "related":
-		return "related-to"
-	case "similar":
-		return "similar-to"
-	default:
-		return relType + "-inverse"
-	}
-}
-
 // RelationFileNode represents a relation file (read-only info + rm-to-delete).
 // It embeds renderFile for Open/Read/Getattr and keeps only its Unlink.
 type RelationFileNode struct {
@@ -162,26 +130,6 @@ func (n *RelationFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 	n.render = f.render
 	n.relation, n.isInverse, n.issueID = f.relation, f.isInverse, f.issueID
 	n.renderMu.Unlock()
-}
-
-// relationContent renders a relation file's YAML body.
-func relationContent(rel api.IssueRelation, isInverse bool) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("type: %s\n", rel.Type))
-
-	if isInverse && rel.Issue != nil {
-		sb.WriteString(fmt.Sprintf("from: %s\n", rel.Issue.Identifier))
-		if rel.Issue.Title != "" {
-			sb.WriteString(fmt.Sprintf("title: %s\n", rel.Issue.Title))
-		}
-	} else if rel.RelatedIssue != nil {
-		sb.WriteString(fmt.Sprintf("to: %s\n", rel.RelatedIssue.Identifier))
-		if rel.RelatedIssue.Title != "" {
-			sb.WriteString(fmt.Sprintf("title: %s\n", rel.RelatedIssue.Title))
-		}
-	}
-
-	return sb.String()
 }
 
 func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -212,12 +160,10 @@ func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errn
 	})
 }
 
-// createRelation is the relations create surface's onFlush: parse
-// "type identifier" (or just "identifier", defaulting to "related") and run
-// the create tail.
+// createRelation is the relations create surface's onFlush: parse the
+// command via parseRelationInput (relationlisting.go), resolve the target
+// issue, and run the create tail.
 func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.Errno {
-	content := strings.TrimSpace(string(raw))
-
 	// relatedID carries the resolved target issue's ID from mutate to persist
 	// (the API's echoed relation doesn't include it).
 	var relatedID string
@@ -227,22 +173,10 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 		op:  "create relation",
 		key: collectionErrorKey("relations", n.issueID),
 		mutate: func(ctx context.Context) (*api.IssueRelation, error) {
-			if content == "" {
-				return nil, &FieldError{Field: "content", Message: `empty content. Write "<type> <ISSUE-ID>", e.g. "blocks ENG-123".`}
-			}
-			parts := strings.Fields(content)
-			if len(parts) == 1 {
-				// Just identifier, default to "related"
-				relationType = "related"
-				relatedIdentifier = parts[0]
-			} else {
-				relationType = parts[0]
-				relatedIdentifier = parts[1]
-			}
-
-			validTypes := map[string]bool{"blocks": true, "duplicate": true, "related": true, "similar": true}
-			if !validTypes[relationType] {
-				return nil, &FieldError{Field: "type", Value: relationType, Message: "invalid relation type. Use one of: blocks, duplicate, related, similar."}
+			var err error
+			relationType, relatedIdentifier, err = parseRelationInput(string(raw))
+			if err != nil {
+				return nil, err
 			}
 
 			relatedIssue, err := n.lfs.repo.GetIssueByIdentifier(ctx, relatedIdentifier)
@@ -253,9 +187,12 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 
 			return n.lfs.mutator().CreateIssueRelation(ctx, n.issueID, relatedIssue.ID, relationType)
 		},
+		// The name derives from the parsed input (through the shared
+		// relationFileName) by necessity: the API's echoed relation doesn't
+		// include the related issue.
 		result: func(*api.IssueRelation) WriteResult {
 			return WriteResult{
-				Path:  relationType + "-" + relatedIdentifier + ".rel",
+				Path:  relationFileName(relationType, relatedIdentifier),
 				Title: relationType + " " + relatedIdentifier,
 			}
 		},
@@ -283,7 +220,7 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 		},
 		dir: relationsDirIno(n.issueID),
 		entryName: func(*api.IssueRelation) string {
-			return relationType + "-" + relatedIdentifier + ".rel"
+			return relationFileName(relationType, relatedIdentifier)
 		},
 	})
 	return errno

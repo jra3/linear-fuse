@@ -710,6 +710,54 @@ distinguishes not-found (`ENOENT`) from couldn't-look (`EIO`) via the
 slices (`TestAttachmentListing*`: round-trip, cross-family dedup, extension
 edges, linkName), no mount.
 
+### Relation listing (`relationListing`)
+The **deep module** owning the `{type}-{ID}.rel` filenames of the relations
+directory — the *direction-aware* sibling of [[named-listing]],
+[[indexed-listing]], and [[attachment-listing]], covering the last collection
+not on a listing module. One relation table projects in two directions:
+outgoing relations name themselves from the raw type and the related issue
+(`blocks-ENG-123.rel`), inverse ones from `inverseRelationType` and the source
+issue (`blocked-by-ENG-456.rel`). `relationListing{outgoing, inverse}`
+(`internal/fs/relationlisting.go`) exposes `entries()` (Readdir: outgoing
+first, then inverse — today's order) and `find(name)` (Lookup) returning a
+tagged entry carrying the direction (render and Unlink policy differ by it),
+and owns `relationFileName` — the `%s-%s.rel` format string exists exactly
+once. Before it, the derivation and the direction split were restated at four
+sites across Readdir/Lookup/createRelation, and the file had no test twin.
+
+**Collisions are first-match, emit-once — [[named-listing]]'s policy,
+inherited WITH its rationale:** the .rel name is a resolution key (`rm` must
+delete exactly what `find` matched), so a disambiguated
+`blocks-ENG-123 (2).rel` would mint a name that resolves nowhere. `entries()`
+implements the emit-once (first wins) and `find` replays `entries()`, so
+readdir and find agree by construction. Nil-issue/empty-identifier relations
+are skipped (they would derive a broken name).
+
+Two recorded behavior changes rode the collapse. (1) Lookup adopted
+[[attachment-listing]]'s `listing(ctx, &fetchErr)` seam: a store failure now
+returns `EIO` instead of masquerading as `ENOENT` (the old code discarded
+fetch errors). Readdir keeps failing whole-directory on either fetch error —
+attachments' best-effort Readdir is justified by *independent* sources, and
+both relation fetches hit the same table. (2) `relationContent` renders
+through `yaml.Marshal` over ordered structs (declaration-order fields keep the
+output byte-identical for plain values) instead of hand-`Sprintf`: a title
+containing a colon used to emit INVALID YAML — the .rel twin of the catalog
+render fix. The **no-delimiter format is preserved** (plain YAML body, not
+frontmatter).
+
+The create surface parses its command through `parseRelationInput` (pure:
+`"<type> <ISSUE-ID>"`, bare identifier defaults to `related`, FieldErrors for
+empty content/bad type) and derives its `.last` path and kernel-entry name
+from the *parsed input* by necessity — the mutation's echoed relation lacks
+the related issue — but through the shared `relationFileName`. Boundary note:
+`parseRelationInput` lives in `fs`, not `marshal` — marshal's seam is
+markdown↔entity, and a one-line command syntax for a write-only trigger is
+not a markdown document, so the parse-side-lives-in-marshal instinct doesn't
+over-apply. The caller fetches and passes the slices (ordering is the repo's
+job); pure of the repo, unit-tested on literals (`TestRelationListing*`,
+`TestRelationContent`, `TestParseRelationInput`), the fetch-error seam tested
+against a real store (`TestRelationsNodeListingFetchErrSeam`), no mount.
+
 ### Entity-directory manifest (`dirManifest`)
 The **deep module** owning the *static* children of an entity directory — the
 `issue.md`/`issue.meta`/`.error`/`.last`/`history.md` files and the
