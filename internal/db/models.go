@@ -287,6 +287,11 @@ type SyncMetum struct {
 	IssueCount         sql.NullInt64 `json:"issue_count"`
 }
 
+type SyncSchedule struct {
+	Key     string    `json:"key"`
+	LastRun time.Time `json:"last_run"`
+}
+
 type Team struct {
 	ID        string         `json:"id"`
 	Key       string         `json:"key"`

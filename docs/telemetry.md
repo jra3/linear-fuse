@@ -102,7 +102,7 @@ observed — a stuck reservation is exactly the anomaly worth seeing.
 
 | Instrument | Kind | Attributes | Recorded |
 |---|---|---|---|
-| `linearfs.sync.cycle_duration` | histogram (s) | — | defer-recorded inside `syncAllTeams`, one sample per cycle for all three invokers (initial run, ticker, `SyncNow`). Budget-skipped cycles record ~0s — that near-zero spike IS the skip signature |
+| `linearfs.sync.cycle_duration` | histogram (s) | `mode` = `lean` \| `full` | defer-recorded inside `syncCycle`, one sample per cycle for all three invokers (initial run, ticker, `SyncNow`). `mode` is the cycle's speed (#242): `full` = workspace + team-metadata drains + issues (cold start, `SyncNow`, and every `FullSyncInterval`, default 10m, off the persisted `sync_schedule` timestamp); `lean` = incremental issues only, skipping the `GetWorkspace`/`GetTeamMetadata` fetches. The per-mode sample counts double as the cycle-mode counter — no separate instrument. Budget-skipped cycles record ~0s (attributed with the mode they would have run) — that near-zero spike IS the skip signature |
 | `linearfs.sync.detail_outcomes` | counter | `outcome` = `synced` \| `deferred` | at `syncDetails`' two exits (the `deferAll` gate paths and the per-issue ledger). **Every issue leaving `syncDetails` is counted exactly once**, so summing both series gives issues processed |
 | `linearfs.sync.prunes` | counter | `collection` | inside `reconcile.Collection`, only when a prune **actually executes** (suppressed-by-unclean or nil prunes record nothing) |
 | `linearfs.sync.pending_depth` | observable gauge | — | `COUNT(*)` of `pending_detail_sync` (the detail-retry backlog), evaluated only at collect time; a count error skips the observation |

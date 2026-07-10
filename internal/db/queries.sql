@@ -111,6 +111,16 @@ ON CONFLICT(team_id) DO UPDATE SET
     last_issue_updated_at = excluded.last_issue_updated_at,
     issue_count = excluded.issue_count;
 
+-- Sync schedule queries
+
+-- name: GetSyncSchedule :one
+SELECT last_run FROM sync_schedule WHERE key = ?;
+
+-- name: UpsertSyncSchedule :exec
+INSERT INTO sync_schedule (key, last_run)
+VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET last_run = excluded.last_run;
+
 -- Teams queries
 
 -- name: ListTeams :many

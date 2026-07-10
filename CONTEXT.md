@@ -1115,6 +1115,37 @@ raw `SELECT *` positional scans would misalign on one layout — every issue
 scan uses an explicit column list (sqlc expands `*` itself;
 `ListIssuesByLabel` was made explicit by hand).
 
+### Cycle taxonomy (`syncCycle`, lean/full)
+The worker's sync cycle has two speeds (`internal/sync/worker.go`, #242 —
+slice 1 of the #238 sync-cycle diet). A **full** cycle is the complete
+pre-diet behavior verbatim: `syncWorkspace` (users + initiatives +
+project-label catalog) and per-team `syncTeamMetadata`
+(states/labels/cycles/projects/members) — with every prune license — plus
+the incremental issues sync. A **lean** cycle (the steady-state default)
+runs only the cheap `GetTeams` enumeration and each team's incremental
+issues sync: no `GetWorkspace`, no `GetTeamMetadata`, and therefore no
+metadata prunes (pruning stays licensed exclusively by the full cycle's
+complete drains, so the metadata deletion/staleness bound is the full-cycle
+interval). The decision is **time-based off a persisted timestamp**, not an
+in-memory counter: `nextCycleMode` reads the `sync_schedule` row keyed
+`full_cycle` and answers full when the row is missing (cold start — a fresh
+store populates exactly as fast as before) or ≥ `Config.FullSyncInterval`
+(default 10m) old; `SyncNow` bypasses the decision and is always full. Only
+a full cycle that ran to completion stamps the row (with `w.now()`, through
+the clock seam) — a budget-skipped or `GetTeams`-failed cycle does not, so
+the full sync stays due rather than silently stretching the staleness
+bound; conversely a restart mid-window reads the fresh persisted stamp and
+starts lean (no redundant full-cycle storm). `sync_schedule(key, last_run)`
+is deliberately a generic key/value schedule table: later diet slices hang
+probe watermarks and the hourly ID-reconcile key off the same table. Cycle
+mode is observable as the `mode` attribute on
+`linearfs.sync.cycle_duration` (per-mode sample counts double as the cycle
+counter). Tested at the worker's API-client seam
+(`worker_test.go` "Lean/Full Cycle Taxonomy"): scripted multi-cycle
+sequences on the fake clock assert per-cycle op windows (`opsDuring`), the
+restart case runs a second Worker over the same store, and the budget-skip
+case asserts the stamp was withheld.
+
 ### Worker clock seam (`Worker.now`/`newTimer`/`newTicker`)
 The sync worker's timing goes through three unexported function fields on
 `Worker` (`internal/sync/worker.go`) — `now func() time.Time`, `newTimer
