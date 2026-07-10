@@ -148,6 +148,11 @@ teams/{KEY}/
       .last                         [read-only: recent created milestones]
       {name}.md                     [read/write: name, targetDate, sortOrder + body; rm to delete]
       {name}.meta                   [read-only: id]
+    links/                          [external links ("Links / Resources")]
+      _create                       [write "URL [label]" to link]
+      .error                        [read-only: last failed write here]
+      .last                         [read-only: recent created links]
+      {label}.link                  [read-only: label, url; rm to delete]
     {ISSUE-ID} symlinks
   cycles/
     current                         [symlink to active cycle]
@@ -169,6 +174,11 @@ initiatives/{slug}/
     .error                          [read-only: last failed write here]
     .last                           [read-only: recent created updates]
     {seq}-{date}-{health}.md        [read-only]
+  links/                            [external links ("Links / Resources")]
+    _create                         [write "URL [label]" to link]
+    .error                          [read-only: last failed write here]
+    .last                           [read-only: recent created links]
+    {label}.link                    [read-only: label, url; rm to delete]
 
 users/{name}/                       [issue symlinks + user.md]
 my/assigned|created|active/         [your issue symlinks]
@@ -186,6 +196,7 @@ CREATE:  mkdir %s/teams/ENG/issues/"New Issue Title"   (quick: title only)
          echo "text" > docs/"Title.md"
          echo "---\nhealth: atRisk\n---\nBlocked" > updates/_create
 LINK:    echo "https://github.com/org/repo/pull/123" > attachments/_create
+         echo "https://notes.granola.ai/x [Onboarding Sync]" > projects/my-project/links/_create
          echo "blocks ENG-456" > relations/_create
          echo -e "Phase 1\nInitial milestone" > milestones/_create
 INITIATIVES:

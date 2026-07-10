@@ -494,6 +494,21 @@ func FixtureAPIAttachment() api.Attachment {
 	}
 }
 
+// FixtureAPIEntityExternalLink returns a project/initiative external link
+// (rendered as a *.link file in the links/ directory).
+func FixtureAPIEntityExternalLink() api.EntityExternalLink {
+	user := FixtureAPIUser()
+	return api.EntityExternalLink{
+		ID:        "extlink-1",
+		Label:     "Onboarding Notes",
+		URL:       "https://notes.granola.ai/onboarding-sync",
+		SortOrder: 1,
+		Creator:   &user,
+		CreatedAt: fixtureTime,
+		UpdatedAt: fixtureTime,
+	}
+}
+
 // FixtureAPIHistoryEntries returns issue history entries with a describable
 // change (state transition), so HistoryToMarkdown renders a non-empty body.
 func FixtureAPIHistoryEntries() []api.IssueHistoryEntry {

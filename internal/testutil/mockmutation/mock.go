@@ -393,6 +393,21 @@ func (c *Client) LinkURL(ctx context.Context, issueID, url, title string) (*api.
 
 func (c *Client) DeleteAttachment(ctx context.Context, attachmentID string) error { return nil }
 
+// ---- Entity external links (project/initiative "Links / Resources") ----
+
+func (c *Client) CreateEntityExternalLink(ctx context.Context, input map[string]any) (*api.EntityExternalLink, error) {
+	n := c.next()
+	return &api.EntityExternalLink{
+		ID:        fmt.Sprintf("mock-extlink-%d", n),
+		Label:     str(input, "label"),
+		URL:       str(input, "url"),
+		CreatedAt: c.now,
+		UpdatedAt: c.now,
+	}, nil
+}
+
+func (c *Client) DeleteEntityExternalLink(ctx context.Context, id string) error { return nil }
+
 // ---- Read-your-writes verify seam (fs.verifyReader) ----
 //
 // These serve the edit-commit tail's re-fetch: the recorded post-Update state if

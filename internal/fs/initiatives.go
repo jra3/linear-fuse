@@ -153,6 +153,9 @@ func (i *InitiativeNode) manifest() *dirManifest {
 	m.subdir("updates", initiativeUpdatesDirIno(initiative.ID), func() dirChild {
 		return &InitiativeUpdatesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, initiativeID: initiative.ID}
 	})
+	m.subdir("links", linksDirIno(initiative.ID), func() dirChild {
+		return &LinksNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, initiativeID: initiative.ID}
+	})
 
 	return m
 }

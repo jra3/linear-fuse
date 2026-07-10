@@ -2125,6 +2125,10 @@ func TestDeleteOrphanProject(t *testing.T) {
 	mustExec("initiative-project link", q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 		InitiativeID: "init-1", ProjectID: projectID, SyncedAt: now,
 	}))
+	mustExec("project link", q.UpsertEntityExternalLink(ctx, db.UpsertEntityExternalLinkParams{
+		ID: "el1", ProjectID: sql.NullString{String: projectID, Valid: true},
+		Label: "Link", Url: "https://example.com", SyncedAt: now, Data: []byte("{}"),
+	}))
 	// Sub-resources on the keeper.
 	mustExec("keeper doc", q.UpsertDocument(ctx, db.UpsertDocumentParams{
 		ID: "pd-keep", SlugID: "pd-keep", Title: "Keep",
@@ -2152,6 +2156,9 @@ func TestDeleteOrphanProject(t *testing.T) {
 	}
 	if got := linkCount(t, store, "SELECT COUNT(*) FROM initiative_projects WHERE project_id = ?", projectID); got != 0 {
 		t.Errorf("orphan initiative-project links not deleted: %d remain", got)
+	}
+	if got, _ := q.ListProjectLinks(ctx, sql.NullString{String: projectID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan project external links not deleted: %d remain", len(got))
 	}
 	// Keeper survives.
 	if _, err := q.GetProject(ctx, otherID); err != nil {
@@ -2197,6 +2204,10 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 	mustExec("init-project link", q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 		InitiativeID: initID, ProjectID: "some-proj", SyncedAt: now,
 	}))
+	mustExec("init link", q.UpsertEntityExternalLink(ctx, db.UpsertEntityExternalLinkParams{
+		ID: "el2", InitiativeID: sql.NullString{String: initID, Valid: true},
+		Label: "Link", Url: "https://example.com", SyncedAt: now, Data: []byte("{}"),
+	}))
 	// Keeper sub-resource.
 	mustExec("keeper update", q.UpsertInitiativeUpdate(ctx, db.UpsertInitiativeUpdateParams{
 		ID: "iu-keep", InitiativeID: otherID, Body: "keep", CreatedAt: now, UpdatedAt: now, SyncedAt: now, Data: []byte("{}"),
@@ -2215,6 +2226,9 @@ func TestDeleteOrphanInitiative(t *testing.T) {
 	}
 	if got := linkCount(t, store, "SELECT COUNT(*) FROM initiative_projects WHERE initiative_id = ?", initID); got != 0 {
 		t.Errorf("orphan init-project links not deleted: %d remain", got)
+	}
+	if got, _ := q.ListInitiativeLinks(ctx, sql.NullString{String: initID, Valid: true}); len(got) != 0 {
+		t.Errorf("orphan init external links not deleted: %d remain", len(got))
 	}
 	if _, err := q.GetInitiative(ctx, otherID); err != nil {
 		t.Errorf("keeper initiative was deleted: %v", err)

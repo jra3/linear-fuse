@@ -63,6 +63,10 @@ type MutationClient interface {
 	// Attachments
 	LinkURL(ctx context.Context, issueID, url, title string) (*api.Attachment, error)
 	DeleteAttachment(ctx context.Context, attachmentID string) error
+
+	// Entity external links (project/initiative "Links / Resources")
+	CreateEntityExternalLink(ctx context.Context, input map[string]any) (*api.EntityExternalLink, error)
+	DeleteEntityExternalLink(ctx context.Context, id string) error
 }
 
 // compile-time assertion that the concrete client satisfies the seam.
