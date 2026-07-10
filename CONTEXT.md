@@ -1149,6 +1149,15 @@ incremental issues sync: no `GetWorkspace`, no `GetTeamMetadata`, and
 therefore no metadata prunes (pruning stays licensed exclusively by the full
 cycle's complete drains, so the metadata deletion/staleness bound is the
 full-cycle interval). The decision is **time-based off a persisted timestamp**, not an
+
+runs only the cheap `GetTeams` enumeration, each team's incremental
+issues sync, and the change-detection probes (see "Initiatives probe"
+below): no `GetTeamMetadata`, and `GetWorkspace` only when a probe detects
+change — and therefore no unconditional metadata prunes (pruning stays
+licensed exclusively by complete drains — the full cycle's, or a
+probe-escalated `syncWorkspace`'s — so the metadata deletion/staleness
+bound is the full-cycle interval). The decision is **time-based off a
+persisted timestamp**, not an
 in-memory counter: `nextCycleMode` reads the `sync_schedule` row keyed
 `full_cycle` and answers full when the row is missing (cold start — a fresh
 store populates exactly as fast as before) or ≥ `Config.FullSyncInterval`
@@ -1233,6 +1242,37 @@ triggers. Deletions are exported as `linearfs.sync.reconcile_deletions`
 Sweep": real `SQLiteRepository` over the test store, mock drain, fake clock)
 and at the repo seam (partial-drain per-team all-or-nothing, pending-guard
 mutual exclusion).
+
+### Initiatives probe (`probeInitiatives`, lean cycles)
+Lean cycles detect initiative changes with a scalars-only probe
+(`internal/sync/worker.go` `probeInitiatives`, #244 — slice 3 of #238):
+`GetInitiativesProbe` fetches the newest 5 initiatives by `updatedAt`
+through the `InitiativeFields` fragment with NO nested projects connection
+(the nested `first:` arguments are what make `queryWorkspace` cost ~7.2K
+regardless of data volume; the probe costs a few hundred) and no
+`pageInfo` (never paginates — selecting it would arm `fetchNodes`'
+truncation tripwire). The newest `updatedAt` is compared against the
+persisted watermark (`sync_schedule` key `initiatives_probe`); not newer →
+done; newer (or the watermark is missing/unreadable — over-syncing is the
+safe direction) → the EXISTING full `syncWorkspace` runs (users +
+initiatives with nested project drains and the junction-prune licenses).
+The probe itself never prunes. `syncWorkspace` advances the watermark to
+the max initiative `updatedAt` its complete fetch saw — stamped whenever
+the FETCH succeeded, even with per-item upsert errors (the full-cycle
+stamp's policy: don't re-drain every 2 minutes over a persistent per-item
+failure), so full cycles keep it current and a fetch failure leaves change
+"due". **Link-timestamp live check (2026-07-10, on issue #244): linking or
+unlinking a project bumps NEITHER `Initiative.updatedAt` nor
+`Project.updatedAt`**, so initiative-link changes are structurally
+invisible to the probe — link freshness is bounded by the full cycle
+(`FullSyncInterval`, default 10m), the PRD's accepted fallback; scalar
+changes (rename/status/description/targetDate/owner) are probe-visible at
+the lean cadence. Outcomes are observable as
+`linearfs.sync.probe_outcomes{kind=initiatives,
+outcome=unchanged|changed|error}`; a probe or escalation failure logs and
+the cycle continues. Wire shape guarded at the mock server
+(`internal/api/initiatives_probe_test.go`); behavior at the worker seam
+(`worker_test.go` "Initiatives Probe Tests").
 
 ### Worker clock seam (`Worker.now`/`newTimer`/`newTicker`)
 The sync worker's timing goes through three unexported function fields on

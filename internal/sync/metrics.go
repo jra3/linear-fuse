@@ -39,7 +39,7 @@ func newSyncMetrics() syncMetrics {
 		detailOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.detail_outcomes",
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
 		probeOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.probe_outcomes",
-			metric.WithDescription("Lean-cycle change-detection probe runs, by kind (team_projects) and outcome (unchanged|changed|error)")),
+			metric.WithDescription("Lean-cycle change-detection probe runs, by kind (team_projects|initiatives) and outcome (unchanged|changed|error)")),
 		reconcileDeletions: telemetry.MustInt64Counter(m, "linearfs.sync.reconcile_deletions",
 			metric.WithDescription("Local rows deleted by the scheduled ID-reconcile sweep, by kind (issue)")),
 	}
@@ -57,7 +57,10 @@ const (
 	probeError     probeOutcome = "error"     // fetch/upsert failure or cancellation — watermark untouched
 )
 
-const probeKindTeamProjects = "team_projects"
+const (
+	probeKindTeamProjects = "team_projects"
+	probeKindInitiatives  = "initiatives"
+)
 
 // recordCycle records one sync cycle's duration, attributed with the cycle's
 // mode (lean|full) — the histogram's per-mode sample counts double as the

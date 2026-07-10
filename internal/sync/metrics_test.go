@@ -12,6 +12,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -135,6 +136,69 @@ func TestSyncDetailsRecordsOutcomes(t *testing.T) {
 	}
 	if got := outcomeValue(t, rm, "synced"); got != 1 {
 		t.Errorf("detail_outcomes{outcome=synced} = %d, want 1 (unchanged by the gate)", got)
+	}
+}
+
+// probeOutcomeValue returns the probe_outcomes count for one kind+outcome
+// pair, or -1 when no such datapoint exists.
+func probeOutcomeValue(t *testing.T, rm metricdata.ResourceMetrics, kind, outcome string) int64 {
+	t.Helper()
+	m, ok := findMetric(rm, "linearfs.sync.probe_outcomes")
+	if !ok {
+		return -1
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("probe_outcomes data is %T, want Sum[int64]", m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		k, kok := dp.Attributes.Value(attribute.Key("kind"))
+		o, ook := dp.Attributes.Value(attribute.Key("outcome"))
+		if kok && ook && k.AsString() == kind && o.AsString() == outcome {
+			return dp.Value
+		}
+	}
+	return -1
+}
+
+// TestProbeOutcomesRecorded: each probeInitiatives run lands in exactly one
+// probe_outcomes datapoint — unchanged when the watermark holds, changed when
+// it doesn't, error when the probe query fails.
+func TestProbeOutcomesRecorded(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	updated := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC)
+	mock.initiatives = []api.Initiative{{ID: "init-1", Slug: "q1", Name: "Q1", UpdatedAt: updated}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	// Arm the watermark via the full workspace sync, then probe: unchanged.
+	if err := worker.syncWorkspace(ctx); err != nil {
+		t.Fatalf("syncWorkspace: %v", err)
+	}
+	worker.probeInitiatives(ctx)
+	rm := collectMetrics(t, reader)
+	if got := probeOutcomeValue(t, rm, "initiatives", "unchanged"); got != 1 {
+		t.Errorf("probe_outcomes{initiatives,unchanged} = %d, want 1", got)
+	}
+
+	// A newer updatedAt: changed.
+	mock.initiatives[0].UpdatedAt = updated.Add(time.Minute)
+	worker.probeInitiatives(ctx)
+	rm = collectMetrics(t, reader)
+	if got := probeOutcomeValue(t, rm, "initiatives", "changed"); got != 1 {
+		t.Errorf("probe_outcomes{initiatives,changed} = %d, want 1", got)
+	}
+
+	// A failing probe query: error.
+	mock.initiativesProbeErr = errors.New("probe boom")
+	worker.probeInitiatives(ctx)
+	rm = collectMetrics(t, reader)
+	if got := probeOutcomeValue(t, rm, "initiatives", "error"); got != 1 {
+		t.Errorf("probe_outcomes{initiatives,error} = %d, want 1", got)
 	}
 }
 

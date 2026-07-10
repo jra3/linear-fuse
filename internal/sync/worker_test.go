@@ -95,34 +95,35 @@ func (f *fakeClock) install(w *Worker) {
 
 // mockAPIClient implements APIClient for testing
 type mockAPIClient struct {
-	teams            []api.Team
-	issuesByTeam     map[string][]api.Issue   // teamID -> all issues (will be paginated)
-	statesByTeam     map[string][]api.State   // teamID -> states
-	labelsByTeam     map[string][]api.Label   // teamID -> labels
-	cyclesByTeam     map[string][]api.Cycle   // teamID -> cycles
-	projectsByTeam   map[string][]api.Project // teamID -> projects
-	membersByTeam    map[string][]api.User    // teamID -> members
-	users            []api.User
-	initiatives      []api.Initiative
-	projectLabels    []api.ProjectLabel
-	projectLabelsErr error // if set, GetProjectLabels fails with this (catalog isolation tests)
-	pageSize         int
-	getTeamsCalls    int32
-	getIssuesCalls   int32
-	simulateError    error
-	rateLimitResetAt time.Time                    // M-3: configurable reset time for adaptive backoff tests
-	detailsByIssue   map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
-	detailsCalls     int32                        // number of GetIssueDetailsBatch calls (incl. failed ones)
-	onDetailsBatch   func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
-	onTeamMetadata   func()                       // if set, runs inside GetTeamMetadata (simulates writes racing the fetch)
-	onWorkspace      func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
-	viewerErr        error                        // if set, GetViewer (the cold-start budget probe) fails with this
-	getViewerCalls   int32
-	projectsProbeErr error               // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
-	issueIDsByTeam   map[string][]string // teamID -> authoritative bare issue IDs (the reconcile sweep's drain)
-	issueIDsErr      error               // if set, GetTeamIssueIDs fails with this (all-or-nothing drain tests)
-	opMu             gosync.Mutex
-	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams/GetTeamProjectsNewestPage (probe-sequencing + lean/full cycle tests)
+	teams               []api.Team
+	issuesByTeam        map[string][]api.Issue   // teamID -> all issues (will be paginated)
+	statesByTeam        map[string][]api.State   // teamID -> states
+	labelsByTeam        map[string][]api.Label   // teamID -> labels
+	cyclesByTeam        map[string][]api.Cycle   // teamID -> cycles
+	projectsByTeam      map[string][]api.Project // teamID -> projects
+	membersByTeam       map[string][]api.User    // teamID -> members
+	users               []api.User
+	initiatives         []api.Initiative
+	initiativesProbeErr error // if set, GetInitiativesProbe fails with this (probe-error tests)
+	projectLabels       []api.ProjectLabel
+	projectLabelsErr    error // if set, GetProjectLabels fails with this (catalog isolation tests)
+	pageSize            int
+	getTeamsCalls       int32
+	getIssuesCalls      int32
+	simulateError       error
+	rateLimitResetAt    time.Time                    // M-3: configurable reset time for adaptive backoff tests
+	detailsByIssue      map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
+	detailsCalls        int32                        // number of GetIssueDetailsBatch calls (incl. failed ones)
+	onDetailsBatch      func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
+	onTeamMetadata      func()                       // if set, runs inside GetTeamMetadata (simulates writes racing the fetch)
+	onWorkspace         func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
+	viewerErr           error                        // if set, GetViewer (the cold-start budget probe) fails with this
+	getViewerCalls      int32
+	projectsProbeErr    error               // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
+	issueIDsByTeam      map[string][]string // teamID -> authoritative bare issue IDs (the reconcile sweep's drain)
+	issueIDsErr         error               // if set, GetTeamIssueIDs fails with this (all-or-nothing drain tests)
+	opMu                gosync.Mutex
+	opOrder             []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams/GetTeamProjectsNewestPage (probe-sequencing + lean/full cycle tests)
 }
 
 // recordOp appends op to the observed call order.
@@ -274,6 +275,24 @@ func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, e
 		Users:       m.users,
 		Initiatives: m.initiatives,
 	}, nil
+}
+
+func (m *mockAPIClient) GetInitiativesProbe(ctx context.Context) ([]api.Initiative, error) {
+	m.recordOp("GetInitiativesProbe")
+	if m.initiativesProbeErr != nil {
+		return nil, m.initiativesProbeErr
+	}
+	if m.simulateError != nil {
+		return nil, m.simulateError
+	}
+	// Scalars-only view of m.initiatives: the real probe query selects no
+	// nested projects connection, so returned initiatives carry none.
+	out := make([]api.Initiative, len(m.initiatives))
+	for i, initiative := range m.initiatives {
+		initiative.Projects = api.InitiativeProjects{}
+		out[i] = initiative
+	}
+	return out, nil
 }
 
 func (m *mockAPIClient) GetProjectLabels(ctx context.Context) ([]api.ProjectLabel, error) {
@@ -2476,5 +2495,205 @@ func TestDetailsSyncRelationUpsertFailureSuppressesPrune(t *testing.T) {
 	rels, err := store.Queries().ListIssueRelations(ctx, "issue-1")
 	if err != nil || len(rels) != 1 || rels[0].ID != "rel-stale" {
 		t.Errorf("unclean relation sync must suppress the prune, but rel-stale is gone: err=%v rels=%v", err, rels)
+	}
+}
+
+// =============================================================================
+// Initiatives Probe Tests (#244)
+// =============================================================================
+
+// indexOfOp returns the index of op's first occurrence in ops, or -1.
+func indexOfOp(ops []string, op string) int {
+	for i, o := range ops {
+		if o == op {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestLeanCycleProbeUnchangedSkipsWorkspace: with no initiative change since
+// the watermark, a lean cycle issues the cheap probe and NOT the full
+// workspace fetch; the full cycle issues the workspace fetch directly and no
+// probe.
+func TestLeanCycleProbeUnchangedSkipsWorkspace(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, clock := cycleTestWorker(t, store)
+	updated := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC).Add(368 * time.Millisecond)
+	mock.initiatives = []api.Initiative{
+		{ID: "init-1", Slug: "q1-goals", Name: "Q1 Goals", UpdatedAt: updated},
+	}
+
+	// Cold-start full cycle: workspace fetch, no probe — and it stamps the
+	// watermark from what the complete fetch saw.
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("cold-start cycle: %v", err)
+		}
+	})
+	assertCycleOps(t, "cold start", ops, true)
+	if containsOp(ops, "GetInitiativesProbe") {
+		t.Errorf("full cycle ops = %v, want no GetInitiativesProbe (full cycles fetch, they don't probe)", ops)
+	}
+	watermark, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyInitiativesProbe)
+	if err != nil {
+		t.Fatalf("GetSyncSchedule(initiatives_probe) after full cycle: %v", err)
+	}
+	if !watermark.Equal(updated) {
+		t.Errorf("watermark = %v, want %v (max initiative updatedAt the full fetch saw)", watermark, updated)
+	}
+
+	// Lean cycle, nothing changed: the probe fires, the workspace fetch
+	// does not — that skipped fetch is the entire point of the probe.
+	clock.advance(2 * time.Minute)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("lean cycle: %v", err)
+		}
+	})
+	assertCycleOps(t, "lean cycle (unchanged)", ops, false)
+	if !containsOp(ops, "GetInitiativesProbe") {
+		t.Errorf("lean cycle ops = %v, want GetInitiativesProbe", ops)
+	}
+}
+
+// TestLeanCycleProbeDetectsChange: a remote initiative change (newer
+// updatedAt than the watermark) makes the next lean cycle run the existing
+// full workspace sync — probe first, then GetWorkspace — after which the
+// change is visible in the store and the watermark has advanced.
+func TestLeanCycleProbeDetectsChange(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, clock := cycleTestWorker(t, store)
+	updated := time.Date(2026, 7, 9, 10, 0, 0, 0, time.UTC).Add(368 * time.Millisecond)
+	mock.initiatives = []api.Initiative{
+		{ID: "init-1", Slug: "q1-goals", Name: "Q1 Goals", UpdatedAt: updated},
+	}
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("cold-start cycle: %v", err)
+	}
+
+	// A remote edit: renamed, newer updatedAt.
+	renamedAt := updated.Add(5 * time.Minute)
+	mock.initiatives = []api.Initiative{
+		{ID: "init-1", Slug: "q1-goals", Name: "Q1 Goals (renamed)", UpdatedAt: renamedAt},
+	}
+
+	clock.advance(2 * time.Minute)
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("lean cycle: %v", err)
+		}
+	})
+
+	// The probe detected the change and escalated to the full workspace sync.
+	probeIdx, wsIdx := indexOfOp(ops, "GetInitiativesProbe"), indexOfOp(ops, "GetWorkspace")
+	if probeIdx == -1 || wsIdx == -1 || probeIdx > wsIdx {
+		t.Fatalf("lean cycle ops = %v, want GetInitiativesProbe followed by GetWorkspace", ops)
+	}
+	// Still a lean cycle for the other fetch class: no team-metadata drain.
+	if containsOp(ops, "GetTeamMetadata") {
+		t.Errorf("lean cycle ops = %v, want no GetTeamMetadata (the probe escalates the workspace sync only)", ops)
+	}
+
+	// The change landed in the store...
+	initiatives, err := store.Queries().ListInitiatives(ctx)
+	if err != nil {
+		t.Fatalf("ListInitiatives: %v", err)
+	}
+	if len(initiatives) != 1 || initiatives[0].Name != "Q1 Goals (renamed)" {
+		t.Fatalf("initiatives = %+v, want the renamed initiative", initiatives)
+	}
+
+	// ...and the watermark advanced to what the full sync saw, so the next
+	// lean cycle is back to probe-only.
+	watermark, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyInitiativesProbe)
+	if err != nil {
+		t.Fatalf("GetSyncSchedule(initiatives_probe): %v", err)
+	}
+	if !watermark.Equal(renamedAt) {
+		t.Errorf("watermark = %v, want %v (advanced by the on-change sync)", watermark, renamedAt)
+	}
+	clock.advance(2 * time.Minute)
+	ops = opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("follow-up lean cycle: %v", err)
+		}
+	})
+	if containsOp(ops, "GetWorkspace") {
+		t.Errorf("follow-up lean cycle ops = %v, want no GetWorkspace (watermark advanced)", ops)
+	}
+}
+
+// TestLeanCycleProbeErrorContinuesCycle: a probe failure must not block the
+// cycle — no workspace escalation, but the teams/issues sync still runs and
+// the cycle reports success (the probe is an optimization, not a gate).
+func TestLeanCycleProbeErrorContinuesCycle(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, clock := cycleTestWorker(t, store)
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("cold-start cycle: %v", err)
+	}
+
+	mock.initiativesProbeErr = errors.New("probe boom")
+	clock.advance(2 * time.Minute)
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("lean cycle with failing probe returned error: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetInitiativesProbe") {
+		t.Errorf("ops = %v, want the probe attempted", ops)
+	}
+	if containsOp(ops, "GetWorkspace") {
+		t.Errorf("ops = %v, want no GetWorkspace after a probe error (an error is not a change signal)", ops)
+	}
+	if !containsOp(ops, "GetTeams") {
+		t.Errorf("ops = %v, want GetTeams — the issues sync must continue past a probe failure", ops)
+	}
+}
+
+// TestLeanCycleProbeMissingWatermarkEscalates: a lean cycle over a store with
+// a full-cycle stamp but NO probe watermark (e.g. a binary upgraded
+// mid-window) treats the unreadable watermark as changed — over-syncing is
+// the safe direction — and the escalation stamps the watermark, self-healing.
+func TestLeanCycleProbeMissingWatermarkEscalates(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, clock := cycleTestWorker(t, store)
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("cold-start cycle: %v", err)
+	}
+	// Simulate a pre-#244 store: full-cycle stamp present, watermark absent.
+	if _, err := store.DB().ExecContext(ctx,
+		"DELETE FROM sync_schedule WHERE key = ?", scheduleKeyInitiativesProbe); err != nil {
+		t.Fatalf("delete watermark: %v", err)
+	}
+
+	clock.advance(2 * time.Minute)
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("lean cycle: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetWorkspace") {
+		t.Errorf("ops = %v, want GetWorkspace (missing watermark reads as changed)", ops)
+	}
+	if _, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyInitiativesProbe); err != nil {
+		t.Errorf("watermark not re-stamped after escalation: %v", err)
 	}
 }
