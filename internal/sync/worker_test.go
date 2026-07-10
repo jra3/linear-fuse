@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -115,8 +117,9 @@ type mockAPIClient struct {
 	onWorkspace      func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
 	viewerErr        error                        // if set, GetViewer (the cold-start budget probe) fails with this
 	getViewerCalls   int32
+	projectsProbeErr error // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
 	opMu             gosync.Mutex
-	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams (probe-sequencing + lean/full cycle tests)
+	opOrder          []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams/GetTeamProjectsNewestPage (probe-sequencing + lean/full cycle tests)
 }
 
 // recordOp appends op to the observed call order.
@@ -218,6 +221,42 @@ func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*ap
 		Projects: m.projectsByTeam[teamID],
 		Members:  m.membersByTeam[teamID],
 	}, nil
+}
+
+// GetTeamProjectsNewestPage serves projectsByTeam sorted updatedAt DESC with
+// offset cursors — the projects sibling of the GetTeamIssuesPage mock.
+func (m *mockAPIClient) GetTeamProjectsNewestPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Project, api.PageInfo, error) {
+	m.recordOp("GetTeamProjectsNewestPage")
+	if m.projectsProbeErr != nil {
+		return nil, api.PageInfo{}, m.projectsProbeErr
+	}
+	if m.simulateError != nil {
+		return nil, api.PageInfo{}, m.simulateError
+	}
+
+	projects := append([]api.Project(nil), m.projectsByTeam[teamID]...)
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].UpdatedAt.After(projects[j].UpdatedAt)
+	})
+
+	offset := 0
+	if cursor != "" {
+		offset, _ = strconv.Atoi(cursor)
+	}
+	if offset >= len(projects) {
+		return []api.Project{}, api.PageInfo{}, nil
+	}
+	end := offset + pageSize
+	if end > len(projects) {
+		end = len(projects)
+	}
+	page := projects[offset:end]
+	hasNext := end < len(projects)
+	nextCursor := ""
+	if hasNext {
+		nextCursor = strconv.Itoa(end)
+	}
+	return page, api.PageInfo{HasNextPage: hasNext, EndCursor: nextCursor}, nil
 }
 
 func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, error) {
@@ -1459,9 +1498,10 @@ func containsOp(ops []string, op string) bool {
 }
 
 // assertCycleOps asserts one cycle's fetch classes: a full cycle issues both
-// GetWorkspace and GetTeamMetadata, a lean cycle issues neither; every
-// non-skipped cycle issues GetTeams (the cheap team enumeration the issues
-// sync needs either way).
+// GetWorkspace and GetTeamMetadata (whose complete projects drain makes the
+// probe redundant there), a lean cycle issues neither but runs the projects
+// change-detection probe instead; every non-skipped cycle issues GetTeams
+// (the cheap team enumeration the issues sync needs either way).
 func assertCycleOps(t *testing.T, label string, ops []string, wantFull bool) {
 	t.Helper()
 	if !containsOp(ops, "GetTeams") {
@@ -1471,6 +1511,10 @@ func assertCycleOps(t *testing.T, label string, ops []string, wantFull bool) {
 		if got := containsOp(ops, op); got != wantFull {
 			t.Errorf("%s: ops = %v, %s present = %v, want %v", label, ops, op, got, wantFull)
 		}
+	}
+	if got := containsOp(ops, "GetTeamProjectsNewestPage"); got != !wantFull {
+		t.Errorf("%s: ops = %v, GetTeamProjectsNewestPage present = %v, want %v (probe rides lean cycles only)",
+			label, ops, got, !wantFull)
 	}
 }
 

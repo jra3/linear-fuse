@@ -28,6 +28,10 @@ type APIClient interface {
 	// Consolidated team metadata (states, labels, cycles, projects, members in one call)
 	GetTeamMetadata(ctx context.Context, teamID string) (*api.TeamMetadata, error)
 
+	// One newest-first page of a team's projects — the lean cycle's projects
+	// change-detection probe and its resume pages (see probeTeamProjects).
+	GetTeamProjectsNewestPage(ctx context.Context, teamID string, cursor string, pageSize int) ([]api.Project, api.PageInfo, error)
+
 	// Consolidated workspace data (users + initiatives in one call)
 	GetWorkspace(ctx context.Context) (*api.WorkspaceData, error)
 
@@ -253,9 +257,10 @@ func (w *Worker) run(ctx context.Context) {
 // cycleMode names the two speeds of a sync cycle. A full cycle is the
 // complete workspace + per-team metadata + issues sync with every prune
 // license; a lean cycle (the steady-state default) runs only the per-team
-// incremental issues sync — no GetWorkspace, no GetTeamMetadata — which is
-// where ~90% of a quiet cycle's complexity went (#238). The string values
-// double as the metric attribute (linearfs.sync.cycle_duration {mode}).
+// projects probe and incremental issues sync — no GetWorkspace, no
+// GetTeamMetadata — which is where ~90% of a quiet cycle's complexity went
+// (#238). The string values double as the metric attribute
+// (linearfs.sync.cycle_duration {mode}).
 type cycleMode string
 
 const (
@@ -301,8 +306,9 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 // team the metadata sync (states/labels/cycles/projects/members, with their
 // prune licenses) and the incremental issues sync. Lean mode skips the
 // workspace and team-metadata fetches entirely and runs only the (cheap)
-// teams list plus each team's incremental issues sync; nothing prunes in a
-// lean cycle beyond what the issues path always did. A full cycle that runs
+// teams list, each team's projects change-detection probe (upsert-only, see
+// probeTeamProjects), and each team's incremental issues sync; nothing prunes
+// in a lean cycle beyond what the issues path always did. A full cycle that runs
 // to completion stamps the persisted last-full-cycle timestamp; a
 // budget-skipped or teams-fetch-failed cycle returns early and does not, so
 // the full sync stays due. A cycle whose workspace or per-team metadata sync
@@ -367,10 +373,19 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		}
 
 		// Sync team metadata (states, labels, cycles, projects, members) —
-		// full cycles only, the other fetch class the lean cycle skips
+		// full cycles only, the other fetch class the lean cycle skips. A
+		// lean cycle runs the cheap projects change-detection probe instead
+		// (#243): the full cycle's complete drain covers projects anyway (and
+		// is what licenses their prunes), so the probe would be a redundant
+		// page there. Probe failures log-and-continue like the metadata sync:
+		// the issues sync still runs and the next cycle probes again.
 		if mode == cycleFull {
 			if err := w.syncTeamMetadata(ctx, team); err != nil {
 				log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
+			}
+		} else {
+			if err := w.probeTeamProjects(ctx, team); err != nil {
+				log.Printf("[sync] projects probe %s failed: %v", team.Key, err)
 			}
 		}
 
@@ -792,43 +807,18 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	})
 
 	// Projects prune the project_teams junction (a project that moved off this
-	// team, or was deleted). The upsert closure's completeness set is the project
+	// team, or was deleted). The upsert's completeness set is the project
 	// entity plus the project_teams row: a failure in either suppresses the
 	// prune. Milestones are a nested best-effort sub-write in a capped,
 	// never-pruned connection — outside that set — so a milestone failure is
-	// logged and swallowed, never suppressing the prune.
+	// logged and swallowed, never suppressing the prune. The upsert body is
+	// upsertTeamProject, shared with the lean cycle's probe.
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Project]{
 		Label: "project",
 		Kind:  "project",
 		Items: meta.Projects,
 		Upsert: func(ctx context.Context, project api.Project) error {
-			params, err := db.APIProjectToDBProject(project)
-			if err != nil {
-				return err
-			}
-			if err := w.store.Queries().UpsertProject(ctx, params); err != nil {
-				return err
-			}
-			// A junction failure marks the item unclean but does not abort the
-			// milestone sub-writes below, so return it after they run.
-			junctionErr := w.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
-				ProjectID: project.ID,
-				TeamID:    team.ID,
-				SyncedAt:  db.Now(),
-			})
-			if project.Milestones != nil {
-				for _, milestone := range project.Milestones.Nodes {
-					mParams, mErr := db.APIProjectMilestoneToDBMilestone(milestone, project.ID)
-					if mErr != nil {
-						log.Printf("[sync] convert milestone %s failed: %v", milestone.Name, mErr)
-						continue
-					}
-					if err := w.store.Queries().UpsertProjectMilestone(ctx, mParams); err != nil {
-						log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
-					}
-				}
-			}
-			return junctionErr
+			return w.upsertTeamProject(ctx, team.ID, project)
 		},
 		Prune: func(ctx context.Context) error {
 			return w.store.Queries().PruneProjectTeams(ctx, db.PruneProjectTeamsParams{
@@ -866,6 +856,167 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 		},
 	})
 
+	return nil
+}
+
+// upsertTeamProject persists one fetched project exactly the way the full
+// drain does: the project row, the project_teams junction row for this team,
+// and the nested milestones. A junction failure marks the write unclean
+// (returned) but does not abort the milestone sub-writes; a milestone failure
+// is logged and swallowed (a best-effort sub-write in a capped, never-pruned
+// connection). Shared by the full cycle's reconcile pass (syncTeamMetadata)
+// and the lean cycle's probe (probeTeamProjects) so the two persist paths
+// cannot drift.
+func (w *Worker) upsertTeamProject(ctx context.Context, teamID string, project api.Project) error {
+	params, err := db.APIProjectToDBProject(project)
+	if err != nil {
+		return err
+	}
+	if err := w.store.Queries().UpsertProject(ctx, params); err != nil {
+		return err
+	}
+	junctionErr := w.store.Queries().UpsertProjectTeam(ctx, db.UpsertProjectTeamParams{
+		ProjectID: project.ID,
+		TeamID:    teamID,
+		SyncedAt:  db.Now(),
+	})
+	if project.Milestones != nil {
+		for _, milestone := range project.Milestones.Nodes {
+			mParams, mErr := db.APIProjectMilestoneToDBMilestone(milestone, project.ID)
+			if mErr != nil {
+				log.Printf("[sync] convert milestone %s failed: %v", milestone.Name, mErr)
+				continue
+			}
+			if err := w.store.Queries().UpsertProjectMilestone(ctx, mParams); err != nil {
+				log.Printf("[sync] upsert milestone %s failed: %v", milestone.Name, err)
+			}
+		}
+	}
+	return junctionErr
+}
+
+// =============================================================================
+// Team Projects Probe (lean cycles)
+// =============================================================================
+
+// scheduleKeyProjectsProbePrefix keys each team's projects-probe watermark in
+// the sync_schedule table (the generic key/value schedule table #242 created
+// for exactly this reuse): key "projects_probe:<teamID>", last_run = the max
+// project updatedAt the probe has walked past. Persisting the watermark means
+// a restart does not refetch unchanged teams.
+const scheduleKeyProjectsProbePrefix = "projects_probe:"
+
+func projectsProbeScheduleKey(teamID string) string {
+	return scheduleKeyProjectsProbePrefix + teamID
+}
+
+// Probe page sizes. A project node costs ~187 complexity (nested
+// milestone/initiative selections), so the probe page is deliberately tiny:
+// the unchanged-world check — the common case — costs ~1K complexity instead
+// of the full drain's ~9.4K per page. Resume pages, only paid when something
+// actually changed, use the full-drain page size (50 is the largest page that
+// fits Linear's 10k single-query complexity budget; see queryTeamProjects).
+const (
+	probeProjectsPageSize       = 5
+	probeProjectsResumePageSize = 50
+)
+
+// probeTeamProjects is the lean cycle's replacement for the full projects
+// drain (#243): fetch the team's projects newest-first and compare against
+// the persisted per-team watermark. If the newest updatedAt is not newer, the
+// team's projects are up to date — done, one small page. If it is newer, keep
+// paginating newest-first, upserting every node through the full drain's
+// persist path, until reaching nodes at/older than the watermark (the
+// sync-until-unchanged pattern of syncTeamIssues; the probe page doubles as
+// the first resume page), then advance the watermark.
+//
+// A missing watermark (first lean cycle ever for this team) walks every page
+// — a one-time upsert-only full fetch that seeds the watermark; the full
+// cycle keeps bootstrap correctness either way.
+//
+// NEVER prunes. The probe and its resume pages are upsert-only by design:
+// only the full cycle's complete drains license pruning, so a deleted or
+// moved-off-team project is caught by the next full cycle (the
+// FullSyncInterval bound), not here. That also means the watermark advances
+// only over data that was cleanly persisted: any fetch or upsert failure
+// aborts without advancing, and the next lean cycle re-probes the same
+// window.
+func (w *Worker) probeTeamProjects(ctx context.Context, team api.Team) error {
+	watermark, err := w.store.Queries().GetSyncSchedule(ctx, projectsProbeScheduleKey(team.ID))
+	if err != nil {
+		// No row yet (or an unreadable schedule): zero watermark — walk
+		// everything, which is the over-syncing safe direction.
+		watermark = time.Time{}
+	}
+
+	var (
+		cursor       string
+		pageSize     = probeProjectsPageSize
+		newWatermark = watermark
+		fetched      int
+	)
+
+walk:
+	for {
+		select {
+		case <-ctx.Done():
+			w.metrics.recordProbeOutcome(probeKindTeamProjects, probeError)
+			return ctx.Err()
+		default:
+		}
+
+		projects, pageInfo, fetchErr := w.client.GetTeamProjectsNewestPage(ctx, team.ID, cursor, pageSize)
+		if fetchErr != nil {
+			w.metrics.recordProbeOutcome(probeKindTeamProjects, probeError)
+			return fmt.Errorf("projects probe fetch: %w", fetchErr)
+		}
+
+		for _, project := range projects {
+			// Nodes arrive updatedAt DESC: the first node at/older than the
+			// watermark means everything from here on is already known.
+			if !watermark.IsZero() && !project.UpdatedAt.After(watermark) {
+				break walk
+			}
+			if err := w.upsertTeamProject(ctx, team.ID, project); err != nil {
+				// Abort WITHOUT advancing the watermark: an advance past a
+				// project that failed to persist would hide it from every
+				// following probe until its next remote change. The next lean
+				// cycle re-probes (and re-upserts) the same window instead.
+				w.metrics.recordProbeOutcome(probeKindTeamProjects, probeError)
+				return fmt.Errorf("projects probe upsert %s: %w", project.Name, err)
+			}
+			fetched++
+			if project.UpdatedAt.After(newWatermark) {
+				newWatermark = project.UpdatedAt
+			}
+		}
+
+		if !pageInfo.HasNextPage || pageInfo.EndCursor == "" || pageInfo.EndCursor == cursor {
+			break
+		}
+		cursor = pageInfo.EndCursor
+		pageSize = probeProjectsResumePageSize
+	}
+
+	if newWatermark.After(watermark) {
+		if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+			Key:     projectsProbeScheduleKey(team.ID),
+			LastRun: newWatermark,
+		}); err != nil {
+			// The walk itself succeeded — everything fetched is persisted —
+			// so this is not a probe error; the next cycle merely re-walks
+			// the same (already-upserted) window.
+			log.Printf("[sync] persist projects-probe watermark for %s failed: %v", team.Key, err)
+		}
+	}
+
+	if fetched > 0 {
+		w.metrics.recordProbeOutcome(probeKindTeamProjects, probeChanged)
+		log.Printf("[sync] projects probe %s: %d changed, watermark → %s",
+			team.Key, fetched, newWatermark.Format(time.RFC3339))
+	} else {
+		w.metrics.recordProbeOutcome(probeKindTeamProjects, probeUnchanged)
+	}
 	return nil
 }
 

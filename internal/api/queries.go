@@ -445,6 +445,26 @@ query TeamProjects($teamId: String!, $after: String) {
 }
 ` + projectFieldsFragment
 
+// queryTeamProjectsByUpdatedAt fetches a team's projects newest-first — the
+// lean cycle's change-detection probe and its resume pages (#243), the
+// projects sibling of queryTeamIssuesByUpdatedAt. $first is a variable, not a
+// constant, because the two callers want different pages: the probe pays for
+// only a handful of nodes (each costs ~187 complexity via the nested
+// milestone/initiative selections), while a resume page uses the full-drain
+// page size. Nodes project through ProjectFields, identical to
+// queryTeamProjects — the fragment rule: a probed project must carry the
+// same fields a drained one does.
+var queryTeamProjectsByUpdatedAt = `
+query TeamProjectsByUpdatedAt($teamId: String!, $first: Int!, $after: String) {
+  team(id: $teamId) {
+    projects(first: $first, after: $after, orderBy: updatedAt) {
+      pageInfo { hasNextPage endCursor }
+      nodes { ...ProjectFields }
+    }
+  }
+}
+` + projectFieldsFragment
+
 var queryProject = `
 query Project($id: String!) {
   project(id: $id) { ...ProjectFields }

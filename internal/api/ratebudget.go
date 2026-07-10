@@ -124,11 +124,16 @@ var opBaseTier = map[string]priority{
 	"Project":                  pSkeleton,
 
 	// Lists: issue pages and the reconcile ID sweeps.
-	"TeamIssuesByUpdatedAt":  pList,
-	"TeamIssueIDs":           pList,
-	"WorkspaceProjectIDs":    pList,
-	"WorkspaceInitiativeIDs": pList,
-	"Issue":                  pList,
+	"TeamIssuesByUpdatedAt": pList,
+	// The lean cycle's projects probe: shape-critical like TeamProjects, but
+	// classified with the incremental issue pages it mirrors — a deferred
+	// probe just means one lean cycle without project freshness, and the full
+	// cycle's skeleton-tier drain still bounds staleness.
+	"TeamProjectsByUpdatedAt": pList,
+	"TeamIssueIDs":            pList,
+	"WorkspaceProjectIDs":     pList,
+	"WorkspaceInitiativeIDs":  pList,
+	"Issue":                   pList,
 
 	// Details: the per-issue/project/initiative deep fetches — the largest
 	// complexity spenders, and the first to defer.

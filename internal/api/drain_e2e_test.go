@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jra3/linear-fuse/internal/testutil"
@@ -53,6 +54,74 @@ func TestGetTeamProjectsPaginates(t *testing.T) {
 	}
 	if calls[1].Variables["after"] != "cursor-1" {
 		t.Errorf("second page after = %v, want cursor-1", calls[1].Variables["after"])
+	}
+}
+
+// TestGetTeamProjectsNewestPageQueryShape: the lean cycle's projects probe
+// query (#243) — newest-first ordering, caller-chosen page size, cursor
+// passed only on resume pages, nodes projected through ProjectFields (so a
+// probed project carries the full drain's field set, nested milestones
+// included).
+func TestGetTeamProjectsNewestPageQueryShape(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	mock.SetResponseSequence("TeamProjectsByUpdatedAt",
+		map[string]any{"team": map[string]any{"projects": connOf(pf(true, "cursor-1"),
+			map[string]any{"id": "proj-a", "name": "Alpha", "slugId": "alpha",
+				"updatedAt": "2026-07-09T12:34:56.017Z",
+				"projectMilestones": map[string]any{"nodes": []map[string]any{
+					{"id": "ms-1", "name": "Phase 1", "sortOrder": 1.0},
+				}}})}},
+		map[string]any{"team": map[string]any{"projects": connOf(pf(false, ""),
+			map[string]any{"id": "proj-b", "name": "Beta", "slugId": "beta"})}},
+	)
+
+	c := NewClient("test")
+	c.SetAPIURL(mock.URL())
+
+	// Probe page: small first, no cursor.
+	projects, pageInfo, err := c.GetTeamProjectsNewestPage(context.Background(), "team-1", "", 5)
+	if err != nil {
+		t.Fatalf("GetTeamProjectsNewestPage: %v", err)
+	}
+	if len(projects) != 1 || projects[0].Name != "Alpha" {
+		t.Fatalf("projects = %+v, want [Alpha]", projects)
+	}
+	if projects[0].Milestones == nil || len(projects[0].Milestones.Nodes) != 1 {
+		t.Errorf("probed project milestones = %+v, want the fragment's nested nodes", projects[0].Milestones)
+	}
+	if !pageInfo.HasNextPage || pageInfo.EndCursor != "cursor-1" {
+		t.Errorf("pageInfo = %+v, want hasNextPage cursor-1", pageInfo)
+	}
+
+	// Resume page: the caller passes the cursor and a larger page.
+	if _, _, err := c.GetTeamProjectsNewestPage(context.Background(), "team-1", "cursor-1", 50); err != nil {
+		t.Fatalf("resume page: %v", err)
+	}
+
+	calls := mock.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(calls))
+	}
+	if !strings.Contains(calls[0].Query, "orderBy: updatedAt") {
+		t.Errorf("query missing newest-first ordering:\n%s", calls[0].Query)
+	}
+	if !strings.Contains(calls[0].Query, "...ProjectFields") {
+		t.Errorf("query must project through ProjectFields, not an inline copy:\n%s", calls[0].Query)
+	}
+	if got := calls[0].Variables["first"]; got != float64(5) {
+		t.Errorf("probe first = %v, want 5", got)
+	}
+	if calls[0].Variables["after"] != nil {
+		t.Errorf("probe after = %v, want omitted", calls[0].Variables["after"])
+	}
+	if got := calls[1].Variables["first"]; got != float64(50) {
+		t.Errorf("resume first = %v, want 50", got)
+	}
+	if got := calls[1].Variables["after"]; got != "cursor-1" {
+		t.Errorf("resume after = %v, want cursor-1", got)
 	}
 }
 
