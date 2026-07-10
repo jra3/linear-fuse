@@ -85,11 +85,12 @@ stays a `retryableCreateErr` concern; `api.IsNotFound` — the "Entity not
 found" rejection), the single owners the client's GraphQL-errors branch, the
 sync worker's backoff, and the repo's orphan defense also delegate to.
 
-For status updates the front half is the shared `parseUpdateContent` (one parser for
-both project and initiative updates): an explicitly-written unknown `health:` is a
-`FieldError` (→ `EINVAL`), never silently coerced to `onTrack`, and frontmatter with
-an empty body is likewise rejected; only plain whitespace content (no frontmatter)
-is treated as flush noise and no-ops before the tail.
+For status updates the front half is the shared `marshal.MarkdownToStatusUpdate`
+(one parser for both project and initiative updates — see [[entity-parse]]): an
+explicitly-written unknown `health:` is a `FieldError` (→ `EINVAL`), never silently
+coerced to `onTrack`, and frontmatter with an empty body is likewise rejected; only
+plain whitespace content (no frontmatter) is treated as flush noise and no-ops
+before the tail.
 
 ### Delete tail (`commitDelete`)
 The **deep module** owning the invariant tail of every delete (`rm`/`rmdir`,
@@ -212,9 +213,7 @@ expose exactly two editable scalars: a **name** (frontmatter) and a
 **description** (body). `scalarEdit` (`internal/fs/scalaredit.go`) is the diff of
 those two — `{name, desc *string, origName, origDesc string}` — and owns the
 change decision (trim both sides of the body so a render/parse trailing-newline
-delta doesn't read as an edit; coerce the name via `marshal.ScalarToString` so a
-numeric/bare-scalar name updates instead of being silently dropped by a direct
-type assertion), the `changed()` predicate, and the read-your-writes
+delta doesn't read as an edit), the `changed()` predicate, and the read-your-writes
 `divergences(freshName, freshDesc)` classification (one canonical field order,
 `writeBackDivergence` per changed field). It stays **neutral to the entity type**:
 the caller maps `name`/`desc` onto its own typed `api.ProjectUpdateInput` /
@@ -225,10 +224,12 @@ collapsed the byte-identical `fieldChanged`-flag diff and the byte-identical
 mutation failure now routes through the shared `classifyMutationErr` (like the
 reconcile path 20 lines above it), so a rate-limited scalar edit returns
 `EAGAIN` — not the old flat `EIO` — and the server's reason reaches `.error`.
-Pure of the FUSE mount, SQLite, and API: unit-tested directly on a parsed
-`marshal.Document` plus current values. (`marshal.ScalarToString` and
-`marshal.StringSliceFromYAML` — the list coercion the handlers now share for the
-relational front half — were exported from marshal for this.)
+Pure of everything including the parse: it takes already-extracted
+name/body strings (the coercion lives with [[entity-parse]]'s
+`MarkdownToProjectEdit`/`MarkdownToInitiativeEdit`, which coerce the name via
+`marshal.ScalarToString` so a numeric/bare-scalar name updates instead of being
+silently dropped), so its unit tests are literal strings — no FUSE mount,
+SQLite, API, or `marshal.Document`.
 
 ### Entity render (`marshal.*ToMarkdown`)
 Every entity's markdown render lives in `internal/marshal`, one seam for
@@ -243,14 +244,55 @@ fs/comments.go, and `LabelToMarkdown`). **All seven rendered entities now
 follow the editable-only split** (server-managed fields live in a `.meta`
 sidecar, so a successful write never rewrites the writer's bytes), each pinned
 by unit tests on the exact frontmatter key sets. The fs nodes keep one-line
-wrappers that degrade a render failure to an empty file. The parse side stays
-with [[scalar-edit]] (name/description) and [[link-reconciliation]] (the
-member lists). The read-only catalog renders (team.md, states.md, labels.md,
+wrappers that degrade a render failure to an empty file. The parse side is the
+mirror-image family — see "Entity parse" below. The read-only catalog renders
+(team.md, states.md, labels.md,
 project-labels.md, user.md, cycle.md, updates) also route their frontmatter
 through this seam (`renderWithFrontmatter`, internal/fs/catalogrender.go) —
 they used to fmt.Sprintf-concatenate YAML, so a name like `Q3: Bets` emitted
 invalid YAML in exactly the files agents machine-parse after a `.error`; the
 bodies stay hand-built prose/tables.
+
+### Entity parse (`marshal.MarkdownTo*`)
+The mirror image of Entity render, and since the parse-side round it is
+**complete 7/7**: every entity's markdown parse lives in `internal/marshal` —
+Issue/Document/Milestone always did (`MarkdownToIssueUpdate`,
+`MarkdownToDocumentUpdate`/`ParseNewDocument`, `MarkdownToMilestoneUpdate`/
+`ParseNewMilestone`), and the round moved the last three fs-resident parsers
+onto the seam: `MarkdownToStatusUpdate` (project + initiative status updates,
+replacing a hand line-scanner), `MarkdownToLabelUpdate`/`ParseNewLabel`
+(replacing a hand YAML scanner with a quote-strip hack), and
+`MarkdownToProjectEdit`/`MarkdownToInitiativeEdit` (typed extraction structs).
+Everything is real YAML via `marshal.Parse` + the shared coercers
+(`ScalarToString`, `StringSliceFromYAML`) — no hand scanners remain.
+
+**Parse says what the file says; the edit modules decide what changed.** The
+project/initiative parses are extraction/coercion only — no `original` param,
+no diffing — because the diff has owners: [[scalar-edit]] (name/body, now fed
+literal strings), `labelsEdit` (which keeps the raw value + presence pair,
+since it owns label coercion: ID passthrough, ambiguity), and
+[[link-reconciliation]] (plain slices where absent ⇒ empty, the unlink-all
+semantics). The label/document/milestone parses keep their changed-fields-map
+shape because their originals are at hand in the file node.
+
+`FieldError` moved here (`fielderror.go`) with `type FieldError =
+marshal.FieldError` left in fs — an alias, so every construction site and the
+`errors.As` in `classifyMutationErr` match unchanged. The principle: the
+module that discovers a bad field mints the error that names it, and the parse
+family now discovers bad fields.
+
+Two recorded behavior changes, both loud-over-silent: (1) unclosed frontmatter
+in a status update is now `FieldError{frontmatter}` → EINVAL (the old scanner
+silently posted the raw bytes — delimiter and all — as the update body); the
+wrap matters because a plain error would classify as EIO. (2) an unquoted hex
+color (`color: #FF0000`) parses in YAML as a *comment* — key present, value
+nil — so both label parsers reject it with quoting guidance
+(`color: '#FF0000'`) instead of silently dropping the edit; the render side
+already single-quotes, so render → parse stays a fixpoint
+(`TestLabelRenderParseRoundTrip`, plus render→parse identity pins for
+project/initiative). Comments' `extractCommentBody` deliberately stays in fs:
+its lenient strip-leading-frontmatter policy is a comment-surface tolerance
+(recorded under "Collection meta split"), not a parse contract.
 
 ### Collection meta split (`{base}.meta` sidecars)
 The editable-only split, extended to the four small collection entities —

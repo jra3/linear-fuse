@@ -174,3 +174,116 @@ func TestInitiativeMetaToMarkdown(t *testing.T) {
 		t.Errorf("meta must be frontmatter-only, got body %q", doc.Body)
 	}
 }
+
+// TestMarkdownToProjectEditRoundTrip pins render → parse as the identity on
+// the editable field set: name, body, labels presence + raw values, and the
+// initiatives list. The parse is extraction-only — the diff owners downstream
+// (scalarEdit/labelsEdit/reconcileLinks) must see exactly what the render said.
+func TestMarkdownToProjectEditRoundTrip(t *testing.T) {
+	t.Parallel()
+	project := &api.Project{
+		Name:        "API Gateway",
+		Description: "The gateway project.",
+		Initiatives: &api.ProjectInitiatives{Nodes: []api.ProjectInitiative{{Name: "Platform"}, {Name: "Modernization"}}},
+	}
+	content, err := ProjectToMarkdown(project, []string{"Backend", "Q3-Bet"})
+	if err != nil {
+		t.Fatalf("ProjectToMarkdown: %v", err)
+	}
+	edit, err := MarkdownToProjectEdit(content)
+	if err != nil {
+		t.Fatalf("MarkdownToProjectEdit: %v", err)
+	}
+	if edit.Name != project.Name {
+		t.Errorf("Name = %q, want %q", edit.Name, project.Name)
+	}
+	if edit.Body != project.Description {
+		t.Errorf("Body = %q, want %q", edit.Body, project.Description)
+	}
+	if !edit.LabelsPresent {
+		t.Error("LabelsPresent = false, want true (labels were rendered)")
+	}
+	if got := StringSliceFromYAML(edit.LabelsRaw); !reflect.DeepEqual(got, []string{"Backend", "Q3-Bet"}) {
+		t.Errorf("LabelsRaw = %v, want the rendered names", got)
+	}
+	if !reflect.DeepEqual(edit.Initiatives, []string{"Platform", "Modernization"}) {
+		t.Errorf("Initiatives = %v, want the rendered names", edit.Initiatives)
+	}
+
+	// Bare project: labels key absent ⇒ LabelsPresent false (delete-the-line
+	// clears via labelsEdit); initiatives absent ⇒ empty (unlink-all).
+	content, err = ProjectToMarkdown(&api.Project{Name: "Bare"}, nil)
+	if err != nil {
+		t.Fatalf("ProjectToMarkdown(bare): %v", err)
+	}
+	edit, err = MarkdownToProjectEdit(content)
+	if err != nil {
+		t.Fatalf("MarkdownToProjectEdit(bare): %v", err)
+	}
+	if edit.LabelsPresent || edit.LabelsRaw != nil {
+		t.Errorf("bare project LabelsPresent = %v raw = %v, want absent", edit.LabelsPresent, edit.LabelsRaw)
+	}
+	if len(edit.Initiatives) != 0 {
+		t.Errorf("bare project Initiatives = %v, want empty", edit.Initiatives)
+	}
+}
+
+// TestMarkdownToProjectEditCoercion pins the ScalarToString name coercion (a
+// numeric name arrives as its string form, not a silent drop) and that an
+// unclosed frontmatter surfaces as a parse error.
+func TestMarkdownToProjectEditCoercion(t *testing.T) {
+	t.Parallel()
+	edit, err := MarkdownToProjectEdit([]byte("---\nname: 2026\n---\nbody"))
+	if err != nil {
+		t.Fatalf("MarkdownToProjectEdit: %v", err)
+	}
+	if edit.Name != "2026" {
+		t.Errorf("numeric name = %q, want coerced \"2026\"", edit.Name)
+	}
+
+	if _, err := MarkdownToProjectEdit([]byte("---\nname: x\nno closing")); err == nil {
+		t.Error("unclosed frontmatter should error, got nil")
+	}
+}
+
+// TestMarkdownToInitiativeEditRoundTrip pins render → parse as the identity on
+// the editable field set: name, body, and the project-slug list.
+func TestMarkdownToInitiativeEditRoundTrip(t *testing.T) {
+	t.Parallel()
+	initiative := &api.Initiative{
+		Name:        "Platform Modernization",
+		Description: "Modernize all the things.",
+	}
+	initiative.Projects.Nodes = []api.InitiativeProject{{ID: "p1", Slug: "api-gateway"}, {ID: "p2", Slug: "auth-service"}}
+
+	content, err := InitiativeToMarkdown(initiative)
+	if err != nil {
+		t.Fatalf("InitiativeToMarkdown: %v", err)
+	}
+	edit, err := MarkdownToInitiativeEdit(content)
+	if err != nil {
+		t.Fatalf("MarkdownToInitiativeEdit: %v", err)
+	}
+	if edit.Name != initiative.Name {
+		t.Errorf("Name = %q, want %q", edit.Name, initiative.Name)
+	}
+	if edit.Body != initiative.Description {
+		t.Errorf("Body = %q, want %q", edit.Body, initiative.Description)
+	}
+	if !reflect.DeepEqual(edit.Projects, []string{"api-gateway", "auth-service"}) {
+		t.Errorf("Projects = %v, want the rendered slugs", edit.Projects)
+	}
+
+	// No linked projects: key absent ⇒ empty (unlink-all semantics downstream).
+	content, err = InitiativeToMarkdown(&api.Initiative{Name: "Bare"})
+	if err != nil {
+		t.Fatalf("InitiativeToMarkdown(bare): %v", err)
+	}
+	edit, err = MarkdownToInitiativeEdit(content)
+	if err != nil {
+		t.Fatalf("MarkdownToInitiativeEdit(bare): %v", err)
+	}
+	if len(edit.Projects) != 0 {
+		t.Errorf("bare initiative Projects = %v, want empty", edit.Projects)
+	}
+}

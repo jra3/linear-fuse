@@ -2,7 +2,7 @@ package fs
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log"
 	"strings"
 	"syscall"
@@ -324,7 +324,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	defer cancel()
 
 	// Parse the markdown and get update fields
-	update, err := parseLabelMarkdown(n.content, &n.label)
+	update, err := marshal.MarkdownToLabelUpdate(n.content, &n.label)
 	if err != nil {
 		log.Printf("Failed to parse label: %v", err)
 		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nParse error: "+err.Error())
@@ -389,8 +389,14 @@ func (n *LabelsNode) createLabel(ctx context.Context, content []byte) syscall.Er
 		op:  "create label",
 		key: collectionErrorKey("labels", n.teamID),
 		mutate: func(ctx context.Context) (*api.Label, error) {
-			name, color, description, err := parseNewLabelMarkdown(content)
+			name, color, description, err := marshal.ParseNewLabel(content)
 			if err != nil {
+				// A *FieldError (e.g. the unquoted-color guard) already names
+				// the field; only wrap the shapeless parse failures.
+				var ferr *FieldError
+				if errors.As(err, &ferr) {
+					return nil, ferr
+				}
 				return nil, &FieldError{Field: "content", Message: "parse error: " + err.Error()}
 			}
 			if name == "" {
@@ -421,97 +427,4 @@ func (n *LabelsNode) createLabel(ctx context.Context, content []byte) syscall.Er
 		entryName: func(l *api.Label) string { return labelFilename(*l) },
 	})
 	return errno
-}
-
-// parseLabelMarkdown parses markdown and returns fields that changed
-func parseLabelMarkdown(content []byte, original *api.Label) (map[string]any, error) {
-	// Use the marshal package to parse YAML frontmatter
-	doc, err := parseYAMLFrontmatter(content)
-	if err != nil {
-		return nil, err
-	}
-
-	update := make(map[string]any)
-
-	// Check name
-	if name, ok := doc["name"].(string); ok && name != original.Name {
-		update["name"] = name
-	}
-
-	// Check color
-	if color, ok := doc["color"].(string); ok && color != original.Color {
-		update["color"] = color
-	}
-
-	// Check description
-	if desc, ok := doc["description"].(string); ok && desc != original.Description {
-		update["description"] = desc
-	}
-
-	return update, nil
-}
-
-// parseNewLabelMarkdown parses markdown for creating a new label
-func parseNewLabelMarkdown(content []byte) (name, color, description string, err error) {
-	doc, err := parseYAMLFrontmatter(content)
-	if err != nil {
-		return "", "", "", err
-	}
-
-	if n, ok := doc["name"].(string); ok {
-		name = n
-	}
-	if c, ok := doc["color"].(string); ok {
-		color = c
-	}
-	if d, ok := doc["description"].(string); ok {
-		description = d
-	}
-
-	return name, color, description, nil
-}
-
-// parseYAMLFrontmatter extracts YAML frontmatter from markdown content
-func parseYAMLFrontmatter(content []byte) (map[string]any, error) {
-	s := string(content)
-
-	// Check for YAML frontmatter delimiter
-	if !strings.HasPrefix(s, "---") {
-		return nil, fmt.Errorf("no YAML frontmatter found")
-	}
-
-	// Find end of frontmatter
-	endIdx := strings.Index(s[3:], "---")
-	if endIdx == -1 {
-		return nil, fmt.Errorf("unterminated YAML frontmatter")
-	}
-
-	yamlContent := s[3 : endIdx+3]
-
-	// Simple YAML parsing for our use case
-	result := make(map[string]any)
-	lines := strings.Split(yamlContent, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		colonIdx := strings.Index(line, ":")
-		if colonIdx == -1 {
-			continue
-		}
-		key := strings.TrimSpace(line[:colonIdx])
-		value := strings.TrimSpace(line[colonIdx+1:])
-		// Remove quotes if present. Single quotes matter: yaml.v3 renders a
-		// #-leading color as 'color: '#FF0000'', so a re-save of the rendered
-		// file must not read the quotes as part of the value (it used to, and
-		// the phantom "change" pushed a corrupted color).
-		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') ||
-			(value[0] == '\'' && value[len(value)-1] == '\'')) {
-			value = value[1 : len(value)-1]
-		}
-		result[key] = value
-	}
-
-	return result, nil
 }
