@@ -35,4 +35,5 @@ go.work.sum
 docs/*
 !docs/plans/
 !docs/telemetry.md
+!docs/ARCHITECTURE.md
 coverage.out
