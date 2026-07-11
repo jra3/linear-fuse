@@ -353,7 +353,7 @@ func (n *AttachmentsNode) upsertAttachment(ctx context.Context, att api.Attachme
 		Url:        att.URL,
 		SourceType: sql.NullString{String: att.SourceType, Valid: att.SourceType != ""},
 		Metadata:   json.RawMessage("{}"),
-		SyncedAt:   time.Now(),
+		SyncedAt:   db.Now(),
 		Data:       data,
 	}); err != nil {
 		log.Printf("[attachments] upsert to DB failed: %v", err)

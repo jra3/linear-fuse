@@ -197,7 +197,7 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 			}
 		},
 		persist: func(ctx context.Context, rel *api.IssueRelation) error {
-			now := time.Now()
+			now := db.Now()
 			// Prefer the server's authoritative relation times; fall back to now()
 			// if the mutation echoed a zero time.
 			created := rel.CreatedAt

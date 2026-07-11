@@ -1321,7 +1321,7 @@ func (r *SQLiteRepository) upsertHistoryCache(ctx context.Context, issueID strin
 	}
 	if err := r.store.Queries().UpsertIssueHistoryCache(ctx, db.UpsertIssueHistoryCacheParams{
 		IssueID:  issueID,
-		SyncedAt: time.Now(),
+		SyncedAt: db.Now(),
 		Data:     data,
 	}); err != nil {
 		log.Printf("[repo] upsert history cache %s failed: %v", issueID, err)
