@@ -36,6 +36,18 @@ type embeddedFileCache struct {
 	mem map[string][]byte
 }
 
+// embeddedFileCacheDir returns the on-disk byte-cache root under the
+// platform's user cache dir — ~/.cache/linearfs/files per XDG on Linux,
+// ~/Library/Caches/linearfs/files on macOS (identical to the previously
+// hardcoded macOS-only path, so existing caches carry over).
+func embeddedFileCacheDir() string {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		dir = filepath.Join(os.Getenv("HOME"), ".cache")
+	}
+	return filepath.Join(dir, "linearfs", "files")
+}
+
 // newEmbeddedFileCache builds the cache rooted at dir. auth supplies the CDN
 // Authorization header; persist records a freshly-cached file's on-disk path and
 // size (best-effort). Both are late-bound closures because the repo they reach is
