@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	gosync "sync"
 	"time"
@@ -122,7 +121,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	// Initialize file cache directory
-	cacheDir := filepath.Join(os.Getenv("HOME"), "Library", "Caches", "linearfs", "files")
+	cacheDir := embeddedFileCacheDir()
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		log.Printf("[linearfs] Warning: failed to create cache dir: %v", err)
 	}

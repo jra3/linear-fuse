@@ -114,22 +114,40 @@ func DefaultRequestLogPath() string {
 	return filepath.Join(configDir, "linearfs", "requests.jsonl")
 }
 
-// Load loads configuration using the real environment.
+// Load loads configuration using the real environment and the default config
+// path. A missing default file is fine: defaults + env apply.
 func Load() (*Config, error) {
 	return LoadWithEnv(os.Getenv)
+}
+
+// LoadFrom loads configuration from an explicitly named config file (the
+// --config flag). Unlike Load, an unreadable file is an error — the user
+// asked for that exact file, so silently falling back to defaults would mount
+// with the wrong config. Environment variables still override.
+func LoadFrom(path string) (*Config, error) {
+	return loadPath(os.Getenv, path, true)
 }
 
 // LoadWithEnv loads configuration using the provided environment lookup function.
 // This allows tests to provide isolated environment values.
 func LoadWithEnv(getenv func(string) string) (*Config, error) {
+	return loadPath(getenv, getConfigPathWithEnv(getenv), false)
+}
+
+// loadPath reads path into DefaultConfig, then applies env overrides.
+// explicit governs the missing-file contract: the default path is optional,
+// a user-named path is not.
+func loadPath(getenv func(string) string, path string, explicit bool) (*Config, error) {
 	cfg := DefaultConfig()
 
-	// Try to load from config file
-	configPath := getConfigPathWithEnv(getenv)
-	if data, err := os.ReadFile(configPath); err == nil {
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
 		if err := yaml.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("failed to parse config file: %w", err)
+			return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 		}
+	case explicit:
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	// Environment variables override config file

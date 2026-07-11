@@ -272,7 +272,7 @@ func PopulateInitiative(ctx context.Context, store *db.Store, initiative api.Ini
 		if err := q.UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
 			InitiativeID: initiative.ID,
 			ProjectID:    proj.ID,
-			SyncedAt:     time.Now(),
+			SyncedAt:     db.Now(),
 		}); err != nil {
 			return err
 		}
@@ -312,8 +312,8 @@ func PopulateEmbeddedFiles(ctx context.Context, store *db.Store, issueID string,
 			Filename:  file.Filename,
 			MimeType:  sql.NullString{String: file.MimeType, Valid: file.MimeType != ""},
 			Source:    file.Source,
-			CreatedAt: time.Now(),
-			SyncedAt:  time.Now(),
+			CreatedAt: db.Now(),
+			SyncedAt:  db.Now(),
 		}
 		if err := q.UpsertEmbeddedFile(ctx, params); err != nil {
 			return err
@@ -438,7 +438,7 @@ func PopulateIssueHistory(ctx context.Context, store *db.Store, issueID string, 
 	}
 	return store.Queries().UpsertIssueHistoryCache(ctx, db.UpsertIssueHistoryCacheParams{
 		IssueID:  issueID,
-		SyncedAt: time.Now(),
+		SyncedAt: db.Now(),
 		Data:     data,
 	})
 }
@@ -451,7 +451,7 @@ func PopulateTeamMembers(ctx context.Context, store *db.Store, teamID string, us
 		if err := q.UpsertTeamMember(ctx, db.UpsertTeamMemberParams{
 			TeamID:   teamID,
 			UserID:   uid,
-			SyncedAt: time.Now(),
+			SyncedAt: db.Now(),
 		}); err != nil {
 			return err
 		}
@@ -464,7 +464,7 @@ func PopulateTeamMembers(ctx context.Context, store *db.Store, teamID string, us
 func PopulateViewer(ctx context.Context, store *db.Store, userID string) error {
 	return store.Queries().SetViewerUserID(ctx, db.SetViewerUserIDParams{
 		UserID:   userID,
-		SyncedAt: time.Now(),
+		SyncedAt: db.Now(),
 	})
 }
 
