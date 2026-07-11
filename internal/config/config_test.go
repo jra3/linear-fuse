@@ -458,3 +458,44 @@ cache:
 		t.Errorf("LoadWithEnv() Log.Level = %q, want %q (default)", cfg.Log.Level, "info")
 	}
 }
+
+func TestLoadFrom(t *testing.T) {
+	t.Run("explicit file loads", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "custom.yaml")
+		if err := os.WriteFile(path, []byte("api_key: from-file\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("LINEAR_API_KEY", "")
+		cfg, err := LoadFrom(path)
+		if err != nil {
+			t.Fatalf("LoadFrom() error: %v", err)
+		}
+		if cfg.APIKey != "from-file" {
+			t.Errorf("LoadFrom() APIKey = %q, want %q", cfg.APIKey, "from-file")
+		}
+	})
+
+	t.Run("missing explicit file is an error", func(t *testing.T) {
+		// Unlike Load's optional default path, a user-named --config file
+		// that can't be read must fail loudly, not mount with defaults.
+		_, err := LoadFrom(filepath.Join(t.TempDir(), "nope.yaml"))
+		if err == nil {
+			t.Fatal("LoadFrom() with missing file: want error, got nil")
+		}
+	})
+
+	t.Run("env overrides explicit file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "custom.yaml")
+		if err := os.WriteFile(path, []byte("api_key: from-file\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("LINEAR_API_KEY", "from-env")
+		cfg, err := LoadFrom(path)
+		if err != nil {
+			t.Fatalf("LoadFrom() error: %v", err)
+		}
+		if cfg.APIKey != "from-env" {
+			t.Errorf("LoadFrom() APIKey = %q, want %q", cfg.APIKey, "from-env")
+		}
+	})
+}

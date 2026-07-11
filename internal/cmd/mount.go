@@ -32,7 +32,15 @@ func init() {
 }
 
 func runMount(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load()
+	// --config names an exact file (unreadable = error); without it the
+	// default XDG path applies (missing = defaults + env).
+	var cfg *config.Config
+	var err error
+	if configPath, _ := cmd.Flags().GetString("config"); configPath != "" {
+		cfg, err = config.LoadFrom(configPath)
+	} else {
+		cfg, err = config.Load()
+	}
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
