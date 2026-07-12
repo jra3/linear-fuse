@@ -849,6 +849,53 @@ set per directory (issue 10 / project 6 / initiative 6) as a change-detector. Th
 `nodeattr` anti-drift equality test gains the three entity-dir kinds; the
 effectful `build` path stays covered by existing integration tests.
 
+### Collection item-file surface (`collectionDir`)
+The **deep module** owning the *item-file surface* of a dynamic collection
+directory — `Readdir`, `Lookup` (incl. the `{base}.meta` sidecar), and `Unlink`
+— shared by `comments/`, `docs/`, `labels/`, `milestones/`. Where [[dir-manifest]]
+owns a static entity directory's fixed children, this owns a dynamic
+collection's *head*: the branchy orchestration **above** the naming round-trip.
+Before it, those four nodes hand-copied that head — the trio short-circuit, the
+`.meta` shadow branch, the find-or-`ENOENT` symmetry, the on-fetch-error
+degradation, the two `Unlink` `EPERM` guards, and a per-node re-implementation of
+the freshest-by-id `.meta` render — four copies that had already drifted into a
+real bug (a label `Unlink` that skipped the SQLite forget, so a deleted label
+resurrected on the next readdir until the sync worker reconciled).
+
+Constructed per-call by each node's `collection()` method (the
+[[named-listing]]/`manifest()` grain — no embedded state), then delegated to.
+The module holds only the two things it needs to touch a live inode — `parent`
+(the collection node, for `NewInode`/`mountRenderFile`) and `lfs` — plus a
+per-collection spec of small closures: `trio` (also derives the delete's error
+key via kind+parentID — no separate field), `refresh?` (nil for the
+non-SWR labels/milestones), `fetch`, `listing` (the `collectionListing[T]` seam
+that [[named-listing]] and [[indexed-listing]] both satisfy), `idOf`,
+`buildFile` (the **one opaque per-node closure** — the writable node *type* is
+the thing that genuinely varies, so each node owns it), `metaMarshal`/`metaTimes`/
+`metaIno` (the `.meta` sidecar, rendered freshest-by-id via `freshestByID`), and
+`deleteMutate`/`deleteForget`. The delete's `dir` inode is **derived** from the
+live `parent` inode (`EmbeddedInode().StableAttr().Ino`) — the inode the kernel
+actually knows for the coherence notify — not a recomputed `xDirIno(parentID)`.
+
+**Pure decision surface, effectful dispatch.** `entries(items)` (Readdir
+assembly: trio + item `.md` + `.meta`) and `classify(name, items)` (Lookup:
+`.meta`-shadow → item → `notFound`) are pure — the branchy part unit-tested with
+no mount (`collectiondir_test.go`), the way `dirManifest`'s `find` is. `lookup`
+runs the trio short-circuit (via `lookupCollectionTrio`) then dispatches on
+`classify`'s result; `unlink` guards `_create`/`.meta` (`EPERM`) then routes the
+shared delete tail ([[delete-tail]] equivalent, `commitDelete`). The mount-level
+behavior stays covered by each collection's existing integration tests — the
+delete tests in particular exercise the derived `dir` inode end-to-end (a wrong
+inode leaves the removed item lingering in the kernel cache).
+
+**Scope, deliberately.** `Create` (3/4, with an overwrite branch) and `Rename`
+(2/4, divergent) stay on the nodes — folding them in would add conditional spec
+width for a weaker payoff; Create is a plausible follow-up ride-along once the
+shape proved out. `relations/` and `attachments/` stay out: they have their own
+listing modules and no `.meta` sidecar. **One recorded behavior change:** the
+labels `Readdir` on a fetch error used to return `EIO`; it now degrades to
+serving the trio, matching the other three (the writable surfaces stay usable).
+
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
 the read-side counterpart to `execMutation`. Linear silently caps a

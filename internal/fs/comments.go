@@ -28,20 +28,27 @@ var _ fs.NodeUnlinker = (*CommentsNode)(nil)
 var _ fs.NodeGetattrer = (*CommentsNode)(nil)
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Trigger background refresh of sub-resources if stale
-	n.lfs.repo.MaybeRefreshIssueDetails(n.issueID)
+	return n.collection().readdir(ctx)
+}
 
-	// Fetch comments (uses cache if available)
-	comments, err := n.lfs.repo.GetIssueComments(ctx, n.issueID)
-	if err != nil {
-		// On error, still serve the trio
-		return fs.NewListDirStream(n.trio().entries()), 0
+// collection is the item-file surface (Readdir/Lookup/Unlink) for comments/.
+func (n *CommentsNode) collection() collectionDir[api.Comment] {
+	return collectionDir[api.Comment]{
+		parent:       n,
+		lfs:          n.lfs,
+		trio:         n.trio(),
+		noun:         "comment",
+		refresh:      func(ctx context.Context) { n.lfs.repo.MaybeRefreshIssueDetails(n.issueID) },
+		fetch:        func(ctx context.Context) ([]api.Comment, error) { return n.lfs.repo.GetIssueComments(ctx, n.issueID) },
+		listing:      func(items []api.Comment) collectionListing[api.Comment] { return n.listing(items) },
+		idOf:         func(c api.Comment) string { return c.ID },
+		buildFile:    n.buildComment,
+		metaMarshal:  marshal.CommentMetaToMarkdown,
+		metaTimes:    func(c api.Comment) (time.Time, time.Time) { return c.UpdatedAt, c.CreatedAt },
+		metaIno:      func(c api.Comment) uint64 { return commentMetaIno(c.ID) },
+		deleteMutate: func(ctx context.Context, c *api.Comment) error { return n.lfs.mutator().DeleteComment(ctx, c.ID) },
+		deleteForget: func(ctx context.Context, c *api.Comment) error { return n.lfs.store.Queries().DeleteComment(ctx, c.ID) },
 	}
-
-	items := n.listing(comments).entries()
-	entries := append(n.trio().entries(), items...)
-	entries = append(entries, metaSidecarEntries(items)...)
-	return fs.NewListDirStream(entries), 0
 }
 
 // trio declares the comments collection's writable surfaces.
@@ -62,28 +69,11 @@ func (n *CommentsNode) listing(comments []api.Comment) indexedListing[api.Commen
 }
 
 func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
+	return n.collection().lookup(ctx, name, out)
+}
 
-	comments, err := n.lfs.repo.GetIssueComments(ctx, n.issueID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
-	if mdName, ok := metaSidecarSource(name); ok {
-		comment, found := n.listing(comments).find(mdName)
-		if !found {
-			return nil, syscall.ENOENT
-		}
-		return n.lfs.mountRenderFile(ctx, n, name, n.commentMetaRender(comment), commentMetaIno(comment.ID), 0, out), 0
-	}
-
-	comment, ok := n.listing(comments).find(name)
-	if !ok {
-		return nil, syscall.ENOENT
-	}
+// buildComment mounts the read/write CommentNode for an existing comment.
+func (n *CommentsNode) buildComment(ctx context.Context, name string, comment api.Comment, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	content := marshal.CommentToMarkdown(&comment)
 	node := &CommentNode{
 		BaseNode:   BaseNode{lfs: n.lfs},
@@ -95,72 +85,8 @@ func (n *CommentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
 }
 
-// commentMetaRender returns the render closure behind a comment's .meta
-// sidecar: re-derive the freshest comment on every read (renderFile is
-// DIRECT_IO, so baked bytes would go stale for the life of the mount) and
-// report its real times.
-func (n *CommentsNode) commentMetaRender(comment api.Comment) renderFunc {
-	lfs, issueID := n.lfs, n.issueID
-	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		cur := comment
-		if comments, err := lfs.repo.GetIssueComments(ctx, issueID); err == nil {
-			for _, c := range comments {
-				if c.ID == comment.ID {
-					cur = c
-					break
-				}
-			}
-		}
-		b, err := marshal.CommentMetaToMarkdown(&cur)
-		if err != nil {
-			return nil, cur.UpdatedAt, cur.CreatedAt
-		}
-		return b, cur.UpdatedAt, cur.CreatedAt
-	}
-}
-
 func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	if n.lfs.debug {
-		log.Printf("Unlink comment: %s", name)
-	}
-
-	// Don't allow deleting _create
-	if name == "_create" {
-		return syscall.EPERM
-	}
-
-	// The .meta sidecar is a read-only virtual file; it vanishes with its
-	// entity (rm the .md), never on its own.
-	if _, isMeta := metaSidecarSource(name); isMeta {
-		return syscall.EPERM
-	}
-
-	return commitDelete(ctx, n.lfs, deleteSpec[api.Comment]{
-		op:  `delete comment "` + name + `"`,
-		key: collectionErrorKey("comments", n.issueID),
-		find: func(ctx context.Context) (*api.Comment, error) {
-			comments, err := n.lfs.repo.GetIssueComments(ctx, n.issueID)
-			if err != nil {
-				return nil, err
-			}
-			if c, ok := n.listing(comments).find(name); ok {
-				return &c, nil
-			}
-			return nil, nil
-		},
-		mutate: func(ctx context.Context, c *api.Comment) error {
-			return n.lfs.mutator().DeleteComment(ctx, c.ID)
-		},
-		forget: func(ctx context.Context, c *api.Comment) error {
-			return n.lfs.store.Queries().DeleteComment(ctx, c.ID)
-		},
-		dir:  commentsDirIno(n.issueID),
-		name: name,
-		// The .meta sidecar renders from the deleted entity: drop its entry too.
-		invalidateExtra: func(c *api.Comment) {
-			n.lfs.InvalidateDeleted(commentsDirIno(n.issueID), metaSidecarName(name))
-		},
-	})
+	return n.collection().unlink(ctx, name)
 }
 
 func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

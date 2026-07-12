@@ -68,17 +68,30 @@ func docParentID(issueID, teamID, projectID, initiativeID string) string {
 }
 
 func (n *DocsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Fetch documents (uses cache if available)
-	docs, err := n.getDocuments(ctx)
-	if err != nil {
-		// On error, still serve the trio
-		return fs.NewListDirStream(n.trio().entries()), 0
-	}
+	return n.collection().readdir(ctx)
+}
 
-	items := n.listing(docs).entries()
-	entries := append(n.trio().entries(), items...)
-	entries = append(entries, metaSidecarEntries(items)...)
-	return fs.NewListDirStream(entries), 0
+// collection is the item-file surface (Readdir/Lookup/Unlink) for docs/. The
+// refresh is nil: getDocuments already triggers MaybeRefreshIssueDetails for
+// issue docs internally.
+func (n *DocsNode) collection() collectionDir[api.Document] {
+	return collectionDir[api.Document]{
+		parent:       n,
+		lfs:          n.lfs,
+		trio:         n.trio(),
+		noun:         "document",
+		fetch:        n.getDocuments,
+		listing:      func(items []api.Document) collectionListing[api.Document] { return n.listing(items) },
+		idOf:         func(d api.Document) string { return d.ID },
+		buildFile:    n.newDocumentInode,
+		metaMarshal:  marshal.DocumentMetaToMarkdown,
+		metaTimes:    func(d api.Document) (time.Time, time.Time) { return d.UpdatedAt, d.CreatedAt },
+		metaIno:      func(d api.Document) uint64 { return documentMetaIno(d.ID) },
+		deleteMutate: func(ctx context.Context, d *api.Document) error { return n.lfs.mutator().DeleteDocument(ctx, d.ID) },
+		deleteForget: func(ctx context.Context, d *api.Document) error {
+			return n.lfs.store.Queries().DeleteDocument(ctx, d.ID)
+		},
+	}
 }
 
 // trio declares the docs collection's writable surfaces. The _create trigger
@@ -95,95 +108,11 @@ func (n *DocsNode) listing(docs []api.Document) namedListing[api.Document] {
 }
 
 func (n *DocsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
-
-	docs, err := n.getDocuments(ctx)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
-	if mdName, ok := metaSidecarSource(name); ok {
-		doc, found := n.listing(docs).find(mdName)
-		if !found {
-			return nil, syscall.ENOENT
-		}
-		return n.lfs.mountRenderFile(ctx, n, name, n.documentMetaRender(doc), documentMetaIno(doc.ID), 0, out), 0
-	}
-
-	if doc, ok := n.listing(docs).find(name); ok {
-		return n.newDocumentInode(ctx, name, doc, out)
-	}
-
-	return nil, syscall.ENOENT
-}
-
-// documentMetaRender returns the render closure behind a document's .meta
-// sidecar: re-derive the freshest document on every read and report its real
-// times.
-func (n *DocsNode) documentMetaRender(doc api.Document) renderFunc {
-	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		cur := doc
-		if docs, err := n.getDocuments(ctx); err == nil {
-			for _, d := range docs {
-				if d.ID == doc.ID {
-					cur = d
-					break
-				}
-			}
-		}
-		b, err := marshal.DocumentMetaToMarkdown(&cur)
-		if err != nil {
-			return nil, cur.UpdatedAt, cur.CreatedAt
-		}
-		return b, cur.UpdatedAt, cur.CreatedAt
-	}
+	return n.collection().lookup(ctx, name, out)
 }
 
 func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	if n.lfs.debug {
-		log.Printf("Unlink document: %s", name)
-	}
-
-	// Don't allow deleting _create
-	if name == "_create" {
-		return syscall.EPERM
-	}
-
-	// The .meta sidecar is a read-only virtual file; it vanishes with its
-	// entity (rm the .md), never on its own.
-	if _, isMeta := metaSidecarSource(name); isMeta {
-		return syscall.EPERM
-	}
-
-	return commitDelete(ctx, n.lfs, deleteSpec[api.Document]{
-		op:  `delete document "` + name + `"`,
-		key: collectionErrorKey("docs", n.parentID()),
-		find: func(ctx context.Context) (*api.Document, error) {
-			docs, err := n.getDocuments(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if doc, ok := n.listing(docs).find(name); ok {
-				return &doc, nil
-			}
-			return nil, nil
-		},
-		mutate: func(ctx context.Context, d *api.Document) error {
-			return n.lfs.mutator().DeleteDocument(ctx, d.ID)
-		},
-		forget: func(ctx context.Context, d *api.Document) error {
-			return n.lfs.store.Queries().DeleteDocument(ctx, d.ID)
-		},
-		dir:  docsDirIno(n.parentID()),
-		name: name,
-		// The .meta sidecar renders from the deleted entity: drop its entry too.
-		invalidateExtra: func(d *api.Document) {
-			n.lfs.InvalidateDeleted(docsDirIno(n.parentID()), metaSidecarName(name))
-		},
-	})
+	return n.collection().unlink(ctx, name)
 }
 
 func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {

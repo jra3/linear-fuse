@@ -28,16 +28,28 @@ var _ fs.NodeUnlinker = (*LabelsNode)(nil)
 var _ fs.NodeRenamer = (*LabelsNode)(nil)
 
 func (n *LabelsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
-	if err != nil {
-		log.Printf("Failed to get labels: %v", err)
-		return nil, syscall.EIO
-	}
+	return n.collection().readdir(ctx)
+}
 
-	items := n.listing(labels).entries()
-	entries := append(n.trio().entries(), items...)
-	entries = append(entries, metaSidecarEntries(items)...)
-	return fs.NewListDirStream(entries), 0
+// collection is the item-file surface (Readdir/Lookup/Unlink) for labels/.
+// api.Label carries no timestamps, so metaTimes is zero — an honest "unknown"
+// (see the renderFile rule), never a fabricated now().
+func (n *LabelsNode) collection() collectionDir[api.Label] {
+	return collectionDir[api.Label]{
+		parent:       n,
+		lfs:          n.lfs,
+		trio:         n.trio(),
+		noun:         "label",
+		fetch:        func(ctx context.Context) ([]api.Label, error) { return n.lfs.repo.GetTeamLabels(ctx, n.teamID) },
+		listing:      func(items []api.Label) collectionListing[api.Label] { return n.listing(items) },
+		idOf:         func(l api.Label) string { return l.ID },
+		buildFile:    n.newLabelInode,
+		metaMarshal:  marshal.LabelMetaToMarkdown,
+		metaTimes:    func(api.Label) (time.Time, time.Time) { return time.Time{}, time.Time{} },
+		metaIno:      func(l api.Label) uint64 { return labelMetaIno(l.ID) },
+		deleteMutate: func(ctx context.Context, l *api.Label) error { return n.lfs.mutator().DeleteLabel(ctx, l.ID) },
+		deleteForget: func(ctx context.Context, l *api.Label) error { return n.lfs.store.Queries().DeleteLabel(ctx, l.ID) },
+	}
 }
 
 // trio declares the labels collection's writable surfaces.
@@ -53,53 +65,7 @@ func (n *LabelsNode) listing(labels []api.Label) namedListing[api.Label] {
 }
 
 func (n *LabelsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
-
-	labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
-	if mdName, ok := metaSidecarSource(name); ok {
-		label, found := n.listing(labels).find(mdName)
-		if !found {
-			return nil, syscall.ENOENT
-		}
-		return n.lfs.mountRenderFile(ctx, n, name, n.labelMetaRender(label), labelMetaIno(label.ID), 0, out), 0
-	}
-
-	if label, ok := n.listing(labels).find(name); ok {
-		return n.newLabelInode(ctx, name, label, out)
-	}
-
-	return nil, syscall.ENOENT
-}
-
-// labelMetaRender returns the render closure behind a label's .meta sidecar:
-// re-derive the freshest label on every read. api.Label carries no timestamps,
-// so the times are zero — an honest "unknown" (see the renderFile rule), never
-// a fabricated now().
-func (n *LabelsNode) labelMetaRender(label api.Label) renderFunc {
-	lfs, teamID := n.lfs, n.teamID
-	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		cur := label
-		if labels, err := lfs.repo.GetTeamLabels(ctx, teamID); err == nil {
-			for _, l := range labels {
-				if l.ID == label.ID {
-					cur = l
-					break
-				}
-			}
-		}
-		b, err := marshal.LabelMetaToMarkdown(&cur)
-		if err != nil {
-			return nil, time.Time{}, time.Time{}
-		}
-		return b, time.Time{}, time.Time{}
-	}
+	return n.collection().lookup(ctx, name, out)
 }
 
 // newLabelInode builds the read/write LabelFileNode inode for an existing label,
@@ -134,50 +100,7 @@ func (n *LabelsNode) newLabelInode(ctx context.Context, name string, label api.L
 }
 
 func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	if n.lfs.debug {
-		log.Printf("Unlink label: %s", name)
-	}
-
-	// Don't allow deleting _create
-	if name == "_create" {
-		return syscall.EPERM
-	}
-
-	// The .meta sidecar is a read-only virtual file; it vanishes with its
-	// entity (rm the .md), never on its own.
-	if _, isMeta := metaSidecarSource(name); isMeta {
-		return syscall.EPERM
-	}
-
-	return commitDelete(ctx, n.lfs, deleteSpec[api.Label]{
-		op:  `delete label "` + name + `"`,
-		key: collectionErrorKey("labels", n.teamID),
-		find: func(ctx context.Context) (*api.Label, error) {
-			labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
-			if err != nil {
-				return nil, err
-			}
-			if label, ok := n.listing(labels).find(name); ok {
-				return &label, nil
-			}
-			return nil, nil
-		},
-		mutate: func(ctx context.Context, l *api.Label) error {
-			return n.lfs.mutator().DeleteLabel(ctx, l.ID)
-		},
-		// The store forget was missing here entirely: SQLite is the listing
-		// source of truth, so a deleted label resurrected on the next readdir
-		// until the sync worker reconciled.
-		forget: func(ctx context.Context, l *api.Label) error {
-			return n.lfs.store.Queries().DeleteLabel(ctx, l.ID)
-		},
-		dir:  labelsDirIno(n.teamID),
-		name: name,
-		// The .meta sidecar renders from the deleted entity: drop its entry too.
-		invalidateExtra: func(l *api.Label) {
-			n.lfs.InvalidateDeleted(labelsDirIno(n.teamID), metaSidecarName(name))
-		},
-	})
+	return n.collection().unlink(ctx, name)
 }
 
 func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {

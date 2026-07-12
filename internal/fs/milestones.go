@@ -25,16 +25,33 @@ var _ fs.NodeUnlinker = (*MilestonesNode)(nil)
 var _ fs.NodeGetattrer = (*MilestonesNode)(nil)
 
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	milestones, err := n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
-	if err != nil {
-		// On error, still serve the trio
-		return fs.NewListDirStream(n.trio().entries()), 0
-	}
+	return n.collection().readdir(ctx)
+}
 
-	items := n.listing(milestones).entries()
-	entries := append(n.trio().entries(), items...)
-	entries = append(entries, metaSidecarEntries(items)...)
-	return fs.NewListDirStream(entries), 0
+// collection is the item-file surface (Readdir/Lookup/Unlink) for milestones/.
+// api.ProjectMilestone carries no timestamps, so metaTimes is zero.
+func (n *MilestonesNode) collection() collectionDir[api.ProjectMilestone] {
+	return collectionDir[api.ProjectMilestone]{
+		parent: n,
+		lfs:    n.lfs,
+		trio:   n.trio(),
+		noun:   "milestone",
+		fetch: func(ctx context.Context) ([]api.ProjectMilestone, error) {
+			return n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
+		},
+		listing:     func(items []api.ProjectMilestone) collectionListing[api.ProjectMilestone] { return n.listing(items) },
+		idOf:        func(m api.ProjectMilestone) string { return m.ID },
+		buildFile:   n.buildMilestone,
+		metaMarshal: marshal.MilestoneMetaToMarkdown,
+		metaTimes:   func(api.ProjectMilestone) (time.Time, time.Time) { return time.Time{}, time.Time{} },
+		metaIno:     func(m api.ProjectMilestone) uint64 { return milestoneMetaIno(m.ID) },
+		deleteMutate: func(ctx context.Context, m *api.ProjectMilestone) error {
+			return n.lfs.mutator().DeleteProjectMilestone(ctx, m.ID)
+		},
+		deleteForget: func(ctx context.Context, m *api.ProjectMilestone) error {
+			return n.lfs.store.Queries().DeleteProjectMilestone(ctx, m.ID)
+		},
+	}
 }
 
 // trio declares the milestones collection's writable surfaces.
@@ -50,29 +67,12 @@ func (n *MilestonesNode) listing(ms []api.ProjectMilestone) namedListing[api.Pro
 }
 
 func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
+	return n.collection().lookup(ctx, name, out)
+}
 
-	milestones, err := n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-
-	// "{base}.meta" shadows "{base}.md": the read-only server-managed sidecar.
-	if mdName, ok := metaSidecarSource(name); ok {
-		m, found := n.listing(milestones).find(mdName)
-		if !found {
-			return nil, syscall.ENOENT
-		}
-		return n.lfs.mountRenderFile(ctx, n, name, n.milestoneMetaRender(m), milestoneMetaIno(m.ID), 0, out), 0
-	}
-
-	m, ok := n.listing(milestones).find(name)
-	if !ok {
-		return nil, syscall.ENOENT
-	}
-
+// buildMilestone mounts the read/write MilestoneFileNode for an existing
+// milestone.
+func (n *MilestonesNode) buildMilestone(ctx context.Context, name string, m api.ProjectMilestone, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	content, err := marshal.MilestoneToMarkdown(&m)
 	if err != nil {
 		log.Printf("Failed to marshal milestone: %v", err)
@@ -101,72 +101,8 @@ func (n *MilestonesNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}), 0
 }
 
-// milestoneMetaRender returns the render closure behind a milestone's .meta
-// sidecar: re-derive the freshest milestone on every read. api.ProjectMilestone
-// carries no timestamps, so the times are zero — an honest "unknown" (see the
-// renderFile rule), never a fabricated now().
-func (n *MilestonesNode) milestoneMetaRender(m api.ProjectMilestone) renderFunc {
-	lfs, projectID := n.lfs, n.projectID
-	return func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		cur := m
-		if milestones, err := lfs.repo.GetProjectMilestones(ctx, projectID); err == nil {
-			for _, mm := range milestones {
-				if mm.ID == m.ID {
-					cur = mm
-					break
-				}
-			}
-		}
-		b, err := marshal.MilestoneMetaToMarkdown(&cur)
-		if err != nil {
-			return nil, time.Time{}, time.Time{}
-		}
-		return b, time.Time{}, time.Time{}
-	}
-}
-
 func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	if n.lfs.debug {
-		log.Printf("Unlink milestone: %s", name)
-	}
-
-	// Don't allow deleting _create
-	if name == "_create" {
-		return syscall.EPERM
-	}
-
-	// The .meta sidecar is a read-only virtual file; it vanishes with its
-	// entity (rm the .md), never on its own.
-	if _, isMeta := metaSidecarSource(name); isMeta {
-		return syscall.EPERM
-	}
-
-	return commitDelete(ctx, n.lfs, deleteSpec[api.ProjectMilestone]{
-		op:  `delete milestone "` + name + `"`,
-		key: collectionErrorKey("milestones", n.projectID),
-		find: func(ctx context.Context) (*api.ProjectMilestone, error) {
-			milestones, err := n.lfs.repo.GetProjectMilestones(ctx, n.projectID)
-			if err != nil {
-				return nil, err
-			}
-			if m, ok := n.listing(milestones).find(name); ok {
-				return &m, nil
-			}
-			return nil, nil
-		},
-		mutate: func(ctx context.Context, m *api.ProjectMilestone) error {
-			return n.lfs.mutator().DeleteProjectMilestone(ctx, m.ID)
-		},
-		forget: func(ctx context.Context, m *api.ProjectMilestone) error {
-			return n.lfs.store.Queries().DeleteProjectMilestone(ctx, m.ID)
-		},
-		dir:  milestonesDirIno(n.projectID),
-		name: name,
-		// The .meta sidecar renders from the deleted entity: drop its entry too.
-		invalidateExtra: func(m *api.ProjectMilestone) {
-			n.lfs.InvalidateDeleted(milestonesDirIno(n.projectID), metaSidecarName(name))
-		},
-	})
+	return n.collection().unlink(ctx, name)
 }
 
 // milestoneFilename returns the filename for a milestone
