@@ -11,71 +11,105 @@ For per-package internals see the source; this is the orientation map.
 ## System diagram
 
 ```mermaid
-flowchart TB
-    USER["user / agent<br/>ls · cat · vim · rm · echo &gt; _create"]
-    LIN[("Linear GraphQL API<br/>(source of truth)")]
-    CDN["Linear CDN<br/>uploads.linear.app"]
-    METRICS[("metrics.jsonl /<br/>journald summary")]
+flowchart LR
+    %% ===== external boundary: the human and the sources of truth =====
+    USER["<b>user / agent</b><br/>ls · cat · vim · rm · echo &gt; _create"]
+    LIN[("<b>Linear GraphQL API</b><br/>source of truth")]
+    CDN[("Linear CDN<br/>uploads.linear.app")]
 
     subgraph KERNEL["kernel"]
         FUSE["FUSE<br/>page + attr/entry caches"]
     end
+    KN["kernelNotify<br/>(internal/fs · notify seam)"]
 
     subgraph PROC["linearfs process"]
-        CMD["internal/cmd + internal/config<br/>wiring · startup order"]
+        direction LR
 
-        subgraph FSP["internal/fs — the serving end"]
-            LFS["LinearFS + node catalog<br/>issue.md · project.md · _create · .error · .last · *.meta"]
-            KN["kernelNotify"]
+        subgraph FSP["internal/fs · the serving end"]
+            direction TB
+            LFS["<b>LinearFS</b> + node catalog<br/>issue.md · project.md · _create · .error · .last · *.meta"]
+            MAR["internal/marshal<br/>markdown ↔ api types"]
             EFC["embeddedFileCache"]
         end
 
-        MAR["internal/marshal<br/>markdown ↔ api types"]
-        REPO["internal/repo<br/>SQLiteRepository · stale-while-revalidate"]
-        DB[("internal/db<br/>SQLite · sqlc")]
-        RECON["internal/reconcile<br/>convert → upsert-all → prune-if-clean"]
-        WORKER["internal/sync<br/>background Worker · incremental by updatedAt"]
-        CLIENT["internal/api — api.Client + api.CDNClient<br/>rate budget · circuit breaker · GraphQL + CDN, the only two network clients"]
+        subgraph DATA["persistence"]
+            direction TB
+            REPO["internal/repo<br/>SQLiteRepository · stale-while-revalidate"]
+            RECON["internal/reconcile<br/>convert → upsert-all → prune-if-clean"]
+            DB[("internal/db<br/>SQLite · sqlc")]
+        end
+
+        subgraph INGEST["ingest · the only two network clients"]
+            direction TB
+            WORKER["internal/sync<br/>background Worker<br/>incremental by updatedAt"]
+            CLIENT["internal/api<br/>api.Client + api.CDNClient<br/>rate budget · circuit breaker"]
+        end
+
+        CMD["internal/cmd + internal/config<br/>wiring · startup order"]
         TEL["internal/telemetry<br/>OTEL meters"]
+        METRICS[("metrics.jsonl /<br/>journald summary")]
     end
 
-    %% ---- read path (never touches the Linear API) ----
+    %% ---- read path: user → kernel → fs → repo → SQLite (never the API) ----
     USER -->|syscalls| FUSE
     FUSE <-->|go-fuse| LFS
+    LFS <-->|render / parse| MAR
     LFS -->|every read| REPO
     REPO -->|sqlc queries| DB
-    LFS <-->|render / parse| MAR
 
-    %% ---- background ingest ----
+    %% ---- background ingest: worker → api → Linear, reconciled into SQLite ----
     WORKER -->|paged queries| CLIENT
     CLIENT <-->|GraphQL| LIN
-    WORKER --> RECON
+    WORKER -->|hand off pages| RECON
     RECON -->|upsert / prune| DB
     REPO -.->|SWR refresh, bounded| CLIENT
     REPO -.->|SWR persist tail| RECON
 
-    %% ---- write path (straight to API, then backfill) ----
+    %% ---- write path: fs → api → Linear, then backfill SQLite + poke kernel ----
     LFS -->|"mutations (Flush · mkdir · _create · rm)"| CLIENT
     LFS -->|post-write upsert / post-delete forget| DB
     LFS -.->|one catalog refresh on name miss| WORKER
     KN -->|InodeNotify / EntryNotify| FUSE
-    EFC -.->|"CDNClient.Get (lazy embedded-file bytes)"| CDN
-    RECON -.->|"CDNClient.Size (HEAD for sizes)"| CDN
 
-    %% ---- cross-cutting ----
+    %% ---- lazy bytes: embedded files come from the CDN, not SQLite ----
+    EFC -.->|CDNClient.Get| CDN
+    RECON -.->|CDNClient.Size HEAD| CDN
+
+    %% ---- cross-cutting: wiring in, telemetry out ----
     CMD -.->|constructs & injects| LFS
     CLIENT & WORKER & REPO & RECON -.-> TEL
     TEL --> METRICS
+
+    %% ===================== lane styling =====================
+    classDef ext     fill:#26263a,stroke:#9a9ac0,color:#e9e9f4
+    classDef serve   fill:#173026,stroke:#54b98a,color:#d8f6e7
+    classDef persist fill:#152a38,stroke:#4f9fd0,color:#d8eef8
+    classDef ingest  fill:#332816,stroke:#cf9a4d,color:#f7ecd8
+    classDef cross   fill:#251e33,stroke:#9376c8,color:#e9e0f8
+
+    class USER,LIN,CDN,FUSE ext
+    class LFS,MAR,KN,EFC serve
+    class REPO,RECON,DB persist
+    class WORKER,CLIENT ingest
+    class CMD,TEL,METRICS cross
+
+    style PROC fill:none,stroke:#666,stroke-dasharray:5 4
+    style KERNEL fill:#26263a,stroke:#9a9ac0,color:#e9e9f4
+    style FSP fill:#0f1a15,stroke:#356b52,color:#d8f6e7
+    style DATA fill:#0f1720,stroke:#2f5f80,color:#d8eef8
+    style INGEST fill:#1c160c,stroke:#7a5c2c,color:#f7ecd8
 ```
 
-Reading the graph: solid arrows on the left half are the **read path** (user →
-FUSE → fs → repo → SQLite, never the Linear API); the right half is **ingest**
-(worker → api.Client → Linear, reconciled into SQLite) and the **write path**
-(fs → api.Client → Linear, then backfilled into — or, for deletes, forgotten
-from — SQLite and punched through the kernel caches via `kernelNotify`). Dotted
-arrows are background/lazy/cross-cutting; note the one deliberate write-path →
-worker edge (stale-catalog refresh) and that embedded-file bytes come from the
-CDN, not SQLite.
+Reading the graph: it flows left→right along the **read path** (user → FUSE → fs
+→ repo → SQLite, never the Linear API). The **serving** lane (green,
+`internal/fs`) answers every read out of the **persistence** lane (blue, repo →
+SQLite); the **ingest** lane (amber, worker → api.Client → Linear, reconciled
+into SQLite) keeps that cache fresh in the background; and the **write path**
+cuts straight from fs → api.Client → Linear, then backfills SQLite and punches
+the kernel caches via `kernelNotify`. Solid arrows are the primary paths; dotted
+arrows are background/lazy/cross-cutting (SWR refresh, CDN byte fetches, wiring,
+telemetry). Note the one deliberate write-path → worker edge (stale-catalog
+refresh) and that embedded-file bytes come from the CDN, not SQLite.
 
 ## The pipeline
 
