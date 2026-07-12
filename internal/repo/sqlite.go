@@ -95,7 +95,7 @@ func NewSQLiteRepository(store *db.Store, client *api.Client) *SQLiteRepository 
 		metrics:            newSWRMetrics(),
 	}
 	if client != nil {
-		r.extractor = &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader}
+		r.extractor = &reconcile.Extractor{Q: store.Queries(), CDN: api.NewCDNClient(client.AuthHeader)}
 	}
 	return r
 }

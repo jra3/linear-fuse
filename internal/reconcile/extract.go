@@ -6,11 +6,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"log"
-	"net/http"
 	"path"
 	"regexp"
 	"strings"
 
+	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
@@ -85,12 +85,11 @@ func extractEmbeddedFiles(content, issueID, source string) []embeddedFileSpec {
 }
 
 // Extractor owns the I/O tail of embedded-file sync: HEAD each parsed CDN URL
-// for its size and upsert the row. HTTPClient nil means http.DefaultClient —
-// injectable for tests (the embeddedFileCache precedent in internal/fs).
+// for its size and upsert the row. CDN is the shared api.CDNClient (auth +
+// timeout + telemetry), the same seam the FUSE read-path byte cache uses.
 type Extractor struct {
-	Q          *db.Queries
-	AuthHeader func() string
-	HTTPClient *http.Client
+	Q   *db.Queries
+	CDN *api.CDNClient
 }
 
 // ExtractAndStore parses content for Linear CDN URLs, fetches each one's size,
@@ -99,7 +98,7 @@ type Extractor struct {
 func (e *Extractor) ExtractAndStore(ctx context.Context, issueID, content, source string) {
 	for _, spec := range extractEmbeddedFiles(content, issueID, source) {
 		// Fetch file size via HEAD request (doesn't download the file).
-		fileSize := e.fetchFileSize(ctx, spec.URL)
+		fileSize := e.CDN.Size(ctx, spec.URL)
 
 		params := db.UpsertEmbeddedFileParams{
 			ID:        spec.ID,
@@ -117,31 +116,6 @@ func (e *Extractor) ExtractAndStore(ctx context.Context, issueID, content, sourc
 			log.Printf("[reconcile] upsert embedded file %s failed: %v", spec.Filename, err)
 		}
 	}
-}
-
-// fetchFileSize gets the file size via HTTP HEAD request without downloading
-func (e *Extractor) fetchFileSize(ctx context.Context, url string) int64 {
-	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
-	if err != nil {
-		return 0
-	}
-	req.Header.Set("Authorization", e.AuthHeader())
-
-	client := e.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0
-	}
-
-	return resp.ContentLength
 }
 
 // extractFilename extracts a clean filename from a Linear CDN URL

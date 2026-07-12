@@ -35,7 +35,7 @@ flowchart TB
         DB[("internal/db<br/>SQLite · sqlc")]
         RECON["internal/reconcile<br/>convert → upsert-all → prune-if-clean"]
         WORKER["internal/sync<br/>background Worker · incremental by updatedAt"]
-        CLIENT["internal/api — api.Client<br/>rate budget · circuit breaker · the only Linear GraphQL caller"]
+        CLIENT["internal/api — api.Client + api.CDNClient<br/>rate budget · circuit breaker · GraphQL + CDN, the only two network clients"]
         TEL["internal/telemetry<br/>OTEL meters"]
     end
 
@@ -59,7 +59,8 @@ flowchart TB
     LFS -->|post-write upsert / post-delete forget| DB
     LFS -.->|one catalog refresh on name miss| WORKER
     KN -->|InodeNotify / EntryNotify| FUSE
-    EFC -.->|lazy embedded-file bytes| CDN
+    EFC -.->|"CDNClient.Get (lazy embedded-file bytes)"| CDN
+    RECON -.->|"CDNClient.Size (HEAD for sizes)"| CDN
 
     %% ---- cross-cutting ----
     CMD -.->|constructs & injects| LFS
@@ -115,13 +116,17 @@ Worker and the Repository's SWR refreshes.
 
 ## Subsystems
 
-### `internal/api` — Linear GraphQL client (the only Linear GraphQL caller)
+### `internal/api` — Linear network clients (GraphQL + CDN)
 
-The lowest layer and the only one that speaks the Linear GraphQL API. (Two other
-components make HTTP calls, both to Linear's uploads CDN rather than the API:
-`internal/fs`'s `embeddedFileCache` GETs embedded-file bytes on read, and
-`internal/reconcile`'s `Extractor` HEADs embedded-file URLs for their sizes
-during sync.) Its only internal dependency is the small `internal/telemetry`
+The lowest layer and the only one that speaks to Linear over the network, through
+exactly two clients: `api.Client` speaks the GraphQL API, and `api.CDNClient`
+(`cdn.go`) speaks HTTP to Linear's uploads CDN for embedded-attachment bytes.
+Both embedded-file consumers route through the one shared `CDNClient` — so CDN
+traffic has one auth header, one timeout policy, and one set of OTEL instruments
+(`linearfs.cdn.*`) instead of each wiring its own invisible `http.Client`:
+`internal/fs`'s `embeddedFileCache` calls `CDNClient.Get` for bytes on read, and
+`internal/reconcile`'s `Extractor` calls `CDNClient.Size` (a HEAD) for embedded-file
+sizes during sync. Its only internal dependency is the small `internal/telemetry`
 instrument-constructor helpers. Exposes 26 query methods (`GetTeamIssuesPage`,
 `GetTeamMetadata`, `GetInitiativesProbe`, `GetIssueDetailsBatch`, …) backed by
 31 named GraphQL operations — combined fetches like `GetTeamMetadata` issue
@@ -163,8 +168,10 @@ Operational guards:
   the moment of the call, never kept on a struct or handed to a goroutine.
 - **Circuit breaker** (`client.go`): after 5 consecutive network errors, opens
   for 30s to stop wasting budget during an outage.
-- **Metrics** (`metrics.go`): OTEL counters/histograms for per-op requests,
-  latency, complexity, and budget decisions (admit/defer/wait/ratelimited).
+- **Metrics** (`metrics.go`, `cdn.go`): OTEL counters/histograms for per-op
+  GraphQL requests, latency, complexity, and budget decisions
+  (admit/defer/wait/ratelimited), plus per-method CDN requests and latency
+  (`linearfs.cdn.*`).
 - **Request log** (`requestlog.go`): optional JSONL trace of every completed
   request (op, vars, duration, outcome, complexity) to
   `~/.config/linearfs/requests.jsonl`, for offline diagnosis.
@@ -255,7 +262,8 @@ prune is licensed at all (nil `Prune` for capped/partial fetches).
 - `PersistIssueDetails` applies it to the five per-issue detail collections
   (comments, docs, attachments, relations, inverse relations).
 - `Extractor` parses Linear-CDN URLs out of markdown bodies and upserts
-  embedded-file rows (the I/O tail of a pure, unit-tested parser).
+  embedded-file rows (the I/O tail of a pure, unit-tested parser), sizing each
+  via the shared `api.CDNClient` (a HEAD).
 
 **Called by:** the Sync Worker (workspace/metadata/details) and the
 Repository's SWR refreshes (issue details; project/initiative docs, updates,
