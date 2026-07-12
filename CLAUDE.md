@@ -183,6 +183,29 @@ stale claim, mentions the current surfaces (`.last`, `issue.meta`, `recent/`),
 and that documented write-only files really are unreadable. Extend it when you
 add a surface the README should describe.
 
+### Architecture doc (orientation map)
+
+`docs/ARCHITECTURE.md` is the verified prose+diagram orientation map for the
+whole system (mermaid data-flow diagram, the two governing rules, the per-package
+seam/contract descriptions). It was reconstructed and agent-verified on 2026-07-11
+(262 claims checked, 34 corrections applied) — but, exactly like the generated
+README, it can silently drift back into lying about the code.
+
+**When a change adds, removes, or reshapes a package-level seam, contract, data
+flow, or invariant — a new sub-module on `LinearFS`, a change to the read/write
+data path, a new network caller, a change to the sync cycle or rate-budget tiers,
+a moved responsibility between packages — you MUST update `docs/ARCHITECTURE.md`
+in the same change** so the map matches the code. (A real example from this
+backlog: making `teams/{KEY}/docs/` a synced surface removed the "reads never
+touch the API" exception the doc had called out — both the rule text and the
+persistence-layer description had to change with it.)
+
+Prefer contracts over counts: method counts, file counts, and tuning constants
+drift fastest, so state the invariant ("every mutation projects through the
+entity's fragment") rather than the tally where you can. There is no automated
+test guarding this doc — the discipline is the guard, so treat the architecture
+doc as part of the diff, not a follow-up.
+
 ### GraphQL Query Design
 
 Queries in `internal/api/queries.go` use GraphQL fragments to avoid field duplication:
