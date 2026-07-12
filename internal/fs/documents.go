@@ -285,75 +285,57 @@ func (n *DocumentFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if !n.dirty || n.content == nil {
-		return 0
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	docErrKey := collectionErrorKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID))
-
-	// Parse the markdown and get update fields
-	update, err := marshal.MarkdownToDocumentUpdate(n.content, &n.document)
-	if err != nil {
-		log.Printf("Failed to parse document: %v", err)
-		n.lfs.SetWriteError(docErrKey, "Operation: update document "+documentFilename(n.document)+"\nParse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	if len(update) == 0 {
-		if n.lfs.debug {
-			log.Printf("Flush document %s: no changes", n.document.ID)
-		}
-		n.dirty = false
-		return 0
-	}
-
-	if n.lfs.debug {
-		log.Printf("Updating document %s", n.document.ID)
-	}
-
-	updatedDoc, err := n.lfs.UpdateDocument(ctx, n.document.ID, update, n.issueID, n.teamID, n.projectID)
-	if err != nil {
-		log.Printf("Failed to update document: %v", err)
-		msg, errno := classifyMutationErr("update document "+documentFilename(n.document), err)
-		n.lfs.SetWriteError(docErrKey, msg)
-		return errno
-	}
-
-	// Edit-commit tail: verify read-your-writes against the API's echoed response,
-	// persist, and surface divergence via .error.
-	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.Document]{
-		errKey:  docErrKey,
-		fetch:   func(ctx context.Context) (*api.Document, error) { return updatedDoc, nil },
-		persist: func(ctx context.Context, fresh *api.Document) error { return n.lfs.UpsertDocument(ctx, *fresh) },
-		compare: func(fresh *api.Document) []writeBackResult {
-			var results []writeBackResult
-			if want, ok := update["title"].(string); ok {
-				results = append(results, writeBackDivergence("title", want, fresh.Title, n.document.Title))
+	// update + updatedDoc bridge the front half to the commit tail.
+	var update map[string]any
+	var updatedDoc *api.Document
+	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.Document]{
+		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+			var err error
+			update, err = marshal.MarkdownToDocumentUpdate(n.content, &n.document)
+			if err != nil {
+				log.Printf("Failed to parse document: %v", err)
+				n.lfs.SetWriteError(docErrKey, "Operation: update document "+documentFilename(n.document)+"\nParse error: "+err.Error())
+				return false, syscall.EINVAL
 			}
-			if want, ok := update["content"].(string); ok {
-				results = append(results, writeBackDivergence("content (body)", want, fresh.Content, n.document.Content))
+			if len(update) == 0 {
+				if n.lfs.debug {
+					log.Printf("Flush document %s: no changes", n.document.ID)
+				}
+				return false, 0
 			}
-			return results
+			if n.lfs.debug {
+				log.Printf("Updating document %s", n.document.ID)
+			}
+			updatedDoc, err = n.lfs.UpdateDocument(ctx, n.document.ID, update, n.issueID, n.teamID, n.projectID)
+			if err != nil {
+				log.Printf("Failed to update document: %v", err)
+				msg, errno := classifyMutationErr("update document "+documentFilename(n.document), err)
+				n.lfs.SetWriteError(docErrKey, msg)
+				return false, errno
+			}
+			return true, 0
 		},
+		// Edit-commit tail: verify read-your-writes against the API's echoed
+		// response, persist, and surface divergence via .error.
+		writeBack: writeBackSpec[api.Document]{
+			errKey:  docErrKey,
+			fetch:   func(ctx context.Context) (*api.Document, error) { return updatedDoc, nil },
+			persist: func(ctx context.Context, fresh *api.Document) error { return n.lfs.UpsertDocument(ctx, *fresh) },
+			compare: func(fresh *api.Document) []writeBackResult {
+				var results []writeBackResult
+				if want, ok := update["title"].(string); ok {
+					results = append(results, writeBackDivergence("title", want, fresh.Title, n.document.Title))
+				}
+				if want, ok := update["content"].(string); ok {
+					results = append(results, writeBackDivergence("content (body)", want, fresh.Content, n.document.Content))
+				}
+				return results
+			},
+		},
+		adopt:     func(fresh *api.Document) { n.document = *fresh },
+		coherence: []uint64{documentIno(n.document.ID), documentMetaIno(n.document.ID)},
 	})
-
-	// Invalidate kernel cache for this document file and its .meta sidecar
-	// (updated reflects the edit)
-	n.lfs.InvalidateUpdated(documentIno(n.document.ID))
-	n.lfs.InvalidateUpdated(documentMetaIno(n.document.ID))
-
-	if fresh != nil {
-		n.document = *fresh
-	}
-	n.dirty = false
-	return errno
 }
 
 // createDocument returns the docs create surface's onFlush for one write

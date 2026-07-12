@@ -269,115 +269,96 @@ func (i *InitiativeInfoNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	if !i.dirty || i.content == nil {
-		return 0
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if i.lfs.debug {
-		log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)
-	}
-
-	// Parse the modified content: extraction/coercion only, into the editable
-	// field set. The diffs below own change detection.
-	parsed, err := marshal.MarkdownToInitiativeEdit(i.content)
-	if err != nil {
-		log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
-		i.lfs.SetWriteError(i.initiativeID, "Parse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	// Desired projects, already coerced by the parse (absent ⇒ empty ⇒ unlink all)
-	newProjectSlugs := parsed.Projects
-
-	// Get current project slugs
-	var currentProjectSlugs []string
-	for _, proj := range i.initiative.Projects.Nodes {
-		currentProjectSlugs = append(currentProjectSlugs, proj.Slug)
-	}
-
-	// Reconcile the initiative's project links (front half of the edit). The
-	// link/unlink closures own the API mutation and the immediate junction-row
-	// write; reconcileLinks owns the diff and the resolve-error classification.
-	if err := reconcileLinks(ctx, linkReconcileSpec{
-		current: currentProjectSlugs,
-		desired: newProjectSlugs,
-		resolve: i.lfs.ResolveProjectSlugToID,
-		link: func(ctx context.Context, projectID string) error {
-			if err := i.lfs.mutator().AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
-				return err
+	// edit bridges the front half (which builds it) to the commit-tail compare
+	// (which reads its divergences against the pre-write i.initiative).
+	var edit scalarEdit
+	return editFlush(ctx, i.lfs, &i.editBuffer, editFlushSpec[api.Initiative]{
+		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+			if i.lfs.debug {
+				log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)
 			}
-			i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, true)
-			return nil
-		},
-		unlink: func(ctx context.Context, projectID string) error {
-			if err := i.lfs.mutator().RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
-				return err
+			// Parse the modified content: extraction/coercion only, into the
+			// editable field set. The diffs below own change detection.
+			parsed, err := marshal.MarkdownToInitiativeEdit(i.content)
+			if err != nil {
+				log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
+				i.lfs.SetWriteError(i.initiativeID, "Parse error: "+err.Error())
+				return false, syscall.EINVAL
 			}
-			i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, false)
-			return nil
-		},
-		field: "projects",
-		hint:  ". Use a project slug from teams/<KEY>/projects/.",
-	}); err != nil {
-		msg, errno := classifyMutationErr("update initiative projects", err)
-		i.lfs.SetWriteError(i.initiativeID, msg)
-		return errno
-	}
 
-	// Persist editable scalar fields (name in frontmatter, content in the body).
-	// The body maps to Linear's uncapped `content`, not the ≤255 `description`
-	// (see #5), matching generateContent(). scalarEdit owns the diff, name
-	// coercion, and the divergence compare below.
-	edit := newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Content)
-	initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Content: edit.desc}
-	if edit.changed() {
-		if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
-			msg, errno := classifyMutationErr("update initiative", err)
-			i.lfs.SetWriteError(i.initiativeID, msg)
-			return errno
-		}
-		if i.lfs.debug {
-			log.Printf("Updated initiative %s scalar fields", i.initiative.Name)
-		}
-	}
+			// Desired projects, already coerced by the parse (absent ⇒ empty ⇒ unlink all)
+			newProjectSlugs := parsed.Projects
 
-	// Edit-commit tail: re-fetch the initiative, verify read-your-writes against
-	// the pre-write values still on i.initiative, upsert, and surface divergence
-	// via .error. The project-link side-work (above) stays in the handler.
-	fresh, errno := commitWriteBack(ctx, i.lfs, writeBackSpec[api.Initiative]{
-		errKey: i.initiativeID,
-		fetch: func(ctx context.Context) (*api.Initiative, error) {
-			return i.lfs.verify().GetInitiative(ctx, i.initiativeID)
+			var currentProjectSlugs []string
+			for _, proj := range i.initiative.Projects.Nodes {
+				currentProjectSlugs = append(currentProjectSlugs, proj.Slug)
+			}
+
+			// Reconcile the initiative's project links (front half of the edit).
+			if err := reconcileLinks(ctx, linkReconcileSpec{
+				current: currentProjectSlugs,
+				desired: newProjectSlugs,
+				resolve: i.lfs.ResolveProjectSlugToID,
+				link: func(ctx context.Context, projectID string) error {
+					if err := i.lfs.mutator().AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
+						return err
+					}
+					i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, true)
+					return nil
+				},
+				unlink: func(ctx context.Context, projectID string) error {
+					if err := i.lfs.mutator().RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
+						return err
+					}
+					i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, false)
+					return nil
+				},
+				field: "projects",
+				hint:  ". Use a project slug from teams/<KEY>/projects/.",
+			}); err != nil {
+				msg, errno := classifyMutationErr("update initiative projects", err)
+				i.lfs.SetWriteError(i.initiativeID, msg)
+				return false, errno
+			}
+
+			// Persist editable scalar fields. The body maps to Linear's uncapped
+			// `content`, not the ≤255 `description` (see #5), matching
+			// generateContent().
+			edit = newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Content)
+			initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Content: edit.desc}
+			if edit.changed() {
+				if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
+					msg, errno := classifyMutationErr("update initiative", err)
+					i.lfs.SetWriteError(i.initiativeID, msg)
+					return false, errno
+				}
+				if i.lfs.debug {
+					log.Printf("Updated initiative %s scalar fields", i.initiative.Name)
+				}
+			}
+			// Always commit: the re-fetch below catches project-link changes the
+			// scalar diff alone would miss.
+			return true, 0
 		},
-		persist: func(ctx context.Context, fresh *api.Initiative) error {
-			return i.lfs.UpsertInitiative(ctx, *fresh)
+		// Edit-commit tail: re-fetch the initiative, verify read-your-writes
+		// against the pre-write values still on i.initiative, upsert, and surface
+		// divergence via .error. The project-link side-work (in mutate) stays there.
+		writeBack: writeBackSpec[api.Initiative]{
+			errKey: i.initiativeID,
+			fetch: func(ctx context.Context) (*api.Initiative, error) {
+				return i.lfs.verify().GetInitiative(ctx, i.initiativeID)
+			},
+			persist: func(ctx context.Context, fresh *api.Initiative) error {
+				return i.lfs.UpsertInitiative(ctx, *fresh)
+			},
+			compare: func(fresh *api.Initiative) []writeBackResult {
+				return edit.divergences(fresh.Name, fresh.Content)
+			},
 		},
-		compare: func(fresh *api.Initiative) []writeBackResult {
-			return edit.divergences(fresh.Name, fresh.Content)
-		},
+		adopt: func(fresh *api.Initiative) { i.initiative = *fresh },
+		// initiative.md, its meta, and the projects/ listing.
+		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},
 	})
-	if fresh != nil {
-		i.initiative = *fresh
-	}
-
-	if i.lfs.debug {
-		log.Printf("Flush: initiative %s updated successfully", i.initiative.Name)
-	}
-
-	// Invalidate kernel inode cache (initiative.md, its meta, and projects/ listing)
-	i.lfs.InvalidateUpdated(initiativeInfoIno(i.initiativeID))
-	i.lfs.InvalidateUpdated(metaIno(i.initiativeID)) // initiative.meta reflects the edit
-	i.lfs.InvalidateUpdated(initiativeProjectsIno(i.initiativeID))
-
-	i.dirty = false
-	return errno
 }
 
 // InitiativeProjectsNode represents the projects/ directory within an initiative

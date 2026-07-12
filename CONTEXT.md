@@ -32,6 +32,38 @@ tested with a fake sink and stub closures — no FUSE mount, SQLite, or API.
 The **front half** of each edit (parse, resolve, call API) stays per-entity. For
 issues the resolve step is itself a deep module — see Name→ID resolution below.
 
+### Edit-flush shell (`editFlush`)
+The **deep module** owning the invariant *shell* every editable file node's FUSE
+`Flush` wraps around its front half and the [[writeback-tail]]: take the buffer
+lock, skip a clean/empty buffer, bound the API work with a 30s timeout, run the
+front half, and on success run the commit tail, adopt the fresh value,
+invalidate the node's kernel-cache set, and clear dirty. All seven handlers
+(issue/comment/label/document/milestone/project/initiative) hand-copied it, and
+it had drifted: issues invalidated **before** persisting (a stale-repopulation
+window — a racing read could reload the not-yet-written row and re-cache it),
+and the invalidation set lived as loose `InvalidateUpdated` calls each handler
+had to remember. `editFlush` (`internal/fs/editflush.go`, generic over `T`)
+concentrates the shell; each `Flush` becomes `return editFlush(ctx, n.lfs,
+&n.editBuffer, editFlushSpec[T]{…})`.
+
+The **front half is one `mutate` closure** returning `(proceed bool, errno
+syscall.Errno)`: `errno != 0` → return it and **keep dirty** (a corrected
+re-save retries; mutate owns its own `.error` message); `errno == 0 && !proceed`
+→ nothing changed, clear dirty, return 0; `proceed` → commit path. The
+`writeBack` (commit tail), `adopt` (`n.entity = *fresh`), and **`coherence
+[]uint64`** (the invalidation set, now declared as data — a forgotten `.meta`
+sidecar is a visible one-line omission) round out the spec. Projects/initiatives
+put their whole multi-mutation front half (labels + links-reconcile + scalar) in
+`mutate` and always return `proceed=true` (they re-fetch to catch link changes);
+the front-half result reaches the commit-tail `compare` through a method-local
+var the two closures share (mutate runs first). **Invalidate-after-persist is
+uniform by construction** — the shell invalidates only after the tail upserts,
+closing the window issues had (a recorded behavior change). It depends only on
+the `editFlushSink` seam (`errorSink` + `InvalidateUpdated`, satisfied by
+`*LinearFS`), so the shell's outcome dispatch, coherence-set exactness, and
+persist-before-invalidate ordering are unit-tested with a recording sink
+(`editflush_test.go`) — no FUSE mount, SQLite, or API.
+
 ### Rename save (`renameSave`)
 The **deep module** owning the atomic-save Rename tail — the rename-shaped
 sibling of the WriteBack tail in the edit-path family. Editors and the Claude

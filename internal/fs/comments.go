@@ -141,72 +141,55 @@ func (n *CommentNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if !n.dirty || n.content == nil {
-		return 0
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// Extract body from the markdown (skip frontmatter)
-	body := extractCommentBody(n.content)
-	if body == "" {
-		if n.lfs.debug {
-			log.Printf("Flush comment %s: empty body, skipping", n.comment.ID)
-		}
-		n.dirty = false
-		return 0
-	}
-
-	// Only update if body changed
-	if body == n.comment.Body {
-		if n.lfs.debug {
-			log.Printf("Flush comment %s: no changes", n.comment.ID)
-		}
-		n.dirty = false
-		return 0
-	}
-
-	if n.lfs.debug {
-		log.Printf("Updating comment %s", n.comment.ID)
-	}
-
 	commentErrKey := collectionErrorKey("comments", n.issueID)
-	updatedComment, err := n.lfs.UpdateComment(ctx, n.issueID, n.comment.ID, body)
-	if err != nil {
-		log.Printf("Failed to update comment: %v", err)
-		msg, errno := classifyMutationErr("update comment", err)
-		n.lfs.SetWriteError(commentErrKey, msg)
-		return errno
-	}
-
-	// Edit-commit tail: verify read-your-writes against the API's echoed response,
-	// persist, and surface divergence via .error.
-	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.Comment]{
-		errKey: commentErrKey,
-		fetch:  func(ctx context.Context) (*api.Comment, error) { return updatedComment, nil },
-		persist: func(ctx context.Context, fresh *api.Comment) error {
-			return n.lfs.UpsertComment(ctx, n.issueID, *fresh)
+	// body + updatedComment bridge the front half to the commit tail (mutate runs
+	// first, then commitWriteBack fetches the echoed response and compares body).
+	var body string
+	var updatedComment *api.Comment
+	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.Comment]{
+		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+			// Extract body from the markdown (skip frontmatter).
+			body = extractCommentBody(n.content)
+			if body == "" {
+				if n.lfs.debug {
+					log.Printf("Flush comment %s: empty body, skipping", n.comment.ID)
+				}
+				return false, 0
+			}
+			if body == n.comment.Body {
+				if n.lfs.debug {
+					log.Printf("Flush comment %s: no changes", n.comment.ID)
+				}
+				return false, 0
+			}
+			if n.lfs.debug {
+				log.Printf("Updating comment %s", n.comment.ID)
+			}
+			var err error
+			updatedComment, err = n.lfs.UpdateComment(ctx, n.issueID, n.comment.ID, body)
+			if err != nil {
+				log.Printf("Failed to update comment: %v", err)
+				msg, errno := classifyMutationErr("update comment", err)
+				n.lfs.SetWriteError(commentErrKey, msg)
+				return false, errno
+			}
+			return true, 0
 		},
-		compare: func(fresh *api.Comment) []writeBackResult {
-			return []writeBackResult{writeBackDivergence("comment body", body, fresh.Body, n.comment.Body)}
+		// Edit-commit tail: verify read-your-writes against the API's echoed
+		// response, persist, and surface divergence via .error.
+		writeBack: writeBackSpec[api.Comment]{
+			errKey: commentErrKey,
+			fetch:  func(ctx context.Context) (*api.Comment, error) { return updatedComment, nil },
+			persist: func(ctx context.Context, fresh *api.Comment) error {
+				return n.lfs.UpsertComment(ctx, n.issueID, *fresh)
+			},
+			compare: func(fresh *api.Comment) []writeBackResult {
+				return []writeBackResult{writeBackDivergence("comment body", body, fresh.Body, n.comment.Body)}
+			},
 		},
+		adopt:     func(fresh *api.Comment) { n.comment = *fresh },
+		coherence: []uint64{commentIno(n.comment.ID), commentMetaIno(n.comment.ID)},
 	})
-
-	// Invalidate kernel cache for this comment file and its .meta sidecar
-	// (updated/edited reflect the edit)
-	n.lfs.InvalidateUpdated(commentIno(n.comment.ID))
-	n.lfs.InvalidateUpdated(commentMetaIno(n.comment.ID))
-
-	if fresh != nil {
-		n.comment = *fresh
-	}
-	n.dirty = false
-	return errno
 }
 
 // extractCommentBody extracts the body from markdown with YAML frontmatter

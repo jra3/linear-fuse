@@ -235,74 +235,59 @@ func (n *LabelFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if !n.dirty || n.content == nil {
-		return 0
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// Parse the markdown and get update fields
-	update, err := marshal.MarkdownToLabelUpdate(n.content, &n.label)
-	if err != nil {
-		log.Printf("Failed to parse label: %v", err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), "Operation: update label "+labelFilename(n.label)+"\nParse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	if len(update) == 0 {
-		if n.lfs.debug {
-			log.Printf("Flush label %s: no changes", n.label.ID)
-		}
-		n.dirty = false
-		return 0
-	}
-
-	if n.lfs.debug {
-		log.Printf("Updating label %s", n.label.ID)
-	}
-
-	updatedLabel, err := n.lfs.UpdateLabel(ctx, n.label.ID, update, n.teamID)
-	if err != nil {
-		log.Printf("Failed to update label: %v", err)
-		msg, errno := classifyMutationErr("update label "+labelFilename(n.label), err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), msg)
-		return errno
-	}
-	// Edit-commit tail: persist the label, verify read-your-writes against the
-	// API's echoed response (labels have no single-entity getter), and surface
-	// divergence via .error — verification this handler previously skipped.
 	labelErrKey := collectionErrorKey("labels", n.teamID)
-	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.Label]{
-		errKey:  labelErrKey,
-		fetch:   func(ctx context.Context) (*api.Label, error) { return updatedLabel, nil },
-		persist: func(ctx context.Context, fresh *api.Label) error { return n.lfs.UpsertLabel(ctx, n.teamID, *fresh) },
-		compare: func(fresh *api.Label) []writeBackResult {
-			var results []writeBackResult
-			if want, ok := update["name"].(string); ok {
-				results = append(results, writeBackDivergence("name", want, fresh.Name, n.label.Name))
+	// update + updatedLabel bridge the front half to the commit tail.
+	var update map[string]any
+	var updatedLabel *api.Label
+	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.Label]{
+		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+			var err error
+			update, err = marshal.MarkdownToLabelUpdate(n.content, &n.label)
+			if err != nil {
+				log.Printf("Failed to parse label: %v", err)
+				n.lfs.SetWriteError(labelErrKey, "Operation: update label "+labelFilename(n.label)+"\nParse error: "+err.Error())
+				return false, syscall.EINVAL
 			}
-			if want, ok := update["description"].(string); ok {
-				results = append(results, writeBackDivergence("description", want, fresh.Description, n.label.Description))
+			if len(update) == 0 {
+				if n.lfs.debug {
+					log.Printf("Flush label %s: no changes", n.label.ID)
+				}
+				return false, 0
 			}
-			return results
+			if n.lfs.debug {
+				log.Printf("Updating label %s", n.label.ID)
+			}
+			updatedLabel, err = n.lfs.UpdateLabel(ctx, n.label.ID, update, n.teamID)
+			if err != nil {
+				log.Printf("Failed to update label: %v", err)
+				msg, errno := classifyMutationErr("update label "+labelFilename(n.label), err)
+				n.lfs.SetWriteError(labelErrKey, msg)
+				return false, errno
+			}
+			return true, 0
 		},
+		// Edit-commit tail: persist the label, verify read-your-writes against the
+		// API's echoed response (labels have no single-entity getter), and
+		// surface divergence via .error.
+		writeBack: writeBackSpec[api.Label]{
+			errKey:  labelErrKey,
+			fetch:   func(ctx context.Context) (*api.Label, error) { return updatedLabel, nil },
+			persist: func(ctx context.Context, fresh *api.Label) error { return n.lfs.UpsertLabel(ctx, n.teamID, *fresh) },
+			compare: func(fresh *api.Label) []writeBackResult {
+				var results []writeBackResult
+				if want, ok := update["name"].(string); ok {
+					results = append(results, writeBackDivergence("name", want, fresh.Name, n.label.Name))
+				}
+				if want, ok := update["description"].(string); ok {
+					results = append(results, writeBackDivergence("description", want, fresh.Description, n.label.Description))
+				}
+				return results
+			},
+		},
+		adopt: func(fresh *api.Label) { n.label = *fresh },
+		// The .meta sidecar renders from the label.
+		coherence: []uint64{labelIno(n.label.ID), labelMetaIno(n.label.ID)},
 	})
-	if fresh != nil {
-		n.label = *fresh
-	}
-
-	n.dirty = false
-
-	// Invalidate kernel inode cache (the .meta sidecar renders from the label)
-	n.lfs.InvalidateUpdated(labelIno(n.label.ID))
-	n.lfs.InvalidateUpdated(labelMetaIno(n.label.ID))
-
-	return errno
 }
 
 // createLabel is the labels create surface's onFlush: parse the frontmatter

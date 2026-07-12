@@ -145,88 +145,71 @@ func (n *MilestoneFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if !n.dirty || n.content == nil {
-		return 0
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
 	milestoneErrKey := collectionErrorKey("milestones", n.projectID)
-
-	// Parse the markdown and get update fields
-	input, err := marshal.MarkdownToMilestoneUpdate(n.content, &n.milestone)
-	if err != nil {
-		log.Printf("Failed to parse milestone: %v", err)
-		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nParse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	// Validate input
-	if err := marshal.ValidateMilestoneUpdate(input); err != nil {
-		log.Printf("Milestone validation failed: %v", err)
-		n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nValidation error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	// Check if there are any changes
-	if input.Name == nil && input.Description == nil && input.TargetDate == nil && input.SortOrder == nil {
-		if n.lfs.debug {
-			log.Printf("Flush milestone %s: no changes", n.milestone.ID)
-		}
-		n.dirty = false
-		return 0
-	}
-
-	if n.lfs.debug {
-		log.Printf("Updating milestone %s", n.milestone.ID)
-	}
-
-	updated, err := n.lfs.UpdateProjectMilestone(ctx, n.milestone.ID, input)
-	if err != nil {
-		log.Printf("Failed to update milestone: %v", err)
-		msg, errno := classifyMutationErr("update milestone "+milestoneFilename(n.milestone), err)
-		n.lfs.SetWriteError(milestoneErrKey, msg)
-		return errno
-	}
-	// Edit-commit tail. LinearFS.UpdateProjectMilestone already upserted to SQLite
-	// (after routing through the mutation seam), so persist is nil; verify
-	// read-your-writes against the API's echoed response (milestones have no
-	// single-entity getter) and surface divergence via .error.
-	fresh, errno := commitWriteBack(ctx, n.lfs, writeBackSpec[api.ProjectMilestone]{
-		errKey:  milestoneErrKey,
-		fetch:   func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
-		persist: nil,
-		compare: func(fresh *api.ProjectMilestone) []writeBackResult {
-			var results []writeBackResult
-			if input.Name != nil {
-				results = append(results, writeBackDivergence("name", *input.Name, fresh.Name, n.milestone.Name))
+	// input + updated bridge the front half to the commit tail.
+	var input api.ProjectMilestoneUpdateInput
+	var updated *api.ProjectMilestone
+	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.ProjectMilestone]{
+		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+			var err error
+			input, err = marshal.MarkdownToMilestoneUpdate(n.content, &n.milestone)
+			if err != nil {
+				log.Printf("Failed to parse milestone: %v", err)
+				n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nParse error: "+err.Error())
+				return false, syscall.EINVAL
 			}
-			if input.Description != nil {
-				results = append(results, writeBackDivergence("description", *input.Description, fresh.Description, n.milestone.Description))
+			if err := marshal.ValidateMilestoneUpdate(input); err != nil {
+				log.Printf("Milestone validation failed: %v", err)
+				n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nValidation error: "+err.Error())
+				return false, syscall.EINVAL
 			}
-			return results
+			if input.Name == nil && input.Description == nil && input.TargetDate == nil && input.SortOrder == nil {
+				if n.lfs.debug {
+					log.Printf("Flush milestone %s: no changes", n.milestone.ID)
+				}
+				return false, 0
+			}
+			if n.lfs.debug {
+				log.Printf("Updating milestone %s", n.milestone.ID)
+			}
+			updated, err = n.lfs.UpdateProjectMilestone(ctx, n.milestone.ID, input)
+			if err != nil {
+				log.Printf("Failed to update milestone: %v", err)
+				msg, errno := classifyMutationErr("update milestone "+milestoneFilename(n.milestone), err)
+				n.lfs.SetWriteError(milestoneErrKey, msg)
+				return false, errno
+			}
+			return true, 0
 		},
+		// Edit-commit tail. LinearFS.UpdateProjectMilestone already upserted to
+		// SQLite (after routing through the mutation seam), so persist is nil;
+		// verify read-your-writes against the API's echoed response (milestones
+		// have no single-entity getter) and surface divergence via .error.
+		writeBack: writeBackSpec[api.ProjectMilestone]{
+			errKey:  milestoneErrKey,
+			fetch:   func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
+			persist: nil,
+			compare: func(fresh *api.ProjectMilestone) []writeBackResult {
+				var results []writeBackResult
+				if input.Name != nil {
+					results = append(results, writeBackDivergence("name", *input.Name, fresh.Name, n.milestone.Name))
+				}
+				if input.Description != nil {
+					results = append(results, writeBackDivergence("description", *input.Description, fresh.Description, n.milestone.Description))
+				}
+				return results
+			},
+		},
+		// Adopt the fresh value AND re-render the buffer (reflects reality, even
+		// on divergence).
+		adopt: func(fresh *api.ProjectMilestone) {
+			n.milestone = *fresh
+			if newContent, err := marshal.MilestoneToMarkdown(fresh); err == nil {
+				n.content = newContent
+			}
+		},
+		coherence: []uint64{milestoneIno(n.milestone.ID), milestoneMetaIno(n.milestone.ID)},
 	})
-
-	// Update local data with the fresh value (reflects reality, even on divergence)
-	if fresh != nil {
-		n.milestone = *fresh
-		if newContent, err := marshal.MilestoneToMarkdown(fresh); err == nil {
-			n.content = newContent
-		}
-	}
-
-	// Invalidate kernel cache for this milestone file and its .meta sidecar
-	n.lfs.InvalidateUpdated(milestoneIno(n.milestone.ID))
-	n.lfs.InvalidateUpdated(milestoneMetaIno(n.milestone.ID))
-
-	n.dirty = false
-	return errno
 }
 
 // createMilestone is the milestones create surface's onFlush: parse the

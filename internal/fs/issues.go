@@ -502,87 +502,69 @@ func (i *IssueFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 }
 
 func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	if !i.dirty || i.content == nil {
-		return 0
-	}
-
-	// Add timeout for API operations
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if i.lfs.debug {
-		log.Printf("Flush: %s (saving changes)", i.issue.Identifier)
-	}
-
-	// Parse the modified content and compute updates
-	updates, err := marshal.MarkdownToIssueUpdate(i.content, &i.issue)
-	if err != nil {
-		log.Printf("Failed to parse changes for %s: %v", i.issue.Identifier, err)
-		i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
-		return syscall.EINVAL
-	}
-
-	if len(updates) == 0 {
-		if i.lfs.debug {
-			log.Printf("Flush: %s no changes detected", i.issue.Identifier)
-		}
-		i.dirty = false
-		return 0
-	}
-
-	// Resolve the name-bearing relational fields (status, assignee, labels,
-	// parent, project, milestone, cycle) to Linear IDs. The resolver owns field
-	// ordering, the label-clearing special case, and the per-field error messages.
-	if ferr := resolveIssueUpdate(ctx, i.lfs, &i.issue, updates); ferr != nil {
-		log.Printf("Failed to resolve update for %s: %s", i.issue.Identifier, ferr.Message)
-		i.lfs.SetIssueError(i.issue.ID, ferr.Detail())
-		return syscall.EINVAL
-	}
-
-	// Call Linear API to update
-	if err := i.lfs.mutator().UpdateIssue(ctx, i.issue.ID, updates); err != nil {
-		log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
-		msg, errno := classifyMutationErr("update issue", err)
-		i.lfs.SetIssueError(i.issue.ID, msg)
-		return errno
-	}
-
-	if i.lfs.debug {
-		log.Printf("Flush: %s updated successfully", i.issue.Identifier)
-	}
-
-	// Invalidate kernel cache for this file
-	i.lfs.InvalidateUpdated(issueIno(i.issue.ID))
-	i.lfs.InvalidateUpdated(metaIno(i.issue.ID)) // issue.meta reflects the edit
-
-	// Edit-commit tail: re-fetch from the API (an independent read catches #136,
-	// where a large body silently reverts), verify read-your-writes against the
-	// pre-write values still on i.issue, upsert the fresh value, and surface any
-	// divergence via .error. The compare closure runs inside commitWriteBack,
-	// before i.issue is overwritten below.
-	fresh, errno := commitWriteBack(ctx, i.lfs, writeBackSpec[api.Issue]{
-		errKey:  i.issue.ID,
-		fetch:   func(ctx context.Context) (*api.Issue, error) { return i.lfs.verify().GetIssue(ctx, i.issue.ID) },
-		persist: func(ctx context.Context, fresh *api.Issue) error { return i.lfs.UpsertIssue(ctx, *fresh) },
-		compare: func(fresh *api.Issue) []writeBackResult {
-			var results []writeBackResult
-			if want, ok := updates["title"].(string); ok {
-				results = append(results, writeBackDivergence("title", want, fresh.Title, i.issue.Title))
+	// updates bridges the front half (which computes it) and the commit-tail
+	// compare (which reads it against the pre-write i.issue); mutate runs first.
+	var updates map[string]any
+	return editFlush(ctx, i.lfs, &i.editBuffer, editFlushSpec[api.Issue]{
+		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+			if i.lfs.debug {
+				log.Printf("Flush: %s (saving changes)", i.issue.Identifier)
 			}
-			if want, ok := updates["description"].(string); ok {
-				results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
+			var err error
+			updates, err = marshal.MarkdownToIssueUpdate(i.content, &i.issue)
+			if err != nil {
+				log.Printf("Failed to parse changes for %s: %v", i.issue.Identifier, err)
+				i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
+				return false, syscall.EINVAL
 			}
-			return results
+			if len(updates) == 0 {
+				if i.lfs.debug {
+					log.Printf("Flush: %s no changes detected", i.issue.Identifier)
+				}
+				return false, 0
+			}
+			// Resolve the name-bearing relational fields (status, assignee,
+			// labels, parent, project, milestone, cycle) to Linear IDs. The
+			// resolver owns field ordering, the label-clearing special case, and
+			// the per-field error messages.
+			if ferr := resolveIssueUpdate(ctx, i.lfs, &i.issue, updates); ferr != nil {
+				log.Printf("Failed to resolve update for %s: %s", i.issue.Identifier, ferr.Message)
+				i.lfs.SetIssueError(i.issue.ID, ferr.Detail())
+				return false, syscall.EINVAL
+			}
+			if err := i.lfs.mutator().UpdateIssue(ctx, i.issue.ID, updates); err != nil {
+				log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
+				msg, errno := classifyMutationErr("update issue", err)
+				i.lfs.SetIssueError(i.issue.ID, msg)
+				return false, errno
+			}
+			if i.lfs.debug {
+				log.Printf("Flush: %s updated successfully", i.issue.Identifier)
+			}
+			return true, 0
 		},
+		// Edit-commit tail: re-fetch from the API (an independent read catches
+		// #136, where a large body silently reverts), verify read-your-writes
+		// against the pre-write values still on i.issue, upsert the fresh value,
+		// and surface any divergence via .error.
+		writeBack: writeBackSpec[api.Issue]{
+			errKey:  i.issue.ID,
+			fetch:   func(ctx context.Context) (*api.Issue, error) { return i.lfs.verify().GetIssue(ctx, i.issue.ID) },
+			persist: func(ctx context.Context, fresh *api.Issue) error { return i.lfs.UpsertIssue(ctx, *fresh) },
+			compare: func(fresh *api.Issue) []writeBackResult {
+				var results []writeBackResult
+				if want, ok := updates["title"].(string); ok {
+					results = append(results, writeBackDivergence("title", want, fresh.Title, i.issue.Title))
+				}
+				if want, ok := updates["description"].(string); ok {
+					results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
+				}
+				return results
+			},
+		},
+		adopt:     func(fresh *api.Issue) { i.issue = *fresh },
+		coherence: []uint64{issueIno(i.issue.ID), metaIno(i.issue.ID)}, // issue.meta reflects the edit
 	})
-	if fresh != nil {
-		i.issue = *fresh
-	}
-	i.dirty = false
-	return errno
 }
 
 // ChildrenNode represents the /teams/{KEY}/issues/{ID}/children/ directory
