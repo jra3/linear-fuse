@@ -3,9 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	gosync "sync"
@@ -20,17 +18,15 @@ import (
 // two methods on the LinearFS god-object; gathering them keeps the tiers and the
 // state they cache together.
 //
-// Its dependencies on the rest of the mount are three seams: auth (the CDN
-// requires the client's auth header), persist (record the on-disk path back to
-// SQLite), and httpClient (the CDN GET). httpClient defaults to
-// http.DefaultClient but is injectable, so the download→disk→memory layering is
-// unit-testable against an httptest server with no real network — the byte-fetch
-// path that used to hit http.DefaultClient inline and could not be tested.
+// Its dependencies on the rest of the mount are two seams: cdn (the shared
+// api.CDNClient that authenticates and instruments every CDN GET) and persist
+// (record the on-disk path back to SQLite). cdn's transport is injectable, so
+// the download→disk→memory layering stays unit-testable against an httptest
+// server with no real network.
 type embeddedFileCache struct {
-	dir        string
-	auth       func() string
-	persist    func(ctx context.Context, fileID, path string, size int64) error
-	httpClient *http.Client
+	dir     string
+	cdn     *api.CDNClient
+	persist func(ctx context.Context, fileID, path string, size int64) error
 
 	mu  gosync.RWMutex
 	mem map[string][]byte
@@ -48,17 +44,16 @@ func embeddedFileCacheDir() string {
 	return filepath.Join(dir, "linearfs", "files")
 }
 
-// newEmbeddedFileCache builds the cache rooted at dir. auth supplies the CDN
-// Authorization header; persist records a freshly-cached file's on-disk path and
-// size (best-effort). Both are late-bound closures because the repo they reach is
-// wired after the LinearFS exists.
-func newEmbeddedFileCache(dir string, auth func() string, persist func(ctx context.Context, fileID, path string, size int64) error) *embeddedFileCache {
+// newEmbeddedFileCache builds the cache rooted at dir. cdn is the shared CDN
+// client (auth + timeout + telemetry); persist records a freshly-cached file's
+// on-disk path and size (best-effort), a late-bound closure because the repo it
+// reaches is wired after the LinearFS exists.
+func newEmbeddedFileCache(dir string, cdn *api.CDNClient, persist func(ctx context.Context, fileID, path string, size int64) error) *embeddedFileCache {
 	return &embeddedFileCache{
-		dir:        dir,
-		auth:       auth,
-		persist:    persist,
-		httpClient: http.DefaultClient,
-		mem:        make(map[string][]byte),
+		dir:     dir,
+		cdn:     cdn,
+		persist: persist,
+		mem:     make(map[string][]byte),
 	}
 }
 
@@ -82,7 +77,7 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 		return content, nil
 	}
 
-	content, err := c.download(ctx, file.URL)
+	content, err := c.cdn.Get(ctx, file.URL)
 	if err != nil {
 		return nil, fmt.Errorf("download file: %w", err)
 	}
@@ -103,26 +98,4 @@ func (c *embeddedFileCache) store(id string, content []byte) {
 	c.mu.Lock()
 	c.mem[id] = content
 	c.mu.Unlock()
-}
-
-// download fetches a file from Linear's CDN, authenticating with c.auth().
-func (c *embeddedFileCache) download(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if c.auth != nil {
-		req.Header.Set("Authorization", c.auth())
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
-	}
-	return io.ReadAll(resp.Body)
 }

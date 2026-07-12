@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
 )
 
@@ -177,8 +178,8 @@ func TestExtractAndStoreEmbeddedFiles(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 
-	// The injectable HTTPClient (nil would mean http.DefaultClient) routes the
-	// size HEADs to a local server instead of the real CDN.
+	// The CDN client's injectable transport routes the size HEADs to a local
+	// server instead of the real CDN.
 	headCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead {
@@ -187,10 +188,11 @@ func TestExtractAndStoreEmbeddedFiles(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
+	cdn := api.NewCDNClient(func() string { return "test-auth" })
+	cdn.SetHTTPClient(&http.Client{Transport: rewriteTransport{target: srv.URL}})
 	extractor := &Extractor{
-		Q:          store.Queries(),
-		AuthHeader: func() string { return "test-auth" },
-		HTTPClient: &http.Client{Transport: rewriteTransport{target: srv.URL}},
+		Q:   store.Queries(),
+		CDN: cdn,
 	}
 
 	ctx := context.Background()

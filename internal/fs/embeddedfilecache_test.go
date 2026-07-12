@@ -32,14 +32,14 @@ func TestEmbeddedFileCacheTiers(t *testing.T) {
 
 	var persistedID, persistedPath string
 	var persistedSize int64
-	c := newEmbeddedFileCache(dir,
-		func() string { return "Bearer test" },
+	cdn := api.NewCDNClient(func() string { return "Bearer test" })
+	cdn.SetHTTPClient(srv.Client())
+	c := newEmbeddedFileCache(dir, cdn,
 		func(_ context.Context, id, path string, size int64) error {
 			persistedID, persistedPath, persistedSize = id, path, size
 			return nil
 		},
 	)
-	c.httpClient = srv.Client()
 
 	file := api.EmbeddedFile{ID: "f1", URL: srv.URL + "/f1.png", Filename: "f1.png"}
 
@@ -97,8 +97,9 @@ func TestEmbeddedFileCacheDownloadError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newEmbeddedFileCache(t.TempDir(), func() string { return "" }, nil)
-	c.httpClient = srv.Client()
+	cdn := api.NewCDNClient(func() string { return "" })
+	cdn.SetHTTPClient(srv.Client())
+	c := newEmbeddedFileCache(t.TempDir(), cdn, nil)
 
 	if _, err := c.FetchEmbeddedFile(context.Background(), api.EmbeddedFile{ID: "x", URL: srv.URL}); err == nil {
 		t.Error("expected an error on a 403 CDN response, got nil")

@@ -145,7 +145,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	// EnableSQLiteCache), so persist reads lfs.repo at call time — and no-ops
 	// while it is still nil (a fetch before the cache is enabled).
 	lfs.embeddedFileCache = newEmbeddedFileCache(cacheDir,
-		func() string { return lfs.client.AuthHeader() },
+		api.NewCDNClient(func() string { return lfs.client.AuthHeader() }),
 		func(ctx context.Context, fileID, path string, size int64) error {
 			if lfs.repo == nil {
 				return nil

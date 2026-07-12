@@ -180,7 +180,7 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 	return &Worker{
 		client:           client,
 		store:            store,
-		extractor:        &reconcile.Extractor{Q: store.Queries(), AuthHeader: client.AuthHeader},
+		extractor:        &reconcile.Extractor{Q: store.Queries(), CDN: api.NewCDNClient(client.AuthHeader)},
 		interval:         cfg.Interval,
 		fullSyncInterval: cfg.FullSyncInterval,
 		stopCh:           make(chan struct{}),
