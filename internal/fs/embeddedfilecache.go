@@ -68,6 +68,7 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 	c.mu.RLock()
 	if content, ok := c.mem[file.ID]; ok {
 		c.mu.RUnlock()
+		recordEmbeddedFetch(ctx, "memory")
 		return content, nil
 	}
 	c.mu.RUnlock()
@@ -79,6 +80,7 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 
 	if content, err := os.ReadFile(diskPath); err == nil {
 		c.store(file.ID, content)
+		recordEmbeddedFetch(ctx, "disk")
 		return content, nil
 	}
 
@@ -86,6 +88,7 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 	if err != nil {
 		return nil, fmt.Errorf("download file: %w", err)
 	}
+	recordEmbeddedFetch(ctx, "cdn")
 
 	if err := os.WriteFile(diskPath, content, 0644); err != nil {
 		log.Printf("[cache] Warning: failed to cache file %s: %v", file.Filename, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -52,7 +53,10 @@ func (b *editBuffer) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }
 
-func (b *editBuffer) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (b *editBuffer) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (res fuse.ReadResult, errno syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "read", start, errno) }()
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -66,7 +70,10 @@ func (b *editBuffer) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 	return fuse.ReadResultData(b.content[off:end]), 0
 }
 
-func (b *editBuffer) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+func (b *editBuffer) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (n uint32, errno syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "write", start, errno) }()
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 

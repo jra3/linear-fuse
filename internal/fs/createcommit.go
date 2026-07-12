@@ -96,13 +96,17 @@ type createSpec[T any] struct {
 //   - mutate fails otherwise        -> .error gets the cause, EIO.
 //   - success                       -> clear .error, append .last, persist
 //     (non-fatal on failure), InvalidateCreated(dir, name), run extras, errno 0.
-func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T]) (*T, syscall.Errno) {
+func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T]) (created *T, errno syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "create", start, errno) }()
+
 	ctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
 
 	created, err := spec.mutate(ctx)
 	if err != nil {
-		msg, errno := classifyMutationErr(spec.op, err)
+		var msg string
+		msg, errno = classifyMutationErr(spec.op, err)
 		log.Printf("Failed to %s: %v", spec.op, err)
 		sink.SetWriteError(spec.key, msg)
 		return nil, errno
