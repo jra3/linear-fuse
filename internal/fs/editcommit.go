@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"syscall"
+	"time"
 )
 
 // The edit-commit tail.
@@ -66,7 +67,10 @@ type writeBackSpec[T any] struct {
 //   - no divergence      → clear .error, return (fresh, 0).
 //   - benign reformat    → set .error note, return (fresh, 0).
 //   - fatal divergence   → set .error, return (fresh, syscall.EIO).
-func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackSpec[T]) (*T, syscall.Errno) {
+func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackSpec[T]) (fresh *T, errno syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "flush", start, errno) }()
+
 	fresh, err := spec.fetch(ctx)
 	if err != nil {
 		// The API accepted the write; we just could not re-read it to verify.

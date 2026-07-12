@@ -107,6 +107,9 @@ func (r *renderFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 }
 
 func (r *renderFile) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "read", start, 0) }()
+
 	content, _, _ := r.renderNow(ctx)
 	return readWindow(content, dest, off), 0
 }

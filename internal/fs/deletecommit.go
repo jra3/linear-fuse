@@ -73,13 +73,17 @@ type deleteSpec[T any] struct {
 //   - mutate fails        -> .error gets the cause, EAGAIN if transient else EIO.
 //   - success             -> clear .error, forget SQLite (non-fatal on failure),
 //     InvalidateDeleted(dir, name), run extras, errno 0.
-func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T]) syscall.Errno {
+func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T]) (errno syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "delete", start, errno) }()
+
 	ctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
 
 	target, err := spec.find(ctx)
 	if err != nil {
-		msg, errno := classifyMutationErr(spec.op, err)
+		var msg string
+		msg, errno = classifyMutationErr(spec.op, err)
 		log.Printf("Failed to %s: %v", spec.op, err)
 		sink.SetWriteError(spec.key, msg)
 		return errno
@@ -91,7 +95,8 @@ func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T
 
 	if err := spec.mutate(ctx, target); err != nil {
 		if !remoteAlreadyGone(err) {
-			msg, errno := classifyMutationErr(spec.op, err)
+			var msg string
+			msg, errno = classifyMutationErr(spec.op, err)
 			log.Printf("Failed to %s: %v", spec.op, err)
 			sink.SetWriteError(spec.key, msg)
 			return errno

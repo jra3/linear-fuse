@@ -510,9 +510,15 @@ re-`rm`ing a phantom row heals it.
 
 ### `internal/telemetry` — OTEL metrics pipeline
 
-Owns the meter provider the recording packages (api, sync, repo, reconcile)
-record into; fs records no instruments — it only wires the per-request debug
-log. One `MeterProvider`, two renderings: an always-on 5-minute summary line to
+Owns the meter provider the recording packages (api, sync, repo, reconcile,
+fs) record into. `internal/fs` records serving-layer instruments (`metrics.go`,
+meter `linearfs/fuse`): `linearfs.fuse.ops {op, outcome}` and
+`linearfs.fuse.duration {op}` at the three commit tails (create/delete/flush)
+and the editBuffer/renderFile read/write entry points, plus
+`linearfs.embedded_files.fetch {source=memory|disk|cdn}` at the byte-cache
+tiers. Coverage is those cheap choke points, not lookup/readdir (spread across
+every node type with no shared tail). It also wires the optional per-request
+debug log. One `MeterProvider`, two renderings: an always-on 5-minute summary line to
 journald/logs, and a config-gated file export writing one compact JSON line per
 interval to `~/.config/linearfs/metrics.jsonl` through a rotating writer
 (diagnosis = `jq` over that file). There is no OTLP exporter. Exporter failure
