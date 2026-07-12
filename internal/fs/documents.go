@@ -36,7 +36,7 @@ func (n *DocsNode) getDocuments(ctx context.Context) ([]api.Document, error) {
 		return n.lfs.repo.GetIssueDocuments(ctx, n.issueID)
 	}
 	if n.teamID != "" {
-		return n.lfs.GetTeamDocuments(ctx, n.teamID)
+		return n.lfs.repo.GetTeamDocuments(ctx, n.teamID)
 	}
 	if n.projectID != "" {
 		return n.lfs.repo.GetProjectDocuments(ctx, n.projectID)

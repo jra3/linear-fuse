@@ -945,10 +945,10 @@ func (c *Client) GetIssueHistory(ctx context.Context, issueID string) ([]IssueHi
 		map[string]any{"issueId": issueID}, "issue", "history")
 }
 
-// GetTeamDocuments returns an empty list since Linear API doesn't support team-level documents
-// Documents can be attached to issues or projects, but not directly to teams
+// GetTeamDocuments fetches documents attached directly to a team, drained.
 func (c *Client) GetTeamDocuments(ctx context.Context, teamID string) ([]Document, error) {
-	return []Document{}, nil
+	return fetchAll[Document](ctx, c, queryTeamDocuments,
+		map[string]any{"teamId": teamID}, "documents")
 }
 
 // GetProjectDocuments fetches documents for a project, drained.

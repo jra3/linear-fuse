@@ -146,6 +146,7 @@ fragment DocumentFields on Document {
   issue { id identifier }
   project { id }
   initiative { id name }
+  team { id key name }
 }
 `
 
@@ -864,6 +865,15 @@ query ProjectDocuments($projectId: ID!, $after: String) {
 var queryInitiativeDocuments = `
 query InitiativeDocuments($initiativeId: ID!, $after: String) {
   documents(first: 100, after: $after, filter: { initiative: { id: { eq: $initiativeId } } }) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ...DocumentFields }
+  }
+}
+` + DocumentFieldsFragment
+
+var queryTeamDocuments = `
+query TeamDocuments($teamId: ID!, $after: String) {
+  documents(first: 100, after: $after, filter: { team: { id: { eq: $teamId } } }) {
     pageInfo { hasNextPage endCursor }
     nodes { ...DocumentFields }
   }

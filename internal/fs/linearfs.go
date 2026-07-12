@@ -532,13 +532,6 @@ func (lfs *LinearFS) UpdateComment(ctx context.Context, issueID string, commentI
 	return lfs.mutator().UpdateComment(ctx, commentID, body)
 }
 
-// GetTeamDocuments returns documents for a team (currently via API as not
-// synced). This is a synchronous API call on a live FUSE path — the caller's
-// user is blocked on it — so it promotes to the interactive budget tier.
-func (lfs *LinearFS) GetTeamDocuments(ctx context.Context, teamID string) ([]api.Document, error) {
-	return lfs.client.GetTeamDocuments(api.WithInteractive(ctx), teamID)
-}
-
 func (lfs *LinearFS) UpdateDocument(ctx context.Context, documentID string, input map[string]any, issueID, teamID, projectID string) (*api.Document, error) {
 	return lfs.mutator().UpdateDocument(ctx, documentID, input)
 }
