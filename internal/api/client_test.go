@@ -799,17 +799,26 @@ func TestGetProjectDocuments(t *testing.T) {
 
 func TestGetTeamDocuments(t *testing.T) {
 	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	doc := testutil.FixtureDocument()
+	mock.SetResponse("TeamDocuments", testutil.ProjectDocumentsResponse(doc))
 
 	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
 
-	// GetTeamDocuments always returns empty (Linear API doesn't support team-level docs)
 	docs, err := client.GetTeamDocuments(context.Background(), "team-123")
 	if err != nil {
 		t.Fatalf("GetTeamDocuments failed: %v", err)
 	}
 
-	if len(docs) != 0 {
-		t.Errorf("expected 0 documents, got %d", len(docs))
+	if len(docs) != 1 {
+		t.Fatalf("expected 1 document, got %d", len(docs))
+	}
+
+	if docs[0].Title != "Test Document" {
+		t.Errorf("expected title 'Test Document', got %q", docs[0].Title)
 	}
 }
 

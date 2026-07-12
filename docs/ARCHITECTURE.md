@@ -100,8 +100,9 @@ Two rules govern the whole design:
    keeps SQLite fresh. Two deliberate exceptions block on the network: embedded
    attachment bytes (`*.png`, `*.pdf`) fall through memory → disk → a lazy CDN
    GET (`embeddedFileCache`), and a handful of interactive-tier synchronous
-   reads (team documents aren't synced to SQLite, and a few write-flow
-   re-checks) — see `WithInteractive` under the rate budget.
+   reads (a few write-flow re-checks, e.g. the attachment-listing live
+   re-check and the project read-your-writes re-fetch) — see `WithInteractive`
+   under the rate budget.
 2. **Writes go straight to the API, then backfill the cache.** The `api.Client`
    only talks to Linear — it never writes SQLite. The FUSE write handlers
    (`Flush`, `Mkdir`, `_create`, `rm`/`rmdir`) are responsible for upserting the
@@ -383,11 +384,11 @@ The serving end and the largest package, built on `go-fuse/v2`. The root struct
   `MutationClient` (`mutationclient.go`, every mutation; swappable in tests via
   `testutil/mockmutation`), a `verifyReader` for read-your-writes refetches,
   and a catalog-refresher seam for the stale-catalog flow below.
-- **Persistence:** `SQLiteRepository` (nearly all reads — team documents are
-  the exception: they aren't synced, so `teams/{KEY}/docs/` fetches live via
-  the `api.Client` at the interactive tier), `db.Store`, the `sync.Worker`, and
-  the mount-lifetime `lifeCtx`/`spawn` pair that ties every background
-  goroutine to unmount.
+- **Persistence:** `SQLiteRepository` (every metadata read, including
+  `teams/{KEY}/docs/`, which is served from SQLite with a stale-while-revalidate
+  background refresh like the project/initiative doc surfaces), `db.Store`, the
+  `sync.Worker`, and the mount-lifetime `lifeCtx`/`spawn` pair that ties every
+  background goroutine to unmount.
 - **Sub-modules (embedded structs):** `writeFeedback` (the `.error` *and*
   `.last` state), `embeddedFileCache` (memory → disk → CDN bytes for embedded
   files), and `kernelNotify` (the only coupling to `*fuse.Server`).

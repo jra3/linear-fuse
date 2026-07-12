@@ -109,6 +109,23 @@ func migrateSchema(db *sql.DB) error {
 			return fmt.Errorf("add issues.detail_synced_at: %w", err)
 		}
 	}
+
+	// team_id scopes documents to their owning team (team-level documents).
+	// Safe under sqlc: generated queries expand SELECT * into an explicit
+	// named column list, so the driver honors schema order regardless of
+	// where ALTER TABLE physically appends the column on a migrated DB.
+	hasTeamDoc, err := tableHasColumn(db, "documents", "team_id")
+	if err != nil {
+		return err
+	}
+	if !hasTeamDoc {
+		if _, err := db.Exec("ALTER TABLE documents ADD COLUMN team_id TEXT"); err != nil {
+			return fmt.Errorf("add documents.team_id: %w", err)
+		}
+		if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_documents_team ON documents(team_id)"); err != nil {
+			return fmt.Errorf("index documents.team_id: %w", err)
+		}
+	}
 	return nil
 }
 

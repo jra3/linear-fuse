@@ -97,6 +97,7 @@ Mount point: %s (all paths below are relative to this mount point)
 teams/{KEY}/
   team.md, states.md, labels.md     [read-only metadata]
   project-labels.md                 [symlink to ../../project-labels.md]
+  docs/                             [team-level documents; same surface as issues/docs]
   issues/                           [mkdir "Title" for quick create]
     _create                         [write full frontmatter+body to create one issue with all fields]
     .error                          [read-only: last failed issue creation]

@@ -158,9 +158,9 @@ type interactiveCtxKey struct{}
 //
 // ADOPTION NOTE (PR1): this is the mechanism only. On-demand FS read call
 // The FS layer threads it at its synchronous, user-blocking API call sites
-// (GetTeamDocuments; the attachment-create authoritative re-check) — most
-// read paths never need it because they are SQLite-first with *background*
-// refresh, and background work must stay at base tier.
+// (the attachment-listing live re-check and the project read-your-writes
+// re-fetch) — most read paths never need it because they are SQLite-first
+// with *background* refresh, and background work must stay at base tier.
 //
 // RULE: apply WithInteractive at the moment of the synchronous call, never
 // store a promoted ctx or hand it to a goroutine that outlives the FUSE

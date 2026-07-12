@@ -23,6 +23,7 @@ const (
 	kindHistory           refreshKind = "history"
 	kindProjectDocs       refreshKind = "project-docs"
 	kindInitiativeDocs    refreshKind = "initiative-docs"
+	kindTeamDocs          refreshKind = "team-docs"
 	kindProjectUpdates    refreshKind = "project-updates"
 	kindInitiativeUpdates refreshKind = "initiative-updates"
 	kindProjectLinks      refreshKind = "project-links"

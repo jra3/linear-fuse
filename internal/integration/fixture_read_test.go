@@ -344,6 +344,44 @@ func TestFixtureDocsNewMdWriteOnly(t *testing.T) {
 	}
 }
 
+// TestFixtureTeamDocsServedFromSQLite guards the team-documents surface: it is
+// served from the Repository (SQLite) like every other read, not via a blocking
+// live API call (#261). The fixture seeds one team-level document.
+func TestFixtureTeamDocsServedFromSQLite(t *testing.T) {
+	teamDocsDir := filepath.Join(teamPath(testTeamKey), "docs")
+	entries, err := os.ReadDir(teamDocsDir)
+	if err != nil {
+		t.Fatalf("Failed to read team docs directory: %v", err)
+	}
+
+	docCount := 0
+	for _, entry := range entries {
+		if entry.Name() == "_create" || strings.HasSuffix(entry.Name(), ".meta") {
+			continue
+		}
+		if !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		docCount++
+
+		content, err := os.ReadFile(filepath.Join(teamDocsDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("Failed to read team document %s: %v", entry.Name(), err)
+		}
+		doc, err := parseFrontmatter(content)
+		if err != nil {
+			t.Fatalf("Failed to parse team document %s: %v", entry.Name(), err)
+		}
+		if _, ok := doc.Frontmatter["title"]; !ok {
+			t.Errorf("Team document %s missing title field", entry.Name())
+		}
+	}
+
+	if docCount != 1 {
+		t.Errorf("Expected 1 team document served from SQLite, got %d", docCount)
+	}
+}
+
 // =============================================================================
 // Project Read Tests (fixture: test-project)
 // =============================================================================

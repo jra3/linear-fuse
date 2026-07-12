@@ -477,8 +477,8 @@ SELECT * FROM documents WHERE issue_id = ? ORDER BY title;
 SELECT * FROM documents WHERE project_id = ? ORDER BY title;
 
 -- name: UpsertDocument :exec
-INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, team_id, creator_id, url, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     slug_id = excluded.slug_id,
     title = excluded.title,
@@ -489,6 +489,7 @@ ON CONFLICT(id) DO UPDATE SET
     issue_id = excluded.issue_id,
     project_id = excluded.project_id,
     initiative_id = excluded.initiative_id,
+    team_id = excluded.team_id,
     creator_id = excluded.creator_id,
     url = excluded.url,
     created_at = excluded.created_at,
@@ -519,6 +520,15 @@ DELETE FROM documents WHERE initiative_id = ?;
 
 -- name: GetInitiativeDocumentsSyncedAt :one
 SELECT MAX(synced_at) FROM documents WHERE initiative_id = ?;
+
+-- name: ListTeamDocuments :many
+SELECT * FROM documents WHERE team_id = ? ORDER BY title;
+
+-- name: DeleteTeamDocuments :exec
+DELETE FROM documents WHERE team_id = ?;
+
+-- name: GetTeamDocumentsSyncedAt :one
+SELECT MAX(synced_at) FROM documents WHERE team_id = ?;
 
 -- =============================================================================
 -- Initiatives queries

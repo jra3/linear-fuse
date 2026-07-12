@@ -69,6 +69,7 @@ type Document struct {
 	IssueID      sql.NullString  `json:"issue_id"`
 	ProjectID    sql.NullString  `json:"project_id"`
 	InitiativeID sql.NullString  `json:"initiative_id"`
+	TeamID       sql.NullString  `json:"team_id"`
 	CreatorID    sql.NullString  `json:"creator_id"`
 	Url          sql.NullString  `json:"url"`
 	CreatedAt    sql.NullTime    `json:"created_at"`

@@ -287,6 +287,7 @@ CREATE TABLE IF NOT EXISTS documents (
     issue_id TEXT,
     project_id TEXT,
     initiative_id TEXT,
+    team_id TEXT,
     creator_id TEXT,
     url TEXT,
     created_at DATETIME,
@@ -299,6 +300,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_slug ON documents(slug_id);
 CREATE INDEX IF NOT EXISTS idx_documents_issue ON documents(issue_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_documents_initiative ON documents(initiative_id);
+CREATE INDEX IF NOT EXISTS idx_documents_team ON documents(team_id);
 CREATE INDEX IF NOT EXISTS idx_documents_creator ON documents(creator_id);
 
 -- =============================================================================

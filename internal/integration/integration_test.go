@@ -335,6 +335,14 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 		return err
 	}
 
+	// Populate team-level documents
+	teamDocs := []api.Document{
+		fixtures.FixtureAPITeamDocument(team.ID, 1),
+	}
+	if err := fixtures.PopulateDocuments(ctx, store, teamDocs); err != nil {
+		return err
+	}
+
 	// Populate cycle
 	cycle := fixtures.FixtureAPICycle()
 	if err := fixtures.PopulateCycle(ctx, store, cycle, team.ID); err != nil {

@@ -280,6 +280,15 @@ func (q *Queries) DeleteProjectUpdates(ctx context.Context, projectID string) er
 	return err
 }
 
+const deleteTeamDocuments = `-- name: DeleteTeamDocuments :exec
+DELETE FROM documents WHERE team_id = ?
+`
+
+func (q *Queries) DeleteTeamDocuments(ctx context.Context, teamID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteTeamDocuments, teamID)
+	return err
+}
+
 const getInitiative = `-- name: GetInitiative :one
 
 SELECT id, slug_id, name, description, icon, color, status, sort_order, target_date, owner_id, url, created_at, updated_at, synced_at, data FROM initiatives WHERE id = ?
@@ -736,6 +745,17 @@ func (q *Queries) GetSyncSchedule(ctx context.Context, key string) (time.Time, e
 	return last_run, err
 }
 
+const getTeamDocumentsSyncedAt = `-- name: GetTeamDocumentsSyncedAt :one
+SELECT MAX(synced_at) FROM documents WHERE team_id = ?
+`
+
+func (q *Queries) GetTeamDocumentsSyncedAt(ctx context.Context, teamID sql.NullString) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getTeamDocumentsSyncedAt, teamID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
 const getTeamIssueCount = `-- name: GetTeamIssueCount :one
 SELECT COUNT(*) FROM issues WHERE team_id = ?
 `
@@ -849,7 +869,7 @@ func (q *Queries) ListCycleIssues(ctx context.Context, cycleID sql.NullString) (
 }
 
 const listInitiativeDocuments = `-- name: ListInitiativeDocuments :many
-SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE initiative_id = ? ORDER BY title
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, team_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE initiative_id = ? ORDER BY title
 `
 
 func (q *Queries) ListInitiativeDocuments(ctx context.Context, initiativeID sql.NullString) ([]Document, error) {
@@ -872,6 +892,7 @@ func (q *Queries) ListInitiativeDocuments(ctx context.Context, initiativeID sql.
 			&i.IssueID,
 			&i.ProjectID,
 			&i.InitiativeID,
+			&i.TeamID,
 			&i.CreatorID,
 			&i.Url,
 			&i.CreatedAt,
@@ -1115,7 +1136,7 @@ func (q *Queries) ListIssueComments(ctx context.Context, issueID string) ([]Comm
 
 const listIssueDocuments = `-- name: ListIssueDocuments :many
 
-SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE issue_id = ? ORDER BY title
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, team_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE issue_id = ? ORDER BY title
 `
 
 // =============================================================================
@@ -1141,6 +1162,7 @@ func (q *Queries) ListIssueDocuments(ctx context.Context, issueID sql.NullString
 			&i.IssueID,
 			&i.ProjectID,
 			&i.InitiativeID,
+			&i.TeamID,
 			&i.CreatorID,
 			&i.Url,
 			&i.CreatedAt,
@@ -1312,7 +1334,7 @@ func (q *Queries) ListPendingDetailSync(ctx context.Context) ([]ListPendingDetai
 }
 
 const listProjectDocuments = `-- name: ListProjectDocuments :many
-SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE project_id = ? ORDER BY title
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, team_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE project_id = ? ORDER BY title
 `
 
 func (q *Queries) ListProjectDocuments(ctx context.Context, projectID sql.NullString) ([]Document, error) {
@@ -1335,6 +1357,7 @@ func (q *Queries) ListProjectDocuments(ctx context.Context, projectID sql.NullSt
 			&i.IssueID,
 			&i.ProjectID,
 			&i.InitiativeID,
+			&i.TeamID,
 			&i.CreatorID,
 			&i.Url,
 			&i.CreatedAt,
@@ -1658,6 +1681,51 @@ func (q *Queries) ListTeamCycles(ctx context.Context, teamID string) ([]Cycle, e
 			&i.EndsAt,
 			&i.CompletedAt,
 			&i.Progress,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.Data,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamDocuments = `-- name: ListTeamDocuments :many
+SELECT id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, team_id, creator_id, url, created_at, updated_at, synced_at, data FROM documents WHERE team_id = ? ORDER BY title
+`
+
+func (q *Queries) ListTeamDocuments(ctx context.Context, teamID sql.NullString) ([]Document, error) {
+	rows, err := q.db.QueryContext(ctx, listTeamDocuments, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Document{}
+	for rows.Next() {
+		var i Document
+		if err := rows.Scan(
+			&i.ID,
+			&i.SlugID,
+			&i.Title,
+			&i.Icon,
+			&i.Color,
+			&i.Content,
+			&i.ContentData,
+			&i.IssueID,
+			&i.ProjectID,
+			&i.InitiativeID,
+			&i.TeamID,
+			&i.CreatorID,
+			&i.Url,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SyncedAt,
@@ -2818,8 +2886,8 @@ func (q *Queries) UpsertCycle(ctx context.Context, arg UpsertCycleParams) error 
 }
 
 const upsertDocument = `-- name: UpsertDocument :exec
-INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, creator_id, url, created_at, updated_at, synced_at, data)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO documents (id, slug_id, title, icon, color, content, content_data, issue_id, project_id, initiative_id, team_id, creator_id, url, created_at, updated_at, synced_at, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     slug_id = excluded.slug_id,
     title = excluded.title,
@@ -2830,6 +2898,7 @@ ON CONFLICT(id) DO UPDATE SET
     issue_id = excluded.issue_id,
     project_id = excluded.project_id,
     initiative_id = excluded.initiative_id,
+    team_id = excluded.team_id,
     creator_id = excluded.creator_id,
     url = excluded.url,
     created_at = excluded.created_at,
@@ -2849,6 +2918,7 @@ type UpsertDocumentParams struct {
 	IssueID      sql.NullString  `json:"issue_id"`
 	ProjectID    sql.NullString  `json:"project_id"`
 	InitiativeID sql.NullString  `json:"initiative_id"`
+	TeamID       sql.NullString  `json:"team_id"`
 	CreatorID    sql.NullString  `json:"creator_id"`
 	Url          sql.NullString  `json:"url"`
 	CreatedAt    sql.NullTime    `json:"created_at"`
@@ -2869,6 +2939,7 @@ func (q *Queries) UpsertDocument(ctx context.Context, arg UpsertDocumentParams) 
 		arg.IssueID,
 		arg.ProjectID,
 		arg.InitiativeID,
+		arg.TeamID,
 		arg.CreatorID,
 		arg.Url,
 		arg.CreatedAt,

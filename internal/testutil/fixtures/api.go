@@ -352,6 +352,22 @@ func FixtureAPIProjectDocument(projectID string, n int) api.Document {
 	}
 }
 
+// FixtureAPITeamDocument returns a document attached directly to a team.
+func FixtureAPITeamDocument(teamID string, n int) api.Document {
+	user := FixtureAPIUser()
+	return api.Document{
+		ID:        fmt.Sprintf("doc-team-%s-%d", teamID, n),
+		Title:     fmt.Sprintf("Team Document %d", n),
+		Content:   fmt.Sprintf("# Team Document %d\n\nDocument attached to team %s.", n, teamID),
+		SlugID:    fmt.Sprintf("team-doc-%s-%d", teamID, n),
+		URL:       fmt.Sprintf("https://linear.app/test/document/team-doc-%s-%d", teamID, n),
+		CreatedAt: fixtureTime,
+		UpdatedAt: fixtureTime,
+		Creator:   &user,
+		Team:      &api.Team{ID: teamID},
+	}
+}
+
 // FixtureAPIProject returns a test project.
 func FixtureAPIProject() api.Project {
 	user := FixtureAPIUser()

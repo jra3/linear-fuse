@@ -1028,6 +1028,52 @@ func (r *SQLiteRepository) refreshInitiativeDocuments(ctx context.Context, initi
 	return nil
 }
 
+func (r *SQLiteRepository) GetTeamDocuments(ctx context.Context, teamID string) ([]api.Document, error) {
+	docs, err := r.store.Queries().ListTeamDocuments(ctx, sql.NullString{String: teamID, Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list team documents: %w", err)
+	}
+
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindTeamDocs,
+		id:   teamID,
+		syncedAt: func() (interface{}, error) {
+			return r.store.Queries().GetTeamDocumentsSyncedAt(context.Background(), sql.NullString{String: teamID, Valid: true})
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshTeamDocuments(ctx, teamID)
+		},
+		// No orphan handler: a team is the sync root, not a sub-resource, so a
+		// not-found on its docs must not cascade-delete the team (owned by the
+		// full team sync). Upsert-only refresh, like the project/initiative twins.
+	})
+
+	return db.DBDocumentsToAPIDocuments(docs)
+}
+
+// refreshTeamDocuments fetches documents from API and stores in SQLite.
+// Upsert-only (nil Prune): nothing licenses a prune for this fetch.
+func (r *SQLiteRepository) refreshTeamDocuments(ctx context.Context, teamID string) error {
+	docs, err := r.client.GetTeamDocuments(ctx, teamID)
+	if err != nil {
+		return err
+	}
+
+	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Document]{
+		Label: "team document " + teamID,
+		Kind:  "document",
+		Items: docs,
+		Upsert: func(ctx context.Context, doc api.Document) error {
+			params, err := db.APIDocumentToDBDocument(doc)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertDocument(ctx, params)
+		},
+	})
+	return nil
+}
+
 // =============================================================================
 // Initiatives
 // =============================================================================
