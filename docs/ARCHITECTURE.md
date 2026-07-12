@@ -147,10 +147,14 @@ single-list reads decode through `fetchOne` / `fetchNodes` / `fetchConn` over a
 shared `walkPath`. A null terminal is an **error** (not a silent zero value),
 and `fetchNodes` trips loudly if a connection reports `hasNextPage` — paginated
 reads must drain via `fetchAll`, which guards against stalled/repeating cursors
-and caps runaway pagination. Three paths bypass the fronts: the combined
-metadata queries decode their first page into hand-written structs before
-draining remainders, the aliased `GetIssueDetailsBatch` decodes a raw alias map,
-and mutations use their own envelope.
+and caps runaway pagination. The combined metadata queries
+(`GetTeamMetadata`, `GetWorkspace`) and the aliased `GetIssueDetailsBatch` share
+that same `walkPath` descent — the combined queries decode their raw root and
+lift each connection through `connAt` / `firstPageThenDrain` (first page +
+`drain` tail), and the batch walks each alias — so a null parent object,
+connection, or alias is an error, not a silent empty result a sync prune would
+read as "everything was removed". Mutations use their own envelope (`exec.go`),
+which gates on the `success` flag before decoding.
 
 Operational guards:
 

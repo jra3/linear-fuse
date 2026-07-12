@@ -181,6 +181,55 @@ func TestGetTeamMetadataDrainsOverflowingConnections(t *testing.T) {
 	}
 }
 
+// The combined metadata queries decode their first page through the read
+// envelope's walkPath descent (#263): a null parent object or connection is an
+// error, never a silently empty TeamMetadata / workspace that a sync prune
+// would read as "everything was removed".
+
+func TestGetTeamMetadataNullTeamFails(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	// team is null (nonexistent id); the old anonymous-struct decode returned
+	// an empty TeamMetadata with a nil error.
+	mock.SetResponse("TeamMetadata", map[string]any{
+		"team":        nil,
+		"issueLabels": connOf(pf(false, "")),
+	})
+
+	c := NewClient("test")
+	c.SetAPIURL(mock.URL())
+
+	if _, err := c.GetTeamMetadata(context.Background(), "team-1"); err == nil {
+		t.Fatal("expected error for null team, got nil")
+	} else if !strings.Contains(err.Error(), "team") {
+		t.Errorf("error = %q, want it to name the team path", err)
+	}
+}
+
+func TestGetWorkspaceNullConnectionFails(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	// initiatives is null; the drained set feeds a junction-row prune, so a
+	// silent empty must not pass as an authoritative "no initiatives".
+	mock.SetResponse("Workspace", map[string]any{
+		"users":       connOf(pf(false, ""), map[string]any{"id": "u1", "name": "User", "email": "u@example.com"}),
+		"initiatives": nil,
+	})
+
+	c := NewClient("test")
+	c.SetAPIURL(mock.URL())
+
+	if _, err := c.GetWorkspace(context.Background()); err == nil {
+		t.Fatal("expected error for null initiatives connection, got nil")
+	} else if !strings.Contains(err.Error(), "initiatives") {
+		t.Errorf("error = %q, want it to name the initiatives path", err)
+	}
+}
+
 func TestGetWorkspaceDrainsNestedInitiativeProjects(t *testing.T) {
 	t.Parallel()
 	mock := testutil.NewMockLinearServer()

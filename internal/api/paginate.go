@@ -168,6 +168,30 @@ func drain[N any](ctx context.Context, c *Client, query string, vars map[string]
 	return drainFrom(ctx, c, pi.EndCursor, connFetch[N](c, query, vars, path))
 }
 
+// firstPageThenDrain decodes the connection at path from an already-fetched
+// response root — sharing the read envelope's walkPath descent, so a null on
+// the path (a nonexistent parent object, a null connection) is an error, not
+// a silent empty set (see connAt in fetch.go) — then drains its remaining
+// pages and returns every node in original order.
+//
+// It is the combined-query companion to drain: the combined metadata queries
+// (GetTeamMetadata, GetWorkspace) fetch several connections in one response,
+// so they decode the root once and call this per connection rather than
+// paying a query each. query/vars describe the drain's page query (same
+// contract as drain); path locates the connection both in the decoded root
+// and in every drained page.
+func firstPageThenDrain[N any](ctx context.Context, c *Client, root map[string]json.RawMessage, query string, vars map[string]any, path ...string) ([]N, error) {
+	cn, err := connAt[N](root, path)
+	if err != nil {
+		return nil, err
+	}
+	rest, err := drain[N](ctx, c, query, vars, cn.PageInfo, path...)
+	if err != nil {
+		return nil, err
+	}
+	return append(cn.Nodes, rest...), nil
+}
+
 // connFetch adapts one GraphQL query on c into a pageFetch: it copies vars
 // for every page (the caller's map is never mutated), sets "after" only
 // when the cursor is non-empty, executes via c.query, and walks path from

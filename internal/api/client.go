@@ -475,54 +475,45 @@ func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetad
 	if c.LowBudget() {
 		return nil, fmt.Errorf("team metadata %s: %w", teamID, ErrBudget)
 	}
-	var result struct {
-		Team struct {
-			States struct {
-				Nodes []State `json:"nodes"`
-			} `json:"states"`
-			Labels  conn[Label] `json:"labels"`
-			Cycles  conn[Cycle] `json:"cycles"`
-			Members conn[User]  `json:"members"`
-		} `json:"team"`
-		IssueLabels conn[Label] `json:"issueLabels"`
-	}
-
 	vars := map[string]any{
 		"teamId": teamID,
 	}
 
-	err := c.query(ctx, queryTeamMetadata, vars, &result)
+	// Decode the combined response into the raw root, then extract each
+	// connection through the envelope's descent (connAt / firstPageThenDrain):
+	// a null team (nonexistent id) or a null connection is now an error, not a
+	// silently empty TeamMetadata (#263).
+	var root map[string]json.RawMessage
+	if err := c.query(ctx, queryTeamMetadata, vars, &root); err != nil {
+		return nil, err
+	}
+
+	// states is unpaginated — a team's workflow states fit one page, so the
+	// query selects no pageInfo and we take the nodes without draining.
+	statesConn, err := connAt[State](root, []string{"team", "states"})
 	if err != nil {
 		return nil, err
 	}
 
-	teamLabels := result.Team.Labels.Nodes
-	moreLabels, err := drain[Label](ctx, c, queryTeamLabelsPage, vars, result.Team.Labels.PageInfo, "team", "labels")
+	teamLabels, err := firstPageThenDrain[Label](ctx, c, root, queryTeamLabelsPage, vars, "team", "labels")
 	if err != nil {
-		return nil, fmt.Errorf("drain team labels: %w", err)
+		return nil, fmt.Errorf("team labels: %w", err)
 	}
-	teamLabels = append(teamLabels, moreLabels...)
 
-	cycles := result.Team.Cycles.Nodes
-	moreCycles, err := drain[Cycle](ctx, c, queryTeamCyclesPage, vars, result.Team.Cycles.PageInfo, "team", "cycles")
+	cycles, err := firstPageThenDrain[Cycle](ctx, c, root, queryTeamCyclesPage, vars, "team", "cycles")
 	if err != nil {
-		return nil, fmt.Errorf("drain team cycles: %w", err)
+		return nil, fmt.Errorf("team cycles: %w", err)
 	}
-	cycles = append(cycles, moreCycles...)
 
-	members := result.Team.Members.Nodes
-	moreMembers, err := drain[User](ctx, c, queryTeamMembersPage, vars, result.Team.Members.PageInfo, "team", "members")
+	members, err := firstPageThenDrain[User](ctx, c, root, queryTeamMembersPage, vars, "team", "members")
 	if err != nil {
-		return nil, fmt.Errorf("drain team members: %w", err)
+		return nil, fmt.Errorf("team members: %w", err)
 	}
-	members = append(members, moreMembers...)
 
-	workspaceLabels := result.IssueLabels.Nodes
-	moreWorkspace, err := drain[Label](ctx, c, queryWorkspaceLabelsPage, nil, result.IssueLabels.PageInfo, "issueLabels")
+	workspaceLabels, err := firstPageThenDrain[Label](ctx, c, root, queryWorkspaceLabelsPage, nil, "issueLabels")
 	if err != nil {
-		return nil, fmt.Errorf("drain workspace labels: %w", err)
+		return nil, fmt.Errorf("workspace labels: %w", err)
 	}
-	workspaceLabels = append(workspaceLabels, moreWorkspace...)
 
 	projects, err := c.GetTeamProjects(ctx, teamID)
 	if err != nil {
@@ -546,7 +537,7 @@ func (c *Client) GetTeamMetadata(ctx context.Context, teamID string) (*TeamMetad
 	}
 
 	return &TeamMetadata{
-		States:   result.Team.States.Nodes,
+		States:   statesConn.Nodes,
 		Labels:   labels,
 		Cycles:   cycles,
 		Projects: projects,
@@ -580,29 +571,23 @@ func (c *Client) GetWorkspace(ctx context.Context) (*WorkspaceData, error) {
 	if c.LowBudget() {
 		return nil, fmt.Errorf("workspace: %w", ErrBudget)
 	}
-	var result struct {
-		Users       conn[User]       `json:"users"`
-		Initiatives conn[Initiative] `json:"initiatives"`
-	}
-
-	err := c.query(ctx, queryWorkspace, nil, &result)
-	if err != nil {
+	// Decode the combined response into the raw root, then extract each
+	// connection through the envelope's descent so a null users/initiatives
+	// terminal is an error, not a silently empty workspace (#263).
+	var root map[string]json.RawMessage
+	if err := c.query(ctx, queryWorkspace, nil, &root); err != nil {
 		return nil, err
 	}
 
-	users := result.Users.Nodes
-	moreUsers, err := drain[User](ctx, c, queryWorkspaceUsersPage, nil, result.Users.PageInfo, "users")
+	users, err := firstPageThenDrain[User](ctx, c, root, queryWorkspaceUsersPage, nil, "users")
 	if err != nil {
-		return nil, fmt.Errorf("drain users: %w", err)
+		return nil, fmt.Errorf("users: %w", err)
 	}
-	users = append(users, moreUsers...)
 
-	initiatives := result.Initiatives.Nodes
-	moreInitiatives, err := drain[Initiative](ctx, c, queryWorkspaceInitiativesPage, nil, result.Initiatives.PageInfo, "initiatives")
+	initiatives, err := firstPageThenDrain[Initiative](ctx, c, root, queryWorkspaceInitiativesPage, nil, "initiatives")
 	if err != nil {
-		return nil, fmt.Errorf("drain initiatives: %w", err)
+		return nil, fmt.Errorf("initiatives: %w", err)
 	}
-	initiatives = append(initiatives, moreInitiatives...)
 
 	for i := range initiatives {
 		init := &initiatives[i]
@@ -879,24 +864,23 @@ func (c *Client) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (m
 		return nil, err
 	}
 
-	// Parse each aliased result. Unmarshalling into a pointer distinguishes a
-	// null alias (issue not found) from a present payload — a zero
-	// issueDetailsPayload is indistinguishable from a real issue with no
-	// details.
+	// Parse each aliased result through the read envelope's walkPath descent
+	// (#263): a missing or null alias — how GraphQL reports an issue that
+	// doesn't exist — is an error naming the alias, never a zero
+	// issueDetailsPayload whose empty collections would read as "complete" and
+	// prune a live issue's details. Because walkPath already rejects null, the
+	// payload decodes into a value, not a null-distinguishing pointer.
 	result := make(map[string]*IssueDetails, len(issueIDs))
 	for i, id := range issueIDs {
 		alias := fmt.Sprintf("i%d", i)
-		raw, ok := rawResult[alias]
-		if !ok {
-			return nil, fmt.Errorf("issue details batch: alias %s (issue %s) missing from response", alias, id)
-		}
-
-		var issueData *issueDetailsPayload
-		if err := json.Unmarshal(raw, &issueData); err != nil {
+		raw, err := walkPath(rawResult, []string{alias})
+		if err != nil {
 			return nil, fmt.Errorf("issue details batch: alias %s (issue %s): %w", alias, id, err)
 		}
-		if issueData == nil {
-			return nil, fmt.Errorf("issue details batch: alias %s (issue %s) is null", alias, id)
+
+		var issueData issueDetailsPayload
+		if err := json.Unmarshal(raw, &issueData); err != nil {
+			return nil, fmt.Errorf("issue details batch: alias %s (issue %s): %w", alias, id, err)
 		}
 
 		result[id] = issueData.toDetails()
