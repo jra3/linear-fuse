@@ -90,19 +90,7 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 }
 
 func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	if n.lfs.debug {
-		log.Printf("Create comment file: %s", name)
-	}
-
-	// Only allow creating .md files
-	if !strings.HasSuffix(name, ".md") {
-		return nil, nil, 0, syscall.EINVAL
-	}
-
-	node := newCreateFile(n.lfs, n.createComment)
-	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
-
-	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
+	return n.collection().create(ctx, name, out, n.createComment)
 }
 
 // CommentNode represents a single comment file (read-write)

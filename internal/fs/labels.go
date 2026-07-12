@@ -82,21 +82,11 @@ func (n *LabelsNode) newLabelInode(ctx context.Context, name string, label api.L
 		teamID:     n.teamID,
 		editBuffer: editBuffer{content: content},
 	}
+	// api.Label carries no timestamps; use now() as the hand-rolled path did.
+	// newFileInode owns the attr fill, timeouts, refresh dedup, and the
+	// dirty-size clamp (shared with comments/docs).
 	now := time.Now()
-	out.Attr.Mode = 0644 | syscall.S_IFREG
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.Attr.Size = uint64(len(content))
-	out.Attr.SetTimes(&now, &now, &now)
-	out.SetAttrTimeout(5 * time.Second)  // Shorter timeout for writable files
-	out.SetEntryTimeout(5 * time.Second) // Shorter timeout for writable files
-	// The bridge dedups AFTER this handler returns: push the fresh
-	// label/content into the node it will keep (see refresh.go).
-	refreshExisting(n, name, node)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  labelIno(label.ID),
-	}), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), now, now), labelIno(label.ID), 5*time.Second), 0
 }
 
 func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -167,32 +157,7 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 }
 
 func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	if n.lfs.debug {
-		log.Printf("Create label file: %s", name)
-	}
-
-	// Only allow creating .md files
-	if !strings.HasSuffix(name, ".md") {
-		return nil, nil, 0, syscall.EINVAL
-	}
-
-	// If a label already exists with this name, return its read/write node so an
-	// overwrite (mv/cp/editor save-over) updates it in place instead of binding a
-	// write-only _create node to the name and corrupting it (#137).
-	if labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID); err == nil {
-		if label, ok := n.listing(labels).find(name); ok {
-			inode, errno := n.newLabelInode(ctx, name, label, out)
-			if errno != 0 {
-				return nil, nil, 0, errno
-			}
-			return inode, nil, 0, 0
-		}
-	}
-
-	node := newCreateFile(n.lfs, n.createLabel)
-	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
-
-	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
+	return n.collection().create(ctx, name, out, n.createLabel)
 }
 
 // labelFilename returns the filename for a label

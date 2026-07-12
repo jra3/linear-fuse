@@ -84,21 +84,11 @@ func (n *MilestonesNode) buildMilestone(ctx context.Context, name string, m api.
 		projectID:  n.projectID,
 		editBuffer: editBuffer{content: content},
 	}
+	// api.ProjectMilestone carries no timestamps; use now() as the hand-rolled
+	// path did. newFileInode owns the attr fill, timeouts, refresh dedup, and
+	// the dirty-size clamp (shared with comments/docs).
 	now := time.Now()
-	out.Attr.Mode = 0644 | syscall.S_IFREG
-	out.Attr.Uid = n.lfs.uid
-	out.Attr.Gid = n.lfs.gid
-	out.Attr.Size = uint64(len(content))
-	out.SetAttrTimeout(5 * time.Second)
-	out.SetEntryTimeout(5 * time.Second)
-	out.Attr.SetTimes(&now, &now, &now)
-	// The bridge dedups AFTER this handler returns: push the fresh
-	// milestone/content into the node it will keep (see refresh.go).
-	refreshExisting(n, name, node)
-	return n.NewInode(ctx, node, fs.StableAttr{
-		Mode: syscall.S_IFREG,
-		Ino:  milestoneIno(m.ID),
-	}), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), now, now), milestoneIno(m.ID), 5*time.Second), 0
 }
 
 func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno {

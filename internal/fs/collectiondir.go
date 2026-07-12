@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"log"
+	"strings"
 	"syscall"
 	"time"
 
@@ -176,6 +177,35 @@ func (c collectionDir[T]) metaRender(item T) renderFunc {
 		}
 		return b, mtime, ctime
 	}
+}
+
+// create binds a new item file. onFlush is the create trigger for this name
+// (the trio's onFlush, or a name-bound variant where the filename seeds the
+// title, as docs does). Returns the FUSE Create quad.
+//
+// Overwrite in place: a name that already resolves to an item — a save-over of
+// an existing .md (mv/cp/editor) — returns that item's read/write node so the
+// write updates it through the normal truncate+flush path, rather than binding
+// a write-only _create node to the name and corrupting it (#137). Harmless for
+// an indexed collection (comments): Create only fires for a name Lookup missed,
+// and a user-chosen name never matches an index-derived filename, so find()
+// misses and falls through to the create node.
+func (c collectionDir[T]) create(ctx context.Context, name string, out *fuse.EntryOut, onFlush func(ctx context.Context, content []byte) syscall.Errno) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if !strings.HasSuffix(name, ".md") {
+		return nil, nil, 0, syscall.EINVAL
+	}
+	if items, err := c.fetch(ctx); err == nil {
+		if item, ok := c.listing(items).find(name); ok {
+			inode, errno := c.buildFile(ctx, name, item, out)
+			if errno != 0 {
+				return nil, nil, 0, errno
+			}
+			return inode, nil, 0, 0
+		}
+	}
+	node := newCreateFile(c.lfs, onFlush)
+	inode := c.parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
+	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // unlink deletes an item file. _create and .meta sidecars are read-only

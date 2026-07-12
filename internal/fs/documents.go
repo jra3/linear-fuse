@@ -199,35 +199,8 @@ func (n *DocsNode) newDocumentInode(ctx context.Context, name string, doc api.Do
 }
 
 func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	if n.lfs.debug {
-		log.Printf("Create document file: %s", name)
-	}
-
-	// Only allow creating .md files
-	if !strings.HasSuffix(name, ".md") {
-		return nil, nil, 0, syscall.EINVAL
-	}
-
-	// If a document already exists with this name, return its read/write node so
-	// an overwrite (mv tmp doc.md, cp, editor save-over) updates it in place via
-	// the normal truncate+write+flush path. Previously Create always bound a
-	// write-only _create node to the name, leaving the file unreadable and
-	// unwritable (#137).
-	if docs, err := n.getDocuments(ctx); err == nil {
-		if doc, ok := n.listing(docs).find(name); ok {
-			inode, errno := n.newDocumentInode(ctx, name, doc, out)
-			if errno != 0 {
-				return nil, nil, 0, errno
-			}
-			return inode, nil, 0, 0
-		}
-	}
-
-	// The user-chosen filename feeds the title fallback.
-	node := newCreateFile(n.lfs, n.createDocument(name))
-	inode := n.NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG})
-
-	return inode, &createFileHandle{}, fuse.FOPEN_DIRECT_IO, 0
+	// The user-chosen filename feeds the title fallback (createDocument(name)).
+	return n.collection().create(ctx, name, out, n.createDocument(name))
 }
 
 // documentFilename returns the filename for a document
