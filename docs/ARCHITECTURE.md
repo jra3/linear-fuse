@@ -205,8 +205,12 @@ Operational guards:
   interactive tier — the fs render closures thread the FUSE handler ctx for
   exactly this — with a documented never-store rule: a promoted ctx is minted at
   the moment of the call, never kept on a struct or handed to a goroutine.
-- **Circuit breaker** (`client.go`): after 5 consecutive network errors, opens
-  for 30s to stop wasting budget during an outage.
+- **Circuit breaker** (`circuitbreaker.go`): after 5 consecutive network errors,
+  opens for 30s to stop wasting budget during an outage, then lets one half-open
+  probe through. A clock-injected state machine behind `allow()`/`recordFailure()`/
+  `recordSuccess()` (the isolated sibling of the rate budget), driven in tests
+  with a fake clock and no HTTP; `client.go`'s `query()` only calls it and logs
+  the trip edge.
 - **Metrics** (`metrics.go`, `cdn.go`): OTEL counters/histograms for per-op
   GraphQL requests, latency, complexity, and budget decisions
   (admit/defer/wait/ratelimited), plus per-method CDN requests and latency
