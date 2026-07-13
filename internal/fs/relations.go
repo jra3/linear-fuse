@@ -24,21 +24,28 @@ var _ fs.NodeReaddirer = (*RelationsNode)(nil)
 var _ fs.NodeLookuper = (*RelationsNode)(nil)
 var _ fs.NodeGetattrer = (*RelationsNode)(nil)
 
-func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Unlike attachments' best-effort Readdir (two independent sources), both
-	// fetches here hit the same table — a failure in either fails the whole
-	// directory.
-	var fetchErr error
-	listing := n.listing(ctx, &fetchErr)
-	if fetchErr != nil {
-		return nil, syscall.EIO
+// dir constructs the read-only listing head. Unlike attachments' best-effort
+// Readdir (two independent sources), both fetches here hit the same table, so a
+// failure in either fails the whole directory (failReaddirOnError). Every
+// relation file is named "{type}-{IDENTIFIER}.rel", so preFilter skips the two
+// repo fetches for any other name.
+func (n *RelationsNode) dir() listingDir[relationEntry] {
+	return listingDir[relationEntry]{
+		parent:             n,
+		lfs:                n.lfs,
+		trio:               n.trio(),
+		listing:            func(ctx context.Context, fetchErr *error) infoListing[relationEntry] { return n.listing(ctx, fetchErr) },
+		nameOf:             func(e relationEntry) string { return e.name },
+		failReaddirOnError: true,
+		preFilter:          func(name string) bool { return strings.HasSuffix(name, ".rel") },
+		build: func(ctx context.Context, name string, e relationEntry, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+			return n.createRelationFileNode(ctx, name, e.relation, e.isInverse, out)
+		},
 	}
+}
 
-	entries := n.trio().entries()
-	for _, e := range listing.entries() {
-		entries = append(entries, fuse.DirEntry{Name: e.name, Mode: syscall.S_IFREG})
-	}
-	return fs.NewListDirStream(entries), 0
+func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return n.dir().readdir(ctx)
 }
 
 // listing fetches both direction slices and builds the name-derivation module.
@@ -63,25 +70,7 @@ func (n *RelationsNode) trio() collectionTrio {
 }
 
 func (n *RelationsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
-
-	// Every relation file is named "{type}-{IDENTIFIER}.rel"; skip the repo
-	// fetches for anything else.
-	if !strings.HasSuffix(name, ".rel") {
-		return nil, syscall.ENOENT
-	}
-
-	var fetchErr error
-	entry, ok := n.listing(ctx, &fetchErr).find(name)
-	if !ok {
-		if fetchErr != nil {
-			return nil, syscall.EIO
-		}
-		return nil, syscall.ENOENT
-	}
-	return n.createRelationFileNode(ctx, name, entry.relation, entry.isInverse, out)
+	return n.dir().lookup(ctx, name, out)
 }
 
 func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string, rel api.IssueRelation, isInverse bool, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {

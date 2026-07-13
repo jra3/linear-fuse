@@ -27,23 +27,27 @@ var _ fs.NodeReaddirer = (*AttachmentsNode)(nil)
 var _ fs.NodeLookuper = (*AttachmentsNode)(nil)
 var _ fs.NodeGetattrer = (*AttachmentsNode)(nil)
 
-func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Trigger background refresh of sub-resources if stale
-	n.lfs.repo.MaybeRefreshIssueDetails(n.issueID)
-
-	entries := n.trio().entries()
-
-	// Listing is best-effort: a failed fetch lists that family as empty
-	// rather than failing the whole directory.
-	listing := n.listing(ctx, nil)
-	for _, e := range listing.entries() {
-		entries = append(entries, fuse.DirEntry{
-			Name: e.name,
-			Mode: syscall.S_IFREG,
-		})
+// dir constructs the read-only listing head. Readdir refreshes stale
+// sub-resources first, then lists best-effort: a failed fetch lists that family
+// as empty rather than failing the whole directory (failReaddirOnError=false).
+// build dispatches the two item families — embedded CDN files vs external
+// .link attachments — since the heterogeneity lives entirely inside the entry.
+func (n *AttachmentsNode) dir() listingDir[attachmentEntry] {
+	return listingDir[attachmentEntry]{
+		parent:  n,
+		lfs:     n.lfs,
+		trio:    n.trio(),
+		refresh: func(context.Context) { n.lfs.repo.MaybeRefreshIssueDetails(n.issueID) },
+		listing: func(ctx context.Context, fetchErr *error) infoListing[attachmentEntry] {
+			return n.listing(ctx, fetchErr)
+		},
+		nameOf: func(e attachmentEntry) string { return e.name },
+		build:  n.buildAttachment,
 	}
+}
 
-	return fs.NewListDirStream(entries), 0
+func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return n.dir().readdir(ctx)
 }
 
 // listing fetches both item families and builds the name-derivation module.
@@ -69,19 +73,13 @@ func (n *AttachmentsNode) trio() collectionTrio {
 }
 
 func (n *AttachmentsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
+	return n.dir().lookup(ctx, name, out)
+}
 
-	var fetchErr error
-	entry, ok := n.listing(ctx, &fetchErr).find(name)
-	if !ok {
-		if fetchErr != nil {
-			return nil, syscall.EIO
-		}
-		return nil, syscall.ENOENT
-	}
-
+// buildAttachment mounts the read-only node for a resolved entry: an external
+// attachment renders a .link file, an embedded file mounts the lazily-fetched
+// CDN-backed node.
+func (n *AttachmentsNode) buildAttachment(ctx context.Context, name string, entry attachmentEntry, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	if entry.external != nil {
 		return n.createExternalAttachmentNode(ctx, name, *entry.external, out)
 	}

@@ -55,15 +55,24 @@ func (n *LinksNode) liveLinks(ctx context.Context) ([]api.EntityExternalLink, er
 	return n.lfs.client.GetInitiativeLinks(ctx, n.initiativeID)
 }
 
-func (n *LinksNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	entries := n.trio().entries()
-
-	// Listing is best-effort: a failed fetch lists empty rather than failing
-	// the whole directory.
-	for _, e := range n.listing(ctx, nil).entries() {
-		entries = append(entries, fuse.DirEntry{Name: e.name, Mode: syscall.S_IFREG})
+// dir constructs the read-only listing head. Listing is best-effort: a failed
+// fetch lists empty rather than failing the whole directory
+// (failReaddirOnError=false).
+func (n *LinksNode) dir() listingDir[linkEntry] {
+	return listingDir[linkEntry]{
+		parent:  n,
+		lfs:     n.lfs,
+		trio:    n.trio(),
+		listing: func(ctx context.Context, fetchErr *error) infoListing[linkEntry] { return n.listing(ctx, fetchErr) },
+		nameOf:  func(e linkEntry) string { return e.name },
+		build: func(ctx context.Context, name string, e linkEntry, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+			return n.createExternalLinkNode(ctx, name, *e.link, out), 0
+		},
 	}
-	return fs.NewListDirStream(entries), 0
+}
+
+func (n *LinksNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return n.dir().readdir(ctx)
 }
 
 // listing fetches the links and builds the name-derivation module. A failed
@@ -83,19 +92,7 @@ func (n *LinksNode) trio() collectionTrio {
 }
 
 func (n *LinksNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if inode, ok := n.lfs.lookupCollectionTrio(ctx, n, n.trio(), name, out); ok {
-		return inode, 0
-	}
-
-	var fetchErr error
-	entry, ok := n.listing(ctx, &fetchErr).find(name)
-	if !ok {
-		if fetchErr != nil {
-			return nil, syscall.EIO
-		}
-		return nil, syscall.ENOENT
-	}
-	return n.createExternalLinkNode(ctx, name, *entry.link, out), 0
+	return n.dir().lookup(ctx, name, out)
 }
 
 func (n *LinksNode) createExternalLinkNode(ctx context.Context, name string, link api.EntityExternalLink, out *fuse.EntryOut) *fs.Inode {
