@@ -11,7 +11,6 @@ import (
 	"os"
 	"strings"
 	gosync "sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -62,9 +61,11 @@ type Client struct {
 	limiterMu       gosync.Mutex
 	limiterSizedFor float64 // last request limit applied to the limiter
 
-	// Circuit breaker: stop burning rate limiter tokens during connectivity loss
-	consecutiveErrors atomic.Int32
-	circuitOpenUntil  atomic.Int64 // unix timestamp; 0 = closed
+	// breaker stops burning rate-limiter tokens during a connectivity loss:
+	// after circuitBreakerThreshold consecutive transport failures it refuses
+	// requests for circuitBreakerCooldown, then lets one probe through
+	// (circuitbreaker.go).
+	breaker *circuitBreaker
 }
 
 func NewClient(apiKey string) *Client {
@@ -83,6 +84,7 @@ func NewClient(apiKey string) *Client {
 		metrics:    newAPIMetrics(),
 		budget:     newRateBudget(time.Now),
 		limiter:    limiter,
+		breaker:    newCircuitBreaker(circuitBreakerThreshold, circuitBreakerCooldown, time.Now),
 	}
 }
 
@@ -138,12 +140,9 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 
 	// Circuit breaker: skip requests when connectivity is known to be down.
 	// This prevents burning rate limiter tokens on requests that will fail.
-	if openUntil := c.circuitOpenUntil.Load(); openUntil > 0 {
-		if time.Now().Unix() < openUntil {
-			return fmt.Errorf("circuit breaker open: skipping %s (connectivity down)", opName)
-		}
-		// Cooldown expired — allow one probe request through
-		c.circuitOpenUntil.Store(0)
+	// allow() lets one probe through once the cooldown expires.
+	if !c.breaker.allow() {
+		return fmt.Errorf("circuit breaker open: skipping %s (connectivity down)", opName)
 	}
 
 	// Budget gate: the priority-reserve ladder (ratebudget.go). Reads that
@@ -245,8 +244,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// Network/DNS error — track for circuit breaker
-		if n := c.consecutiveErrors.Add(1); n >= circuitBreakerThreshold {
-			c.circuitOpenUntil.Store(time.Now().Add(circuitBreakerCooldown).Unix())
+		if tripped, n := c.breaker.recordFailure(); tripped {
 			log.Printf("[circuit-breaker] opened after %d consecutive errors, cooling down %s", n, circuitBreakerCooldown)
 		}
 		queryErr = fmt.Errorf("failed to execute request: %w", err)
@@ -255,7 +253,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	defer resp.Body.Close()
 
 	// Request succeeded at the network level — reset circuit breaker
-	c.consecutiveErrors.Store(0)
+	c.breaker.recordSuccess()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

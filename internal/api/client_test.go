@@ -959,8 +959,8 @@ func TestCircuitBreakerTripsAfterConsecutiveErrors(t *testing.T) {
 		_, _ = client.GetTeams(context.Background())
 	}
 
-	// Circuit should now be open
-	if client.circuitOpenUntil.Load() == 0 {
+	// Circuit should now be open (openUntil armed by the trip)
+	if client.breaker.openUntil.IsZero() {
 		t.Fatal("expected circuit breaker to be open after consecutive errors")
 	}
 
@@ -983,14 +983,16 @@ func TestCircuitBreakerResetsOnSuccess(t *testing.T) {
 	client := NewClient("test-api-key")
 	client.SetAPIURL(server.URL)
 
-	// Simulate some consecutive errors
-	client.consecutiveErrors.Store(3)
+	// Simulate some consecutive errors (below threshold, so it stays closed)
+	for i := 0; i < 3; i++ {
+		client.breaker.recordFailure()
+	}
 
 	// Successful request should reset the counter
 	_, _ = client.GetTeams(context.Background())
 
-	if client.consecutiveErrors.Load() != 0 {
-		t.Errorf("expected consecutive errors to reset to 0, got %d", client.consecutiveErrors.Load())
+	if client.breaker.consecutiveErrors != 0 {
+		t.Errorf("expected consecutive errors to reset to 0, got %d", client.breaker.consecutiveErrors)
 	}
 }
 
@@ -1007,7 +1009,7 @@ func TestCircuitBreakerCooldownAllowsProbe(t *testing.T) {
 	client.SetAPIURL(server.URL)
 
 	// Set circuit open but with expired cooldown (in the past)
-	client.circuitOpenUntil.Store(time.Now().Add(-1 * time.Second).Unix())
+	client.breaker.openUntil = time.Now().Add(-1 * time.Second)
 
 	// Should allow a probe request through (cooldown expired)
 	_, err := client.GetTeams(context.Background())
@@ -1015,8 +1017,8 @@ func TestCircuitBreakerCooldownAllowsProbe(t *testing.T) {
 		t.Errorf("expected probe request to succeed after cooldown, got: %v", err)
 	}
 
-	// Circuit should be closed now
-	if client.circuitOpenUntil.Load() != 0 {
+	// Circuit should be closed now (probe cleared the deadline)
+	if !client.breaker.openUntil.IsZero() {
 		t.Error("expected circuit to be closed after successful probe")
 	}
 }

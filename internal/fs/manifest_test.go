@@ -22,8 +22,8 @@ func TestDirManifestRoundTrip(t *testing.T) {
 	updated := time.Unix(1_650_050_000, 0)
 
 	issueDir := &IssueDirectoryNode{
-		attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}},
-		issue:    api.Issue{ID: "i1", Identifier: "ENG-1", CreatedAt: created, UpdatedAt: updated},
+		attrNode:   attrNode{BaseNode: BaseNode{lfs: lfs}},
+		entityCell: entityCell[api.Issue]{val: api.Issue{ID: "i1", Identifier: "ENG-1", CreatedAt: created, UpdatedAt: updated}},
 	}
 	projectDir := &ProjectNode{
 		attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}},
@@ -31,7 +31,7 @@ func TestDirManifestRoundTrip(t *testing.T) {
 	}
 	initiativeDir := &InitiativeNode{
 		attrNode:   attrNode{BaseNode: BaseNode{lfs: lfs}},
-		initiative: api.Initiative{ID: "n1", CreatedAt: created, UpdatedAt: updated},
+		entityCell: entityCell[api.Initiative]{val: api.Initiative{ID: "n1", CreatedAt: created, UpdatedAt: updated}},
 	}
 
 	cases := []struct {
@@ -108,8 +108,8 @@ func TestDirManifestSubdirsAreDirents(t *testing.T) {
 	t.Parallel()
 	lfs := testLFS(t)
 	issueDir := &IssueDirectoryNode{
-		attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}},
-		issue:    api.Issue{ID: "i1", Identifier: "ENG-1"},
+		attrNode:   attrNode{BaseNode: BaseNode{lfs: lfs}},
+		entityCell: entityCell[api.Issue]{val: api.Issue{ID: "i1", Identifier: "ENG-1"}},
 	}
 	dirs := map[string]bool{"comments": true, "docs": true, "children": true, "attachments": true, "relations": true}
 	for _, e := range issueDir.manifest().entries() {

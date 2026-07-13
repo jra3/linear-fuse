@@ -19,7 +19,7 @@ import (
 // snapshot and reports the team's times; Getattr comes from the attrNode mixin.
 type ProjectsNode struct {
 	attrNode
-	team api.Team
+	entityCell[api.Team]
 }
 
 var _ fs.NodeReaddirer = (*ProjectsNode)(nil)
@@ -28,24 +28,11 @@ var _ fs.NodeMkdirer = (*ProjectsNode)(nil)
 var _ fs.NodeRmdirer = (*ProjectsNode)(nil)
 var _ fs.NodeGetattrer = (*ProjectsNode)(nil)
 
-// entity/setEntity snapshot and swap the directory's team under the node's
-// volatile-state lock; setEntity is written by the nodeRefresher seam
-// (refresh.go).
-func (p *ProjectsNode) entity() api.Team {
-	p.stateMu.Lock()
-	defer p.stateMu.Unlock()
-	return p.team
-}
-
-func (p *ProjectsNode) setEntity(team api.Team) {
-	p.stateMu.Lock()
-	p.team = team
-	p.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team].
+// refreshFrom is the nodeRefresher seam (refresh.go).
 func (p *ProjectsNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*ProjectsNode); ok {
-		p.setEntity(f.team)
+		p.setEntity(f.entity())
 	}
 }
 

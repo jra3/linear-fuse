@@ -31,7 +31,7 @@ func assigneeHandle(user *api.User) string {
 // reports the team's times; Getattr comes from the attrNode mixin.
 type FilterRootNode struct {
 	attrNode
-	team api.Team
+	entityCell[api.Team]
 }
 
 var _ fs.NodeReaddirer = (*FilterRootNode)(nil)
@@ -40,24 +40,11 @@ var _ fs.NodeGetattrer = (*FilterRootNode)(nil)
 
 var filterCategories = []string{"status", "label", "assignee"}
 
-// entity/setEntity snapshot and swap the directory's team under the node's
-// volatile-state lock; setEntity is written by the nodeRefresher seam
-// (refresh.go).
-func (f *FilterRootNode) entity() api.Team {
-	f.stateMu.Lock()
-	defer f.stateMu.Unlock()
-	return f.team
-}
-
-func (f *FilterRootNode) setEntity(team api.Team) {
-	f.stateMu.Lock()
-	f.team = team
-	f.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team].
+// refreshFrom is the nodeRefresher seam (refresh.go).
 func (f *FilterRootNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if fr, ok := fresh.(*FilterRootNode); ok {
-		f.setEntity(fr.team)
+		f.setEntity(fr.entity())
 	}
 }
 
@@ -77,9 +64,9 @@ func (f *FilterRootNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	for _, cat := range filterCategories {
 		if cat == name {
 			node := &FilterCategoryNode{
-				attrNode: attrNode{BaseNode: BaseNode{lfs: f.lfs}},
-				team:     team,
-				category: name,
+				attrNode:   attrNode{BaseNode: BaseNode{lfs: f.lfs}},
+				entityCell: entityCell[api.Team]{val: team},
+				category:   name,
 			}
 			return f.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), byCategoryIno(team.ID, name), inheritTimeout), 0
 		}
@@ -91,7 +78,7 @@ func (f *FilterRootNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 // The category is immutable identity; the team snapshot is the volatile half.
 type FilterCategoryNode struct {
 	attrNode
-	team     api.Team
+	entityCell[api.Team]
 	category string
 }
 
@@ -99,21 +86,11 @@ var _ fs.NodeReaddirer = (*FilterCategoryNode)(nil)
 var _ fs.NodeLookuper = (*FilterCategoryNode)(nil)
 var _ fs.NodeGetattrer = (*FilterCategoryNode)(nil)
 
-func (f *FilterCategoryNode) entity() api.Team {
-	f.stateMu.Lock()
-	defer f.stateMu.Unlock()
-	return f.team
-}
-
-func (f *FilterCategoryNode) setEntity(team api.Team) {
-	f.stateMu.Lock()
-	f.team = team
-	f.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team]; the
+// category is immutable identity. refreshFrom is the nodeRefresher seam.
 func (f *FilterCategoryNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if fr, ok := fresh.(*FilterCategoryNode); ok {
-		f.setEntity(fr.team)
+		f.setEntity(fr.entity())
 	}
 }
 
@@ -143,10 +120,10 @@ func (f *FilterCategoryNode) Lookup(ctx context.Context, name string, out *fuse.
 	for _, val := range values {
 		if val == name {
 			node := &FilterValueNode{
-				attrNode: attrNode{BaseNode: BaseNode{lfs: f.lfs}},
-				team:     team,
-				category: f.category,
-				value:    name,
+				attrNode:   attrNode{BaseNode: BaseNode{lfs: f.lfs}},
+				entityCell: entityCell[api.Team]{val: team},
+				category:   f.category,
+				value:      name,
 			}
 			return f.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), byValueIno(team.ID, f.category, name), inheritTimeout), 0
 		}
@@ -205,7 +182,7 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 // category/value are immutable identity; the team snapshot is the volatile half.
 type FilterValueNode struct {
 	attrNode
-	team     api.Team
+	entityCell[api.Team]
 	category string
 	value    string
 }
@@ -214,21 +191,11 @@ var _ fs.NodeReaddirer = (*FilterValueNode)(nil)
 var _ fs.NodeLookuper = (*FilterValueNode)(nil)
 var _ fs.NodeGetattrer = (*FilterValueNode)(nil)
 
-func (f *FilterValueNode) entity() api.Team {
-	f.stateMu.Lock()
-	defer f.stateMu.Unlock()
-	return f.team
-}
-
-func (f *FilterValueNode) setEntity(team api.Team) {
-	f.stateMu.Lock()
-	f.team = team
-	f.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team];
+// category/value are immutable identity. refreshFrom is the nodeRefresher seam.
 func (f *FilterValueNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if fr, ok := fresh.(*FilterValueNode); ok {
-		f.setEntity(fr.team)
+		f.setEntity(fr.entity())
 	}
 }
 

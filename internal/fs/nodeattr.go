@@ -66,9 +66,10 @@ func fileAttr(size int, created, updated time.Time) nodeAttr {
 // go-fuse dedups a Lookup onto an already-known node, newDirInode re-runs
 // setAttr on the OLD node with the freshly-fetched times (the attr half of
 // the nodeRefresher seam — see refresh.go), racing with concurrent Getattrs.
-// stateMu doubles as the volatile-state lock for the embedding entity dir
-// nodes (their entity()/setEntity accessors), so an entity swap and its
-// consumers serialize on one lock.
+// stateMu guards only the attr (na) — the embedding entity dir nodes carry the
+// entity in a separate embedded entityCell with its own lock (entitycell.go).
+// The two guard disjoint data (times vs the entity) and no code reads them
+// jointly, so the split is safe; each still serializes its own read/write.
 type attrNode struct {
 	BaseNode
 	stateMu sync.Mutex

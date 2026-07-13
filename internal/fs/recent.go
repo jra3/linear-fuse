@@ -20,31 +20,18 @@ const recentLimit = 50
 // doesn't depend on `ls -t` (which failed under eza in the #148 retro).
 type RecentNode struct {
 	attrNode
-	team api.Team
+	entityCell[api.Team]
 }
 
 var _ fs.NodeReaddirer = (*RecentNode)(nil)
 var _ fs.NodeLookuper = (*RecentNode)(nil)
 var _ fs.NodeGetattrer = (*RecentNode)(nil)
 
-// entity/setEntity snapshot and swap the directory's team under the node's
-// volatile-state lock; setEntity is written by the nodeRefresher seam
-// (refresh.go).
-func (n *RecentNode) entity() api.Team {
-	n.stateMu.Lock()
-	defer n.stateMu.Unlock()
-	return n.team
-}
-
-func (n *RecentNode) setEntity(team api.Team) {
-	n.stateMu.Lock()
-	n.team = team
-	n.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team].
+// refreshFrom is the nodeRefresher seam (refresh.go).
 func (n *RecentNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*RecentNode); ok {
-		n.setEntity(f.team)
+		n.setEntity(f.entity())
 	}
 }
 

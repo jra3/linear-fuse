@@ -75,7 +75,7 @@ func (lfs *LinearFS) issueCreateSpec(teamID, op, key string, dir uint64, mutate 
 // snapshot and reports the team's times; Getattr comes from the attrNode mixin.
 type IssuesNode struct {
 	attrNode
-	team api.Team
+	entityCell[api.Team]
 }
 
 var _ fs.NodeReaddirer = (*IssuesNode)(nil)
@@ -84,24 +84,11 @@ var _ fs.NodeMkdirer = (*IssuesNode)(nil)
 var _ fs.NodeRmdirer = (*IssuesNode)(nil)
 var _ fs.NodeGetattrer = (*IssuesNode)(nil)
 
-// entity/setEntity snapshot and swap the directory's team under the node's
-// volatile-state lock; setEntity is written by the nodeRefresher seam
-// (refresh.go).
-func (n *IssuesNode) entity() api.Team {
-	n.stateMu.Lock()
-	defer n.stateMu.Unlock()
-	return n.team
-}
-
-func (n *IssuesNode) setEntity(team api.Team) {
-	n.stateMu.Lock()
-	n.team = team
-	n.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team].
+// refreshFrom is the nodeRefresher seam (refresh.go).
 func (n *IssuesNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*IssuesNode); ok {
-		n.setEntity(f.team)
+		n.setEntity(f.entity())
 	}
 }
 
@@ -148,7 +135,7 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.ENOENT
 	}
 
-	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
+	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
 	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }
 
@@ -218,7 +205,7 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		return nil, errno
 	}
 
-	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
+	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
 	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }
 
@@ -296,7 +283,7 @@ func (n *IssuesNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 // IssueDirectoryNode represents /teams/{KEY}/issues/{ID}/ directory
 type IssueDirectoryNode struct {
 	attrNode
-	issue api.Issue
+	entityCell[api.Issue]
 }
 
 var _ fs.NodeReaddirer = (*IssueDirectoryNode)(nil)
@@ -320,25 +307,13 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 // the read-through issue.meta, the generated history.md, the .error/.last
 // sidecars, and the comments/docs/children/attachments/relations subdirs. Issue
 // children have no dynamic tail and a uniform 30s timeout.
-// entity/setEntity snapshot and swap the directory's issue under the node's
-// volatile-state lock: setEntity is written by the Rename write-back and the
-// nodeRefresher seam (refresh.go), which pushes freshly-fetched state into
-// this node when go-fuse dedups a later Lookup onto it.
-func (n *IssueDirectoryNode) entity() api.Issue {
-	n.stateMu.Lock()
-	defer n.stateMu.Unlock()
-	return n.issue
-}
-
-func (n *IssueDirectoryNode) setEntity(issue api.Issue) {
-	n.stateMu.Lock()
-	n.issue = issue
-	n.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Issue].
+// setEntity is written by the Rename write-back and the nodeRefresher seam
+// (refresh.go), which pushes freshly-fetched state into this node when go-fuse
+// dedups a later Lookup onto it.
 func (n *IssueDirectoryNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*IssueDirectoryNode); ok {
-		n.setEntity(f.issue)
+		n.setEntity(f.entity())
 	}
 }
 
@@ -649,6 +624,6 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	}
 
 	// Return the new issue as a directory node (Mkdir must return a directory)
-	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, issue: *issue}
+	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
 	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
 }

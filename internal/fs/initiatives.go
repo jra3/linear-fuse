@@ -49,7 +49,7 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 
 	for _, init := range initiatives {
 		if initiativeDirName(init) == name {
-			node := &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, initiative: init}
+			node := &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, entityCell: entityCell[api.Initiative]{val: init}}
 			return i.newDirInode(ctx, out, name, node, dirAttr(init.CreatedAt, init.UpdatedAt), initiativeDirIno(init.ID), 30*time.Second), 0
 		}
 	}
@@ -73,7 +73,7 @@ func initiativeDirName(init api.Initiative) string {
 // InitiativeNode represents a single initiative directory
 type InitiativeNode struct {
 	attrNode
-	initiative api.Initiative
+	entityCell[api.Initiative]
 }
 
 var _ fs.NodeReaddirer = (*InitiativeNode)(nil)
@@ -97,24 +97,12 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 // initiative.md, the read-through initiative.meta, the .error sidecar, and the
 // docs/projects/updates subdirs. Initiative children have no dynamic tail and a
 // 0 timeout.
-// entity/setEntity snapshot and swap the directory's initiative under the
-// node's volatile-state lock: setEntity is written by the Rename write-back
-// and the nodeRefresher seam (refresh.go).
-func (i *InitiativeNode) entity() api.Initiative {
-	i.stateMu.Lock()
-	defer i.stateMu.Unlock()
-	return i.initiative
-}
-
-func (i *InitiativeNode) setEntity(init api.Initiative) {
-	i.stateMu.Lock()
-	i.initiative = init
-	i.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Initiative].
+// setEntity is written by the Rename write-back and the nodeRefresher seam
+// (refresh.go).
 func (i *InitiativeNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*InitiativeNode); ok {
-		i.setEntity(f.initiative)
+		i.setEntity(f.entity())
 	}
 }
 

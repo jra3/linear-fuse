@@ -452,13 +452,16 @@ The seam: construction helpers (`newDirInode`/`newFileInode`/`newRenderInode`/
 the bridge will keep if it dedups — and push the fresh twin's volatile state
 into it via `refreshFrom(fresh)` (`internal/fs/refresh.go`). A nil child means
 the kernel FORGOT it and the fresh node installs — already fresh. Per-type
-rules: snapshot-carrying dir nodes swap their entity under `attrNode.stateMu`
-(which also guards `nodeAttr`, re-stamped by the seam) and expose
-`entity()/setEntity` snapshots — the three entity dirs (issue/project/
-initiative) plus, since the view-dir normalization, `TeamNode`, `UserNode`,
-`CycleDirNode` (team+cycle under one lock), and every team-view dir holding a
-team (`IssuesNode`/`ProjectsNode`/`CyclesNode`/`RecentNode`/the three by/
-filter shapes); the seven editBuffer file nodes go through
+rules: snapshot-carrying dir nodes swap their entity via a `refreshFrom` that
+adopts the fresh twin's entity. The ~11 regular ones carry it in an embedded
+**`entityCell[E]`** with its own lock and promoted `entity()/setEntity` (see
+[[entity-cell]]) — `IssueDirectoryNode`, `InitiativeNode`, `TeamNode`,
+`UserNode`, and every team-view dir holding a team (`IssuesNode`/`ProjectsNode`/
+`CyclesNode`/`RecentNode`/the three by/ filter shapes); the two irregular
+multi-entity dirs (`ProjectNode` team+project, `CycleDirNode` team+cycle) keep
+bespoke `entity()/setEntity` under `attrNode.stateMu`. `attrNode.stateMu` now
+guards only `nodeAttr` (re-stamped by the seam), disjoint from the cell's lock
+and never read jointly with it. The seven editBuffer file nodes go through
 `editBuffer.refresh` — **a dirty buffer always wins** (a user's in-flight
 edit is never clobbered by background sync) — with Getattr snapshotting
 size+times under one lock; renderFile swaps its closure under `renderMu`
@@ -559,6 +562,29 @@ character a FUSE name can never contain): `bydir:{team}`,
 ever auto-assigned anymore — the only deliberate auto-ino residents are the
 write-only `_create` trigger files (stateless, one node per open-write-close)
 and symlinks.
+
+### Entity cell (`entityCell`)
+The **deep module** owning the volatile-state slot every entity-carrying
+directory node embeds: one lock-guarded field the nodeRefresher seam swaps
+when go-fuse dedups a later Lookup onto an already-known node. Before it, each of
+the ~11 regular entity nodes (`TeamNode`, `IssuesNode`, `UserNode`, `CyclesNode`,
+`RecentNode`, `InitiativeNode`, `IssueDirectoryNode`, `ProjectsNode`, the three
+by/ filter nodes) hand-wrote the identical `entity()/setEntity()` lock dance, so
+the "every read/write of the entity goes under the lock" discipline was enforced
+only by copy-paste — a new node could silently omit it. Embedding
+`entityCell[api.Team]` promotes `entity()/setEntity()` onto the node (call sites
+read exactly as before, `n.entity()`, but the accessor is inherited behavior, not
+maintained code); `refreshFrom` stays per-node — the type assertion is a runtime
+dispatch a generic can't own — but shrinks to the assert plus
+`n.setEntity(f.entity())`. It carries its **own** mutex, distinct from the
+sibling `attrNode.stateMu`: the two guard disjoint data (attr times vs the
+entity) and no code reads them jointly, so the split is behavior-preserving and
+each still serializes its own read/write. The two irregular two-entity nodes
+(`ProjectNode` team+project, `CycleDirNode` team+cycle) keep bespoke triplets —
+a two-field cell would be interface width for two callers (the `resolveByName`
+precedent: collapse the regular cases, leave the irregular ones). Pure — the
+round-trip and the lock-holds-under-concurrency (`-race`) are unit-tested with no
+mount (`entitycell_test.go`).
 
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file
@@ -923,10 +949,47 @@ inode leaves the removed item lingering in the kernel cache).
 **Scope, deliberately.** `Create` (3/4, with an overwrite branch) and `Rename`
 (2/4, divergent) stay on the nodes — folding them in would add conditional spec
 width for a weaker payoff; Create is a plausible follow-up ride-along once the
-shape proved out. `relations/` and `attachments/` stay out: they have their own
-listing modules and no `.meta` sidecar. **One recorded behavior change:** the
-labels `Readdir` on a fetch error used to return `EIO`; it now degrades to
-serving the trio, matching the other three (the writable surfaces stay usable).
+shape proved out. `relations/`, `attachments/`, and `links/` stay out of *this*
+module — they have no editable `.md`/`.meta` pair — but share the read-only twin
+[[listing-dir]] instead of a fourth hand-copied head. **One recorded behavior
+change:** the labels `Readdir` on a fetch error used to return `EIO`; it now
+degrades to serving the trio, matching the other three (the writable surfaces
+stay usable).
+
+### Read-only info-listing surface (`listingDir`)
+The **deep module** owning the `Readdir`+`Lookup` head of the *read-only*
+info-listing directories — `attachments/`, `relations/`, `links/`. The read-only
+twin of [[collection-dir]]: those three list info files fetched from a collection
+(embedded files + external attachments; issue relations; project/initiative
+links), each with a `collectionTrio` and `rm`-to-delete, but **none** has the
+editable `{base}.md`/`{base}.meta` pair `collectionDir` serves — so they share
+its orchestration shape without its meta-sidecar and overwrite-in-place
+machinery. Before it, each hand-copied the same skeleton three times: `Readdir` =
+`[refresh?] trio.entries()` + one dirent per listing entry; `Lookup` = trio
+short-circuit → `[preFilter?]` → find → `EIO`/`ENOENT`/build.
+
+Constructed per-call by each node's `dir()` method (the `collection()` grain — no
+embedded state), then delegated to. Generic over the *entry* type `E`; the naming
+round-trip stays in the per-node listing modules ([[attachment-listing]] /
+[[relation-listing]] / `linkListing`) behind the `infoListing[E]` seam (the
+read-only counterpart to `collectionListing[T]`, satisfied structurally by all
+three). The spec is small closures + knobs: `trio`, `refresh?` (nil except
+`attachments`' `MaybeRefreshIssueDetails`), `listing`, `nameOf` (projects the
+dirent name), `failReaddirOnError` (relations fail the whole directory — both
+fetches hit one table so a partial answer would lie; links/attachments list
+best-effort), `preFilter?` (relations skips the two repo reads for any non-`.rel`
+name), and `build` (the **one opaque per-node closure** — the read-only node
+*type*, and for `attachments` the embedded-vs-external dispatch, is what varies).
+
+**Pure decision surface, effectful dispatch.** `readdir` (assembly + on-error
+policy) touches neither `lfs` nor `parent`, and `resolve(name)` (the Lookup
+branch table: `preFilter` reject → `notFound`, fetch error → `fetchErr`, hit →
+entry) is pure — both unit-tested with no mount (`listingdir_test.go`), the way
+`collectionDir`'s `entries`/`classify` are. `lookup` runs the trio short-circuit
+(`lookupCollectionTrio`) then dispatches on `resolve`. Deletion stays on the file
+nodes / `collectionTrio`: an info file already holds its entity, so its `Unlink`
+is a self-contained `deleteSpec`, unlike `collectionDir`'s fetch-then-find delete.
+Pure refactor — no surface or behavior change.
 
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
