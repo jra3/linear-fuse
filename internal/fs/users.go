@@ -49,7 +49,7 @@ func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		if userDirName(user) == name {
 			// api.User carries no time fields; the dir honestly reports zero
 			// (unknown) rather than a fabricated now().
-			node := &UserNode{attrNode: attrNode{BaseNode: BaseNode{lfs: u.lfs}}, user: user}
+			node := &UserNode{attrNode: attrNode{BaseNode: BaseNode{lfs: u.lfs}}, entityCell: entityCell[api.User]{val: user}}
 			return u.newDirInode(ctx, out, name, node, dirAttr(time.Time{}, time.Time{}), userDirIno(user.ID), inheritTimeout), 0
 		}
 	}
@@ -76,31 +76,18 @@ func userDirName(user api.User) string {
 // nodeRefresher seam like the other snapshot carriers.
 type UserNode struct {
 	attrNode
-	user api.User
+	entityCell[api.User]
 }
 
 var _ fs.NodeReaddirer = (*UserNode)(nil)
 var _ fs.NodeLookuper = (*UserNode)(nil)
 var _ fs.NodeGetattrer = (*UserNode)(nil)
 
-// entity/setEntity snapshot and swap the directory's user under the node's
-// volatile-state lock; setEntity is written by the nodeRefresher seam
-// (refresh.go).
-func (u *UserNode) entity() api.User {
-	u.stateMu.Lock()
-	defer u.stateMu.Unlock()
-	return u.user
-}
-
-func (u *UserNode) setEntity(user api.User) {
-	u.stateMu.Lock()
-	u.user = user
-	u.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.User].
+// refreshFrom is the nodeRefresher seam (refresh.go).
 func (u *UserNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*UserNode); ok {
-		u.setEntity(f.user)
+		u.setEntity(f.entity())
 	}
 }
 

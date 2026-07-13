@@ -46,7 +46,7 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	for _, team := range teams {
 		if team.Key == name {
-			node := &TeamNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+			node := &TeamNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 			return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), teamDirIno(team.ID), inheritTimeout), 0
 		}
 	}
@@ -57,32 +57,19 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 // TeamNode represents a single team directory (e.g., /teams/ENG)
 type TeamNode struct {
 	attrNode
-	team api.Team
+	entityCell[api.Team]
 }
 
 var _ fs.NodeReaddirer = (*TeamNode)(nil)
 var _ fs.NodeLookuper = (*TeamNode)(nil)
 var _ fs.NodeGetattrer = (*TeamNode)(nil)
 
-// entity/setEntity snapshot and swap the directory's team under the node's
-// volatile-state lock: setEntity is written by the nodeRefresher seam
-// (refresh.go), which pushes freshly-fetched state into this node when
-// go-fuse dedups a later Lookup onto it.
-func (t *TeamNode) entity() api.Team {
-	t.stateMu.Lock()
-	defer t.stateMu.Unlock()
-	return t.team
-}
-
-func (t *TeamNode) setEntity(team api.Team) {
-	t.stateMu.Lock()
-	t.team = team
-	t.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team].
+// refreshFrom is the nodeRefresher seam (refresh.go): it pushes freshly-fetched
+// state into this node when go-fuse dedups a later Lookup onto it.
 func (t *TeamNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*TeamNode); ok {
-		t.setEntity(f.team)
+		t.setEntity(f.entity())
 	}
 }
 
@@ -147,26 +134,26 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	// The team's view subdirectories hold a team snapshot and report the
 	// team's times: they are (or contain) projections of the team's state.
 	case "by":
-		node := &FilterRootNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		node := &FilterRootNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), byDirIno(team.ID), inheritTimeout), 0
 
 	case "cycles":
-		node := &CyclesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		node := &CyclesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), cyclesDirIno(team.ID), inheritTimeout), 0
 
 	case "projects":
-		node := &ProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		node := &ProjectsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), projectsDirIno(team.ID), inheritTimeout), 0
 
 	case "issues":
-		node := &IssuesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		node := &IssuesNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 		// The stable ino is what makes create/delete invalidations against
 		// issuesDirIno reach the kernel; without it InodeNotify targets an
 		// inode the kernel never learned.
 		return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), issuesDirIno(team.ID), inheritTimeout), 0
 
 	case "recent":
-		node := &RecentNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, team: team}
+		node := &RecentNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 		// 0555: read-only view.
 		na := nodeAttr{mode: 0555 | syscall.S_IFDIR, created: team.CreatedAt, updated: team.UpdatedAt}
 		return t.newDirInode(ctx, out, name, node, na, recentDirIno(team.ID), inheritTimeout), 0

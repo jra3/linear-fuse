@@ -26,31 +26,18 @@ func cycleDirName(cycle api.Cycle) string {
 // snapshot and reports the team's times; Getattr comes from the attrNode mixin.
 type CyclesNode struct {
 	attrNode
-	team api.Team
+	entityCell[api.Team]
 }
 
 var _ fs.NodeReaddirer = (*CyclesNode)(nil)
 var _ fs.NodeLookuper = (*CyclesNode)(nil)
 var _ fs.NodeGetattrer = (*CyclesNode)(nil)
 
-// entity/setEntity snapshot and swap the directory's team under the node's
-// volatile-state lock; setEntity is written by the nodeRefresher seam
-// (refresh.go).
-func (c *CyclesNode) entity() api.Team {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	return c.team
-}
-
-func (c *CyclesNode) setEntity(team api.Team) {
-	c.stateMu.Lock()
-	c.team = team
-	c.stateMu.Unlock()
-}
-
+// entity()/setEntity() are promoted from the embedded entityCell[api.Team].
+// refreshFrom is the nodeRefresher seam (refresh.go).
 func (c *CyclesNode) refreshFrom(fresh fs.InodeEmbedder) {
 	if f, ok := fresh.(*CyclesNode); ok {
-		c.setEntity(f.team)
+		c.setEntity(f.entity())
 	}
 }
 
