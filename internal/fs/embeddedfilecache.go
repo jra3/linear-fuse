@@ -85,6 +85,10 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 	}
 	recordEmbeddedFetch(ctx, "cdn")
 
+	// intentionally best-effort: the disk cache is a fetch optimization, not a
+	// source of truth. `content` is returned this call regardless, and a cache
+	// miss next time simply re-fetches from the CDN — so a failed write self-
+	// corrects with no divergence to surface. (#278)
 	if err := os.WriteFile(diskPath, content, 0644); err != nil {
 		log.Printf("[cache] Warning: failed to cache file %s: %v", file.Filename, err)
 	} else if c.persist != nil {

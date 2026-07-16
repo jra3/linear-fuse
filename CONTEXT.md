@@ -29,6 +29,27 @@ return `EIO` on fatal divergence. Generic over the entity type `T`. Lives in
 a small `ErrorSink` seam plus `Fetch`/`Persist`/`Compare` closures, so it is unit-
 tested with a fake sink and stub closures — no FUSE mount, SQLite, or API.
 
+**Persist gates the edit** (#278, see [[persist-gate]]): a reflection the local
+cache can't serve is retried against the `SQLITE_BUSY`/sync-worker race and, on
+exhaustion (a wedge), fails loud — `.error` + `EIO` — instead of the old
+log-and-swallow. `fresh` is still returned so the caller adopts correct data into
+the live fd, so the `EIO` is a pure wedge signal whose recovery (re-saving) is
+safe because the edit is idempotent. The **fetch** swallow is deliberately kept
+(intent-commented): a failed verification re-read is not a failed write.
+
+### Persist gate (`retrySQLite` / `persistOrEIO`)
+The shared **deep module** (`internal/fs/persistgate.go`) that commits a mutation's
+local reflection: retry the `SQLITE_BUSY`/sync-worker transient (`retrySQLite`,
+the generalization of the delete tail's old `forgetWithRetry` — one backoff
+schedule, a package var so tests zero the sleeps), and on exhaustion fail loud
+with a `.error` that states the **safe recovery**. `persistOrEIO` wraps it for the
+edit tail and the hand-rolled label/document renames; the delete tail calls
+`retrySQLite` directly with its own message. `unconfirmedEditMsg` (edit/rename:
+"re-saving is safe — idempotent") and `unconfirmedDeleteMsg` (delete: "re-run rm
+to clear the phantom") are the two recovery messages; a create's `.error` is the
+non-idempotent counterpart ("do NOT recreate"). This is where "confirmed
+reflection or say why in `.error`" lives in one place for every write direction.
+
 The **front half** of each edit (parse, resolve, call API) stays per-entity. For
 issues the resolve step is itself a deep module — see Name→ID resolution below.
 
@@ -139,11 +160,15 @@ notes itself in `.error` before returning `ENOENT`. Generic over `T`, behind the
 Durability of the forget (a stress test caught a delete whose forget lost a
 `SQLITE_BUSY` race to the sync worker, leaving a phantom file that resurrected
 forever): the connection-level `busy_timeout` DSN pragma makes the race rare,
-the tail retries a failed forget before giving up, a delete of an entity Linear
-already lacks ("Entity not found") is **idempotent success** — the row is still
-forgotten, so re-`rm`ing a phantom heals it — and the details sync **prunes**
-rows a (provably complete, sub-page-cap) fetch no longer returns, scoped by
-issue and a pre-fetch `synced_at` cutoff so rows created mid-fetch survive.
+the tail retries a failed forget through the shared `retrySQLite` gate (see
+[[persist-gate]]) and, on exhaustion (a wedge), **fails loud** — `.error` naming
+the self-heal + `EIO`, skipping `InvalidateDeleted` since the phantom row is
+still present (#278). A delete of an entity Linear already lacks ("Entity not
+found") is **idempotent success** — the row is still forgotten, so re-`rm`ing a
+phantom heals it (and is exactly the recovery the forget-exhaustion `.error`
+names) — and the details sync **prunes** rows a (provably complete, sub-page-cap)
+fetch no longer returns, scoped by issue and a pre-fetch `synced_at` cutoff so
+rows created mid-fetch survive.
 
 ### Name→ID resolution (`resolveIssueUpdate`)
 marshal returns an issue update whose relational fields hold *names* (a state name,

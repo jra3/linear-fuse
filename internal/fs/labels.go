@@ -142,10 +142,18 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), msg)
 		return errno
 	}
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertLabel(ctx, n.teamID, *updatedLabel); err != nil {
-		log.Printf("Warning: failed to upsert label to SQLite: %v", err)
+	// Persist gates the rename: like the edit tail, a reflection the local cache
+	// can't serve fails loud (retry, then EIO) rather than swallowing it. The
+	// rename is on Linear and idempotent, so the .error says re-saving is safe
+	// (#278). See persistgate.go.
+	errKey := collectionErrorKey("labels", n.teamID)
+	if errno := persistOrEIO(ctx, n.lfs, errKey,
+		func(err error) string { return unconfirmedEditMsg("rename label "+name+" -> "+newName, err) },
+		func(ctx context.Context, l *api.Label) error { return n.lfs.UpsertLabel(ctx, n.teamID, *l) },
+		updatedLabel); errno != 0 {
+		return errno
 	}
+	n.lfs.ClearWriteError(errKey)
 	if n.lfs.debug {
 		log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
 	}

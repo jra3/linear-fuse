@@ -163,10 +163,18 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), msg)
 		return errno
 	}
-	// Upsert to SQLite so it's immediately visible
-	if err := n.lfs.UpsertDocument(ctx, *updatedDoc); err != nil {
-		log.Printf("Warning: failed to upsert document to SQLite: %v", err)
+	// Persist gates the rename: like the edit tail, a reflection the local cache
+	// can't serve fails loud (retry, then EIO) rather than swallowing it. The
+	// rename is on Linear and idempotent, so the .error says re-saving is safe
+	// (#278). See persistgate.go.
+	errKey := collectionErrorKey("docs", n.parentID())
+	if errno := persistOrEIO(ctx, n.lfs, errKey,
+		func(err error) string { return unconfirmedEditMsg("rename document "+name+" -> "+newName, err) },
+		func(ctx context.Context, d *api.Document) error { return n.lfs.UpsertDocument(ctx, *d) },
+		updatedDoc); errno != 0 {
+		return errno
 	}
+	n.lfs.ClearWriteError(errKey)
 	if n.lfs.debug {
 		log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
 	}

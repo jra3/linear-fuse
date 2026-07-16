@@ -142,31 +142,44 @@ func TestCommitDelete_Classification(t *testing.T) {
 	})
 }
 
-// TestCommitDelete_ForgetFailureNonFatal: a SQLite delete failure must not fail
-// a delete Linear already accepted — and the coherence policy still runs. The
-// forget is retried before giving up (the stress-tested failure was a
-// transient SQLITE_BUSY racing the sync worker).
-func TestCommitDelete_ForgetFailureNonFatal(t *testing.T) {
+// TestCommitDelete_ForgetFailureFailsLoud: a SQLite forget that survives the
+// retries is fatal (#278). The delete is on Linear, but the phantom row lingers
+// in the listing, so the tail fails loud (EIO + a "re-run rm" .error) and skips
+// the coherence policy (invalidating would only repopulate the phantom). The
+// forget is retried first (the stress-tested failure was a transient SQLITE_BUSY
+// racing the sync worker).
+func TestCommitDelete_ForgetFailureFailsLoud(t *testing.T) {
+	zeroRetryBackoff(t)
 	sink := &fakeDeleteSink{}
 	mutations, forgets, extras := 0, 0, 0
 	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
 	spec.forget = func(context.Context, *ent) error { forgets++; return errors.New("db down") }
 
-	if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
-		t.Fatalf("errno = %v, want 0 (forget failure must be non-fatal)", errno)
+	if errno := commitDelete(context.Background(), sink, spec); errno != syscall.EIO {
+		t.Fatalf("errno = %v, want EIO (an unforgotten delete leaves a phantom)", errno)
 	}
-	if forgets != 3 {
-		t.Errorf("forget attempts = %d, want 3 (retried before giving up)", forgets)
+	if forgets != len(sqliteRetryBackoff) {
+		t.Errorf("forget attempts = %d, want %d (retried before giving up)", forgets, len(sqliteRetryBackoff))
 	}
-	if sink.clears != 1 || sink.invalidates != 1 || extras != 1 {
-		t.Errorf("tail after forget failure: clears=%d invalidates=%d extras=%d, want 1 each",
-			sink.clears, sink.invalidates, extras)
+	// .error cleared (delete succeeded on Linear) then set to the forget failure.
+	if sink.setCalls != 1 || sink.setKey != "K" {
+		t.Errorf("SetWriteError: calls=%d key=%q, want 1 on K", sink.setCalls, sink.setKey)
+	}
+	for _, want := range []string{"SUCCEEDED on Linear", "Re-run rm", "db down"} {
+		if !strings.Contains(sink.setMsg, want) {
+			t.Errorf(".error = %q, want it to contain %q", sink.setMsg, want)
+		}
+	}
+	// The phantom is still present, so the coherence policy must NOT run.
+	if sink.invalidates != 0 || extras != 0 {
+		t.Errorf("coherence ran on forget failure: invalidates=%d extras=%d, want 0", sink.invalidates, extras)
 	}
 }
 
 // TestCommitDelete_ForgetRetrySucceeds: a transient forget failure (SQLITE_BUSY)
 // recovers on retry — no phantom row, no error surfaced.
 func TestCommitDelete_ForgetRetrySucceeds(t *testing.T) {
+	zeroRetryBackoff(t)
 	sink := &fakeDeleteSink{}
 	mutations, forgets, extras := 0, 0, 0
 	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)

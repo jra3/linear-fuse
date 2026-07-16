@@ -510,11 +510,16 @@ write directions: `commitCreate` (`createcommit.go`), `commitWriteBack`
    markdown reformatting, and flags a silent revert/truncation as `EIO`.
 5. **Upserts the fresh result into SQLite** via the tail's per-spec persist
    closure (direct single-entity upserts; the `reconcile` tails belong to the
-   worker and SWR, not this flow). For a create this upsert **gates success**:
-   an entity Linear accepted but that cannot be reflected locally fails loud
-   (`EIO` + a de-dupe `.error` naming it) rather than a silent no-op, because a
-   no-op invites a retry that duplicates the already-created item (#276). It then
-   re-cohers the kernel through the
+   worker and SWR, not this flow). This upsert **gates success** across every
+   write tail: a mutation Linear accepted but that cannot be reflected locally is
+   retried against the `SQLITE_BUSY`/sync-worker race (`retrySQLite`,
+   `persistgate.go`) and, on exhaustion — a wedge — fails loud (`EIO`) with a
+   `.error` naming the **safe recovery** rather than reporting a clean save over a
+   diverged view (#276/#278). The recovery differs by direction: a **create** is
+   NOT retryable (a blind retry duplicates the already-created item), so its
+   `.error` names the entity and says "do not recreate"; an **edit/rename/delete**
+   is idempotent, so its `.error` says re-issuing is safe (a delete adds "re-run
+   `rm` to clear the phantom"). It then re-cohers the kernel through the
    intent-named `kernelNotify` policy methods — `InvalidateCreated` /
    `InvalidateUpdated` / `InvalidateDeleted` / `InvalidateRenamed`. Handlers
    never hand-pick the raw `InodeNotify`/`EntryNotify` primitives; hand-picked
@@ -523,10 +528,20 @@ write directions: `commitCreate` (`createcommit.go`), `commitWriteBack`
 
 **Delete flow:** `rm` of a comment/doc/label/relation/… or `rmdir`-archive of
 an issue/project goes through `commitDelete`: API delete first, then a
-**required** SQLite forget (retried on `SQLITE_BUSY` — the store is the listing
-source of truth, so a skipped forget resurrects the item as a phantom), then
-`InvalidateDeleted`. "Entity not found" on delete is idempotent success, so
-re-`rm`ing a phantom row heals it.
+**required** SQLite forget (retried on `SQLITE_BUSY` via the same `retrySQLite`
+gate — the store is the listing source of truth, so a skipped forget resurrects
+the item as a phantom). On forget exhaustion it fails loud (`EIO`, `.error`
+naming the self-heal) and skips `InvalidateDeleted` (the phantom row is still
+present); otherwise `InvalidateDeleted` runs. "Entity not found" on delete is
+idempotent success, so re-`rm`ing a phantom row heals it.
+
+**Deliberately-swallowed errors carry a one-line intent note.** A best-effort
+write that is *meant* to be swallowed (a startup optimization, a fetch cache, a
+scheduling ledger, a verification re-read of a write that already landed) carries
+an `// intentionally best-effort: <why> (recovers via <path>)` comment, so a
+future audit distinguishes an audited swallow from a load-bearing one it must
+harden. The load-bearing reflections all commit through the `persistgate.go`
+gate above.
 
 **Special filesystem semantics:**
 - **`_create` trigger files** (write-only, mode 0200): reads are rejected with
