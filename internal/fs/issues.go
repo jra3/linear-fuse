@@ -417,7 +417,7 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 		errKey:     issue.ID,
 		dirIno:     n.EmbeddedInode().StableAttr().Ino,
 		fileIno:    issueIno(issue.ID),
-		scratch:    func(oldName string) ([]byte, bool) { return scratchRenameBytes(n, oldName) },
+		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(n, oldName) },
 		flush: func(ctx context.Context, content []byte) syscall.Errno {
 			fileNode = &IssueFileNode{
 				BaseNode:   BaseNode{lfs: n.lfs},
@@ -434,7 +434,7 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 // is aborted before the rename). Only scratch files we created are removable;
 // the canonical entries (issue.md, comments, etc.) are not.
 func (n *IssueDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	if _, ok := scratchRenameBytes(n, name); ok {
+	if _, _, ok := scratchRenameBytes(n, name); ok {
 		return 0
 	}
 	return syscall.EPERM

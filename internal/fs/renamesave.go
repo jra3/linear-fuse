@@ -56,11 +56,12 @@ type renameSaveSpec struct {
 	// the file re-Looks-up to a fresh node instead of serving the spent scratch
 	// inode go-fuse moved into place.
 	fileIno uint64
-	// scratch reports the buffered contents of the scratch file named name, and
-	// whether name refers to a scratch file this filesystem created.
-	// scratchRenameBytes(dir, name) in production; a seam so the tail is
-	// testable without an inode tree.
-	scratch func(name string) ([]byte, bool)
+	// scratch reports the buffered contents of the scratch file named name, a
+	// closure that marks that scratch node consumed, and whether name refers to
+	// a scratch file this filesystem created. scratchRenameBytes(dir, name) in
+	// production; a seam so the tail is testable without an inode tree. The tail
+	// calls consume only on a persisted save (see renameSave).
+	scratch func(name string) (content []byte, consume func(), ok bool)
 	// flush routes the scratch bytes through the entity file's normal edit path:
 	// construct a transient file node with a dirty editBuffer and Flush it
 	// (frontmatter validation, read-your-writes verification, .error handling,
@@ -84,7 +85,7 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		return syscall.EXDEV
 	}
 
-	content, ok := spec.scratch(name)
+	content, consume, ok := spec.scratch(name)
 	if !ok {
 		// name isn't a scratch file we created — e.g. an attempt to rename the
 		// canonical .md itself. The canonical files aren't renamable.
@@ -108,7 +109,12 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		// the stored content, and drop the kernel caches: go-fuse will MvChild
 		// the spent scratch inode over the canonical file, so the file must
 		// re-Lookup to a fresh node rather than serve the consumed scratch node.
+		// Consume the scratch node so that, until the async invalidation lands,
+		// the spent node moved over the canonical name fails loud (ESTALE)
+		// instead of silently accepting writes it can no longer persist — that
+		// ESTALE drives the VFS to re-Lookup the real node.
 		spec.adopt()
+		consume()
 		sink.InvalidateRenamed(spec.dirIno, name, newName, spec.fileIno)
 	}
 

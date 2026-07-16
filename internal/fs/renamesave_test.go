@@ -38,6 +38,7 @@ type renameParent struct{ fs.Inode }
 type recordingRenameSpec struct {
 	spec         renameSaveSpec
 	scratchCalls int
+	consumeCalls int
 	flushCalls   int
 	flushContent []byte
 	adoptCalls   int
@@ -50,9 +51,9 @@ func newRecordingRenameSpec(scratchOK bool, flushErrno syscall.Errno) *recording
 		errKey:     "issue-1",
 		dirIno:     0, // matches the zero-value renameParent inode
 		fileIno:    99,
-		scratch: func(name string) ([]byte, bool) {
+		scratch: func(name string) ([]byte, func(), bool) {
 			r.scratchCalls++
-			return []byte("scratch bytes"), scratchOK
+			return []byte("scratch bytes"), func() { r.consumeCalls++ }, scratchOK
 		},
 		flush: func(ctx context.Context, content []byte) syscall.Errno {
 			r.flushCalls++
@@ -82,6 +83,10 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 		// failure): nothing to adopt, nothing to invalidate.
 		{"flush EINVAL adopts nothing", syscall.EINVAL, 0, 0},
 	}
+	// The scratch buffer is consumed exactly when the rename succeeds (the same
+	// {0, EIO} branch that adopts): go-fuse has moved the spent node over the
+	// canonical name, so it must reject further access. A rejected save leaves
+	// the scratch usable.
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +107,9 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 			}
 			if rec.adoptCalls != tc.wantAdopts {
 				t.Errorf("adopt calls = %d, want %d", rec.adoptCalls, tc.wantAdopts)
+			}
+			if rec.consumeCalls != tc.wantAdopts {
+				t.Errorf("consume calls = %d, want %d (consume rides the adopt branch)", rec.consumeCalls, tc.wantAdopts)
 			}
 			if len(sink.invalidates) != tc.wantInvalidates {
 				t.Fatalf("invalidates = %v, want %d call(s)", sink.invalidates, tc.wantInvalidates)
@@ -143,6 +151,9 @@ func TestRenameSave_WrongTarget(t *testing.T) {
 	if rec.flushCalls != 0 || rec.adoptCalls != 0 || len(sink.invalidates) != 0 {
 		t.Errorf("wrong target must stop before flush: flush=%d adopt=%d invalidates=%v",
 			rec.flushCalls, rec.adoptCalls, sink.invalidates)
+	}
+	if rec.consumeCalls != 0 {
+		t.Errorf("consume calls = %d, want 0 (a rejected rename leaves the scratch usable)", rec.consumeCalls)
 	}
 }
 

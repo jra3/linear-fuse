@@ -98,13 +98,20 @@ canonical files aren't renamable) → target-name guard (`.error` names the one
 writable target, `ENOTSUP`) → flush the bytes through the file's normal edit
 path (a transient file node with a dirty edit buffer, so frontmatter
 validation, read-your-writes verification, and `.error` handling all apply) →
-**adopt on {0, EIO}** → `InvalidateRenamed`. The adopt-on-EIO line is the
-policy, now written once: `Flush` returns `EIO` only on a fatal
+**adopt + consume + `InvalidateRenamed`, all on {0, EIO}**. The adopt-on-EIO
+line is the policy, now written once: `Flush` returns `EIO` only on a fatal
 read-your-writes divergence, by which point the write has already reached
 Linear — refusing to adopt would keep serving stale content while `.error`
-explains the divergence. Lives in `internal/fs/renamesave.go`; each directory
-hands it a small spec (target name, error key, dir/file inos,
-scratch/flush/adopt closures). It depends only on the `renameSink` seam
+explains the divergence. **Consume closes a silent-write-drop race:** on a
+persisted save go-fuse `MvChild`s the spent `scratchFileNode` over the canonical
+name, and until the async `InvalidateRenamed` lands a racing open resolves to
+that dead buffer — whose ops used to `return 0`, silently swallowing a write
+that can no longer persist. A consumed scratch node now returns `ESTALE` from
+`Open`/`Write`/`Flush`/`Fsync`/`Setattr`, so the write fails loud and the
+`ESTALE` on `Open` drives the VFS to re-Lookup the real node (`LOOKUP_REVAL`).
+Lives in `internal/fs/renamesave.go`; each directory hands it a small spec
+(target name, error key, dir/file inos, scratch/flush/adopt closures — the
+scratch closure also returns the per-node consume). It depends only on the `renameSink` seam
 (ErrorSink + `InvalidateRenamed`, satisfied by `*LinearFS` through the
 writeFeedback and kernelNotify promotions), and the scratch lookup is a spec
 closure, so it is unit-tested with a recording sink — no FUSE mount, inode
