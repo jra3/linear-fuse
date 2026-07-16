@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"syscall"
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -82,6 +83,72 @@ func TestScratchFileNode_Truncate(t *testing.T) {
 	}
 	if got := n.bytes(); len(got) != 0 {
 		t.Fatalf("after truncate to 0: %q, want empty", got)
+	}
+}
+
+// TestScratchFileNode_ConsumedRejectsOpen: after a rename has taken the scratch
+// buffer, go-fuse may leave this spent node serving the canonical file's name
+// until the rename invalidation lands. Opening it must fail loud with ESTALE so
+// the kernel re-Lookups the real node, not resolve to a dead buffer that
+// silently accepts writes it will never persist.
+func TestScratchFileNode_ConsumedRejectsOpen(t *testing.T) {
+	t.Parallel()
+	n := &scratchFileNode{}
+
+	// Fresh: Open succeeds — the editor writes the temp file before renaming it.
+	if _, _, errno := n.Open(context.Background(), 0); errno != 0 {
+		t.Fatalf("fresh Open errno=%v, want 0", errno)
+	}
+
+	n.consume()
+
+	if _, _, errno := n.Open(context.Background(), 0); errno != syscall.ESTALE {
+		t.Fatalf("consumed Open errno=%v, want ESTALE", errno)
+	}
+}
+
+// TestScratchFileNode_ConsumedRejectsFlushAndFsync: the flush/fsync of a write
+// that lands on a spent scratch node must fail loud, never the old silent
+// return-0 that reported a dropped write as a clean save.
+func TestScratchFileNode_ConsumedRejectsFlushAndFsync(t *testing.T) {
+	t.Parallel()
+	n := &scratchFileNode{}
+
+	// Fresh: the editor's own close/fsync of the temp file must succeed.
+	if errno := n.Flush(context.Background(), nil); errno != 0 {
+		t.Fatalf("fresh Flush errno=%v, want 0", errno)
+	}
+	if errno := n.Fsync(context.Background(), nil, 0); errno != 0 {
+		t.Fatalf("fresh Fsync errno=%v, want 0", errno)
+	}
+
+	n.consume()
+
+	if errno := n.Flush(context.Background(), nil); errno != syscall.ESTALE {
+		t.Fatalf("consumed Flush errno=%v, want ESTALE", errno)
+	}
+	if errno := n.Fsync(context.Background(), nil, 0); errno != syscall.ESTALE {
+		t.Fatalf("consumed Fsync errno=%v, want ESTALE", errno)
+	}
+}
+
+// TestScratchFileNode_ConsumedRejectsWrite: a write held on an fd opened before
+// the rename consumed the node must not be accepted into a buffer that will
+// never persist — it fails loud so the caller learns the write was not stored.
+func TestScratchFileNode_ConsumedRejectsWrite(t *testing.T) {
+	t.Parallel()
+	n := &scratchFileNode{}
+	n.consume()
+
+	if _, errno := n.Write(context.Background(), nil, []byte("x"), 0); errno != syscall.ESTALE {
+		t.Fatalf("consumed Write errno=%v, want ESTALE", errno)
+	}
+	var in fuse.SetAttrIn
+	in.Size = 0
+	in.Valid = fuse.FATTR_SIZE
+	var out fuse.AttrOut
+	if errno := n.Setattr(context.Background(), nil, &in, &out); errno != syscall.ESTALE {
+		t.Fatalf("consumed Setattr errno=%v, want ESTALE", errno)
 	}
 }
 

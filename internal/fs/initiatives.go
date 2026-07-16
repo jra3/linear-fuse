@@ -175,7 +175,7 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 		errKey:     initiative.ID,
 		dirIno:     i.EmbeddedInode().StableAttr().Ino,
 		fileIno:    initiativeInfoIno(initiative.ID),
-		scratch:    func(oldName string) ([]byte, bool) { return scratchRenameBytes(i, oldName) },
+		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
 		flush: func(ctx context.Context, content []byte) syscall.Errno {
 			fileNode = &InitiativeInfoNode{
 				BaseNode:     BaseNode{lfs: i.lfs},
@@ -192,7 +192,7 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 // Unlink lets editors clean up an abandoned atomic-save temp file. Only scratch
 // files we created are removable; the canonical entries are not.
 func (i *InitiativeNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	if _, ok := scratchRenameBytes(i, name); ok {
+	if _, _, ok := scratchRenameBytes(i, name); ok {
 		return 0
 	}
 	return syscall.EPERM
