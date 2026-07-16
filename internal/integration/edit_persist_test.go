@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,5 +77,60 @@ func TestOffline_MilestoneEditPreservesOtherFields(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("milestone edit lost %q after saving targetDate=%s\n--- got ---\n%s", want, newDate, got)
 		}
+	}
+}
+
+// TestOffline_AtomicRenameEditPersists drives renameSave: an editor's atomic
+// save (write a sibling temp file, rename it over issue.md) must actually LAND
+// the edit, not merely avoid corruption. The existing TestWriteContractAtomicRename*
+// tests assert only no-corruption/no-EROFS and run without the mock mutator, so
+// persist fails there and "a save lands via rename" was unchecked — the exact
+// neighborhood of the spent-scratch drop bug (#280). With the mock, the rename's
+// inline Flush persists and the consumed scratch re-Looks-up to the fresh
+// store-backed node, so the mount serves the edit back.
+func TestOffline_AtomicRenameEditPersists(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	path := issueFilePath(testTeamKey, "TST-1")
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read issue.md: %v", err)
+	}
+	// Restore the original content through the mount so the shared fixture issue
+	// is left unchanged for other tests.
+	t.Cleanup(func() { claudeToolWrite(t, path, orig) })
+
+	doc, err := marshal.Parse(orig)
+	if err != nil {
+		t.Fatalf("parse issue.md: %v", err)
+	}
+	const marker = "atomic rename persistence probe ZZZ"
+	doc.Body = strings.TrimRight(doc.Body, "\n") + "\n\n" + marker
+	edited, err := marshal.Render(doc)
+	if err != nil {
+		t.Fatalf("render issue.md: %v", err)
+	}
+
+	// Atomic save-via-rename: write a sibling scratch temp file, then rename it
+	// over the canonical issue.md. The rename routes the bytes straight through
+	// issue.md's Flush, so a rejected/failed persist surfaces as a rename error.
+	tmp := path + ".tmp.42.cafef00d"
+	if err := os.WriteFile(tmp, edited, 0o644); err != nil {
+		t.Fatalf("write scratch temp: %v", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		t.Fatalf("atomic rename over issue.md should persist with mock mutator: %v", err)
+	}
+
+	after, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("re-read issue.md: %v", err)
+	}
+	if !strings.Contains(string(after), marker) {
+		t.Fatalf("atomic-rename edit did not persist marker %q\n--- got ---\n%s", marker, after)
 	}
 }
