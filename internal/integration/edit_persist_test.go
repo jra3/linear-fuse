@@ -134,3 +134,91 @@ func TestOffline_AtomicRenameEditPersists(t *testing.T) {
 		t.Fatalf("atomic-rename edit did not persist marker %q\n--- got ---\n%s", marker, after)
 	}
 }
+
+// TestOffline_ProjectEditPersistsDescription is the fixture-mode counterpart of
+// TestClaudeToolEditPersistsProjectDescription (which requires LINEARFS_WRITE_TESTS
+// against the live API, so default CI never runs it). With the mock mutator a
+// write+fsync to project.md must persist the edited body, so the mount serves it
+// back — and the untouched name survives the round trip.
+func TestOffline_ProjectEditPersistsDescription(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	path := projectMDPath()
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read project.md: %v", err)
+	}
+	t.Cleanup(func() { claudeToolWrite(t, path, orig) })
+
+	doc, err := marshal.Parse(orig)
+	if err != nil {
+		t.Fatalf("parse project.md: %v", err)
+	}
+	const marker = "project edit persistence probe ZZZ"
+	doc.Body = strings.TrimRight(doc.Body, "\n") + "\n\n" + marker
+	edited, err := marshal.Render(doc)
+	if err != nil {
+		t.Fatalf("render project.md: %v", err)
+	}
+	claudeToolWrite(t, path, edited)
+
+	after, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("re-read project.md: %v", err)
+	}
+	got := string(after)
+	for _, want := range []string{marker, "Test Project"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("project edit lost %q\n--- got ---\n%s", want, got)
+		}
+	}
+}
+
+// TestOffline_InitiativeEditPersistsDescription is the initiative counterpart of
+// the project test: the fixture-mode version of
+// TestClaudeToolEditPersistsInitiativeDescription. A write+fsync to
+// initiative.md persists the edited body through the mock mutator, and the
+// untouched name survives the round trip.
+func TestOffline_InitiativeEditPersistsDescription(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	dir, err := firstInitiativeDir()
+	if err != nil {
+		t.Skipf("no initiative fixture: %v", err)
+	}
+	path := filepath.Join(dir, "initiative.md")
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read initiative.md: %v", err)
+	}
+	t.Cleanup(func() { claudeToolWrite(t, path, orig) })
+
+	doc, err := marshal.Parse(orig)
+	if err != nil {
+		t.Fatalf("parse initiative.md: %v", err)
+	}
+	const marker = "initiative edit persistence probe ZZZ"
+	doc.Body = strings.TrimRight(doc.Body, "\n") + "\n\n" + marker
+	edited, err := marshal.Render(doc)
+	if err != nil {
+		t.Fatalf("render initiative.md: %v", err)
+	}
+	claudeToolWrite(t, path, edited)
+
+	after, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("re-read initiative.md: %v", err)
+	}
+	got := string(after)
+	for _, want := range []string{marker, "Test Initiative"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("initiative edit lost %q\n--- got ---\n%s", want, got)
+		}
+	}
+}
