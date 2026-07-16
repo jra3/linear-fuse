@@ -291,15 +291,13 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 					if err := i.lfs.mutator().AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
 						return err
 					}
-					i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, true)
-					return nil
+					return i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, true)
 				},
 				unlink: func(ctx context.Context, projectID string) error {
 					if err := i.lfs.mutator().RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
 						return err
 					}
-					i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, false)
-					return nil
+					return i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, false)
 				},
 				field: "projects",
 				hint:  ". Use a project slug from teams/<KEY>/projects/.",

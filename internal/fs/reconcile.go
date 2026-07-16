@@ -2,7 +2,7 @@ package fs
 
 import (
 	"context"
-	"log"
+	"fmt"
 
 	"github.com/jra3/linear-fuse/internal/db"
 )
@@ -16,8 +16,8 @@ import (
 // argument order to the shared mutation, and the .error field label.
 //
 // reconcileLinks is the one module that owns the algorithm; the per-side effect
-// (the API mutation plus a best-effort junction-row write) lives in the caller's
-// link/unlink closures. Like resolveIssueUpdate, it is pure of the errorSink and
+// (the API mutation plus the junction-row write, both fatal on failure) lives in
+// the caller's link/unlink closures. Like resolveIssueUpdate, it is pure of the errorSink and
 // of any entity type — it works only on ID strings and name lists — so it is
 // unit-tested with fake closures, no FUSE mount, SQLite, or API. It returns a
 // classifiable error: a *FieldError for a name that will not resolve (→ EINVAL),
@@ -33,8 +33,9 @@ type linkReconcileSpec struct {
 	// *FieldError tagged with field/hint.
 	resolve func(ctx context.Context, name string) (string, error)
 	// link and unlink apply one membership change: the API mutation plus, on
-	// success, a best-effort junction-row write. A returned error aborts the
-	// reconcile and propagates unchanged.
+	// success, the junction-row write (persistInitiativeProjectLink), whose
+	// failure is fatal — a returned error (from either) aborts the reconcile and
+	// propagates unchanged.
 	link   func(ctx context.Context, id string) error
 	unlink func(ctx context.Context, id string) error
 	// field and hint label a resolve failure in .error: field is the frontmatter
@@ -90,12 +91,19 @@ func reconcileLinks(ctx context.Context, spec linkReconcileSpec) error {
 // persistInitiativeProjectLink writes (linked) or removes (!linked) the
 // initiative↔project junction row in SQLite for immediate visibility. Both edit
 // sides drive the same junction with the same (initiativeID, projectID) pair, so
-// this is their shared persist. Best-effort: a cache-write miss is logged, never
-// fatal — a write Linear already accepted must not fail on a stale local cache,
-// and the sync worker reconciles.
-func (lfs *LinearFS) persistInitiativeProjectLink(ctx context.Context, initiativeID, projectID string, linked bool) {
+// this is their shared persist.
+//
+// Reflection gates success (the #276 contract): unlike other edits, a
+// link/unlink bumps NEITHER side's updatedAt, so a swallowed junction-write is a
+// silent-stale the sync worker never reconciles — the failure the create tail
+// now rejects, but here without even a next-sync safety net. So a failed
+// junction write is returned, not logged-and-swallowed: the caller aborts the
+// reconcile and surfaces it in .error + EIO. The mutation itself is idempotent
+// (re-linking an already-linked pair is a no-op), so the message says re-saving
+// is safe rather than warning against a retry.
+func (lfs *LinearFS) persistInitiativeProjectLink(ctx context.Context, initiativeID, projectID string, linked bool) error {
 	if lfs.store == nil {
-		return
+		return nil
 	}
 	if linked {
 		if err := lfs.store.Queries().UpsertInitiativeProject(ctx, db.UpsertInitiativeProjectParams{
@@ -103,14 +111,15 @@ func (lfs *LinearFS) persistInitiativeProjectLink(ctx context.Context, initiativ
 			ProjectID:    projectID,
 			SyncedAt:     db.Now(),
 		}); err != nil {
-			log.Printf("Warning: failed to upsert initiative-project to SQLite: %v", err)
+			return fmt.Errorf("the link was applied on Linear but the local cache could not be updated, so it may not appear locally until the next sync (re-saving is safe): %w", err)
 		}
-		return
+		return nil
 	}
 	if err := lfs.store.Queries().DeleteInitiativeProject(ctx, db.DeleteInitiativeProjectParams{
 		InitiativeID: initiativeID,
 		ProjectID:    projectID,
 	}); err != nil {
-		log.Printf("Warning: failed to delete initiative-project from SQLite: %v", err)
+		return fmt.Errorf("the unlink was applied on Linear but the local cache could not be updated, so it may still appear locally until the next sync (re-saving is safe): %w", err)
 	}
+	return nil
 }

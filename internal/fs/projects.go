@@ -455,15 +455,13 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 					if err := p.lfs.mutator().AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
 						return err
 					}
-					p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, true)
-					return nil
+					return p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, true)
 				},
 				unlink: func(ctx context.Context, initiativeID string) error {
 					if err := p.lfs.mutator().RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
 						return err
 					}
-					p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, false)
-					return nil
+					return p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, false)
 				},
 				field: "initiatives",
 				hint:  ". See initiatives/ for valid initiative names.",

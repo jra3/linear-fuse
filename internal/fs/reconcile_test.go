@@ -3,8 +3,12 @@ package fs
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jra3/linear-fuse/internal/config"
+	"github.com/jra3/linear-fuse/internal/db"
 )
 
 // reconcileLinks is pure of the errorSink, SQLite, and the API — it drives only
@@ -101,5 +105,44 @@ func TestReconcileLinksMutationFailurePropagates(t *testing.T) {
 	var ferr *FieldError
 	if errors.As(err, &ferr) {
 		t.Errorf("a mutation failure must not be classified as a FieldError")
+	}
+}
+
+// TestPersistInitiativeProjectLinkFailsLoud confirms the #276 contract for the
+// one link path sync can't reconcile (link/unlink bumps no updatedAt): a failed
+// junction write is returned, not swallowed, so the reconcile aborts and the
+// edit surfaces it in .error rather than a silent stale. A nil store (SQLite
+// disabled) stays a no-op. The mutation is idempotent, so the message tells the
+// caller re-saving is safe.
+func TestPersistInitiativeProjectLinkFailsLoud(t *testing.T) {
+	lfs, err := NewLinearFS(&config.Config{APIKey: "test-key"}, true)
+	if err != nil {
+		t.Fatalf("NewLinearFS: %v", err)
+	}
+	defer lfs.Close()
+
+	// No store -> no-op, no error (SQLite disabled path).
+	if err := lfs.persistInitiativeProjectLink(context.Background(), "init-1", "proj-1", true); err != nil {
+		t.Errorf("nil store should be a no-op, got %v", err)
+	}
+
+	// A closed store makes every query fail; the write must now be reported.
+	store, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	lfs.store = store
+	if err := store.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+
+	for _, linked := range []bool{true, false} {
+		err := lfs.persistInitiativeProjectLink(context.Background(), "init-1", "proj-1", linked)
+		if err == nil {
+			t.Fatalf("linked=%v: junction-write failure must be returned, not swallowed", linked)
+		}
+		if !strings.Contains(err.Error(), "applied on Linear") || !strings.Contains(err.Error(), "re-saving is safe") {
+			t.Errorf("linked=%v: message = %q, want it to note the Linear-succeeded + safe-retry guidance", linked, err.Error())
+		}
 	}
 }
