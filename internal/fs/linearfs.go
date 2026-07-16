@@ -266,7 +266,11 @@ func (lfs *LinearFS) EnableSQLiteCache(dbPath string) error {
 			}
 			if v != nil {
 				lfs.repo.SetCurrentUser(v)
-				// Persist viewer ID so next startup is instant
+				// Persist viewer ID so next startup is instant. intentionally
+				// best-effort: this is a startup optimization, not a user write —
+				// a failure just means the next startup re-fetches the viewer via
+				// the API (this same path). No .error surface, nothing to fail
+				// loud to. (#278)
 				if err := store.Queries().SetViewerUserID(ctx, db.SetViewerUserIDParams{
 					UserID:   v.ID,
 					SyncedAt: db.Now(),

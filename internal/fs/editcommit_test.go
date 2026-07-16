@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"errors"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -131,22 +132,41 @@ func TestCommitWriteBack_NilPersist(t *testing.T) {
 	}
 }
 
-// TestCommitWriteBack_PersistFailureNonFatal confirms a SQLite upsert failure
-// does not fail a write Linear already accepted.
-func TestCommitWriteBack_PersistFailureNonFatal(t *testing.T) {
+// TestCommitWriteBack_PersistFailureFailsLoud confirms a SQLite upsert failure
+// that survives the retries is fatal (#278): the write is on Linear but its
+// reflection is unconfirmed (a wedge), so the tail must return EIO with a
+// "re-saving is safe" .error — while still returning `fresh` so the caller can
+// adopt correct data into the live fd.
+func TestCommitWriteBack_PersistFailureFailsLoud(t *testing.T) {
+	zeroRetryBackoff(t)
 	sink := &fakeSink{}
 	fresh := &ent{title: "x"}
+	persists := 0
 	got, errno := commitWriteBack(context.Background(), sink, writeBackSpec[ent]{
 		errKey:  "K",
 		fetch:   func(context.Context) (*ent, error) { return fresh, nil },
-		persist: func(context.Context, *ent) error { return errors.New("db down") },
+		persist: func(context.Context, *ent) error { persists++; return errors.New("db down") },
 		compare: func(*ent) []writeBackResult { return nil },
 	})
-	if errno != 0 {
-		t.Errorf("errno = %v, want 0 (persist failure must be non-fatal)", errno)
+	if errno != syscall.EIO {
+		t.Errorf("errno = %v, want EIO on unconfirmed reflection", errno)
 	}
-	if got != fresh || sink.clears != 1 {
-		t.Errorf("expected success despite persist failure; got fresh=%v clears=%d", got, sink.clears)
+	if got != fresh {
+		t.Errorf("fresh = %v, want it returned for adopt even on EIO", got)
+	}
+	if persists != len(sqliteRetryBackoff) {
+		t.Errorf("persist attempts = %d, want %d (retried before giving up)", persists, len(sqliteRetryBackoff))
+	}
+	if sink.setCalls != 1 || sink.setKey != "K" {
+		t.Errorf("SetWriteError: calls=%d key=%q, want 1 on K", sink.setCalls, sink.setKey)
+	}
+	for _, want := range []string{"SUCCEEDED on Linear", "Re-saving is safe", "db down"} {
+		if !strings.Contains(sink.setMsg, want) {
+			t.Errorf(".error = %q, want it to contain %q", sink.setMsg, want)
+		}
+	}
+	if sink.clears != 0 {
+		t.Errorf("ClearWriteError calls = %d, want 0 on a loud failure", sink.clears)
 	}
 }
 

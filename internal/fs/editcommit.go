@@ -60,10 +60,13 @@ type writeBackSpec[T any] struct {
 // .error but let the close succeed).
 //
 // Contract:
-//   - fetch fails        → the write succeeded but is unverified: clear .error,
-//     return (nil, 0). The handler keeps its prior local state.
-//   - persist fails      → non-fatal: log and continue (a cache miss must not fail
-//     a write that Linear accepted).
+//   - fetch fails        → the write succeeded but its verification re-read did
+//     not: clear .error, return (nil, 0). A read hiccup is not a failed write;
+//     sync reconciles via updatedAt. The handler keeps its prior local state.
+//   - persist fails      → retried; on exhaustion the reflection is unconfirmed
+//     (a wedge), so fail loud: set a "re-saving is safe" .error and return
+//     (fresh, EIO). fresh is still returned so the caller adopts correct data
+//     into the live fd — the EIO is a wedge signal, not data loss (#278).
 //   - no divergence      → clear .error, return (fresh, 0).
 //   - benign reformat    → set .error note, return (fresh, 0).
 //   - fatal divergence   → set .error, return (fresh, syscall.EIO).
@@ -73,16 +76,29 @@ func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackS
 
 	fresh, err := spec.fetch(ctx)
 	if err != nil {
-		// The API accepted the write; we just could not re-read it to verify.
-		// Treat as success (sync will reconcile) and clear any stale error.
+		// intentionally best-effort: fetch is the verification RE-READ of a write
+		// that already landed (spec.mutate ran in the front half). A read hiccup
+		// (network/timeout/rate-limit) is not a failed write, so we do NOT fail
+		// loud here — EIO on a landed write would trigger a pointless re-PUT, and
+		// retrying the fetch during a rate-limit only digs deeper. The write bumped
+		// updatedAt, so sync reconciles the row; the user's own buffer is what the
+		// fd shows. Treat as success and clear any stale error. (#278)
 		log.Printf("Warning: failed to fetch fresh entity after update (%s): %v", spec.errKey, err)
 		sink.ClearWriteError(spec.errKey)
 		return nil, 0
 	}
 
 	if spec.persist != nil {
-		if err := spec.persist(ctx, fresh); err != nil {
-			log.Printf("Warning: failed to upsert entity to SQLite (%s): %v", spec.errKey, err)
+		// Persist gates the edit: a reflection the local cache can't serve fails
+		// loud (retry, then EIO) rather than swallowing the divergence. The write
+		// is already on Linear and `fresh` is returned so the caller adopts it into
+		// the live fd, so the EIO rides alongside correct data — a pure wedge
+		// signal whose recovery (re-saving) is safe because the edit is idempotent
+		// (#278). See persistgate.go.
+		if errno := persistOrEIO(ctx, sink, spec.errKey,
+			func(err error) string { return unconfirmedEditMsg(spec.errKey, err) },
+			spec.persist, fresh); errno != 0 {
+			return fresh, errno
 		}
 	}
 

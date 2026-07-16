@@ -1350,6 +1350,10 @@ type detailOutcome struct {
 func (w *Worker) deferDetailIssues(ctx context.Context, issues []issueRef) {
 	now := db.Now()
 	for _, issue := range issues {
+		// intentionally best-effort: the pending-detail-sync ledger only schedules
+		// detail fetches. A dropped enqueue means this issue's details wait for the
+		// next staleness-driven cycle to re-enqueue it — degraded freshness, never
+		// lost user data, so there is no errno surface to fail loud to. (#278)
 		_ = w.store.Queries().UpsertPendingDetailSync(ctx, db.UpsertPendingDetailSyncParams{
 			IssueID:    issue.ID,
 			Identifier: issue.Identifier,

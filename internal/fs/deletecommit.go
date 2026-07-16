@@ -52,9 +52,9 @@ type deleteSpec[T any] struct {
 	// forget removes the row from SQLite. Required: the store is the source of
 	// truth for listings, so a skipped forget resurrects the deleted item — and
 	// the details sync is not guaranteed to prune it. The tail retries a failed
-	// forget (SQLITE_BUSY races the sync worker) before giving up; an ultimate
-	// failure is non-fatal for the caller but leaves a phantom until a details
-	// sync prunes it or a repeat rm hits the already-gone self-heal path.
+	// forget (SQLITE_BUSY races the sync worker) before giving up; on exhaustion
+	// (a wedge) it fails loud with EIO and a .error naming the self-heal (re-run
+	// rm hits the already-gone path and forgets the row).
 	forget func(ctx context.Context, target *T) error
 	// dir + name drive the kernel-cache coherence policy: the module always
 	// runs InvalidateDeleted(dir, name).
@@ -71,8 +71,10 @@ type deleteSpec[T any] struct {
 //   - find fails          -> .error gets the cause, classified errno.
 //   - find returns nil    -> .error notes the unknown name, ENOENT.
 //   - mutate fails        -> .error gets the cause, EAGAIN if transient else EIO.
-//   - success             -> clear .error, forget SQLite (non-fatal on failure),
-//     InvalidateDeleted(dir, name), run extras, errno 0.
+//   - forget fails (retried) -> .error names the self-heal (re-run rm), EIO; the
+//     coherence policy is skipped since the phantom row is still present.
+//   - success             -> clear .error, forget SQLite, InvalidateDeleted(dir,
+//     name), run extras, errno 0.
 func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T]) (errno syscall.Errno) {
 	start := time.Now()
 	defer func() { recordFuseOp(ctx, "delete", start, errno) }()
@@ -111,8 +113,18 @@ func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T
 
 	sink.ClearWriteError(spec.key)
 
-	if err := forgetWithRetry(ctx, spec.forget, target); err != nil {
-		log.Printf("ERROR: failed to delete entity from SQLite after retries (%s): %v — the deleted item will linger until a details sync prunes it or it is rm'd again", spec.key, err)
+	// Forget gates the delete's local completion: the store is the listing source
+	// of truth, so a dropped forget leaves a phantom row the details sync cannot
+	// always prune. Retry the transient (SQLITE_BUSY racing the sync worker); on
+	// exhaustion — a wedge — fail loud rather than reporting a clean rm over a
+	// listing that still shows the item. Skip the coherence policy: the row is
+	// still present, so invalidating would only repopulate the phantom. The
+	// message names the self-heal (re-run rm) and clarifies it's a local-cache
+	// failure, not a server one (#278).
+	if err := retrySQLite(ctx, spec.forget, target); err != nil {
+		log.Printf("ERROR: failed to forget deleted entity from SQLite after retries (%s): %v — re-run rm to clear the lingering listing entry", spec.key, err)
+		sink.SetWriteError(spec.key, unconfirmedDeleteMsg(spec.op, spec.name, err.Error()))
+		return syscall.EIO
 	}
 
 	sink.InvalidateDeleted(spec.dir, spec.name)
@@ -120,29 +132,6 @@ func commitDelete[T any](ctx context.Context, sink deleteSink, spec deleteSpec[T
 		spec.invalidateExtra(target)
 	}
 	return 0
-}
-
-// forgetWithRetry runs the spec's forget, retrying twice with backoff. The
-// forget must not be lost to a transient failure: the API delete has already
-// succeeded, so a dropped forget leaves a phantom row the details sync cannot
-// always prune. SQLITE_BUSY from racing the sync worker is the observed
-// transient (now largely prevented by the connection-level busy_timeout).
-func forgetWithRetry[T any](ctx context.Context, forget func(ctx context.Context, target *T) error, target *T) error {
-	var err error
-	for attempt, delay := range []time.Duration{0, 200 * time.Millisecond, time.Second} {
-		if delay > 0 {
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return err
-			}
-		}
-		if err = forget(ctx, target); err == nil {
-			return nil
-		}
-		log.Printf("forget attempt %d failed: %v", attempt+1, err)
-	}
-	return err
 }
 
 // remoteAlreadyGone reports whether a delete mutation failed because Linear no

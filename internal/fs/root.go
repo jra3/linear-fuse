@@ -316,11 +316,14 @@ Failure model (every writable surface follows this contract):
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - Rate-limited or timed out (the write did not take effect; retry shortly) -> EAGAIN
 - Backend/API failure -> EIO
-- A create Linear accepted but that could not be cached locally -> EIO, with a
-  .error that NAMES the created entity and warns not to recreate it: the item
-  already exists remotely, so a blind retry would duplicate it. Restart the
-  daemon or wait for the next sync to reflect it. (A succeeded create is never a
-  silent no-op — it either appears locally or says why in .error.)
+- A mutation Linear accepted but whose local reflection fails after retries ->
+  EIO, and the .error names the SAFE RECOVERY. For a create it NAMES the entity
+  and warns NOT to recreate it (the item exists remotely, so a blind retry
+  duplicates it). For an edit/rename/delete the change is idempotent, so the
+  .error says re-issuing is safe -- for a delete, re-running rm also clears the
+  lingering listing entry. Either way, restart the daemon or wait for the next
+  sync to reflect it. (A succeeded mutation is never a silent no-op -- it appears
+  locally or says why in .error.)
 - Whatever the errno, the reason lands in .error; success clears it. Always read
   .error after any failed write (including an atomic-save rename that returns
   EINVAL/EMSGSIZE) — the errno alone cannot carry the reason.
