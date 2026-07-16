@@ -510,7 +510,11 @@ write directions: `commitCreate` (`createcommit.go`), `commitWriteBack`
    markdown reformatting, and flags a silent revert/truncation as `EIO`.
 5. **Upserts the fresh result into SQLite** via the tail's per-spec persist
    closure (direct single-entity upserts; the `reconcile` tails belong to the
-   worker and SWR, not this flow) and re-cohers the kernel through the
+   worker and SWR, not this flow). For a create this upsert **gates success**:
+   an entity Linear accepted but that cannot be reflected locally fails loud
+   (`EIO` + a de-dupe `.error` naming it) rather than a silent no-op, because a
+   no-op invites a retry that duplicates the already-created item (#276). It then
+   re-cohers the kernel through the
    intent-named `kernelNotify` policy methods — `InvalidateCreated` /
    `InvalidateUpdated` / `InvalidateDeleted` / `InvalidateRenamed`. Handlers
    never hand-pick the raw `InodeNotify`/`EntryNotify` primitives; hand-picked

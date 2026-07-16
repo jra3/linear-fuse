@@ -153,22 +153,34 @@ func TestCommitCreate_Classification(t *testing.T) {
 	}
 }
 
-// TestCommitCreate_PersistFailureNonFatal confirms a SQLite upsert failure does
-// not fail a create Linear already accepted — and the coherence policy still runs.
-func TestCommitCreate_PersistFailureNonFatal(t *testing.T) {
+// TestCommitCreate_PersistFailureFailsLoud confirms a SQLite upsert failure is
+// fatal to the create (#276): the entity is live on Linear but unconfirmed
+// locally, so the tail must return EIO, write a de-dupe .error naming the
+// entity, and NOT advertise the create via .last or run the coherence policy.
+func TestCommitCreate_PersistFailureFailsLoud(t *testing.T) {
 	sink := &fakeCreateSink{}
 	persists, extras := 0, 0
-	spec := okSpec(&ent{title: "x"}, &persists, &extras)
+	spec := okSpec(&ent{title: "Fix bug"}, &persists, &extras)
+	spec.result = func(e *ent) WriteResult { return WriteResult{Identifier: "ENG-5567", Title: e.title} }
 	spec.persist = func(context.Context, *ent) error { return errors.New("db down") }
 
 	got, errno := commitCreate(context.Background(), sink, spec)
 
-	if errno != 0 || got == nil {
-		t.Fatalf("got (%v, %v), want success despite persist failure", got, errno)
+	if errno != syscall.EIO || got != nil {
+		t.Fatalf("got (%v, %v), want (nil, EIO) on unconfirmed reflection", got, errno)
 	}
-	if sink.appends != 1 || sink.invalidates != 1 || extras != 1 {
-		t.Errorf("tail after persist failure: appends=%d invalidates=%d extras=%d, want 1 each",
-			sink.appends, sink.invalidates, extras)
+	if sink.setCalls != 1 || sink.setKey != "K" {
+		t.Errorf("SetWriteError: calls=%d key=%q, want 1 call on K", sink.setCalls, sink.setKey)
+	}
+	for _, want := range []string{"SUCCEEDED on Linear", "ENG-5567", "do NOT recreate", "db down"} {
+		if !strings.Contains(sink.setMsg, want) {
+			t.Errorf(".error = %q, want it to contain %q", sink.setMsg, want)
+		}
+	}
+	// A create the local cache can't serve must not be advertised or cohered.
+	if sink.appends != 0 || sink.clears != 0 || sink.invalidates != 0 || extras != 0 {
+		t.Errorf("success tail ran on unconfirmed reflection: appends=%d clears=%d invalidates=%d extras=%d",
+			sink.appends, sink.clears, sink.invalidates, extras)
 	}
 }
 

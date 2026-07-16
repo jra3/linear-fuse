@@ -316,6 +316,11 @@ Failure model (every writable surface follows this contract):
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - Rate-limited or timed out (the write did not take effect; retry shortly) -> EAGAIN
 - Backend/API failure -> EIO
+- A create Linear accepted but that could not be cached locally -> EIO, with a
+  .error that NAMES the created entity and warns not to recreate it: the item
+  already exists remotely, so a blind retry would duplicate it. Restart the
+  daemon or wait for the next sync to reflect it. (A succeeded create is never a
+  silent no-op — it either appears locally or says why in .error.)
 - Whatever the errno, the reason lands in .error; success clears it. Always read
   .error after any failed write (including an atomic-save rename that returns
   EINVAL/EMSGSIZE) — the errno alone cannot carry the reason.

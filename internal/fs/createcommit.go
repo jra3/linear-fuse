@@ -14,9 +14,12 @@ import (
 //
 // Every create surface (_create trigger writes and mkdir) ends the same way once
 // the handler has content in hand: call the mutation, classify a failure into an
-// errno plus a .error message, and on success clear .error, record the new
-// identity in .last, persist to SQLite, and re-coher the kernel's view of the
-// collection directory. That tail was copy-pasted across eight handlers and
+// errno plus a .error message, and on success persist to SQLite, clear .error,
+// record the new identity in .last, and re-coher the kernel's view of the
+// collection directory. Persist gates success: an entity Linear accepted but
+// that cannot be reflected locally fails loud (EIO + a de-dupe .error) rather
+// than reporting a silent no-op that invites a duplicate-creating retry (#276).
+// That tail was copy-pasted across eight handlers and
 // drifted where it was hand-rolled: attachments and relations never wrote .last,
 // only projects and issues classified rate limits as EAGAIN, and creates never
 // refreshed the recent/ view.
@@ -70,8 +73,10 @@ type createSpec[T any] struct {
 	// create surface reports its resulting identity (#149/#151).
 	result func(created *T) WriteResult
 	// persist upserts the created entity to SQLite for immediate visibility.
-	// Always explicit — no mutation wrapper hides an upsert. Failure is
-	// non-fatal: a cache miss must not fail a create Linear accepted.
+	// Always explicit — no mutation wrapper hides an upsert. Failure is FATAL to
+	// the create: an entity Linear accepted but that we cannot reflect locally
+	// must fail loud (EIO + a de-dupe .error), not report a clean success — a
+	// silent no-op is what invites a duplicate-creating retry (#276).
 	persist func(ctx context.Context, created *T) error
 	// dir is the collection directory's inode. The tail always applies the
 	// kernel-cache coherence policy InvalidateCreated(dir, entryName(created)) —
@@ -94,8 +99,11 @@ type createSpec[T any] struct {
 //   - mutate returns *notFoundError -> .error gets Detail(), ENOENT.
 //   - mutate fails transiently      -> .error gets a retry hint, EAGAIN.
 //   - mutate fails otherwise        -> .error gets the cause, EIO.
-//   - success                       -> clear .error, append .last, persist
-//     (non-fatal on failure), InvalidateCreated(dir, name), run extras, errno 0.
+//   - mutate ok but persist fails   -> .error gets a de-dupe message naming the
+//     created entity, EIO (the item is live on Linear but not cached locally;
+//     .last is NOT appended and the caller must not recreate it — #276).
+//   - success                       -> persist, clear .error, append .last,
+//     InvalidateCreated(dir, name), run extras, errno 0.
 func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T]) (created *T, errno syscall.Errno) {
 	start := time.Now()
 	defer func() { recordFuseOp(ctx, "create", start, errno) }()
@@ -112,12 +120,25 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 		return nil, errno
 	}
 
+	// The mutation succeeded — the entity is live on Linear. A create is only
+	// truly done once that entity is reflected in the local cache, so persist is
+	// part of the success contract, not a best-effort afterthought. If it fails
+	// (a wedged or locked SQLite write, or the create timeout firing on a stuck
+	// write), we must NOT report a clean success: a silent no-op is exactly what
+	// let succeeded creates look like nothing happened, so callers retried and
+	// duplicated them on the board (#276). Fail loud instead — record the cause
+	// and the entity's identity in .error, and return EIO — so the caller sees
+	// the create is in an unconfirmed state and does not blindly recreate it.
+	// .last is appended only after confirmed reflection, so it never advertises a
+	// create the local cache can't yet serve.
+	if err := spec.persist(ctx, created); err != nil {
+		log.Printf("Reflection failed after %s succeeded on Linear: %v", spec.op, err)
+		sink.SetWriteError(spec.key, unconfirmedReflectionMsg(spec.op, spec.result(created), err))
+		return nil, syscall.EIO
+	}
+
 	sink.ClearWriteError(spec.key)
 	sink.AppendWriteSuccess(spec.key, spec.result(created))
-
-	if err := spec.persist(ctx, created); err != nil {
-		log.Printf("Warning: failed to upsert created entity to SQLite (%s): %v", spec.key, err)
-	}
 
 	name := ""
 	if spec.entryName != nil {
@@ -128,6 +149,28 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 		spec.invalidateExtra(created)
 	}
 	return created, 0
+}
+
+// unconfirmedReflectionMsg renders the .error for a create that Linear accepted
+// but whose local reflection (the SQLite upsert) failed or timed out. It names
+// the created entity so the caller can find the already-created item and,
+// crucially, tells them NOT to recreate it — a blind retry on a create that only
+// *looked* like a no-op is what turned one incident's creates into duplicates
+// (#276). The identity comes from the create's own WriteResult (identifier where
+// the entity has one, else its title).
+func unconfirmedReflectionMsg(op string, r WriteResult, err error) string {
+	who := r.Identifier
+	if who == "" {
+		who = r.Title
+	}
+	if who != "" {
+		who = " (" + who + ")"
+	}
+	return "Operation: " + op +
+		"\nError: this create SUCCEEDED on Linear" + who +
+		" but its result could not be cached locally: " + err.Error() +
+		". The entity already exists — do NOT recreate it (a blind retry duplicates it)." +
+		" Restart the daemon (systemctl --user restart linearfs) or wait for the next sync to reflect it."
 }
 
 // classifyMutationErr maps a mutation failure to its .error message and errno.
