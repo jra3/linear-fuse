@@ -1,15 +1,12 @@
 package integration
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/marshal"
-	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
 
 // These tests exercise the per-entity EDIT (Flush) persistence paths OFFLINE,
@@ -22,17 +19,6 @@ import (
 // edit-commit tail (mutate → upsert SQLite → read-your-writes) for these
 // entities.
 
-// restoreFixtureMilestone re-seeds the "Alpha Release" milestone so an edit
-// test does not leave the shared mount's store mutated for later tests.
-func restoreFixtureMilestone(t *testing.T) {
-	t.Helper()
-	if err := fixtures.PopulateProjectMilestones(context.Background(), testStore,
-		fixtures.FixtureAPIProject().ID,
-		[]api.ProjectMilestone{fixtures.FixtureAPIProjectMilestone()}); err != nil {
-		t.Errorf("restore fixture milestone: %v", err)
-	}
-}
-
 // TestOffline_MilestoneEditPreservesOtherFields drives MilestoneFileNode.Flush:
 // editing ONE milestone field (targetDate) and saving must land the change while
 // leaving the untouched fields (name, description) intact on re-read. This is the
@@ -44,7 +30,6 @@ func TestOffline_MilestoneEditPreservesOtherFields(t *testing.T) {
 		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
 	}
 	enableMockMutations(t)
-	t.Cleanup(func() { restoreFixtureMilestone(t) })
 
 	path := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones", "Alpha Release.md")
 
@@ -52,6 +37,10 @@ func TestOffline_MilestoneEditPreservesOtherFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read milestone: %v", err)
 	}
+	// Restore the original content through the mount so the shared fixture
+	// milestone is left unchanged for later tests (a store-only reseed would not
+	// refresh this live node's adopted buffer — see TestFixtureMilestoneFile).
+	t.Cleanup(func() { claudeToolWrite(t, path, orig) })
 
 	// Edit only the targetDate, leaving name and description untouched.
 	doc, err := marshal.Parse(orig)
