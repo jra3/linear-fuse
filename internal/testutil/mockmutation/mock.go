@@ -326,14 +326,42 @@ func (c *Client) CreateProjectMilestone(ctx context.Context, projectID, name, de
 }
 
 func (c *Client) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
-	m := &api.ProjectMilestone{ID: milestoneID}
+	// The real mutation returns the WHOLE updated milestone, so overlay the input
+	// onto the current stored state — echoing only the edited fields would zero
+	// the untouched ones (name/targetDate/sortOrder), corrupting the upsert.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := c.currentMilestoneLocked(ctx, milestoneID)
 	if input.Name != nil {
 		m.Name = *input.Name
 	}
 	if input.Description != nil {
 		m.Description = *input.Description
 	}
-	return m, nil
+	if input.TargetDate != nil {
+		td := *input.TargetDate
+		if td == "" {
+			m.TargetDate = nil
+		} else {
+			m.TargetDate = &td
+		}
+	}
+	if input.SortOrder != nil {
+		m.SortOrder = *input.SortOrder
+	}
+	return &m, nil
+}
+
+// currentMilestoneLocked returns the current stored milestone, else a bare {ID}.
+// The caller must hold c.mu. Milestones have no post-edit record (no verify
+// getter); the store is the source of truth for the merge base.
+func (c *Client) currentMilestoneLocked(ctx context.Context, id string) api.ProjectMilestone {
+	if c.store != nil {
+		if row, err := c.store.Queries().GetProjectMilestone(ctx, id); err == nil {
+			return db.DBMilestoneToAPIProjectMilestone(row)
+		}
+	}
+	return api.ProjectMilestone{ID: id}
 }
 
 func (c *Client) DeleteProjectMilestone(ctx context.Context, milestoneID string) error { return nil }
