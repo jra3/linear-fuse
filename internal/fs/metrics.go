@@ -12,7 +12,7 @@ package fs
 // so there are no nil checks or enable flags.
 //
 // Coverage is deliberately the cheap choke points, not every node type: the
-// three commit tails (create/delete/flush), the editBuffer read/write and
+// four commit tails (create/delete/flush/rename), the editBuffer read/write and
 // renderFile read entry points, and the embedded-file fetch tiers. Lookup and
 // readdir are spread across every node type with no shared tail, so they are
 // left out rather than instrumented invasively — see #264.
@@ -46,7 +46,7 @@ func fuseMetricsInstance() fuseMetrics {
 		m := otel.Meter("linearfs/fuse")
 		fuseMetricsInst = fuseMetrics{
 			ops: telemetry.MustInt64Counter(m, "linearfs.fuse.ops",
-				metric.WithDescription("FUSE operations completed, by op (create|delete|flush|write|read) and outcome (ok|einval|eio|eagain|...)")),
+				metric.WithDescription("FUSE operations completed, by op (create|delete|flush|rename|write|read) and outcome (ok|einval|eio|eagain|...)")),
 			duration: telemetry.MustFloat64Histogram(m, "linearfs.fuse.duration",
 				metric.WithUnit("s"),
 				metric.WithDescription("FUSE operation duration by op")),
