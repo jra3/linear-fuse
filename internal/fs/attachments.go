@@ -26,6 +26,7 @@ type AttachmentsNode struct {
 var _ fs.NodeReaddirer = (*AttachmentsNode)(nil)
 var _ fs.NodeLookuper = (*AttachmentsNode)(nil)
 var _ fs.NodeGetattrer = (*AttachmentsNode)(nil)
+var _ fs.NodeUnlinker = (*AttachmentsNode)(nil)
 
 // dir constructs the read-only listing head. Readdir refreshes stale
 // sub-resources first, then lists best-effort: a failed fetch lists that family
@@ -41,13 +42,44 @@ func (n *AttachmentsNode) dir() listingDir[attachmentEntry] {
 		listing: func(ctx context.Context, fetchErr *error) infoListing[attachmentEntry] {
 			return n.listing(ctx, fetchErr)
 		},
-		nameOf: func(e attachmentEntry) string { return e.name },
-		build:  n.buildAttachment,
+		nameOf:      func(e attachmentEntry) string { return e.name },
+		build:       n.buildAttachment,
+		unlinkEntry: n.deleteAttachment,
 	}
 }
 
 func (n *AttachmentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return n.dir().readdir(ctx)
+}
+
+func (n *AttachmentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	return n.dir().unlink(ctx, name)
+}
+
+// deleteAttachment is the attachments unlink tail (listingDir.unlinkEntry). Only
+// external attachments (*.link) are deletable: an embedded file is CDN-backed
+// bytes referenced from the issue's markdown, with no attachment entity to
+// delete, so rm on one is EPERM. The resolved entry already holds the entity.
+func (n *AttachmentsNode) deleteAttachment(ctx context.Context, name string, e attachmentEntry) syscall.Errno {
+	if e.external == nil {
+		return syscall.EPERM
+	}
+	att := *e.external
+	return commitDelete(ctx, n.lfs, deleteSpec[api.Attachment]{
+		op:  `delete attachment "` + name + `"`,
+		key: collectionErrorKey("attachments", n.issueID),
+		find: func(context.Context) (*api.Attachment, error) {
+			return &att, nil
+		},
+		mutate: func(ctx context.Context, a *api.Attachment) error {
+			return n.lfs.mutator().DeleteAttachment(ctx, a.ID)
+		},
+		forget: func(ctx context.Context, a *api.Attachment) error {
+			return n.lfs.store.Queries().DeleteAttachment(ctx, a.ID)
+		},
+		dir:  attachmentsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 // listing fetches both item families and builds the name-derivation module.
@@ -202,15 +234,13 @@ func (n *EmbeddedFileNode) Read(ctx context.Context, fh fs.FileHandle, dest []by
 }
 
 // ExternalAttachmentNode represents a .link file for an external attachment
-// (GitHub PR, URL, etc.). It embeds renderFile for Open/Read/Getattr and keeps
-// only its Unlink.
+// (GitHub PR, URL, etc.). Deletion is the parent AttachmentsNode's Unlink, so
+// this node embeds renderFile for Open/Read/Getattr only.
 type ExternalAttachmentNode struct {
 	renderFile
 	attachment api.Attachment
 	issueID    string
 }
-
-var _ fs.NodeUnlinker = (*ExternalAttachmentNode)(nil)
 
 // refreshFrom adopts a fresh twin's attachment and render closure
 // (refresh.go); renderMu doubles as the entity-field lock.
@@ -237,29 +267,6 @@ func externalAttachmentContent(att api.Attachment) string {
 		sb.WriteString(fmt.Sprintf("source: %s\n", att.SourceType))
 	}
 	return sb.String()
-}
-
-func (n *ExternalAttachmentNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	// The file node already holds its entity, so find just hands it over.
-	return commitDelete(ctx, n.lfs, deleteSpec[api.Attachment]{
-		op:  `delete attachment "` + name + `"`,
-		key: collectionErrorKey("attachments", n.issueID),
-		find: func(context.Context) (*api.Attachment, error) {
-			// Snapshot: a concurrent refresh (refresh.go) may swap the field.
-			n.renderMu.Lock()
-			att := n.attachment
-			n.renderMu.Unlock()
-			return &att, nil
-		},
-		mutate: func(ctx context.Context, a *api.Attachment) error {
-			return n.lfs.mutator().DeleteAttachment(ctx, a.ID)
-		},
-		forget: func(ctx context.Context, a *api.Attachment) error {
-			return n.lfs.store.Queries().DeleteAttachment(ctx, a.ID)
-		},
-		dir:  attachmentsDirIno(n.issueID),
-		name: name,
-	})
 }
 
 // createAttachment is the attachments create surface's onFlush: parse

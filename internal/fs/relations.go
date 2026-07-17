@@ -23,6 +23,7 @@ type RelationsNode struct {
 var _ fs.NodeReaddirer = (*RelationsNode)(nil)
 var _ fs.NodeLookuper = (*RelationsNode)(nil)
 var _ fs.NodeGetattrer = (*RelationsNode)(nil)
+var _ fs.NodeUnlinker = (*RelationsNode)(nil)
 
 // dir constructs the read-only listing head. Unlike attachments' best-effort
 // Readdir (two independent sources), both fetches here hit the same table, so a
@@ -41,11 +42,43 @@ func (n *RelationsNode) dir() listingDir[relationEntry] {
 		build: func(ctx context.Context, name string, e relationEntry, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 			return n.createRelationFileNode(ctx, name, e.relation, e.isInverse, out)
 		},
+		unlinkEntry: n.deleteRelation,
 	}
 }
 
 func (n *RelationsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return n.dir().readdir(ctx)
+}
+
+func (n *RelationsNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	return n.dir().unlink(ctx, name)
+}
+
+// deleteRelation is the relations unlink tail (listingDir.unlinkEntry): only an
+// outgoing relation can be deleted — the inverse endpoint (blocked-by-*.rel) is
+// a projection of the same edge, so deleting it is EPERM (delete from the owning
+// side). The resolved entry already holds the relation, so find just hands it
+// over.
+func (n *RelationsNode) deleteRelation(ctx context.Context, name string, e relationEntry) syscall.Errno {
+	if e.isInverse {
+		return syscall.EPERM
+	}
+	rel := e.relation
+	return commitDelete(ctx, n.lfs, deleteSpec[api.IssueRelation]{
+		op:  `delete relation "` + name + `"`,
+		key: collectionErrorKey("relations", n.issueID),
+		find: func(context.Context) (*api.IssueRelation, error) {
+			return &rel, nil
+		},
+		mutate: func(ctx context.Context, r *api.IssueRelation) error {
+			return n.lfs.mutator().DeleteIssueRelation(ctx, r.ID)
+		},
+		forget: func(ctx context.Context, r *api.IssueRelation) error {
+			return n.lfs.store.Queries().DeleteIssueRelation(ctx, r.ID)
+		},
+		dir:  relationsDirIno(n.issueID),
+		name: name,
+	})
 }
 
 // listing fetches both direction slices and builds the name-derivation module.
@@ -97,16 +130,15 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string,
 	return n.newRenderInode(ctx, out, name, node, relationIno(inoKey), 30*time.Second), 0
 }
 
-// RelationFileNode represents a relation file (read-only info + rm-to-delete).
-// It embeds renderFile for Open/Read/Getattr and keeps only its Unlink.
+// RelationFileNode represents a relation file (read-only info). Deletion is the
+// parent RelationsNode's Unlink, so this node embeds renderFile for
+// Open/Read/Getattr only.
 type RelationFileNode struct {
 	renderFile
 	relation  api.IssueRelation
 	isInverse bool
 	issueID   string // parent issue (for the relations/ .error key)
 }
-
-var _ fs.NodeUnlinker = (*RelationFileNode)(nil)
 
 // refreshFrom adopts a fresh twin's relation and render closure (refresh.go);
 // renderMu doubles as the entity-field lock.
@@ -119,34 +151,6 @@ func (n *RelationFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 	n.render = f.render
 	n.relation, n.isInverse, n.issueID = f.relation, f.isInverse, f.issueID
 	n.renderMu.Unlock()
-}
-
-func (n *RelationFileNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	// Only allow deleting outgoing relations (not inverse)
-	if n.isInverse {
-		return syscall.EPERM
-	}
-
-	// The file node already holds its entity, so find just hands it over.
-	return commitDelete(ctx, n.lfs, deleteSpec[api.IssueRelation]{
-		op:  `delete relation "` + name + `"`,
-		key: collectionErrorKey("relations", n.issueID),
-		find: func(context.Context) (*api.IssueRelation, error) {
-			// Snapshot: a concurrent refresh (refresh.go) may swap the field.
-			n.renderMu.Lock()
-			rel := n.relation
-			n.renderMu.Unlock()
-			return &rel, nil
-		},
-		mutate: func(ctx context.Context, r *api.IssueRelation) error {
-			return n.lfs.mutator().DeleteIssueRelation(ctx, r.ID)
-		},
-		forget: func(ctx context.Context, r *api.IssueRelation) error {
-			return n.lfs.store.Queries().DeleteIssueRelation(ctx, r.ID)
-		},
-		dir:  relationsDirIno(n.issueID),
-		name: name,
-	})
 }
 
 // createRelation is the relations create surface's onFlush: parse the

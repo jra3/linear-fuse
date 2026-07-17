@@ -27,6 +27,7 @@ type LinksNode struct {
 var _ fs.NodeReaddirer = (*LinksNode)(nil)
 var _ fs.NodeLookuper = (*LinksNode)(nil)
 var _ fs.NodeGetattrer = (*LinksNode)(nil)
+var _ fs.NodeUnlinker = (*LinksNode)(nil)
 
 // parentID returns the single non-empty parent ID (project or initiative). Used
 // for the .error/.last key, the kernel-cache inode, and the create input.
@@ -68,11 +69,37 @@ func (n *LinksNode) dir() listingDir[linkEntry] {
 		build: func(ctx context.Context, name string, e linkEntry, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 			return n.createExternalLinkNode(ctx, name, *e.link, out), 0
 		},
+		unlinkEntry: n.deleteLink,
 	}
 }
 
 func (n *LinksNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return n.dir().readdir(ctx)
+}
+
+func (n *LinksNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	return n.dir().unlink(ctx, name)
+}
+
+// deleteLink is the links unlink tail (listingDir.unlinkEntry). The resolved
+// entry already holds the link, so find just hands it over.
+func (n *LinksNode) deleteLink(ctx context.Context, name string, e linkEntry) syscall.Errno {
+	link := *e.link
+	return commitDelete(ctx, n.lfs, deleteSpec[api.EntityExternalLink]{
+		op:  `delete link "` + name + `"`,
+		key: collectionErrorKey("links", n.parentID()),
+		find: func(context.Context) (*api.EntityExternalLink, error) {
+			return &link, nil
+		},
+		mutate: func(ctx context.Context, l *api.EntityExternalLink) error {
+			return n.lfs.mutator().DeleteEntityExternalLink(ctx, l.ID)
+		},
+		forget: func(ctx context.Context, l *api.EntityExternalLink) error {
+			return n.lfs.store.Queries().DeleteEntityExternalLink(ctx, l.ID)
+		},
+		dir:  linksDirIno(n.parentID()),
+		name: name,
+	})
 }
 
 // listing fetches the links and builds the name-derivation module. A failed
@@ -111,15 +138,14 @@ func (n *LinksNode) createExternalLinkNode(ctx context.Context, name string, lin
 }
 
 // ExternalLinkNode represents a .link file for a project/initiative external
-// link. It embeds renderFile for Open/Read/Getattr and keeps only its Unlink.
+// link. Deletion is the parent LinksNode's Unlink, so this node embeds
+// renderFile for Open/Read/Getattr only.
 type ExternalLinkNode struct {
 	renderFile
 	link         api.EntityExternalLink
 	projectID    string
 	initiativeID string
 }
-
-var _ fs.NodeUnlinker = (*ExternalLinkNode)(nil)
 
 // refreshFrom adopts a fresh twin's link and render closure (refresh.go);
 // renderMu doubles as the entity-field lock.
@@ -140,35 +166,6 @@ func externalLinkContent(link api.EntityExternalLink) string {
 	sb.WriteString(fmt.Sprintf("label: %s\n", link.Label))
 	sb.WriteString(fmt.Sprintf("url: %s\n", link.URL))
 	return sb.String()
-}
-
-func (n *ExternalLinkNode) parentID() string {
-	if n.projectID != "" {
-		return n.projectID
-	}
-	return n.initiativeID
-}
-
-func (n *ExternalLinkNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	return commitDelete(ctx, n.lfs, deleteSpec[api.EntityExternalLink]{
-		op:  `delete link "` + name + `"`,
-		key: collectionErrorKey("links", n.parentID()),
-		find: func(context.Context) (*api.EntityExternalLink, error) {
-			// Snapshot: a concurrent refresh (refresh.go) may swap the field.
-			n.renderMu.Lock()
-			link := n.link
-			n.renderMu.Unlock()
-			return &link, nil
-		},
-		mutate: func(ctx context.Context, l *api.EntityExternalLink) error {
-			return n.lfs.mutator().DeleteEntityExternalLink(ctx, l.ID)
-		},
-		forget: func(ctx context.Context, l *api.EntityExternalLink) error {
-			return n.lfs.store.Queries().DeleteEntityExternalLink(ctx, l.ID)
-		},
-		dir:  linksDirIno(n.parentID()),
-		name: name,
-	})
 }
 
 // createLink is the links create surface's onFlush: parse "url [label]" and run

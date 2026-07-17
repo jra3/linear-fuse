@@ -34,9 +34,12 @@ import (
 // grain), then delegated to — listingDir holds no state the node doesn't already
 // have.
 //
-// Deletion (Unlink) and creation stay on the file nodes / collectionTrio: an
-// info file already holds its entity, so its Unlink is a self-contained
-// deleteSpec, unlike collectionDir's fetch-then-find delete.
+// Deletion (Unlink) lives here on the DIRECTORY node, not the file node:
+// go-fuse dispatches unlink to the parent directory's ops (bridge.go), never to
+// the child file, and reports success when the parent has no NodeUnlinker. So
+// listingDir owns the resolve→EIO/ENOENT symmetry and defers the per-entity
+// mutation (and any reject guard — inverse relations, embedded files) to
+// unlinkEntry. Creation stays on collectionTrio.
 type listingDir[E any] struct {
 	// parent is the collection directory node itself, satisfying InodeEmbedder
 	// for the trio short-circuit and supplying the dir inode for kernel notify.
@@ -72,6 +75,13 @@ type listingDir[E any] struct {
 
 	// build mounts the read-only file node for one resolved entry.
 	build func(ctx context.Context, name string, entry E, out *fuse.EntryOut) (*fs.Inode, syscall.Errno)
+
+	// unlinkEntry deletes a resolved entry, returning the delete's errno. It
+	// owns the per-entity mutation (commitDelete) and any reject guard (EPERM
+	// for entries that cannot be deleted — inverse relations, embedded files).
+	// nil means the directory is not deletable (unlink is EPERM for every real
+	// entry). listingDir owns the resolve→EIO/ENOENT dispatch above it.
+	unlinkEntry func(ctx context.Context, name string, entry E) syscall.Errno
 }
 
 // infoListing is the naming round-trip seam listingDir needs: derive the
@@ -152,5 +162,30 @@ func (d listingDir[E]) lookup(ctx context.Context, name string, out *fuse.EntryO
 		return nil, syscall.EIO
 	default:
 		return nil, syscall.ENOENT
+	}
+}
+
+// unlink deletes a listed item. The trio surfaces (_create/.error/.last) are
+// virtual control files, not deletable (EPERM). A real entry routes through the
+// per-node unlinkEntry, which drives the API delete, the SQLite forget, and the
+// kernel-notify coherence; a fetch error is EIO and a miss is ENOENT (the same
+// resolve() symmetry lookup uses). Wired as the DIRECTORY node's Unlink, since
+// go-fuse dispatches unlink to the parent.
+func (d listingDir[E]) unlink(ctx context.Context, name string) syscall.Errno {
+	switch name {
+	case "_create", ".error", ".last":
+		return syscall.EPERM
+	}
+	res := d.resolve(ctx, name)
+	switch res.kind {
+	case infoHit:
+		if d.unlinkEntry == nil {
+			return syscall.EPERM
+		}
+		return d.unlinkEntry(ctx, name, res.entry)
+	case infoFetchErr:
+		return syscall.EIO
+	default:
+		return syscall.ENOENT
 	}
 }

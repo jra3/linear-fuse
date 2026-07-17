@@ -658,8 +658,10 @@ source is a synchronous API call promotes it via `api.WithInteractive` at the
 call; SQLite-backed closures pass it through for cancellation. It
 replaced **nine** hand-copied node types (`TeamInfoNode`, `StatesInfoNode`,
 `LabelsInfoNode`, `UserInfoNode`, `CycleFileNode`, `ReadmeNode`, `MetaFileNode`,
-`ErrorFileNode`, `SuccessFileNode`) and reduced two more (`RelationFileNode`,
-`ExternalAttachmentNode`, which embed it and keep only their `Unlink`) — net
+`ErrorFileNode`, `SuccessFileNode`) and reduced the info-file nodes
+(`RelationFileNode`, `ExternalAttachmentNode`, `ExternalLinkNode`) to a
+renderFile embed plus entity fields — deletion is the parent directory node's
+`Unlink` (go-fuse dispatches unlink to the parent), not the file's — net
 −490-odd lines. The byte-window offset-clamp that all of them hand-rolled (a dozen
 verbatim copies) lives once in `readWindow`.
 
@@ -1010,18 +1012,22 @@ three). The spec is small closures + knobs: `trio`, `refresh?` (nil except
 dirent name), `failReaddirOnError` (relations fail the whole directory — both
 fetches hit one table so a partial answer would lie; links/attachments list
 best-effort), `preFilter?` (relations skips the two repo reads for any non-`.rel`
-name), and `build` (the **one opaque per-node closure** — the read-only node
-*type*, and for `attachments` the embedded-vs-external dispatch, is what varies).
+name), `build` (the opaque per-node closure — the read-only node *type*, and for
+`attachments` the embedded-vs-external dispatch, is what varies), and
+`unlinkEntry` (the per-entity delete tail + reject guard — see below).
 
 **Pure decision surface, effectful dispatch.** `readdir` (assembly + on-error
 policy) touches neither `lfs` nor `parent`, and `resolve(name)` (the Lookup
 branch table: `preFilter` reject → `notFound`, fetch error → `fetchErr`, hit →
 entry) is pure — both unit-tested with no mount (`listingdir_test.go`), the way
 `collectionDir`'s `entries`/`classify` are. `lookup` runs the trio short-circuit
-(`lookupCollectionTrio`) then dispatches on `resolve`. Deletion stays on the file
-nodes / `collectionTrio`: an info file already holds its entity, so its `Unlink`
-is a self-contained `deleteSpec`, unlike `collectionDir`'s fetch-then-find delete.
-Pure refactor — no surface or behavior change.
+(`lookupCollectionTrio`) then dispatches on `resolve`. **Deletion is wired on the
+directory node, not the file node** — go-fuse dispatches `unlink` to the parent
+directory's ops, so `unlink(name)` shares `resolve`'s `EIO`/`ENOENT` symmetry and
+hands the resolved entry to the per-node `unlinkEntry`, which drives `commitDelete`
+(or returns `EPERM` for an entry that can't be deleted — an inverse relation, an
+embedded file). `RelationsNode`/`LinksNode`/`AttachmentsNode` each expose an
+`Unlink` that delegates to `dir().unlink`; the info-file nodes carry no `Unlink`.
 
 ### Connection drain (`paginate`)
 The **deep module** owning cursor pagination of Linear GraphQL connections —
