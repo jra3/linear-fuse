@@ -115,74 +115,33 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	return n.collection().unlink(ctx, name)
 }
 
+// Rename renames a document by changing its title on Linear. The whole rename
+// tail — special-name/cross-dir guards, name parsing, find, mutate, persist gate,
+// and kernel re-coherence of the .md and its .meta twin — lives in commitRename;
+// this handler is the document-specific spec.
 func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
-	if n.lfs.debug {
-		log.Printf("Rename document: %s -> %s", name, newName)
-	}
-
-	// Don't allow renaming _create
-	if name == "_create" {
-		return syscall.EPERM
-	}
-
-	// The .meta sidecar is read-only; its name follows the .md's.
-	if _, isMeta := metaSidecarSource(name); isMeta {
-		return syscall.EPERM
-	}
-
-	// For same-directory rename, compare inode numbers
-	if newParent.EmbeddedInode().StableAttr().Ino != n.EmbeddedInode().StableAttr().Ino {
-		if n.lfs.debug {
-			log.Printf("Rename: cross-directory not allowed")
-		}
-		return syscall.EXDEV
-	}
-
-	// Extract new title from filename (remove .md suffix, convert dashes to spaces)
-	if !strings.HasSuffix(newName, ".md") {
-		return syscall.EINVAL
-	}
-	newTitle := strings.TrimSuffix(newName, ".md")
-	newTitle = strings.ReplaceAll(newTitle, "-", " ")
-
-	docs, err := n.getDocuments(ctx)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	doc, ok := n.listing(docs).find(name)
-	if !ok {
-		return syscall.ENOENT
-	}
-
-	// Update document title
-	updatedDoc, err := n.lfs.UpdateDocument(ctx, doc.ID, map[string]any{"title": newTitle}, n.issueID, n.teamID, n.projectID)
-	if err != nil {
-		log.Printf("Failed to rename document: %v", err)
-		msg, errno := classifyMutationErr("rename document "+name+" -> "+newName, err)
-		n.lfs.SetWriteError(collectionErrorKey("docs", n.parentID()), msg)
-		return errno
-	}
-	// Persist gates the rename: like the edit tail, a reflection the local cache
-	// can't serve fails loud (retry, then EIO) rather than swallowing it. The
-	// rename is on Linear and idempotent, so the .error says re-saving is safe
-	// (#278). See persistgate.go.
-	errKey := collectionErrorKey("docs", n.parentID())
-	if errno := persistOrEIO(ctx, n.lfs, errKey,
-		func(err error) string { return unconfirmedEditMsg("rename document "+name+" -> "+newName, err) },
-		func(ctx context.Context, d *api.Document) error { return n.lfs.UpsertDocument(ctx, *d) },
-		updatedDoc); errno != 0 {
-		return errno
-	}
-	n.lfs.ClearWriteError(errKey)
-	if n.lfs.debug {
-		log.Printf("Document renamed successfully: %s -> %s", doc.Title, newTitle)
-	}
-	// Invalidate kernel cache for old and new names — the .meta sidecar's
-	// name follows the .md's, so both pairs move.
-	n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), name, newName, 0)
-	n.lfs.InvalidateRenamed(docsDirIno(n.parentID()), metaSidecarName(name), metaSidecarName(newName), 0)
-	return 0
+	return commitRename(ctx, n.lfs, name, newParent, newName, renameSpec[api.Document]{
+		kind:   "document",
+		errKey: collectionErrorKey("docs", n.parentID()),
+		dirIno: docsDirIno(n.parentID()),
+		find: func(ctx context.Context) (*api.Document, error) {
+			docs, err := n.getDocuments(ctx)
+			if err != nil {
+				return nil, err
+			}
+			doc, ok := n.listing(docs).find(name)
+			if !ok {
+				return nil, nil
+			}
+			return &doc, nil
+		},
+		mutate: func(ctx context.Context, target *api.Document, newName string) (*api.Document, error) {
+			return n.lfs.UpdateDocument(ctx, target.ID, map[string]any{"title": newName}, n.issueID, n.teamID, n.projectID)
+		},
+		persist: func(ctx context.Context, fresh *api.Document) error {
+			return n.lfs.UpsertDocument(ctx, *fresh)
+		},
+	})
 }
 
 // newDocumentInode builds the read/write DocumentFileNode inode for an existing

@@ -87,7 +87,10 @@ persist-before-invalidate ordering are unit-tested with a recording sink
 
 ### Rename save (`renameSave`)
 The **deep module** owning the atomic-save Rename tail — the rename-shaped
-sibling of the WriteBack tail in the edit-path family. Editors and the Claude
+sibling of the WriteBack tail in the edit-path family. Not to be confused with
+[[rename-tail]] (`commitRename`), the mutation-tail family's rename sibling that
+renames an *entity* (a label's name / a doc's title); this one moves editor
+scratch-temp *bytes* onto a canonical `.md`. Editors and the Claude
 Code Edit/Write tools never write a file in place: they write a sibling scratch
 temp file (see the Edit buffer's scratch counterpart in
 `internal/fs/atomicwrite.go`, #145) and rename(2) it onto the canonical `.md`.
@@ -176,6 +179,41 @@ phantom heals it (and is exactly the recovery the forget-exhaustion `.error`
 names) — and the details sync **prunes** rows a (provably complete, sub-page-cap)
 fetch no longer returns, scoped by issue and a pre-fetch `synced_at` cutoff so
 rows created mid-fetch survive.
+
+### Rename tail (`commitRename`)
+The **deep module** owning the invariant tail of every *entity* rename — a
+label's name, a document's title — the rename-shaped fourth sibling of the
+Create/WriteBack/Delete tails. `LabelsNode.Rename` and `DocsNode.Rename` had
+hand-copied it byte-parallel; `commitRename` (`internal/fs/renamecommit.go`,
+generic over `T`) collapses both into a spec literal. Its contract:
+guard (`_create`, `.meta` sidecar, cross-dir → `EPERM`/`EXDEV`; a target
+lacking `.md` → `EINVAL` **plus a helpful `.error`**) → parse the new name →
+`find` the current entity by its old name (nil → `ENOENT`) → `mutate` (call the
+API rename, returning the API's updated entity) → **persist-gate** the
+reflection through `persistOrEIO` (see [[persist-gate]]; a wedge fails loud with
+`unconfirmedEditMsg` and skips invalidation) → on success clear `.error` and
+fire **both** `InvalidateRenamed` calls, the `.md` pair and its `.meta` twin
+(the sidecar names are computed by the tail via `metaSidecarName`, not a spec
+field). It **persists the API-returned entity, not the requested name**, so
+server-side name normalization is captured for free. It reuses the existing
+`renameSink` seam (ErrorSink + `InvalidateRenamed`, satisfied by `*LinearFS`) —
+no new sink — and carries **no read-your-writes compare and no telemetry**
+(matching [[rename-save]]). Unit-tested with a recording sink over the exact
+9-branch table, no FUSE mount, SQLite, or API.
+
+Not to be confused with [[rename-save]], the *atomic-save* Rename tail that
+flushes editor scratch-temp bytes onto a canonical `.md` (issue/project/
+initiative); that one owns the temp-file adoption/consume dance, this one owns
+the entity-name mutation. The two rename tails are disjoint: `renameSave` is the
+edit-path's rename sibling (bytes into a file), `commitRename` is the mutation-
+tail family's rename sibling (a new name for an entity).
+
+The absence of a compare here is deliberate and principled: **read-your-writes
+verification is a layer *above* the commit-tail primitives, not part of them.**
+`commitRename`, `commitCreate`, and `commitDelete` are pure mutate → persist-gate
+→ invalidate — they trust the mutation's echoed entity. Only the edit path adds a
+compare (see [[read-your-writes-verification]]), and it lives in the layer above
+the commit tail (`editFlush`/`commitWriteBack`), not inside it.
 
 ### Name→ID resolution (`resolveIssueUpdate`)
 marshal returns an issue update whose relational fields hold *names* (a state name,

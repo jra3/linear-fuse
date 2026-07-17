@@ -488,9 +488,14 @@ building blocks:
 **Read flow:** kernel → `Lookup`/`Readdir`/`Read` → Repository → SQLite →
 marshal to markdown bytes. `mtime` = `updatedAt`, `ctime` = `createdAt`.
 
-**Write flow (the important interaction).** Three sibling commit tails own the
+**Write flow (the important interaction).** Four sibling commit tails own the
 write directions: `commitCreate` (`createcommit.go`), `commitWriteBack`
-(`editcommit.go`), `commitDelete` (`deletecommit.go`). For an edit:
+(`editcommit.go`), `commitDelete` (`deletecommit.go`), and `commitRename`
+(`renamecommit.go`) — the entity-rename tail that mutates then confirms local
+reflection through the persist gate (`persistOrEIO`) and re-cohers the
+`.md`/`.meta` pair; it carries no read-your-writes compare (that verification is
+a layer above the commit-tail primitives) and no telemetry (matching
+`renameSave`). For an edit:
 1. `Write` buffers bytes in the `editBuffer`; `Flush` parses the markdown via
    `marshal`. Editor save-via-rename (temp file + `rename`) is caught by a
    scratch node and routed through the same path (`atomicwrite.go`,
