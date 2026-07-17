@@ -202,6 +202,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		// surface divergence via .error.
 		writeBack: writeBackSpec[api.Label]{
 			errKey:  labelErrKey,
+			op:      "save label " + labelFilename(n.label),
 			fetch:   func(ctx context.Context) (*api.Label, error) { return updatedLabel, nil },
 			persist: func(ctx context.Context, fresh *api.Label) error { return n.lfs.UpsertLabel(ctx, n.teamID, *fresh) },
 			compare: func(fresh *api.Label) []writeBackResult {

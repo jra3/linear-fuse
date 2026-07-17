@@ -178,6 +178,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 		// projectID so it never clobbers the association with a fallible lookup.
 		writeBack: writeBackSpec[api.ProjectMilestone]{
 			errKey: milestoneErrKey,
+			op:     "save milestone " + milestoneFilename(n.milestone),
 			fetch:  func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
 			persist: func(ctx context.Context, fresh *api.ProjectMilestone) error {
 				return n.lfs.UpsertProjectMilestone(ctx, n.projectID, *fresh)

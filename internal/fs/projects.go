@@ -496,6 +496,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		// via .error. The initiative-link side-work (in mutate) stays there.
 		writeBack: writeBackSpec[api.Project]{
 			errKey: p.project.ID,
+			op:     "save project " + p.project.Name,
 			fetch:  func(ctx context.Context) (*api.Project, error) { return p.lfs.verify().GetProject(ctx, p.project.ID) },
 			persist: func(ctx context.Context, fresh *api.Project) error {
 				return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)

@@ -260,6 +260,7 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		// response, persist, and surface divergence via .error.
 		writeBack: writeBackSpec[api.Document]{
 			errKey:  docErrKey,
+			op:      "save document " + documentFilename(n.document),
 			fetch:   func(ctx context.Context) (*api.Document, error) { return updatedDoc, nil },
 			persist: func(ctx context.Context, fresh *api.Document) error { return n.lfs.UpsertDocument(ctx, *fresh) },
 			compare: func(fresh *api.Document) []writeBackResult {
