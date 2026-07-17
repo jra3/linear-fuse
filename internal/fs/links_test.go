@@ -81,6 +81,65 @@ func (e erroringLiveReader) GetIssueAttachments(ctx context.Context, issueID str
 	return nil, e.err
 }
 
+// recheckMutator drives the create tails' post-mutation re-check branch: the
+// mutation FAILS, but the authoritative live list already holds the URL (the
+// mutation committed before its response was lost, or Linear auto-linked it), so
+// the tail must adopt the live entity as the idempotent success it is rather than
+// surface the raw mutation error. It embeds a nil MutationClient (only the two
+// create mutations under test are overridden) and implements the liveReader seam
+// with configurable live lists. Shared by the link and attachment re-check tests.
+type recheckMutator struct {
+	MutationClient
+	err   error
+	links []api.EntityExternalLink
+	atts  []api.Attachment
+}
+
+func (m recheckMutator) CreateEntityExternalLink(ctx context.Context, input map[string]any) (*api.EntityExternalLink, error) {
+	return nil, m.err
+}
+
+func (m recheckMutator) LinkURL(ctx context.Context, issueID, url, title string) (*api.Attachment, error) {
+	return nil, m.err
+}
+
+func (m recheckMutator) GetProjectLinks(ctx context.Context, projectID string) ([]api.EntityExternalLink, error) {
+	return m.links, nil
+}
+
+func (m recheckMutator) GetInitiativeLinks(ctx context.Context, initiativeID string) ([]api.EntityExternalLink, error) {
+	return nil, nil
+}
+
+func (m recheckMutator) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	return m.atts, nil
+}
+
+// TestCreateLinkMutateFailureRechecksLive covers links.go's post-mutation
+// re-check: CreateEntityExternalLink fails, yet the authoritative live list
+// already has the URL, so createLink adopts the live link as an idempotent success
+// (a .last entry, errno 0) instead of surfacing the raw error. Only expressible
+// through the injectable liveReader seam.
+func TestCreateLinkMutateFailureRechecksLive(t *testing.T) {
+	lfs, _ := linkTestLFS(t)
+
+	const projectID = "proj-recheck"
+	const url = "https://example.com/recheck-link"
+	live := api.EntityExternalLink{ID: "extlink-recheck", URL: url, Label: "Recheck Link", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	lfs.InjectTestMutationClient(recheckMutator{err: errors.New("mutation response lost"), links: []api.EntityExternalLink{live}})
+
+	dir := &LinksNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: projectID}
+	key := collectionErrorKey("links", dir.parentID())
+
+	errno := dir.createLink(context.Background(), []byte(url+" Recheck Link"))
+	if errno != 0 {
+		t.Fatalf("createLink after a lost mutation response: errno = %v, want 0 (live re-check confirms)", errno)
+	}
+	if got := lfs.GetWriteSuccess(key); len(got) != 1 || got[0].URL != url {
+		t.Fatalf("re-check must adopt the live link as success (.last), got: %+v", got)
+	}
+}
+
 // TestCreateLinkPersistFailureFailsLoud is the #283 regression: an external-link
 // create whose SQLite reflection fails must fail loud (EIO) with a de-dupe .error,
 // not report success — commitCreate's #276 persist gate has to fire. The bug was

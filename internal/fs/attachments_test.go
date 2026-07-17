@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -114,5 +115,32 @@ func TestCreateAttachmentPersistFailureFailsLoud(t *testing.T) {
 	}
 	if got := lfs.GetWriteSuccess(key); len(got) != 0 {
 		t.Errorf(".last advertised an attachment the cache can't serve: %+v", got)
+	}
+}
+
+// TestCreateAttachmentMutateFailureRechecksLive covers attachments.go's
+// post-mutation re-check (#284's idempotency half): LinkURL fails, but the URL is
+// in fact already attached (Linear auto-linked a branch-named PR, or the mutation
+// committed before its response was lost), so createAttachment adopts the live
+// attachment as an idempotent success (a .last entry, errno 0) rather than
+// surfacing the raw rejection. Only expressible through the injectable liveReader
+// seam — recheckMutator's LinkURL fails while its GetIssueAttachments serves the URL.
+func TestCreateAttachmentMutateFailureRechecksLive(t *testing.T) {
+	lfs, _ := linkTestLFS(t)
+
+	const issueID = "issue-recheck"
+	const url = "https://github.com/antimetal/overlook/pull/9999"
+	live := api.Attachment{ID: "att-recheck", Title: "Recheck PR", URL: url}
+	lfs.InjectTestMutationClient(recheckMutator{err: errors.New("Unable to create issue attachment"), atts: []api.Attachment{live}})
+
+	dir := &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, issueID: issueID}
+	key := collectionErrorKey("attachments", issueID)
+
+	errno := dir.createAttachment(context.Background(), []byte(url+" Recheck PR"))
+	if errno != 0 {
+		t.Fatalf("createAttachment after a failed mutation with the URL live: errno = %v, want 0 (live re-check confirms)", errno)
+	}
+	if got := lfs.GetWriteSuccess(key); len(got) != 1 || got[0].URL != url {
+		t.Fatalf("re-check must adopt the live attachment as success (.last), got: %+v", got)
 	}
 }
