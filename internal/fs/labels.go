@@ -102,17 +102,9 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		kind:   "label",
 		errKey: collectionErrorKey("labels", n.teamID),
 		dirIno: labelsDirIno(n.teamID),
-		find: func(ctx context.Context) (*api.Label, error) {
-			labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
-			if err != nil {
-				return nil, err
-			}
-			label, ok := n.listing(labels).find(name)
-			if !ok {
-				return nil, nil
-			}
-			return &label, nil
-		},
+		// Route through the same resolve Lookup/Unlink use so a rename can never
+		// ENOENT a label those still resolve (#293).
+		find: func(ctx context.Context) (*api.Label, error) { return n.collection().resolve(ctx, name) },
 		mutate: func(ctx context.Context, target *api.Label, newName string) (*api.Label, error) {
 			return n.lfs.UpdateLabel(ctx, target.ID, map[string]any{"name": newName}, n.teamID)
 		},

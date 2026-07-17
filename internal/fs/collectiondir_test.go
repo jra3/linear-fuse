@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"syscall"
 	"testing"
 
@@ -95,5 +96,31 @@ func TestCollectionDirClassify(t *testing.T) {
 		if tc.item != "" && res.item != tc.item {
 			t.Errorf("classify(%q) item = %q, want %q", tc.name, res.item, tc.item)
 		}
+	}
+}
+
+// TestCollectionDirResolve pins the shared ctx-ful find that Unlink and both
+// Rename specs delegate to: a hit returns the item, a clean miss is (nil, nil)
+// (the contract commitDelete/commitRename expect), and a fetch failure
+// propagates the error. It resolves the same names classify resolves, so Rename
+// can never ENOENT an entity Lookup/Unlink still find (#293).
+func TestCollectionDirResolve(t *testing.T) {
+	t.Parallel()
+	cd := testCollectionDir()
+	cd.fetch = func(context.Context) ([]string, error) { return []string{"a", "b"}, nil }
+
+	got, err := cd.resolve(context.Background(), "a.md")
+	if err != nil || got == nil || *got != "a" {
+		t.Errorf("resolve(a.md) = (%v, %v), want (&\"a\", nil)", got, err)
+	}
+
+	got, err = cd.resolve(context.Background(), "z.md")
+	if err != nil || got != nil {
+		t.Errorf("resolve(z.md) = (%v, %v), want (nil, nil) on a clean miss", got, err)
+	}
+
+	cd.fetch = func(context.Context) ([]string, error) { return nil, errors.New("db down") }
+	if _, err := cd.resolve(context.Background(), "a.md"); err == nil {
+		t.Error("resolve must propagate a fetch error, not swallow it")
 	}
 }
