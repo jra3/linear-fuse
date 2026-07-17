@@ -32,6 +32,7 @@ type recordingCommitRenameSpec struct {
 	mutateErr     error
 
 	persistCalls int
+	persistGot   *fakeRenameEntity // the entity persist was handed (the normalization contract)
 	persistErr   error
 }
 
@@ -55,6 +56,7 @@ func newRecordingCommitRenameSpec() *recordingCommitRenameSpec {
 		},
 		persist: func(ctx context.Context, fresh *fakeRenameEntity) error {
 			r.persistCalls++
+			r.persistGot = fresh
 			return r.persistErr
 		},
 	}
@@ -152,6 +154,67 @@ func TestCommitRename_Contract(t *testing.T) {
 			wantInvalidates: 0,
 		},
 		{
+			// find/mutate errors flow through classifyMutationErr; rows 5/7 use a
+			// plain error (default EIO). These pin the classified branches so a
+			// hardcoded `return msg, EIO` would fail (#291).
+			name:            "5a find rate-limit is EAGAIN",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			findErr:         errors.New("rate limit exceeded"),
+			wantErrno:       syscall.EAGAIN,
+			wantFind:        true,
+			wantSets:        1,
+			wantErrSubstr:   "rate-limited",
+			wantInvalidates: 0,
+		},
+		{
+			name:            "5b find FieldError is EINVAL",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			findErr:         &FieldError{Field: "name", Value: "bar", Message: "bad name"},
+			wantErrno:       syscall.EINVAL,
+			wantFind:        true,
+			wantSets:        1,
+			wantErrSubstr:   "bad name",
+			wantInvalidates: 0,
+		},
+		{
+			name:            "7a mutate rate-limit is EAGAIN",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			mutErr:          errors.New("rate limit exceeded"),
+			wantErrno:       syscall.EAGAIN,
+			wantFind:        true,
+			wantMutate:      true,
+			wantSets:        1,
+			wantErrSubstr:   "rate-limited",
+			wantInvalidates: 0,
+		},
+		{
+			name:            "7b mutate FieldError is EINVAL",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			mutErr:          &FieldError{Field: "name", Value: "bar", Message: "name taken"},
+			wantErrno:       syscall.EINVAL,
+			wantFind:        true,
+			wantMutate:      true,
+			wantSets:        1,
+			wantErrSubstr:   "name taken",
+			wantInvalidates: 0,
+		},
+		{
+			name:            "7c mutate not-found is ENOENT",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			mutErr:          &notFoundError{FieldError{Field: "id", Value: "ent-1", Message: "gone"}},
+			wantErrno:       syscall.ENOENT,
+			wantFind:        true,
+			wantMutate:      true,
+			wantSets:        1,
+			wantErrSubstr:   "gone",
+			wantInvalidates: 0,
+		},
+		{
 			name:            "8 persist wedge fails loud, no invalidation",
 			oldName:         "foo.md",
 			newName:         "bar.md",
@@ -242,6 +305,37 @@ func TestCommitRename_ParseReachesMutate(t *testing.T) {
 	}
 	if rec.mutateNewName != "new name" {
 		t.Errorf("mutate saw newName %q, want %q (dashes should become spaces, .md stripped)", rec.mutateNewName, "new name")
+	}
+}
+
+// TestCommitRename_PersistsMutateReturn proves the normalization contract: the
+// tail persists the entity mutate RETURNED (the server-normalized value), not
+// the pre-rename target it found nor the parsed filename. If a refactor
+// persisted `target`, the local cache would silently diverge from Linear and
+// every other case would still pass (#291). The mutate return carries a name
+// distinct from both the found "foo" and the parsed "bar" to make it sharp.
+func TestCommitRename_PersistsMutateReturn(t *testing.T) {
+	orig := sqliteRetryBackoff
+	sqliteRetryBackoff = []time.Duration{0}
+	t.Cleanup(func() { sqliteRetryBackoff = orig })
+
+	sink := &renameRecorder{}
+	rec := newRecordingCommitRenameSpec()
+	rec.findRet = &fakeRenameEntity{ID: "ent-1", Name: "foo"}
+	rec.mutateRet = &fakeRenameEntity{ID: "ent-1", Name: "Server Normalized"}
+
+	errno := commitRename(context.Background(), sink, "foo.md",
+		&renameParent{}, "bar.md", rec.spec)
+
+	if errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	if rec.persistGot == nil {
+		t.Fatal("persist was never handed an entity")
+	}
+	if rec.persistGot.Name != "Server Normalized" {
+		t.Errorf("persist got Name %q, want %q (the mutate return, not the found target %q or parsed %q)",
+			rec.persistGot.Name, "Server Normalized", "foo", "bar")
 	}
 }
 
