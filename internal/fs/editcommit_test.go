@@ -143,7 +143,8 @@ func TestCommitWriteBack_PersistFailureFailsLoud(t *testing.T) {
 	fresh := &ent{title: "x"}
 	persists := 0
 	got, errno := commitWriteBack(context.Background(), sink, writeBackSpec[ent]{
-		errKey:  "K",
+		errKey:  "9f3c-uuid",
+		op:      "save issue ENG-1",
 		fetch:   func(context.Context) (*ent, error) { return fresh, nil },
 		persist: func(context.Context, *ent) error { persists++; return errors.New("db down") },
 		compare: func(*ent) []writeBackResult { return nil },
@@ -157,13 +158,18 @@ func TestCommitWriteBack_PersistFailureFailsLoud(t *testing.T) {
 	if persists != len(sqliteRetryBackoff) {
 		t.Errorf("persist attempts = %d, want %d (retried before giving up)", persists, len(sqliteRetryBackoff))
 	}
-	if sink.setCalls != 1 || sink.setKey != "K" {
-		t.Errorf("SetWriteError: calls=%d key=%q, want 1 on K", sink.setCalls, sink.setKey)
+	if sink.setCalls != 1 || sink.setKey != "9f3c-uuid" {
+		t.Errorf("SetWriteError: calls=%d key=%q, want 1 on the errKey", sink.setCalls, sink.setKey)
 	}
-	for _, want := range []string{"SUCCEEDED on Linear", "Re-saving is safe", "db down"} {
+	// The wedge .error must render the human-readable op label, NOT the errKey
+	// UUID that identifies the sidecar (#292).
+	for _, want := range []string{"Operation: save issue ENG-1", "SUCCEEDED on Linear", "Re-saving is safe", "db down"} {
 		if !strings.Contains(sink.setMsg, want) {
 			t.Errorf(".error = %q, want it to contain %q", sink.setMsg, want)
 		}
+	}
+	if strings.Contains(sink.setMsg, "Operation: 9f3c-uuid") {
+		t.Errorf(".error = %q, must not render the errKey UUID as the operation", sink.setMsg)
 	}
 	if sink.clears != 0 {
 		t.Errorf("ClearWriteError calls = %d, want 0 on a loud failure", sink.clears)

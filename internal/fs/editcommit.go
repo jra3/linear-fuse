@@ -38,6 +38,12 @@ type writeBackSpec[T any] struct {
 	// errKey identifies the .error file to set or clear (an entity ID, or a
 	// collectionErrorKey for collection-scoped entities like labels/milestones).
 	errKey string
+	// op is the human-readable operation label for a persist-wedge .error, e.g.
+	// "save issue ENG-1" or "save label bug.md" — a verb+target an agent can act
+	// on, NOT the errKey (which is an entity UUID or collection namespace). It is
+	// the edit-path counterpart of the op string commitRename composes, and must
+	// be set by every caller so the #278 recovery message reads sensibly.
+	op string
 	// fetch returns the authoritative post-write value. For issues this is an
 	// independent API re-fetch (catches server-side silent reverts of large
 	// bodies); for entities with no single-entity getter it may return the
@@ -96,7 +102,7 @@ func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackS
 		// signal whose recovery (re-saving) is safe because the edit is idempotent
 		// (#278). See persistgate.go.
 		if errno := persistOrEIO(ctx, sink, spec.errKey,
-			func(err error) string { return unconfirmedEditMsg(spec.errKey, err) },
+			func(err error) string { return unconfirmedEditMsg(spec.op, err) },
 			spec.persist, fresh); errno != 0 {
 			return fresh, errno
 		}

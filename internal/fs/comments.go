@@ -167,6 +167,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		// response, persist, and surface divergence via .error.
 		writeBack: writeBackSpec[api.Comment]{
 			errKey: commentErrKey,
+			op:     "save comment " + n.comment.ID,
 			fetch:  func(ctx context.Context) (*api.Comment, error) { return updatedComment, nil },
 			persist: func(ctx context.Context, fresh *api.Comment) error {
 				return n.lfs.UpsertComment(ctx, n.issueID, *fresh)

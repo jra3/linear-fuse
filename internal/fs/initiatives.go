@@ -331,6 +331,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		// divergence via .error. The project-link side-work (in mutate) stays there.
 		writeBack: writeBackSpec[api.Initiative]{
 			errKey: i.initiativeID,
+			op:     "save initiative " + i.initiative.Name,
 			fetch: func(ctx context.Context) (*api.Initiative, error) {
 				return i.lfs.verify().GetInitiative(ctx, i.initiativeID)
 			},

@@ -524,6 +524,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		// and surface any divergence via .error.
 		writeBack: writeBackSpec[api.Issue]{
 			errKey:  i.issue.ID,
+			op:      "save issue " + i.issue.Identifier,
 			fetch:   func(ctx context.Context) (*api.Issue, error) { return i.lfs.verify().GetIssue(ctx, i.issue.ID) },
 			persist: func(ctx context.Context, fresh *api.Issue) error { return i.lfs.UpsertIssue(ctx, *fresh) },
 			compare: func(fresh *api.Issue) []writeBackResult {
