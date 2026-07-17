@@ -93,75 +93,33 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	return n.collection().unlink(ctx, name)
 }
 
+// Rename renames a label by changing its name on Linear. The whole rename tail —
+// special-name/cross-dir guards, name parsing, find, mutate, persist gate, and
+// kernel re-coherence of the .md and its .meta twin — lives in commitRename; this
+// handler is the label-specific spec.
 func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
-	if n.lfs.debug {
-		log.Printf("Rename label: %s -> %s (newParent type: %T)", name, newName, newParent)
-	}
-
-	// Don't allow renaming _create
-	if name == "_create" {
-		return syscall.EPERM
-	}
-
-	// The .meta sidecar is read-only; its name follows the .md's.
-	if _, isMeta := metaSidecarSource(name); isMeta {
-		return syscall.EPERM
-	}
-
-	// For same-directory rename, newParent should be the same inode as us
-	// Compare by inode number
-	if newParent.EmbeddedInode().StableAttr().Ino != n.EmbeddedInode().StableAttr().Ino {
-		if n.lfs.debug {
-			log.Printf("Rename: cross-directory not allowed")
-		}
-		return syscall.EXDEV
-	}
-
-	// Extract new label name from filename (remove .md suffix, convert dashes to spaces)
-	if !strings.HasSuffix(newName, ".md") {
-		return syscall.EINVAL
-	}
-	newLabelName := strings.TrimSuffix(newName, ".md")
-	newLabelName = strings.ReplaceAll(newLabelName, "-", " ")
-
-	labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	label, ok := n.listing(labels).find(name)
-	if !ok {
-		return syscall.ENOENT
-	}
-
-	// Update label name
-	updatedLabel, err := n.lfs.UpdateLabel(ctx, label.ID, map[string]any{"name": newLabelName}, n.teamID)
-	if err != nil {
-		log.Printf("Failed to rename label: %v", err)
-		msg, errno := classifyMutationErr("rename label "+name+" -> "+newName, err)
-		n.lfs.SetWriteError(collectionErrorKey("labels", n.teamID), msg)
-		return errno
-	}
-	// Persist gates the rename: like the edit tail, a reflection the local cache
-	// can't serve fails loud (retry, then EIO) rather than swallowing it. The
-	// rename is on Linear and idempotent, so the .error says re-saving is safe
-	// (#278). See persistgate.go.
-	errKey := collectionErrorKey("labels", n.teamID)
-	if errno := persistOrEIO(ctx, n.lfs, errKey,
-		func(err error) string { return unconfirmedEditMsg("rename label "+name+" -> "+newName, err) },
-		func(ctx context.Context, l *api.Label) error { return n.lfs.UpsertLabel(ctx, n.teamID, *l) },
-		updatedLabel); errno != 0 {
-		return errno
-	}
-	n.lfs.ClearWriteError(errKey)
-	if n.lfs.debug {
-		log.Printf("Label renamed successfully: %s -> %s", label.Name, newLabelName)
-	}
-	// Invalidate kernel cache for old and new names — the .meta sidecar's
-	// name follows the .md's, so both pairs move.
-	n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), name, newName, 0)
-	n.lfs.InvalidateRenamed(labelsDirIno(n.teamID), metaSidecarName(name), metaSidecarName(newName), 0)
-	return 0
+	return commitRename(ctx, n.lfs, name, newParent, newName, renameSpec[api.Label]{
+		kind:   "label",
+		errKey: collectionErrorKey("labels", n.teamID),
+		dirIno: labelsDirIno(n.teamID),
+		find: func(ctx context.Context) (*api.Label, error) {
+			labels, err := n.lfs.repo.GetTeamLabels(ctx, n.teamID)
+			if err != nil {
+				return nil, err
+			}
+			label, ok := n.listing(labels).find(name)
+			if !ok {
+				return nil, nil
+			}
+			return &label, nil
+		},
+		mutate: func(ctx context.Context, target *api.Label, newName string) (*api.Label, error) {
+			return n.lfs.UpdateLabel(ctx, target.ID, map[string]any{"name": newName}, n.teamID)
+		},
+		persist: func(ctx context.Context, fresh *api.Label) error {
+			return n.lfs.UpsertLabel(ctx, n.teamID, *fresh)
+		},
+	})
 }
 
 func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
