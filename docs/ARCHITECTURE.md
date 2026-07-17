@@ -339,6 +339,17 @@ Design conventions:
   pooled connection gets them (a `db.Exec("PRAGMA …")` configures only one
   pooled connection; that gap once caused deletes racing the worker to fail
   instantly and leave phantom rows).
+- **Cancellation-detached queries:** the `Store` runs every SQLite operation
+  through `ctxDetachDBTX`, a `DBTX` wrapper that strips the caller's context
+  cancellation (keeping its values) before delegating. The callers are FUSE
+  request handlers, and under load the kernel cancels a request's context — a
+  spurious interrupt, not an abandoned op. That cancellation reaching SQLite
+  makes the driver return `context.Canceled` regardless of `busy_timeout`,
+  surfacing a clean local read as an EIO listing and a committed mutation's
+  reflection as an EIO on close (the offline-suite flake, #296). A local read is
+  sub-millisecond and a committed mutation MUST reflect, so neither hinges on the
+  liveness of the request that triggered it; the worker still checks its own
+  context between operations, so cooperative shutdown is unaffected.
 - **No transaction wrapper:** multi-table writes are *not* transactional.
   Durability is `busy_timeout` plus single-statement upserts, with the
   reconcile clean-guard providing prune safety; a `Store.WithTx` helper was

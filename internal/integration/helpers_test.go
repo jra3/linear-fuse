@@ -262,7 +262,44 @@ func waitForDirEntry(dir, name string, maxWait time.Duration) error {
 	return fmt.Errorf("entry %s not found in %s after %v", name, dir, maxWait)
 }
 
+// waitForNoDirEntry is the negative twin of waitForDirEntry: it polls until name
+// is ABSENT from dir (a delete/rename-away invalidates the kernel cache
+// asynchronously, so the removed entry can linger for a beat under load).
+func waitForNoDirEntry(dir, name string, maxWait time.Duration) error {
+	deadline := time.Now().Add(maxWait)
+
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			present := false
+			for _, e := range entries {
+				if e.Name() == name {
+					present = true
+					break
+				}
+			}
+			if !present {
+				return nil
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	return fmt.Errorf("entry %s still present in %s after %v", name, dir, maxWait)
+}
+
 const defaultWaitTime = 500 * time.Millisecond
+
+// dirHas / dirLacks are polling predicates for post-mutation listing checks. A
+// write invalidates the kernel directory cache asynchronously (server.Inode/
+// EntryNotify), so a one-shot os.ReadDir immediately after the mutation races
+// that invalidation — the flake behind #296's "created/renamed X not in
+// listing". These poll up to defaultWaitTime, which a real `ls` a moment later
+// never needs. Use dirHas where the entry SHOULD now appear and dirLacks where
+// it SHOULD now be gone; the one-shot dirContains stays for pre-existing
+// fixture entries that never raced a mutation.
+func dirHas(path, name string) bool  { return waitForDirEntry(path, name, defaultWaitTime) == nil }
+func dirLacks(path, name string) bool { return waitForNoDirEntry(path, name, defaultWaitTime) == nil }
 
 // waitForCacheExpiry waits for the internal cache to expire.
 // Only needed after API-direct operations (createTestIssue, etc.) where

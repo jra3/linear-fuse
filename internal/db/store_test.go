@@ -28,6 +28,36 @@ func TestOpenAndClose(t *testing.T) {
 	}
 }
 
+// TestStoreDetachesContextCancellation is the #296 regression guard: a query run
+// through the store must succeed even when the caller's context is already
+// cancelled. FUSE request handlers pass their request ctx here, and under load
+// the kernel cancels that ctx (a spurious interrupt); if the cancellation reached
+// SQLite the query would return context.Canceled and the handler a spurious EIO.
+// The contrast against the raw *sql.DB (which DOES honor the cancellation) proves
+// the store's ctxDetachDBTX wrapper is what neutralizes it.
+func TestStoreDetachesContextCancellation(t *testing.T) {
+	t.Parallel()
+	store, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer store.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the FUSE request the query rode in on was interrupted
+
+	// Through the store: the wrapper detaches the cancellation, so the query runs.
+	if _, err := store.Queries().CountPendingDetailSync(ctx); err != nil {
+		t.Errorf("store query with cancelled ctx = %v, want nil (ctxDetachDBTX must neutralize FUSE-request cancellation)", err)
+	}
+	// Sanity: the same cancelled ctx straight to the raw *sql.DB DOES fail, so the
+	// test exercises the wrapper rather than a driver that ignores ctx entirely.
+	var n int
+	if err := store.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_detail_sync").Scan(&n); err == nil {
+		t.Error("raw DB query with cancelled ctx unexpectedly succeeded; the detach test proves nothing")
+	}
+}
+
 // TestConnectionPragmas asserts the DSN-level pragmas reach every pooled
 // connection. busy_timeout in particular is per-connection: configured via a
 // one-off Exec it covered only one pooled conn, and a delete's SQLite forget
