@@ -124,17 +124,41 @@ type lookupResult[T any] struct {
 // action: a .meta sidecar, an item .md, or ENOENT. Pure — the branchy part
 // (meta shadowing, find-or-miss) under test without a mount.
 func (c collectionDir[T]) classify(name string, items []T) lookupResult[T] {
-	l := c.listing(items)
 	if mdName, ok := metaSidecarSource(name); ok {
-		if item, found := l.find(mdName); found {
+		if item, found := c.resolveItem(mdName, items); found {
 			return lookupResult[T]{kind: lookupMeta, item: item}
 		}
 		return lookupResult[T]{kind: lookupNotFound}
 	}
-	if item, ok := l.find(name); ok {
+	if item, ok := c.resolveItem(name, items); ok {
 		return lookupResult[T]{kind: lookupFile, item: item}
 	}
 	return lookupResult[T]{kind: lookupNotFound}
+}
+
+// resolveItem is the pure filename→item round-trip: match name against an
+// already-fetched slice via the collection's listing. classify, resolve, and
+// the Create-overwrite check all go through it, so the filename↔name mapping
+// (sanitizing, collision policy, unicode) lives in one place.
+func (c collectionDir[T]) resolveItem(name string, items []T) (T, bool) {
+	return c.listing(items).find(name)
+}
+
+// resolve is the ctx-ful find the delete tail and both node Rename specs share:
+// fetch the collection, then resolve one name to its item. A fetch failure is an
+// error; a clean miss is (nil, nil) — the (nil, nil)-on-miss contract commitDelete
+// and commitRename both expect. Routing Unlink and Rename through it (alongside
+// Lookup, which reaches resolveItem via classify) keeps the resolve round-trip in
+// one tested place, so a Rename can never ENOENT an entity Lookup/Unlink resolve.
+func (c collectionDir[T]) resolve(ctx context.Context, name string) (*T, error) {
+	items, err := c.fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if item, ok := c.resolveItem(name, items); ok {
+		return &item, nil
+	}
+	return nil, nil
 }
 
 // lookup resolves a child: trio surface first, then the classified item/meta/
@@ -195,7 +219,7 @@ func (c collectionDir[T]) create(ctx context.Context, name string, flags uint32,
 		return nil, nil, 0, syscall.EINVAL
 	}
 	if items, err := c.fetch(ctx); err == nil {
-		if item, ok := c.listing(items).find(name); ok {
+		if item, ok := c.resolveItem(name, items); ok {
 			inode, errno := c.buildFile(ctx, name, item, out)
 			if errno != 0 {
 				return nil, nil, 0, errno
@@ -238,18 +262,9 @@ func (c collectionDir[T]) unlink(ctx context.Context, name string) syscall.Errno
 	dir := c.parent.EmbeddedInode().StableAttr().Ino
 
 	return commitDelete(ctx, c.lfs, deleteSpec[T]{
-		op:  `delete ` + c.noun + ` "` + name + `"`,
-		key: collectionErrorKey(c.trio.kind, c.trio.parentID),
-		find: func(ctx context.Context) (*T, error) {
-			items, err := c.fetch(ctx)
-			if err != nil {
-				return nil, err
-			}
-			if item, ok := c.listing(items).find(name); ok {
-				return &item, nil
-			}
-			return nil, nil
-		},
+		op:     `delete ` + c.noun + ` "` + name + `"`,
+		key:    collectionErrorKey(c.trio.kind, c.trio.parentID),
+		find:   func(ctx context.Context) (*T, error) { return c.resolve(ctx, name) },
 		mutate: c.deleteMutate,
 		forget: c.deleteForget,
 		dir:    dir,

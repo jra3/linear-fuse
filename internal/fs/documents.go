@@ -124,17 +124,9 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		kind:   "document",
 		errKey: collectionErrorKey("docs", n.parentID()),
 		dirIno: docsDirIno(n.parentID()),
-		find: func(ctx context.Context) (*api.Document, error) {
-			docs, err := n.getDocuments(ctx)
-			if err != nil {
-				return nil, err
-			}
-			doc, ok := n.listing(docs).find(name)
-			if !ok {
-				return nil, nil
-			}
-			return &doc, nil
-		},
+		// Route through the same resolve Lookup/Unlink use so a rename can never
+		// ENOENT a document those still resolve (#293).
+		find: func(ctx context.Context) (*api.Document, error) { return n.collection().resolve(ctx, name) },
 		mutate: func(ctx context.Context, target *api.Document, newName string) (*api.Document, error) {
 			return n.lfs.UpdateDocument(ctx, target.ID, map[string]any{"title": newName}, n.issueID, n.teamID, n.projectID)
 		},
