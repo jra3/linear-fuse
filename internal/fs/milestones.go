@@ -162,7 +162,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 			if n.lfs.debug {
 				log.Printf("Updating milestone %s", n.milestone.ID)
 			}
-			updated, err = n.lfs.UpdateProjectMilestone(ctx, n.milestone.ID, input)
+			updated, err = n.lfs.mutator().UpdateProjectMilestone(ctx, n.milestone.ID, input)
 			if err != nil {
 				log.Printf("Failed to update milestone: %v", err)
 				msg, errno := classifyMutationErr("update milestone "+milestoneFilename(n.milestone), err)
@@ -171,14 +171,17 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 			}
 			return true, 0
 		},
-		// Edit-commit tail. LinearFS.UpdateProjectMilestone already upserted to
-		// SQLite (after routing through the mutation seam), so persist is nil;
-		// verify read-your-writes against the API's echoed response (milestones
-		// have no single-entity getter) and surface divergence via .error.
+		// Edit-commit tail. Verify read-your-writes against the API's echoed
+		// response (milestones have no single-entity getter), then persist —
+		// gated like every sibling so a wedged reflection fails loud (EIO) rather
+		// than reverting silently (#285). The upsert carries the node's known
+		// projectID so it never clobbers the association with a fallible lookup.
 		writeBack: writeBackSpec[api.ProjectMilestone]{
-			errKey:  milestoneErrKey,
-			fetch:   func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
-			persist: nil,
+			errKey: milestoneErrKey,
+			fetch:  func(ctx context.Context) (*api.ProjectMilestone, error) { return updated, nil },
+			persist: func(ctx context.Context, fresh *api.ProjectMilestone) error {
+				return n.lfs.UpsertProjectMilestone(ctx, n.projectID, *fresh)
+			},
 			compare: func(fresh *api.ProjectMilestone) []writeBackResult {
 				var results []writeBackResult
 				if input.Name != nil {

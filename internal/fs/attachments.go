@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"syscall"
@@ -337,8 +336,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 			}
 		},
 		persist: func(ctx context.Context, a *api.Attachment) error {
-			n.upsertAttachment(ctx, *a)
-			return nil
+			return n.upsertAttachment(ctx, *a)
 		},
 		dir:       attachmentsDirIno(n.issueID),
 		entryName: func(a *api.Attachment) string { return linkName(*a) },
@@ -346,11 +344,16 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 	return errno
 }
 
-// upsertAttachment writes an attachment to SQLite for immediate visibility.
-// Failures are logged, not fatal: the sync worker will reconcile.
-func (n *AttachmentsNode) upsertAttachment(ctx context.Context, att api.Attachment) {
-	data, _ := json.Marshal(att)
-	if err := n.lfs.store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
+// upsertAttachment writes an attachment to SQLite for immediate visibility. It
+// returns the failure rather than swallowing it: the create tail gates success on
+// this reflection (#276/#278), so a wedged upsert must surface as a loud EIO with
+// a de-dupe .error, not a clean save advertising an attachment the cache can't serve.
+func (n *AttachmentsNode) upsertAttachment(ctx context.Context, att api.Attachment) error {
+	data, err := json.Marshal(att)
+	if err != nil {
+		return err
+	}
+	return n.lfs.store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
 		ID:         att.ID,
 		IssueID:    n.issueID,
 		Title:      att.Title,
@@ -360,9 +363,7 @@ func (n *AttachmentsNode) upsertAttachment(ctx context.Context, att api.Attachme
 		Metadata:   json.RawMessage("{}"),
 		SyncedAt:   db.Now(),
 		Data:       data,
-	}); err != nil {
-		log.Printf("[attachments] upsert to DB failed: %v", err)
-	}
+	})
 }
 
 // attachmentURLsEqual reports whether two attachment URLs refer to the same

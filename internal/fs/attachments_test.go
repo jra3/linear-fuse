@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -81,5 +82,37 @@ func TestCreateAttachmentIdempotentOnDuplicate(t *testing.T) {
 	}
 	if e := lfs.GetWriteError(attErrKey); e != nil {
 		t.Errorf("expected .error cleared after idempotent no-op, got %q", e.Message)
+	}
+}
+
+// TestCreateAttachmentPersistFailureFailsLoud is the #284 regression (twin of
+// #283): an attachment link whose SQLite reflection fails must fail loud (EIO)
+// with a de-dupe .error, not report success. The bug was that the persist closure
+// called the void upsertAttachment and returned nil regardless, so a wedged upsert
+// returned 0 with a clean .error and a .last advertising a link the store never
+// got — bypassing commitCreate's #276 persist gate.
+func TestCreateAttachmentPersistFailureFailsLoud(t *testing.T) {
+	lfs, store := linkTestLFS(t)
+
+	const issueID = "issue-1"
+	dir := &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, issueID: issueID}
+
+	// Close the store so the persist (UpsertAttachment) fails while the mock
+	// mutation still succeeds — the #276 confirmed-reflection wedge condition.
+	if err := store.Close(); err != nil {
+		t.Fatalf("store.Close: %v", err)
+	}
+
+	errno := dir.createAttachment(context.Background(), []byte("https://example.com/pr/9 Probe PR"))
+	if errno != syscall.EIO {
+		t.Fatalf("createAttachment on a failed persist: errno = %v, want EIO", errno)
+	}
+
+	key := collectionErrorKey("attachments", issueID)
+	if e := lfs.GetWriteError(key); e == nil {
+		t.Errorf(".error must be set on an unconfirmed reflection")
+	}
+	if got := lfs.GetWriteSuccess(key); len(got) != 0 {
+		t.Errorf(".last advertised an attachment the cache can't serve: %+v", got)
 	}
 }

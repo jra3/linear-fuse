@@ -707,26 +707,6 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 	})
 }
 
-// UpdateProjectMilestone updates an existing milestone via the mutation seam,
-// then upserts to SQLite. The owning project ID is recovered from the cache so
-// the upsert keeps the association.
-func (lfs *LinearFS) UpdateProjectMilestone(ctx context.Context, milestoneID string, input api.ProjectMilestoneUpdateInput) (*api.ProjectMilestone, error) {
-	milestone, err := lfs.mutator().UpdateProjectMilestone(ctx, milestoneID, input)
-	if err != nil {
-		return nil, err
-	}
-	var projectID string
-	if lfs.store != nil {
-		if existing, err := lfs.store.Queries().GetProjectMilestone(ctx, milestoneID); err == nil {
-			projectID = existing.ProjectID
-		}
-	}
-	if err := lfs.UpsertProjectMilestone(ctx, projectID, *milestone); err != nil {
-		log.Printf("[fs] upsert milestone %s failed: %v", milestone.ID, err)
-	}
-	return milestone, nil
-}
-
 // ResolveCycleID resolves a cycle name to its ID. A local catalog miss
 // triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleName string) (string, error) {

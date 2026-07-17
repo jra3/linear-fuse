@@ -45,6 +45,34 @@ func TestEditBufferWriteInPlace(t *testing.T) {
 	}
 }
 
+// TestEditBufferTruncateBufferClearsStaleTail covers the #289 O_TRUNC path for a
+// collectionDir overwrite Create: truncateBuffer empties the buffer (dirty), so a
+// subsequent shorter write leaves no stale tail from the prior content.
+func TestEditBufferTruncateBufferClearsStaleTail(t *testing.T) {
+	t.Parallel()
+	b := &editBuffer{content: []byte("hello world")}
+
+	b.truncateBuffer()
+	if b.size() != 0 {
+		t.Fatalf("size after truncateBuffer = %d, want 0", b.size())
+	}
+	if !b.dirty {
+		t.Error("truncateBuffer did not mark the buffer dirty")
+	}
+
+	// A shorter rewrite must produce exactly the new bytes, not overlay a stale tail.
+	b.Write(context.Background(), nil, []byte("hi"), 0)
+	dest := make([]byte, 32)
+	res, errno := b.Read(context.Background(), nil, dest, 0)
+	if errno != 0 {
+		t.Fatalf("Read errno = %d", errno)
+	}
+	got, _ := res.Bytes(dest)
+	if string(got) != "hi" {
+		t.Errorf("Read after truncate+rewrite = %q, want \"hi\" (no stale tail)", got)
+	}
+}
+
 // TestEditBufferTruncate covers Setattr shrinking and growing the buffer.
 func TestEditBufferTruncate(t *testing.T) {
 	t.Parallel()

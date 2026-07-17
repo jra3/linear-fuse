@@ -190,7 +190,7 @@ func (c collectionDir[T]) metaRender(item T) renderFunc {
 // an indexed collection (comments): Create only fires for a name Lookup missed,
 // and a user-chosen name never matches an index-derived filename, so find()
 // misses and falls through to the create node.
-func (c collectionDir[T]) create(ctx context.Context, name string, out *fuse.EntryOut, onFlush func(ctx context.Context, content []byte) syscall.Errno) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+func (c collectionDir[T]) create(ctx context.Context, name string, flags uint32, out *fuse.EntryOut, onFlush func(ctx context.Context, content []byte) syscall.Errno) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	if !strings.HasSuffix(name, ".md") {
 		return nil, nil, 0, syscall.EINVAL
 	}
@@ -199,6 +199,14 @@ func (c collectionDir[T]) create(ctx context.Context, name string, out *fuse.Ent
 			inode, errno := c.buildFile(ctx, name, item, out)
 			if errno != 0 {
 				return nil, nil, 0, errno
+			}
+			// Honor O_TRUNC: a Create carries it in its own flags (no separate
+			// setattr follows), so without truncating here a shorter rewrite over
+			// the existing content would leave stale tail bytes (#289).
+			if flags&syscall.O_TRUNC != 0 {
+				if tr, ok := inode.Operations().(interface{ truncateBuffer() }); ok {
+					tr.truncateBuffer()
+				}
 			}
 			return inode, nil, 0, 0
 		}

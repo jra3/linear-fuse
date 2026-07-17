@@ -49,6 +49,19 @@ func (b *editBuffer) refresh(freshContent []byte, entitySwap func()) {
 	entitySwap()
 }
 
+// truncateBuffer clears the buffer to empty and marks it dirty. It is the
+// O_TRUNC path for a collectionDir overwrite-in-place Create (#289): unlike an
+// O_TRUNC *open* of an existing file — where the kernel sends a separate
+// setattr(size=0) that editBuffer.Setattr handles — a Create carries O_TRUNC in
+// its own flags and no setattr follows, so without this the node keeps its
+// pre-existing content and a shorter rewrite leaves stale tail bytes.
+func (b *editBuffer) truncateBuffer() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.content = b.content[:0]
+	b.dirty = true
+}
+
 func (b *editBuffer) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }

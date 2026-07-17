@@ -3,6 +3,7 @@ package integration
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -253,6 +254,260 @@ func TestOffline_NamedFileCreate(t *testing.T) {
 // The mount is shared, so relate two freshly-minted issues (not fixture issues
 // other tests also relate) — a duplicate same-named edge would mask a failed
 // delete.
+// TestOffline_DeadHandlerUnlinkRejected pins the #286/#287 fix: rm on a directory
+// node whose entries are not removable through the filesystem must fail loudly
+// (EPERM), not silently succeed. go-fuse reports success when the parent dir has
+// no NodeUnlinker, so before the guards these all returned nil while deleting
+// nothing (the row/file resurrected on the next readdir). Each probe targets a
+// distinct previously-unguarded node.
+func TestOffline_DeadHandlerUnlinkRejected(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check")
+	}
+	enableMockMutations(t)
+
+	initDir, err := firstInitiativeDir()
+	if err != nil {
+		t.Fatalf("no initiative fixture: %v", err)
+	}
+	probes := []struct {
+		node string
+		path string
+	}{
+		{"UpdatesNode", filepath.Join(projectsPath(testTeamKey), "test-project", "updates", "_create")},
+		{"InitiativeUpdatesNode", filepath.Join(initDir, "updates", "_create")},
+		{"IssuesNode (trio)", filepath.Join(issuesPath(testTeamKey), "_create")},
+		{"ProjectsNode (trio)", filepath.Join(projectsPath(testTeamKey), ".last")},
+		{"TeamNode (metadata)", teamInfoPath(testTeamKey)},
+		{"RootNode (metadata)", filepath.Join(rootPath(), "README.md")},
+	}
+	for _, p := range probes {
+		if _, err := os.Stat(p.path); err != nil {
+			t.Fatalf("%s probe path missing (%s): %v", p.node, p.path, err)
+		}
+		err := os.Remove(p.path)
+		if !os.IsPermission(err) {
+			t.Errorf("%s: rm %s = %v, want EPERM (silent-success dead handler)", p.node, p.path, err)
+		}
+		if _, statErr := os.Stat(p.path); statErr != nil {
+			t.Errorf("%s: %s vanished after a rejected rm: %v", p.node, p.path, statErr)
+		}
+	}
+}
+
+// TestOffline_DeadHandlerRmdirRejected pins the Rmdir half of #287: rmdir on an
+// entity's structural sub-directory, or on initiatives/{slug}, must fail loudly
+// (EPERM) rather than silently succeed (go-fuse's no-NodeRmdirer hole). Each probe
+// targets a distinct previously-unguarded node.
+func TestOffline_DeadHandlerRmdirRejected(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check")
+	}
+	enableMockMutations(t)
+
+	initDir, err := firstInitiativeDir()
+	if err != nil {
+		t.Fatalf("no initiative fixture: %v", err)
+	}
+	probes := []struct {
+		node string
+		path string
+	}{
+		{"IssueDirectoryNode", filepath.Join(issueDirPath(testTeamKey, "TST-1"), "comments")},
+		{"ProjectNode", filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")},
+		{"InitiativeNode", filepath.Join(initDir, "updates")},
+		{"InitiativesNode", initDir},
+	}
+	for _, p := range probes {
+		if _, err := os.Stat(p.path); err != nil {
+			t.Fatalf("%s probe path missing (%s): %v", p.node, p.path, err)
+		}
+		err := os.Remove(p.path) // a dir -> rmdir(2)
+		if !os.IsPermission(err) {
+			t.Errorf("%s: rmdir %s = %v, want EPERM (silent-success dead handler)", p.node, p.path, err)
+		}
+		if _, statErr := os.Stat(p.path); statErr != nil {
+			t.Errorf("%s: %s vanished after a rejected rmdir: %v", p.node, p.path, statErr)
+		}
+	}
+}
+
+// TestOffline_MilestoneDelete drives MilestonesNode.Unlink: a milestone is
+// created via _create, then rm'd — it must reach DeleteProjectMilestone and leave
+// the listing without resurrecting. Milestone deletion had zero coverage of any
+// kind before this (create/edit were covered, delete was not).
+func TestOffline_MilestoneDelete(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	msDir := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")
+	if err := writeToWriteOnly(t, filepath.Join(msDir, "_create"), "DeleteProbe\na milestone to delete"); err != nil {
+		t.Fatalf("create milestone via _create should succeed: %v", err)
+	}
+	const file = "DeleteProbe.md"
+	if err := waitForDirEntry(msDir, file, defaultWaitTime); err != nil {
+		t.Fatalf("created milestone %q not listed: %v", file, err)
+	}
+
+	if err := os.Remove(filepath.Join(msDir, file)); err != nil {
+		t.Fatalf("rm milestone should succeed: %v", err)
+	}
+	if dirContains(msDir, file) {
+		t.Errorf("deleted milestone %q still in listing (forget failed / silent no-op)", file)
+	}
+}
+
+// TestOffline_InitiativeUpdateCreatePersists drives InitiativeUpdatesNode.Create:
+// a status update is written to updates/_create and the created {seq}-{date}-{health}.md
+// must appear and read its body back. Before this only a stat of _create and a
+// pre-seeded read existed — the create-through-the-mount path was uncovered.
+func TestOffline_InitiativeUpdateCreatePersists(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	dir, err := firstInitiativeDir()
+	if err != nil {
+		t.Skipf("no initiative fixture: %v", err)
+	}
+	updatesDir := filepath.Join(dir, "updates")
+	const marker = "initiative update body probe ZZZ"
+	if err := writeToWriteOnly(t, filepath.Join(updatesDir, "_create"), "---\nhealth: atRisk\n---\n"+marker); err != nil {
+		t.Fatalf("create initiative update via _create should succeed: %v", err)
+	}
+
+	// The created update file must appear in the listing and serve its body back
+	// (proof the create upserted it, not just echoed a .last line).
+	name := mdFileContaining(t, updatesDir, marker)
+	if last := lastEntryByTitle(t, filepath.Join(updatesDir, ".last"), ""); last != nil && last["url"] == "" {
+		t.Errorf("updates/.last entry missing url: %v", last)
+	}
+	if !dirContains(updatesDir, name) {
+		t.Errorf("created update %q not in updates listing", name)
+	}
+}
+
+// TestOffline_DocumentCreate drives DocsNode.Create: a doc written by named
+// filename must appear in the issue's docs listing (proof the create upserted it
+// with its issue association, not just echoed a .last line).
+func TestOffline_DocumentCreate(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	dir := docsPath(testTeamKey, "TST-1")
+	const marker = "DocCreateProbeBody ZZZ"
+	if err := os.WriteFile(docFilePath(testTeamKey, "TST-1", "Doc Create Probe.md"),
+		[]byte("# DocCreateTitle\n\n"+marker+"\n"), 0o644); err != nil {
+		t.Fatalf("create doc via filename: %v", err)
+	}
+	name := mdFileContaining(t, dir, marker)
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(dir, name)) })
+	if !dirContains(dir, name) {
+		t.Errorf("created doc %q not in docs listing", name)
+	}
+}
+
+// TestOffline_DocumentDelete drives DocsNode.Unlink: a created doc rm'd must reach
+// DeleteDocument and leave the listing without resurrecting.
+func TestOffline_DocumentDelete(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	dir := docsPath(testTeamKey, "TST-1")
+	const marker = "DocDeleteProbeBody ZZZ"
+	if err := os.WriteFile(docFilePath(testTeamKey, "TST-1", "Doc Delete Probe.md"),
+		[]byte("# DocDeleteTitle\n\n"+marker+"\n"), 0o644); err != nil {
+		t.Fatalf("create doc via filename: %v", err)
+	}
+	name := mdFileContaining(t, dir, marker)
+
+	if err := os.Remove(filepath.Join(dir, name)); err != nil {
+		t.Fatalf("rm doc should succeed: %v", err)
+	}
+	if dirContains(dir, name) {
+		t.Errorf("deleted doc %q still in listing (forget failed / silent no-op)", name)
+	}
+}
+
+// TestOffline_MilestoneCreatePersists drives MilestonesNode create: a milestone
+// created via _create must appear with its name and description readable back.
+func TestOffline_MilestoneCreatePersists(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	msDir := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")
+	if err := writeToWriteOnly(t, filepath.Join(msDir, "_create"), "CreateProbe\nmilestone create description ZZZ"); err != nil {
+		t.Fatalf("create milestone via _create should succeed: %v", err)
+	}
+	const file = "CreateProbe.md"
+	if err := waitForDirEntry(msDir, file, defaultWaitTime); err != nil {
+		t.Fatalf("created milestone %q not listed: %v", file, err)
+	}
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(msDir, file)) })
+
+	after, err := readFileWithRetry(filepath.Join(msDir, file), defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read created milestone: %v", err)
+	}
+	for _, want := range []string{"CreateProbe", "milestone create description ZZZ"} {
+		if !strings.Contains(string(after), want) {
+			t.Errorf("created milestone missing %q\n--- got ---\n%s", want, after)
+		}
+	}
+}
+
+// TestOffline_ProjectUpdateCreatePersists drives UpdatesNode.Create: a status
+// update written to updates/_create must appear as {seq}-{date}-{health}.md and
+// read its body back.
+func TestOffline_ProjectUpdateCreatePersists(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	updatesDir := filepath.Join(projectsPath(testTeamKey), "test-project", "updates")
+	const marker = "project update body probe ZZZ"
+	if err := writeToWriteOnly(t, filepath.Join(updatesDir, "_create"), "---\nhealth: atRisk\n---\n"+marker); err != nil {
+		t.Fatalf("create project update via _create should succeed: %v", err)
+	}
+	name := mdFileContaining(t, updatesDir, marker)
+	if !dirContains(updatesDir, name) {
+		t.Errorf("created update %q not in updates listing", name)
+	}
+}
+
+// TestOffline_ChildIssuePersistsParent drives ChildrenNode.Mkdir: creating a
+// sub-issue must persist a real child that resolves to its own issue directory
+// (a symlink pointing nowhere would mean the create never reflected).
+func TestOffline_ChildIssuePersistsParent(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	childrenDir := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "children")
+	if err := os.Mkdir(filepath.Join(childrenDir, "Offline Child Probe"), 0o755); err != nil {
+		t.Fatalf("mkdir child should succeed with mock mutator: %v", err)
+	}
+	child := firstRealEntry(mustReadDir(t, childrenDir))
+	if child == "" {
+		t.Fatalf("no child symlink appeared under %s", childrenDir)
+	}
+	// The symlink must resolve to a real child issue directory with an issue.md.
+	if _, err := readFileWithRetry(filepath.Join(childrenDir, child, "issue.md"), defaultWaitTime); err != nil {
+		t.Errorf("child %q does not resolve to a real issue (parent link not persisted): %v", child, err)
+	}
+}
+
 func TestOffline_RelationCreateAndDelete(t *testing.T) {
 	if liveAPIMode {
 		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
@@ -334,6 +589,38 @@ func TestOffline_ProjectLinkCreateAndDelete(t *testing.T) {
 	}
 	if dirContains(linksDir, link) {
 		t.Errorf("deleted link %q still in listing (forget failed / silent no-op)", link)
+	}
+}
+
+// TestOffline_ProjectLinkCreateIdempotent pins the #288 idempotency contract: a
+// second _create of an already-linked URL must be a no-op (Linear does not dedup
+// external links, so a duplicate would be a real second row). In fixture mode the
+// phantom live-verify errors, so the safe cache-trust skip applies and re-linking
+// never mints a counter-suffixed duplicate.
+func TestOffline_ProjectLinkCreateIdempotent(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
+	}
+	enableMockMutations(t)
+
+	linksDir := filepath.Join(projectsPath(testTeamKey), "test-project", "links")
+	const spec = "https://example.com/offline-idempotent-probe Idempotent Link Probe"
+	const link = "Idempotent Link Probe.link"
+	for i := 0; i < 2; i++ {
+		if err := writeToWriteOnly(t, filepath.Join(linksDir, "_create"), spec); err != nil {
+			t.Fatalf("create link attempt %d should succeed: %v", i+1, err)
+		}
+	}
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(linksDir, link)) })
+
+	if !dirContains(linksDir, link) {
+		t.Fatalf("link %q not created", link)
+	}
+	// A duplicate would surface as a counter-suffixed sibling ("... (2).link").
+	for _, e := range mustReadDir(t, linksDir) {
+		if e.Name() != link && strings.HasPrefix(e.Name(), "Idempotent Link Probe") {
+			t.Errorf("re-linking the same URL minted a duplicate: %q", e.Name())
+		}
 	}
 }
 

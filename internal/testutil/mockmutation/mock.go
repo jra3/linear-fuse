@@ -47,6 +47,11 @@ type Client struct {
 	issueEdit map[string]api.Issue
 	projEdit  map[string]api.Project
 	initEdit  map[string]api.Initiative
+	// docState records each mock-created document (with its parent association)
+	// so an edit preserves the linkage the real documentUpdate response carries
+	// via DocumentFields (issue/project/team/initiative); without it the upsert
+	// would clear issue_id and drop the doc from its parent listing.
+	docState map[string]api.Document
 }
 
 // Option configures a Client.
@@ -74,6 +79,7 @@ func New(opts ...Option) *Client {
 		issueEdit: make(map[string]api.Issue),
 		projEdit:  make(map[string]api.Project),
 		initEdit:  make(map[string]api.Initiative),
+		docState:  make(map[string]api.Document),
 	}
 	for _, o := range opts {
 		o(c)
@@ -220,6 +226,22 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	if v, ok := input["description"].(string); ok {
 		iss.Description = v
 	}
+	// Overlay the editable scalar frontmatter fields the issue Flush can send, so
+	// the verify getter reads them back — mirroring CreateIssue's field handling.
+	// A field absent from input is left untouched (a partial edit must not zero it).
+	if _, ok := input["priority"]; ok {
+		iss.Priority = intVal(input, "priority")
+	}
+	if _, ok := input["estimate"]; ok {
+		est := float64(intVal(input, "estimate"))
+		iss.Estimate = &est
+	}
+	if due, ok := input["dueDate"].(string); ok {
+		iss.DueDate = &due
+	}
+	if sid, ok := input["stateId"].(string); ok && sid != "" {
+		iss.State = api.State{ID: sid, Name: c.stateName(ctx, sid)}
+	}
 	c.issueEdit[issueID] = iss
 	return nil
 }
@@ -244,7 +266,7 @@ func (c *Client) DeleteComment(ctx context.Context, commentID string) error { re
 func (c *Client) CreateDocument(ctx context.Context, input map[string]any) (*api.Document, error) {
 	n := c.next()
 	id := fmt.Sprintf("mock-doc-%d", n)
-	return &api.Document{
+	d := api.Document{
 		ID:        id,
 		Title:     str(input, "title"),
 		Content:   str(input, "content"),
@@ -252,11 +274,46 @@ func (c *Client) CreateDocument(ctx context.Context, input map[string]any) (*api
 		URL:       "https://linear.app/test/document/" + id,
 		CreatedAt: c.now,
 		UpdatedAt: c.now,
-	}, nil
+	}
+	// Echo the parent association the input carries, exactly as the real
+	// documentCreate response does (DocumentFields projects issue/project/
+	// team/initiative). Without it the upsert stores a blank issue_id and the
+	// doc never appears in its parent's listing.
+	if v := str(input, "issueId"); v != "" {
+		d.Issue = &api.Issue{ID: v}
+	}
+	if v := str(input, "projectId"); v != "" {
+		d.Project = &api.Project{ID: v}
+	}
+	if v := str(input, "teamId"); v != "" {
+		d.Team = &api.Team{ID: v}
+	}
+	if v := str(input, "initiativeId"); v != "" {
+		d.Initiative = &api.Initiative{ID: v}
+	}
+	c.mu.Lock()
+	c.docState[id] = d
+	c.mu.Unlock()
+	return &d, nil
 }
 
 func (c *Client) UpdateDocument(ctx context.Context, documentID string, input map[string]any) (*api.Document, error) {
-	return &api.Document{ID: documentID, Title: str(input, "title"), Content: str(input, "content"), CreatedAt: c.now, UpdatedAt: c.now}, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	d := c.docState[documentID] // zero value if unknown (e.g. a fixture-seeded doc)
+	d.ID = documentID
+	if v, ok := input["title"].(string); ok {
+		d.Title = v
+	}
+	if v, ok := input["content"].(string); ok {
+		d.Content = v
+	}
+	d.UpdatedAt = c.now
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = c.now
+	}
+	c.docState[documentID] = d
+	return &d, nil
 }
 
 func (c *Client) DeleteDocument(ctx context.Context, documentID string) error { return nil }
@@ -274,7 +331,24 @@ func (c *Client) CreateLabel(ctx context.Context, input map[string]any) (*api.La
 }
 
 func (c *Client) UpdateLabel(ctx context.Context, id string, input map[string]any) (*api.Label, error) {
-	return &api.Label{ID: id, Name: str(input, "name"), Color: str(input, "color"), Description: str(input, "description")}, nil
+	// The real mutation returns the WHOLE updated label, so overlay the input onto
+	// the current stored state — echoing only the edited fields would zero the
+	// untouched ones (name/color/description), corrupting the upsert.
+	l := api.Label{ID: id, Name: str(input, "name"), Color: str(input, "color"), Description: str(input, "description")}
+	if c.store != nil {
+		if row, err := c.store.Queries().GetLabel(ctx, id); err == nil {
+			if _, ok := input["name"]; !ok {
+				l.Name = row.Name
+			}
+			if _, ok := input["color"]; !ok {
+				l.Color = row.Color.String
+			}
+			if _, ok := input["description"]; !ok {
+				l.Description = row.Description.String
+			}
+		}
+	}
+	return &l, nil
 }
 
 func (c *Client) DeleteLabel(ctx context.Context, id string) error { return nil }

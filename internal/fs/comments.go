@@ -90,7 +90,7 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 }
 
 func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	return n.collection().create(ctx, name, out, n.createComment)
+	return n.collection().create(ctx, name, flags, out, n.createComment)
 }
 
 // CommentNode represents a single comment file (read-write)

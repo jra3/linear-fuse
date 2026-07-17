@@ -208,7 +208,7 @@ func (n *DocsNode) newDocumentInode(ctx context.Context, name string, doc api.Do
 
 func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	// The user-chosen filename feeds the title fallback (createDocument(name)).
-	return n.collection().create(ctx, name, out, n.createDocument(name))
+	return n.collection().create(ctx, name, flags, out, n.createDocument(name))
 }
 
 // documentFilename returns the filename for a document

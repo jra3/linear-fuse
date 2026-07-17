@@ -165,7 +165,7 @@ func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 }
 
 func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	return n.collection().create(ctx, name, out, n.createLabel)
+	return n.collection().create(ctx, name, flags, out, n.createLabel)
 }
 
 // labelFilename returns the filename for a label

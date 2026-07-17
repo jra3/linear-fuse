@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"syscall"
 	"time"
@@ -54,6 +53,24 @@ func (n *LinksNode) liveLinks(ctx context.Context) ([]api.EntityExternalLink, er
 		return n.lfs.client.GetProjectLinks(ctx, n.projectID)
 	}
 	return n.lfs.client.GetInitiativeLinks(ctx, n.initiativeID)
+}
+
+// linkStillLive reports whether url is still linked according to Linear, used to
+// distinguish a genuine idempotent re-link from a phantom cache row (#288). On a
+// verify error it returns true — keep the cache-trust skip, since protecting
+// against a duplicate (which Linear would not dedup) is the safer default when we
+// cannot confirm the row is stale.
+func (n *LinksNode) linkStillLive(ctx context.Context, url string) bool {
+	live, err := n.liveLinks(ctx)
+	if err != nil {
+		return true
+	}
+	for _, l := range live {
+		if linkURLsEqual(l.URL, url) {
+			return true
+		}
+	}
+	return false
 }
 
 // dir constructs the read-only listing head. Listing is best-effort: a failed
@@ -178,12 +195,23 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 	// by URL server-side, so the cache pre-check is the only guard against a
 	// retry minting a second identical link. It returns 0 without a .last entry
 	// (nothing was created).
+	//
+	// The links cache is never pruned by a background worker (only read-triggered
+	// SWR), so a matched row can be a phantom — a link deleted on Linear out of
+	// band while the cache is still fresh. Trusting it blindly would turn a
+	// genuine create into a silent no-op (#288). So on a cache match, verify
+	// against Linear before skipping; a phantom (not live) falls through to a real
+	// create. If the verify itself fails we keep the cache-trust skip — protecting
+	// against a duplicate is the safer default when we cannot confirm.
 	if url := strings.SplitN(content, " ", 2)[0]; url != "" {
 		if existing, err := n.getLinks(ctx); err == nil {
 			for _, l := range existing {
 				if linkURLsEqual(l.URL, url) {
-					n.lfs.ClearWriteError(collectionErrorKey("links", n.parentID()))
-					return 0
+					if n.linkStillLive(ctx, url) {
+						n.lfs.ClearWriteError(collectionErrorKey("links", n.parentID()))
+						return 0
+					}
+					break // phantom row: proceed to a real create
 				}
 			}
 		}
@@ -231,8 +259,7 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 			return WriteResult{URL: l.URL, Path: externalLinkName(*l), Title: l.Label}
 		},
 		persist: func(ctx context.Context, l *api.EntityExternalLink) error {
-			n.upsertLink(ctx, *l)
-			return nil
+			return n.upsertLink(ctx, *l)
 		},
 		dir:       linksDirIno(n.parentID()),
 		entryName: func(l *api.EntityExternalLink) string { return externalLinkName(*l) },
@@ -240,17 +267,17 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 	return errno
 }
 
-// upsertLink writes a link to SQLite for immediate visibility. Failures are
-// logged, not fatal: the SWR refresh will reconcile.
-func (n *LinksNode) upsertLink(ctx context.Context, link api.EntityExternalLink) {
+// upsertLink writes a link to SQLite for immediate visibility. It returns the
+// failure rather than swallowing it: the create tail gates success on this
+// reflection (#276/#278), and unlike issue attachments Linear does NOT dedup
+// external links server-side — a swallowed upsert leaves the cache pre-check
+// blind, so a retry after the false no-op mints a duplicate link.
+func (n *LinksNode) upsertLink(ctx context.Context, link api.EntityExternalLink) error {
 	params, err := db.APIEntityExternalLinkToDB(link, n.projectID, n.initiativeID)
 	if err != nil {
-		log.Printf("[links] convert for DB failed: %v", err)
-		return
+		return err
 	}
-	if err := n.lfs.store.Queries().UpsertEntityExternalLink(ctx, params); err != nil {
-		log.Printf("[links] upsert to DB failed: %v", err)
-	}
+	return n.lfs.store.Queries().UpsertEntityExternalLink(ctx, params)
 }
 
 // linkURLsEqual reports whether two link URLs refer to the same target, ignoring
