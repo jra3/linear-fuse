@@ -85,7 +85,7 @@ func TestOffline_ProjectCreateAndArchive(t *testing.T) {
 
 	// The created project directory is present and carries a server-populated
 	// project.meta (proof the mkdir upserted it to SQLite for the listing).
-	if !dirContains(projectsPath(testTeamKey), dir) {
+	if !dirHas(projectsPath(testTeamKey), dir) {
 		t.Fatalf("created project %q not in projects listing", dir)
 	}
 	assertMetaHasFields(t, filepath.Join(projectsPath(testTeamKey), dir, "project.meta"), "id", "url", "status")
@@ -94,7 +94,7 @@ func TestOffline_ProjectCreateAndArchive(t *testing.T) {
 	if err := os.Remove(filepath.Join(projectsPath(testTeamKey), dir)); err != nil {
 		t.Fatalf("rmdir (archive) project should succeed: %v", err)
 	}
-	if dirContains(projectsPath(testTeamKey), dir) {
+	if !dirLacks(projectsPath(testTeamKey), dir) {
 		t.Errorf("archived project %q still in listing (resurrection — forget failed)", dir)
 	}
 }
@@ -115,7 +115,7 @@ func TestOffline_LabelCreateRenameDelete(t *testing.T) {
 		t.Fatalf("create label via _create should succeed with mock mutator: %v", err)
 	}
 	const created = "Offline-Mock-Label-ZZZ.md"
-	if !dirContains(labelsPath(testTeamKey), created) {
+	if !dirHas(labelsPath(testTeamKey), created) {
 		t.Fatalf("created label %q not in labels listing", created)
 	}
 
@@ -125,10 +125,10 @@ func TestOffline_LabelCreateRenameDelete(t *testing.T) {
 	if err := os.Rename(labelFilePath(testTeamKey, created), labelFilePath(testTeamKey, renamed)); err != nil {
 		t.Fatalf("rename label should succeed: %v", err)
 	}
-	if dirContains(labelsPath(testTeamKey), created) {
+	if !dirLacks(labelsPath(testTeamKey), created) {
 		t.Errorf("old label name %q still present after rename", created)
 	}
-	if !dirContains(labelsPath(testTeamKey), renamed) {
+	if !dirHas(labelsPath(testTeamKey), renamed) {
 		t.Errorf("renamed label %q not present after rename", renamed)
 	}
 
@@ -136,7 +136,7 @@ func TestOffline_LabelCreateRenameDelete(t *testing.T) {
 	if err := os.Remove(labelFilePath(testTeamKey, renamed)); err != nil {
 		t.Fatalf("unlink (delete) label should succeed: %v", err)
 	}
-	if dirContains(labelsPath(testTeamKey), renamed) {
+	if !dirLacks(labelsPath(testTeamKey), renamed) {
 		t.Errorf("deleted label %q still in listing (forget failed)", renamed)
 	}
 }
@@ -187,7 +187,7 @@ func TestOffline_IssueLifecycle(t *testing.T) {
 	if err := os.Remove(commentFilePath(testTeamKey, id, commentFile)); err != nil {
 		t.Fatalf("unlink (delete) comment should succeed: %v", err)
 	}
-	if dirContains(commentsPath(testTeamKey, id), commentFile) {
+	if !dirLacks(commentsPath(testTeamKey, id), commentFile) {
 		t.Errorf("deleted comment %q still present", commentFile)
 	}
 
@@ -195,7 +195,7 @@ func TestOffline_IssueLifecycle(t *testing.T) {
 	if err := os.Remove(issueDirPath(testTeamKey, id)); err != nil {
 		t.Fatalf("rmdir (archive) issue should succeed: %v", err)
 	}
-	if dirContains(issuesPath(testTeamKey), id) {
+	if !dirLacks(issuesPath(testTeamKey), id) {
 		t.Errorf("archived issue %q still in listing (resurrection — forget failed)", id)
 	}
 }
@@ -218,7 +218,7 @@ func TestOffline_NamedFileCreate(t *testing.T) {
 	if err := os.WriteFile(labelFilePath(testTeamKey, labelFile), labelSpec, 0o644); err != nil {
 		t.Fatalf("create label via named file should succeed: %v", err)
 	}
-	if !dirContains(labelsPath(testTeamKey), labelFile) {
+	if !dirHas(labelsPath(testTeamKey), labelFile) {
 		t.Fatalf("named-file label %q not in labels listing", labelFile)
 	}
 	_ = os.Remove(labelFilePath(testTeamKey, labelFile)) // best-effort cleanup
@@ -354,7 +354,7 @@ func TestOffline_MilestoneDelete(t *testing.T) {
 	if err := os.Remove(filepath.Join(msDir, file)); err != nil {
 		t.Fatalf("rm milestone should succeed: %v", err)
 	}
-	if dirContains(msDir, file) {
+	if !dirLacks(msDir, file) {
 		t.Errorf("deleted milestone %q still in listing (forget failed / silent no-op)", file)
 	}
 }
@@ -385,7 +385,7 @@ func TestOffline_InitiativeUpdateCreatePersists(t *testing.T) {
 	if last := lastEntryByTitle(t, filepath.Join(updatesDir, ".last"), ""); last != nil && last["url"] == "" {
 		t.Errorf("updates/.last entry missing url: %v", last)
 	}
-	if !dirContains(updatesDir, name) {
+	if !dirHas(updatesDir, name) {
 		t.Errorf("created update %q not in updates listing", name)
 	}
 }
@@ -407,7 +407,7 @@ func TestOffline_DocumentCreate(t *testing.T) {
 	}
 	name := mdFileContaining(t, dir, marker)
 	t.Cleanup(func() { _ = os.Remove(filepath.Join(dir, name)) })
-	if !dirContains(dir, name) {
+	if !dirHas(dir, name) {
 		t.Errorf("created doc %q not in docs listing", name)
 	}
 }
@@ -431,7 +431,7 @@ func TestOffline_DocumentDelete(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, name)); err != nil {
 		t.Fatalf("rm doc should succeed: %v", err)
 	}
-	if dirContains(dir, name) {
+	if !dirLacks(dir, name) {
 		t.Errorf("deleted doc %q still in listing (forget failed / silent no-op)", name)
 	}
 }
@@ -480,7 +480,7 @@ func TestOffline_ProjectUpdateCreatePersists(t *testing.T) {
 		t.Fatalf("create project update via _create should succeed: %v", err)
 	}
 	name := mdFileContaining(t, updatesDir, marker)
-	if !dirContains(updatesDir, name) {
+	if !dirHas(updatesDir, name) {
 		t.Errorf("created update %q not in updates listing", name)
 	}
 }
@@ -532,7 +532,7 @@ func TestOffline_RelationCreateAndDelete(t *testing.T) {
 		t.Fatalf("create relation via _create should succeed: %v", err)
 	}
 	rel := "blocks-" + dst + ".rel"
-	if !dirContains(relationsDir, rel) {
+	if !dirHas(relationsDir, rel) {
 		t.Fatalf("created relation %q not in relations listing", rel)
 	}
 
@@ -540,13 +540,13 @@ func TestOffline_RelationCreateAndDelete(t *testing.T) {
 	// side; deleting it is EPERM (delete from the owning side).
 	inverseDir := filepath.Join(issueDirPath(testTeamKey, dst), "relations")
 	inverse := "blocked-by-" + src + ".rel"
-	if !dirContains(inverseDir, inverse) {
+	if !dirHas(inverseDir, inverse) {
 		t.Fatalf("inverse relation %q not present on target", inverse)
 	}
 	if err := os.Remove(filepath.Join(inverseDir, inverse)); !os.IsPermission(err) {
 		t.Errorf("rm inverse relation: want EPERM, got %v", err)
 	}
-	if !dirContains(inverseDir, inverse) {
+	if !dirHas(inverseDir, inverse) {
 		t.Errorf("inverse relation %q vanished after a rejected rm", inverse)
 	}
 
@@ -555,10 +555,10 @@ func TestOffline_RelationCreateAndDelete(t *testing.T) {
 	if err := os.Remove(filepath.Join(relationsDir, rel)); err != nil {
 		t.Fatalf("unlink (delete) relation should succeed: %v", err)
 	}
-	if dirContains(relationsDir, rel) {
+	if !dirLacks(relationsDir, rel) {
 		t.Errorf("deleted relation %q still in listing (forget failed / silent no-op)", rel)
 	}
-	if dirContains(inverseDir, inverse) {
+	if !dirLacks(inverseDir, inverse) {
 		t.Errorf("inverse relation %q still present after the edge was deleted", inverse)
 	}
 
@@ -580,14 +580,14 @@ func TestOffline_ProjectLinkCreateAndDelete(t *testing.T) {
 		t.Fatalf("create link via _create should succeed: %v", err)
 	}
 	const link = "Offline Link Probe.link"
-	if !dirContains(linksDir, link) {
+	if !dirHas(linksDir, link) {
 		t.Fatalf("created link %q not in links listing", link)
 	}
 
 	if err := os.Remove(filepath.Join(linksDir, link)); err != nil {
 		t.Fatalf("unlink (delete) link should succeed: %v", err)
 	}
-	if dirContains(linksDir, link) {
+	if !dirLacks(linksDir, link) {
 		t.Errorf("deleted link %q still in listing (forget failed / silent no-op)", link)
 	}
 }
@@ -616,7 +616,7 @@ func TestOffline_ProjectLinkCreateIdempotent(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Remove(filepath.Join(linksDir, link)) })
 
-	if !dirContains(linksDir, link) {
+	if !dirHas(linksDir, link) {
 		t.Fatalf("link %q not created", link)
 	}
 	// A duplicate would surface as a counter-suffixed sibling ("... (2).link").
@@ -641,14 +641,14 @@ func TestOffline_AttachmentCreateAndDelete(t *testing.T) {
 		t.Fatalf("create attachment via _create should succeed: %v", err)
 	}
 	const att = "Offline Att Probe.link"
-	if !dirContains(attDir, att) {
+	if !dirHas(attDir, att) {
 		t.Fatalf("created attachment %q not in attachments listing", att)
 	}
 
 	if err := os.Remove(filepath.Join(attDir, att)); err != nil {
 		t.Fatalf("unlink (delete) attachment should succeed: %v", err)
 	}
-	if dirContains(attDir, att) {
+	if !dirLacks(attDir, att) {
 		t.Errorf("deleted attachment %q still in listing (forget failed / silent no-op)", att)
 	}
 }

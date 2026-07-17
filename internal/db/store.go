@@ -21,6 +21,12 @@ var schemaSQL string
 type Store struct {
 	db      *sql.DB
 	queries *Queries
+	// qdb is the query executor: the raw *sql.DB wrapped so every SQLite
+	// operation detaches from FUSE-request cancellation (see ctxDetachDBTX).
+	// Both sqlc queries and the hand-written store methods run through it, so no
+	// caller can wedge a local read/write into a spurious EIO on a cancelled
+	// FUSE request (#296). db stays raw for lifecycle (Close) and the test seam.
+	qdb DBTX
 }
 
 // Open opens or creates a SQLite database at the given path.
@@ -87,9 +93,11 @@ func openDB(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
+	qdb := ctxDetachDBTX{inner: db}
 	return &Store{
 		db:      db,
-		queries: New(db),
+		queries: New(qdb),
+		qdb:     qdb,
 	}, nil
 }
 
@@ -179,7 +187,7 @@ func (s *Store) DB() *sql.DB {
 // while a fresh one has it in schema.sql order — positional scanning over *
 // would misalign on one of them.
 func (s *Store) ListIssuesByLabel(ctx context.Context, teamID, labelName string) ([]Issue, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.qdb.QueryContext(ctx, `
 		SELECT id, identifier, team_id, title, description,
 			state_id, state_name, state_type,
 			assignee_id, assignee_email, creator_id, creator_email, priority,
