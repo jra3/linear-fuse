@@ -19,6 +19,7 @@ package mockmutation
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
@@ -52,6 +53,13 @@ type Client struct {
 	// via DocumentFields (issue/project/team/initiative); without it the upsert
 	// would clear issue_id and drop the doc from its parent listing.
 	docState map[string]api.Document
+	// liveLinkOverride, when set for a parent ID (project or initiative), replaces
+	// the store-backed authoritative live link list served by the liveReader seam.
+	// It lets a test present a phantom — a link the store still has but Linear no
+	// longer does — which store-backed reads alone cannot express (the store IS the
+	// phantom). Default (no entry) falls back to the store, matching what the real
+	// API would return for an in-sync entity.
+	liveLinkOverride map[string][]api.EntityExternalLink
 }
 
 // Option configures a Client.
@@ -74,12 +82,13 @@ func WithStore(store *db.Store) Option {
 // fixture range so they never collide with seeded fixtures.
 func New(opts ...Option) *Client {
 	c := &Client{
-		teamKey:   "TST",
-		now:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		issueEdit: make(map[string]api.Issue),
-		projEdit:  make(map[string]api.Project),
-		initEdit:  make(map[string]api.Initiative),
-		docState:  make(map[string]api.Document),
+		teamKey:          "TST",
+		now:              time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		issueEdit:        make(map[string]api.Issue),
+		projEdit:         make(map[string]api.Project),
+		initEdit:         make(map[string]api.Initiative),
+		docState:         make(map[string]api.Document),
+		liveLinkOverride: make(map[string][]api.EntityExternalLink),
 	}
 	for _, o := range opts {
 		o(c)
@@ -586,4 +595,64 @@ func (c *Client) currentInitiativeLocked(ctx context.Context, id string) api.Ini
 		}
 	}
 	return api.Initiative{ID: id}
+}
+
+// ---- Authoritative live-list seam (fs.liveReader) ----
+//
+// These serve the mutation handlers' "what is actually linked right now?" reads
+// (the links create tail's phantom check and the attachment re-check). By default
+// they read the injected store, so an in-sync entity reads back exactly what a
+// real API fetch would. SetLiveLinks overrides a parent's link list so a test can
+// present a phantom that diverges from the store.
+
+// SetLiveLinks overrides the authoritative live link list for a project or
+// initiative ID. Pass a set omitting a URL the store still holds to simulate a
+// phantom cache row (a link deleted on Linear out of band).
+func (c *Client) SetLiveLinks(parentID string, links []api.EntityExternalLink) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.liveLinkOverride[parentID] = links
+}
+
+func (c *Client) GetProjectLinks(ctx context.Context, projectID string) ([]api.EntityExternalLink, error) {
+	return c.liveLinks(ctx, projectID, func() ([]db.EntityExternalLink, error) {
+		return c.store.Queries().ListProjectLinks(ctx, sql.NullString{String: projectID, Valid: true})
+	})
+}
+
+func (c *Client) GetInitiativeLinks(ctx context.Context, initiativeID string) ([]api.EntityExternalLink, error) {
+	return c.liveLinks(ctx, initiativeID, func() ([]db.EntityExternalLink, error) {
+		return c.store.Queries().ListInitiativeLinks(ctx, sql.NullString{String: initiativeID, Valid: true})
+	})
+}
+
+// liveLinks returns the override for parentID if one is set, else the store-backed
+// list via load. With no store it returns nil (empty), matching an entity with no
+// links.
+func (c *Client) liveLinks(ctx context.Context, parentID string, load func() ([]db.EntityExternalLink, error)) ([]api.EntityExternalLink, error) {
+	c.mu.Lock()
+	ov, ok := c.liveLinkOverride[parentID]
+	c.mu.Unlock()
+	if ok {
+		return ov, nil
+	}
+	if c.store == nil {
+		return nil, nil
+	}
+	rows, err := load()
+	if err != nil {
+		return nil, err
+	}
+	return db.DBEntityExternalLinksToAPI(rows)
+}
+
+func (c *Client) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	if c.store == nil {
+		return nil, nil
+	}
+	rows, err := c.store.Queries().ListIssueAttachments(ctx, issueID)
+	if err != nil {
+		return nil, err
+	}
+	return db.DBAttachmentsToAPIAttachments(rows)
 }

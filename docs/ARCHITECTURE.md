@@ -432,8 +432,13 @@ The serving end and the largest package, built on `go-fuse/v2`. The root struct
 
 - **API seam:** the `api.Client` plus injectable interfaces —
   `MutationClient` (`mutationclient.go`, every mutation; swappable in tests via
-  `testutil/mockmutation`), a `verifyReader` for read-your-writes refetches,
-  and a catalog-refresher seam for the stale-catalog flow below.
+  `testutil/mockmutation`), a `verifyReader` for read-your-writes refetches, a
+  `liveReader` for the authoritative-live-list reads the mutation tails need (the
+  links create phantom check and the attachment re-check), and a catalog-refresher
+  seam for the stale-catalog flow below. All are auto-detected off the injected
+  fake in `InjectTestMutationClient`, so one swap wires whichever seams the fake
+  implements; the concrete `api.Client` satisfies all of them, leaving production
+  wiring unchanged.
 - **Persistence:** `SQLiteRepository` (every metadata read, including
   `teams/{KEY}/docs/`, which is served from SQLite with a stale-while-revalidate
   background refresh like the project/initiative doc surfaces), `db.Store`, the

@@ -2,11 +2,13 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/config"
 	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/repo"
@@ -35,6 +37,48 @@ func linkTestLFS(t *testing.T) (*LinearFS, *db.Store) {
 	// in the persist-failure tests just skips the overlay.
 	lfs.InjectTestMutationClient(mockmutation.New(mockmutation.WithStore(store)))
 	return lfs, store
+}
+
+// seedProjectLink writes a well-formed external-link row into the store for
+// projectID, so createLink's cache pre-check matches url. It mints the entity via
+// the mock (real identity/timestamps) then upserts it directly — the store is the
+// cache, and these tests drive what the authoritative live list disagrees with.
+func seedProjectLink(t *testing.T, store *db.Store, projectID, url, label string) {
+	t.Helper()
+	seed, err := mockmutation.New(mockmutation.WithStore(store)).CreateEntityExternalLink(
+		context.Background(), map[string]any{"url": url, "label": label, "projectId": projectID})
+	if err != nil {
+		t.Fatalf("seed CreateEntityExternalLink: %v", err)
+	}
+	params, err := db.APIEntityExternalLinkToDB(*seed, projectID, "")
+	if err != nil {
+		t.Fatalf("APIEntityExternalLinkToDB: %v", err)
+	}
+	if err := store.Queries().UpsertEntityExternalLink(context.Background(), params); err != nil {
+		t.Fatalf("seed UpsertEntityExternalLink: %v", err)
+	}
+}
+
+// erroringLiveReader is a MutationClient whose authoritative live reads all fail,
+// used to drive linkStillLive's verify-error branch: when a cache row cannot be
+// confirmed against Linear, the safe default is to keep the idempotent skip rather
+// than risk minting a duplicate Linear would not dedup. It embeds a nil
+// MutationClient (any mutation call panics — the skip path never mutates).
+type erroringLiveReader struct {
+	MutationClient
+	err error
+}
+
+func (e erroringLiveReader) GetProjectLinks(ctx context.Context, projectID string) ([]api.EntityExternalLink, error) {
+	return nil, e.err
+}
+
+func (e erroringLiveReader) GetInitiativeLinks(ctx context.Context, initiativeID string) ([]api.EntityExternalLink, error) {
+	return nil, e.err
+}
+
+func (e erroringLiveReader) GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error) {
+	return nil, e.err
 }
 
 // TestCreateLinkPersistFailureFailsLoud is the #283 regression: an external-link
@@ -68,5 +112,70 @@ func TestCreateLinkPersistFailureFailsLoud(t *testing.T) {
 	// A create the local cache can't serve must never be advertised via .last.
 	if got := lfs.GetWriteSuccess(key); len(got) != 0 {
 		t.Errorf(".last advertised a link the cache can't serve: %+v", got)
+	}
+}
+
+// TestCreateLinkPhantomProceedsToRealCreate is the #288 phantom red-green: the
+// links cache holds a row (never pruned by a worker) whose URL Linear no longer
+// has — a link deleted out of band. A re-create of that URL must NOT trust the
+// stale cache row and skip; it must verify against the authoritative live list,
+// see the row is a phantom, and fall through to a real create (a .last entry).
+// This is the inverse of the idempotent skip and is only expressible once the
+// live read goes through the injectable liveReader seam: the mock serves a live
+// list that deliberately omits the URL the store still holds.
+func TestCreateLinkPhantomProceedsToRealCreate(t *testing.T) {
+	lfs, store := linkTestLFS(t)
+
+	const projectID = "proj-phantom"
+	const url = "https://example.com/phantom"
+
+	// Seed the store with the phantom row so createLink's cache pre-check matches.
+	seedProjectLink(t, store, projectID, url, "Phantom Link")
+
+	// Inject a mutator whose authoritative live list for this project is EMPTY —
+	// the store row is a phantom (deleted on Linear, still cached locally).
+	mock := mockmutation.New(mockmutation.WithStore(store))
+	mock.SetLiveLinks(projectID, nil)
+	lfs.InjectTestMutationClient(mock)
+
+	dir := &LinksNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: projectID}
+	key := collectionErrorKey("links", dir.parentID())
+
+	errno := dir.createLink(context.Background(), []byte(url+" Phantom Link"))
+	if errno != 0 {
+		t.Fatalf("createLink on a phantom row: errno = %v, want 0 (real create)", errno)
+	}
+	// Proceeding to a real create records a .last entry; an idempotent skip does not.
+	if got := lfs.GetWriteSuccess(key); len(got) != 1 {
+		t.Fatalf("phantom re-create must mint a real link (.last), got %d entries: %+v", len(got), got)
+	}
+}
+
+// TestCreateLinkVerifyErrorKeepsSkip pins linkStillLive's third branch (#288):
+// when the authoritative live read FAILS, a cache match cannot be confirmed as a
+// phantom, so createLink keeps the idempotent cache-trust skip — protecting
+// against a duplicate Linear would not dedup is the safer default when we cannot
+// confirm. It must NOT fall through to a real create (no .last), the inverse of
+// the phantom case above where the live list is authoritative and empty.
+func TestCreateLinkVerifyErrorKeepsSkip(t *testing.T) {
+	lfs, store := linkTestLFS(t)
+
+	const projectID = "proj-verifyerr"
+	const url = "https://example.com/verifyerr"
+
+	// Seed the store so the cache pre-check matches; the live read then errors.
+	seedProjectLink(t, store, projectID, url, "Verify Error Link")
+	lfs.InjectTestMutationClient(erroringLiveReader{err: errors.New("live read failed")})
+
+	dir := &LinksNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: projectID}
+	key := collectionErrorKey("links", dir.parentID())
+
+	errno := dir.createLink(context.Background(), []byte(url+" Verify Error Link"))
+	if errno != 0 {
+		t.Fatalf("createLink on an unconfirmable cache row: errno = %v, want 0 (cache-trust skip)", errno)
+	}
+	// A skip mutates nothing, so nothing is advertised via .last.
+	if got := lfs.GetWriteSuccess(key); len(got) != 0 {
+		t.Fatalf("verify-error path must keep the idempotent skip, but minted .last: %+v", got)
 	}
 }

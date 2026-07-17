@@ -91,3 +91,24 @@ type verifyReader interface {
 
 // compile-time assertion that the concrete client satisfies the verify seam.
 var _ verifyReader = (*api.Client)(nil)
+
+// liveReader is the authoritative-live-list surface the mutation handlers use to
+// ask Linear "what is actually linked right now?" — distinct from verifyReader's
+// read-your-writes re-fetch of a single entity. Two callers need it: the links
+// create tail, which checks a matched cache row against the live list before
+// treating a re-link as an idempotent skip (a phantom row — deleted on Linear
+// out of band while the never-pruned cache is still fresh — must fall through to
+// a real create, #288), and the attachment create tail's post-mutation re-check.
+// It is split from verifyReader so a test can serve a live list that deliberately
+// diverges from the store (a phantom) while the entity re-fetch still works.
+//
+// The concrete *api.Client satisfies this directly, so production wiring is
+// unchanged (LinearFS.liveReaderImpl is the same client used for every read).
+type liveReader interface {
+	GetProjectLinks(ctx context.Context, projectID string) ([]api.EntityExternalLink, error)
+	GetInitiativeLinks(ctx context.Context, initiativeID string) ([]api.EntityExternalLink, error)
+	GetIssueAttachments(ctx context.Context, issueID string) ([]api.Attachment, error)
+}
+
+// compile-time assertion that the concrete client satisfies the live-read seam.
+var _ liveReader = (*api.Client)(nil)

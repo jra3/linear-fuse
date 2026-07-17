@@ -26,10 +26,11 @@ import (
 // Read operations go through the Repository (SQLite + on-demand API fetch).
 // Write operations (mutations) use the API Client directly.
 type LinearFS struct {
-	client       *api.Client    // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
-	mutatorImpl  MutationClient // Mutations only; defaults to client, swappable for tests
-	verifierImpl verifyReader   // Read-your-writes re-fetch; defaults to client, swappable for tests
-	mutatorMu    gosync.RWMutex // guards mutatorImpl + verifierImpl + catalogRefreshImpl (handlers read while tests swap)
+	client         *api.Client    // Reads (on-demand fetch) + infrastructure (stats, viewer, close)
+	mutatorImpl    MutationClient // Mutations only; defaults to client, swappable for tests
+	verifierImpl   verifyReader   // Read-your-writes re-fetch; defaults to client, swappable for tests
+	liveReaderImpl liveReader     // Authoritative live list (links/attachments); defaults to client, swappable for tests
+	mutatorMu      gosync.RWMutex // guards mutatorImpl + verifierImpl + liveReaderImpl + catalogRefreshImpl (handlers read while tests swap)
 
 	// catalogRefreshImpl is the validation-failure catalog-refresh seam (#246):
 	// how a name→ID resolution miss refreshes its catalog before the one retry
@@ -127,13 +128,14 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 	}
 
 	lfs := &LinearFS{
-		uid:          uid,
-		gid:          gid,
-		client:       client,
-		mutatorImpl:  client,
-		verifierImpl: client,
-		requestLog:   requestLog,
-		debug:        debug,
+		uid:            uid,
+		gid:            gid,
+		client:         client,
+		mutatorImpl:    client,
+		verifierImpl:   client,
+		liveReaderImpl: client,
+		requestLog:     requestLog,
+		debug:          debug,
 	}
 	// Mint the mount-lifetime context. Background is correct here: the mount's
 	// lifetime is bounded by Close, not by any caller's request ctx.
@@ -841,6 +843,7 @@ func (lfs *LinearFS) InjectTestMutationClient(mc MutationClient) {
 	if mc == nil {
 		lfs.mutatorImpl = lfs.client
 		lfs.verifierImpl = lfs.client
+		lfs.liveReaderImpl = lfs.client
 		return
 	}
 	lfs.mutatorImpl = mc
@@ -848,6 +851,11 @@ func (lfs *LinearFS) InjectTestMutationClient(mc MutationClient) {
 		lfs.verifierImpl = vr
 	} else {
 		lfs.verifierImpl = lfs.client
+	}
+	if lr, ok := mc.(liveReader); ok {
+		lfs.liveReaderImpl = lr
+	} else {
+		lfs.liveReaderImpl = lfs.client
 	}
 }
 
@@ -867,4 +875,13 @@ func (lfs *LinearFS) verify() verifyReader {
 	lfs.mutatorMu.RLock()
 	defer lfs.mutatorMu.RUnlock()
 	return lfs.verifierImpl
+}
+
+// liveReader returns the current authoritative-live-list reader under a read lock
+// (same guard as mutator/verify). Production uses the real client; tests may swap
+// in a fake whose live list diverges from the store via InjectTestMutationClient.
+func (lfs *LinearFS) liveReader() liveReader {
+	lfs.mutatorMu.RLock()
+	defer lfs.mutatorMu.RUnlock()
+	return lfs.liveReaderImpl
 }

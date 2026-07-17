@@ -319,7 +319,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 			// success it is rather than surfacing the raw GraphQL rejection.
 			// Synchronous API read inside a user-blocking flush: promote it so
 			// a tight detail budget can't stall the user's write verdict.
-			if live, lerr := n.lfs.client.GetIssueAttachments(api.WithInteractive(ctx), n.issueID); lerr == nil {
+			if live, lerr := n.lfs.liveReader().GetIssueAttachments(api.WithInteractive(ctx), n.issueID); lerr == nil {
 				for _, ex := range live {
 					if attachmentURLsEqual(ex.URL, url) {
 						return &ex, nil

@@ -595,8 +595,11 @@ func TestOffline_ProjectLinkCreateAndDelete(t *testing.T) {
 // TestOffline_ProjectLinkCreateIdempotent pins the #288 idempotency contract: a
 // second _create of an already-linked URL must be a no-op (Linear does not dedup
 // external links, so a duplicate would be a real second row). In fixture mode the
-// phantom live-verify errors, so the safe cache-trust skip applies and re-linking
-// never mints a counter-suffixed duplicate.
+// mock's authoritative live list (liveReader seam) is store-backed, so it agrees
+// the first-created row is still live — the cache-trust skip applies and
+// re-linking never mints a counter-suffixed duplicate. (The inverse, a live list
+// that diverges from the store, is the phantom fall-through covered by
+// TestCreateLinkPhantomProceedsToRealCreate in the fs package.)
 func TestOffline_ProjectLinkCreateIdempotent(t *testing.T) {
 	if liveAPIMode {
 		t.Skip("fixture-mode offline write-path check; uses the mock mutator")

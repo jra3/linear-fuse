@@ -50,9 +50,9 @@ func (n *LinksNode) getLinks(ctx context.Context) ([]api.EntityExternalLink, err
 func (n *LinksNode) liveLinks(ctx context.Context) ([]api.EntityExternalLink, error) {
 	ctx = api.WithInteractive(ctx)
 	if n.projectID != "" {
-		return n.lfs.client.GetProjectLinks(ctx, n.projectID)
+		return n.lfs.liveReader().GetProjectLinks(ctx, n.projectID)
 	}
-	return n.lfs.client.GetInitiativeLinks(ctx, n.initiativeID)
+	return n.lfs.liveReader().GetInitiativeLinks(ctx, n.initiativeID)
 }
 
 // linkStillLive reports whether url is still linked according to Linear, used to
