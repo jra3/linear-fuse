@@ -584,7 +584,7 @@ gate above.
 Owns the meter provider the recording packages (api, sync, repo, reconcile,
 fs) record into. `internal/fs` records serving-layer instruments (`metrics.go`,
 meter `linearfs/fuse`): `linearfs.fuse.ops {op, outcome}` and
-`linearfs.fuse.duration {op}` at the three commit tails (create/delete/flush)
+`linearfs.fuse.duration {op}` at the four commit tails (create/delete/flush/rename)
 and the editBuffer/renderFile read/write entry points, plus
 `linearfs.embedded_files.fetch {source=memory|disk|cdn}` at the byte-cache
 tiers. Coverage is those cheap choke points, not lookup/readdir (spread across

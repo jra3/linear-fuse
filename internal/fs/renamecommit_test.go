@@ -339,6 +339,40 @@ func TestCommitRename_PersistsMutateReturn(t *testing.T) {
 	}
 }
 
+// TestCommitRename_RecordsFuseOp proves commitRename joins the reflection-contract
+// family's telemetry (#294): a completed rename records a "rename" fuse op tagged
+// with the outcome, on both the success and a classified-failure path. Uses a
+// before-after delta because the shared manual reader (metrics_test.go TestMain)
+// also sees rename ops from other cases in this file.
+func TestCommitRename_RecordsFuseOp(t *testing.T) {
+	orig := sqliteRetryBackoff
+	sqliteRetryBackoff = []time.Duration{0}
+	t.Cleanup(func() { sqliteRetryBackoff = orig })
+
+	// Success -> outcome ok.
+	beforeOK := counterValue(t, "linearfs.fuse.ops", map[string]string{"op": "rename", "outcome": "ok"})
+	rec := newRecordingCommitRenameSpec()
+	if errno := commitRename(context.Background(), &renameRecorder{}, "foo.md",
+		&renameParent{}, "bar.md", rec.spec); errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	if got := counterValue(t, "linearfs.fuse.ops", map[string]string{"op": "rename", "outcome": "ok"}); got != beforeOK+1 {
+		t.Errorf("ops{op=rename,outcome=ok} = %d, want %d", got, beforeOK+1)
+	}
+
+	// Classified mutate failure -> outcome eio (the op is still recorded).
+	beforeEIO := counterValue(t, "linearfs.fuse.ops", map[string]string{"op": "rename", "outcome": "eio"})
+	recFail := newRecordingCommitRenameSpec()
+	recFail.mutateErr = errors.New("api down")
+	if errno := commitRename(context.Background(), &renameRecorder{}, "foo.md",
+		&renameParent{}, "bar.md", recFail.spec); errno != syscall.EIO {
+		t.Fatalf("errno = %v, want EIO", errno)
+	}
+	if got := counterValue(t, "linearfs.fuse.ops", map[string]string{"op": "rename", "outcome": "eio"}); got != beforeEIO+1 {
+		t.Errorf("ops{op=rename,outcome=eio} = %d, want %d", got, beforeEIO+1)
+	}
+}
+
 // TestCommitRename_SuccessInvalidatesBothPairs pins the exact old->new names for
 // the .md pair and its .meta twin on the success path.
 func TestCommitRename_SuccessInvalidatesBothPairs(t *testing.T) {

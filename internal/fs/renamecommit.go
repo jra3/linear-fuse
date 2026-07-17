@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 )
@@ -29,10 +30,12 @@ import (
 // commitRename is the one deep module that owns the tail, the rename-path
 // member of the reflection-contract family (commitCreate / commitWriteBack /
 // commitDelete). Structured like commitDelete — find -> mutate -> gate ->
-// coherence — but with three deliberate differences: no telemetry (matches
-// renameSave), the gate is persistOrEIO rather than retrySQLite+forget (a
-// rename reflects an updated row, it does not remove one), and success fires
-// TWO InvalidateRenamed calls (the .md pair and its .meta sidecar pair). Each
+// coherence — and, like every reflection-contract sibling, it records a fuse op
+// (here "rename") so entity renames are visible in metrics.jsonl (#294). Two
+// deliberate differences from commitDelete: the gate is persistOrEIO rather than
+// retrySQLite+forget (a rename reflects an updated row, it does not remove one),
+// and success fires TWO InvalidateRenamed calls (the .md pair and its .meta
+// sidecar pair). Each
 // handler hands the tail a small spec; the module owns the failure model, the
 // .error reporting, the persist gate, and the coherence policy. It depends only
 // on the renameSink seam plus the spec's closures, so it is unit-tested with a
@@ -83,7 +86,10 @@ type renameSpec[T any] struct {
 //     invalidation (the reflection is unconfirmed).
 //   - success                        -> clear .error, invalidate BOTH the .md
 //     pair and its .meta twin (exact old->new names), errno 0.
-func commitRename[T any](ctx context.Context, sink renameSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSpec[T]) syscall.Errno {
+func commitRename[T any](ctx context.Context, sink renameSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSpec[T]) (errno syscall.Errno) {
+	start := time.Now()
+	defer func() { recordFuseOp(ctx, "rename", start, errno) }()
+
 	// The _create trigger and the read-only .meta sidecars are not renamable.
 	if name == createTriggerName {
 		return syscall.EPERM
@@ -115,7 +121,8 @@ func commitRename[T any](ctx context.Context, sink renameSink, name string, newP
 
 	target, err := spec.find(ctx)
 	if err != nil {
-		msg, errno := classifyMutationErr(op, err)
+		var msg string
+		msg, errno = classifyMutationErr(op, err)
 		log.Printf("Failed to %s: %v", op, err)
 		sink.SetWriteError(spec.errKey, msg)
 		return errno
@@ -127,7 +134,8 @@ func commitRename[T any](ctx context.Context, sink renameSink, name string, newP
 
 	fresh, err := spec.mutate(ctx, target, parsedName)
 	if err != nil {
-		msg, errno := classifyMutationErr(op, err)
+		var msg string
+		msg, errno = classifyMutationErr(op, err)
 		log.Printf("Failed to %s: %v", op, err)
 		sink.SetWriteError(spec.errKey, msg)
 		return errno
@@ -137,7 +145,7 @@ func commitRename[T any](ctx context.Context, sink renameSink, name string, newP
 	// can't serve fails loud (retry, then EIO) rather than swallowing it. The
 	// rename is already on Linear and idempotent, so the .error says re-saving is
 	// safe (#278). No invalidation on a wedge — the local view is unconfirmed.
-	if errno := persistOrEIO(ctx, sink, spec.errKey,
+	if errno = persistOrEIO(ctx, sink, spec.errKey,
 		func(err error) string { return unconfirmedEditMsg(op, err) },
 		spec.persist, fresh); errno != 0 {
 		return errno

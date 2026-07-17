@@ -60,8 +60,9 @@ documented in its own section below.
 ## Instruments
 
 Naming: `linearfs.<layer>.<what>`; meter scopes are `linearfs/process`,
-`linearfs/api`, `linearfs/budget`, `linearfs/sync`, `linearfs/swr`.
-Histograms use the SDK default buckets; durations are in **seconds**.
+`linearfs/fuse`, `linearfs/api`, `linearfs/budget`, `linearfs/sync`,
+`linearfs/swr`. Histograms use the SDK default buckets; durations are in
+**seconds**.
 
 ### Process heartbeats — `internal/telemetry/heartbeat.go`
 
@@ -69,6 +70,22 @@ Histograms use the SDK default buckets; durations are in **seconds**.
 |---|---|---|---|
 | `linearfs.process.uptime_seconds` | observable gauge (float64, s) | — | seconds since process start |
 | `linearfs.build.info` | gauge (int64, always 1) | `version`, `commit` | build metadata carried as attributes |
+
+### Serving layer — `internal/fs/metrics.go` (`fuseMetrics`, lazily bound on first record)
+
+| Instrument | Kind | Attributes | Recorded |
+|---|---|---|---|
+| `linearfs.fuse.ops` | counter | `op`, `outcome` = `ok` \| `einval` \| `eio` \| `eagain` \| `enoent` \| `eperm` \| `exdev` \| `eacces` \| `other` | one per completed op at the cheap choke points — the **four** commit tails (`op` = `create` \| `delete` \| `flush` \| `rename`; `rename` added in #294 so entity renames stop reading as "no renames happen") plus the editBuffer `read`/`write` and renderFile `read` entry points. `outcome` is `outcomeForErrno` — a closed enum so cardinality stays bounded |
+| `linearfs.fuse.duration` | histogram (s) | `op` | same sites, wall time of the op |
+| `linearfs.embedded_files.fetch` | counter | `source` = `memory` \| `disk` \| `cdn` | one per embedded-file byte fetch, by the tier that served it |
+
+Coverage is deliberately the shared tails, not every node type: Lookup and
+readdir are spread across every node type with no common choke, so they are
+left out rather than instrumented invasively (#264). The instruments bind
+lazily on first record (no single construction site threads a handle through
+the free-function tails); until `telemetry.Init` registers a provider the
+global no-op makes every record free. `op` is NOT in the summary keep-list, so
+the journald line merges the per-op series (see below).
 
 ### API layer — `internal/api/metrics.go` (`apiMetrics`, bound at `Client` construction)
 
