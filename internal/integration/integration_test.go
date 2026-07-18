@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +28,11 @@ var (
 	lfs         *fs.LinearFS
 	testStore   *db.Store // fixture mode: the store behind the mount, for tests simulating sync-side writes
 	apiClient   *api.Client
+
+	// offlineAPIServer is where fixture-mode's real client is pointed so an
+	// un-mocked mutation/verify call fails instantly and locally instead of
+	// reaching api.linear.app with the dummy key and 401-ing (#197).
+	offlineAPIServer *httptest.Server
 	testTeamID  string
 	testTeamKey string
 
@@ -177,6 +184,18 @@ func setupSQLiteFixtures() error {
 	}
 
 	testStore = store
+
+	// Point the real client at a local endpoint that always fails with a
+	// distinctive offline error. Fixture-mode reads come from the store, but the
+	// mutator/verify/liveReader default to this client, so any write path with no
+	// mock injected (the deliberate loud-failure tests, and incidental
+	// post-teardown writes) fails locally and instantly here instead of hitting
+	// api.linear.app with the dummy key (#197).
+	offlineAPIServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"errors":[{"message":"linearfs fixture mode: offline, no mock mutator injected for this write path (#197)"}]}`))
+	}))
+	lfs.SetTestAPIURL(offlineAPIServer.URL)
 
 	// Inject the store and create repository (no API client for fetching)
 	if err := lfs.InjectTestStore(store); err != nil {
@@ -492,6 +511,9 @@ func cleanup() {
 	}
 	if lfs != nil {
 		lfs.Close()
+	}
+	if offlineAPIServer != nil {
+		offlineAPIServer.Close()
 	}
 	if mountPoint != "" {
 		os.RemoveAll(mountPoint)

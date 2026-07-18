@@ -833,7 +833,9 @@ func (lfs *LinearFS) GetStore() *db.Store {
 // (create/edit reach ClearWriteError/AppendWriteSuccess instead of failing at the
 // network). Reads/infrastructure continue to use the real client. Pass nil to
 // restore the default (mutations hit the real client and fail without an API key,
-// which the loud-failure tests rely on).
+// which the loud-failure tests rely on — the fixture harness points that client
+// at a local offline endpoint via SetTestAPIURL so the failure is instant and
+// local instead of a real-network 401, #197).
 // If mc also implements verifyReader (as the mockmutation fake does), the
 // read-your-writes verify fetch is routed to it too, so the edit-commit tail
 // runs against fake state offline instead of taking the "unverified" branch.
@@ -857,6 +859,16 @@ func (lfs *LinearFS) InjectTestMutationClient(mc MutationClient) {
 	} else {
 		lfs.liveReaderImpl = lfs.client
 	}
+}
+
+// SetTestAPIURL points the real client's HTTP endpoint at url — a test seam so
+// the fixture harness can aim any un-mocked mutation/verify/liveReader call at a
+// local offline server instead of the real api.linear.app. Without it, a
+// fixture-mode write with no mock injected reaches the real API with the dummy
+// key and 401s (network noise, non-hermetic, burns real budget — #197). Call at
+// setup, before the mount serves; it is not concurrency-guarded.
+func (lfs *LinearFS) SetTestAPIURL(url string) {
+	lfs.client.SetAPIURL(url)
 }
 
 // mutator returns the current mutation client under a read lock, so a FUSE
