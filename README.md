@@ -2,6 +2,19 @@
 
 Mount your Linear workspace as a FUSE filesystem. Browse and edit issues as markdown files.
 
+## Project status
+
+**LinearFS is a `v0` tool — capable and daily-usable, but with no stability guarantees.**
+Breaking changes are acceptable and expected. It is solo-maintained with heavy AI assistance,
+and **contributions are welcome** — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+- **For:** CLI-first people who'd rather `ls`/`cat`/`grep`/`vim` their issues than click a UI,
+  and anyone scripting against Linear through ordinary file operations.
+- **Not for:** real-time collaboration (sync is eventually consistent) or production tooling
+  that needs a stable API — use Linear's [official API](https://developers.linear.app) for that.
+- **Handling secrets?** Read [SECURITY.md](SECURITY.md) before mounting, especially on a shared machine.
+- **Known limitations** are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+
 ## Features
 
 - Browse teams, issues, projects, initiatives, and labels as directories/files
@@ -28,7 +41,7 @@ make install
 
 ### Requirements
 
-- **Go 1.21+**
+- **Go 1.25+**
 - **FUSE filesystem:**
   - **macOS:** macFUSE (`brew install --cask macfuse`)
     - ⚠️ Apple Silicon requires enabling kernel extensions in Recovery Mode
@@ -463,7 +476,10 @@ Lower values = fresher data but more API calls. Higher values = better performan
 
 - **No real-time sync**: Linear's WebSocket-based sync engine is internal only; the public API offers webhooks (requires HTTP server) but not subscriptions
 - **Eventual consistency**: Changes by teammates appear after TTL expiry
-- **Rate limits**: Linear allows 1,500 requests/hour with API key auth
+- **Rate limits**: Linear meters API keys on two axes — request count and query *complexity* —
+  and reports both on every response. LinearFS governs itself against the live limits from
+  those headers (a priority ladder sheds background detail fetches first). Bulk reads over a
+  large workspace can still exhaust the hourly budget; reads then fall back to the local cache.
 
 ## Configuration
 
@@ -511,6 +527,15 @@ systemctl --user start linearfs.service
 
 See [INSTALL.md](INSTALL.md#running-as-a-systemd-user-service-linux) for details.
 
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) — it explains the
+development workflow, the testing philosophy, and the two living design docs
+([`CONTEXT.md`](CONTEXT.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)) that keep the
+codebase navigable. Bugs and feature ideas go through the
+[issue templates](https://github.com/jra3/linear-fuse/issues/new/choose); security reports
+go through [SECURITY.md](SECURITY.md).
+
 ## License
 
-MIT
+[MIT](LICENSE) © John Allen
