@@ -3,11 +3,13 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	gosync "sync"
 	"testing"
+	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/db"
@@ -51,9 +53,15 @@ func (r *refreshCalls) snapshot() []string {
 }
 
 // createRefreshTestIssue creates a fresh fixture issue via issues/_create (so
-// the shared fixture issues stay untouched) and returns its identifier.
+// the shared fixture issues stay untouched) and returns its identifier. The
+// title is made UNIQUE per call so a later in-process rerun (-count) creates a
+// distinct issue with a fresh node — reusing the same identifier would inherit
+// the prior run's leftover dirty edit buffer (a failed validation write keeps
+// the buffer dirty), which re-flushes on the next write and double-counts
+// resolution/refresh attempts.
 func createRefreshTestIssue(t *testing.T, title string) string {
 	t.Helper()
+	title = fmt.Sprintf("%s %d", title, time.Now().UnixNano())
 	if err := writeCreateSpec(t, "---\ntitle: "+title+"\n---\nrefresh-retry probe body\n"); err != nil {
 		t.Fatalf("create probe issue: %v", err)
 	}
@@ -88,9 +96,16 @@ func TestStaleCatalogWriteSelfHeals(t *testing.T) {
 	enableMockMutations(t)
 	identifier := createRefreshTestIssue(t, "Stale Catalog Self-Heal Probe")
 
+	const freshLabelID = "label-teammate-fresh"
+	// The test's whole premise is a LOCAL MISS on this label; the injected
+	// refresh "discovers" it by upserting it into the store. Delete it on
+	// cleanup so a later in-process rerun (-count) starts from the same miss
+	// instead of resolving immediately and firing no refresh.
+	t.Cleanup(func() { _ = testStore.Queries().DeleteLabel(context.Background(), freshLabelID) })
+
 	rec := catalogRefreshRecorder(t, func(ctx context.Context) error {
 		label := api.Label{
-			ID:    "label-teammate-fresh",
+			ID:    freshLabelID,
 			Name:  "TeammateFresh",
 			Color: "#00ff00",
 			Team:  &api.Team{ID: testTeamID},
