@@ -34,9 +34,18 @@ func TestIsRateLimited(t *testing.T) {
 			true,
 		},
 		{
-			"client-side deferred rate limit message",
-			errors.New("rate limit: query GetIssue deferred (reserve)"),
-			true,
+			// A local budget deferral (typed ErrDeferred) is NOT a server rate
+			// limit — the whole point of #257. The typed exclusion must win even
+			// when the message literally says "rate limit" (the historical
+			// phrasing that caused the misclassification).
+			"client-side budget deferral is not a server rate limit",
+			fmt.Errorf("rate limit: query GetIssue deferred (reserve): %w", ErrDeferred),
+			false,
+		},
+		{
+			"pagination-preflight ErrBudget is not a server rate limit",
+			fmt.Errorf("paginate: %w", ErrBudget), // ErrBudget's own message contains "rate-limit"
+			false,
 		},
 		{
 			"circuit breaker is NOT rate limiting",
@@ -54,6 +63,30 @@ func TestIsRateLimited(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := IsRateLimited(tc.err); got != tc.want {
 				t.Errorf("IsRateLimited(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsDeferred(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"ErrDeferred sentinel", ErrDeferred, true},
+		{"ErrDeferred wrapped via %w", fmt.Errorf("query X deferred (reserve): %w", ErrDeferred), true},
+		{"pagination ErrBudget", ErrBudget, true},
+		{"ErrBudget wrapped via %w", fmt.Errorf("paginate: %w", ErrBudget), true},
+		{"server RATELIMITED is not a defer", &GraphQLError{Code: "RATELIMITED"}, false},
+		{"plain rate-limit string is not a defer", errors.New("Rate limit exceeded"), false},
+		{"unrelated error", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsDeferred(tc.err); got != tc.want {
+				t.Errorf("IsDeferred(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}

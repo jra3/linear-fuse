@@ -222,8 +222,12 @@ Operational guards:
   request (op, vars, duration, outcome, complexity) to
   `~/.config/linearfs/requests.jsonl`, for offline diagnosis.
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
-  `IsFieldTooLong` — the vocabulary the fs layer's error classifier maps to
-  errnos.
+  `IsFieldTooLong`, `IsDeferred` — the vocabulary the fs layer's error classifier
+  maps to errnos. `IsDeferred` (a local budget deferral: `ErrDeferred` or the
+  pagination `ErrBudget`) is deliberately *excluded* from `IsRateLimited`: a
+  server rate limit warrants a long pause until the window resets, but a local
+  admission-ladder defer clears next cycle, so the sync worker skips-this-cycle
+  on a defer instead of entering the hour-long rate-limit backoff (#257).
 
 **Consumed by:** Sync Worker (reads), Repository (SWR refreshes and its
 reconcile pass), LinearFS (mutations plus the interactive-tier synchronous
