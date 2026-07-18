@@ -4,10 +4,13 @@
 BINARY=linearfs
 VERSION?=dev
 COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-LDFLAGS=-ldflags "-X github.com/jra3/linear-fuse/internal/cmd.Version=$(VERSION) -X github.com/jra3/linear-fuse/internal/cmd.GitCommit=$(COMMIT)"
+# Commit date (not wall-clock) keeps `make build` reproducible for a given commit.
+DATE=$(shell git show -s --format=%cI HEAD 2>/dev/null || echo "unknown")
+PKG=github.com/jra3/linear-fuse/internal/cmd
+LDFLAGS=-ldflags "-X $(PKG).Version=$(VERSION) -X $(PKG).GitCommit=$(COMMIT) -X $(PKG).BuildDate=$(DATE)"
 
 build:
-	go build $(LDFLAGS) -o bin/$(BINARY) ./cmd/linearfs
+	go build -trimpath $(LDFLAGS) -o bin/$(BINARY) ./cmd/linearfs
 
 install: build
 	mkdir -p ~/.local/bin
