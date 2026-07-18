@@ -1,6 +1,51 @@
 package fs
 
-import "github.com/hanwen/go-fuse/v2/fuse"
+import (
+	"log"
+	"time"
+
+	"github.com/hanwen/go-fuse/v2/fuse"
+)
+
+// kernelNotifyTimeout bounds one kernel-cache invalidation intent. A package var
+// so a test can lower it (the sqliteRetryBackoff seam idiom). 5s is ~1000x a
+// healthy notify's sub-millisecond latency, so a false trip is nearly impossible
+// while a real wedge still returns control promptly.
+var kernelNotifyTimeout = 5 * time.Second
+
+// boundedNotify runs one kernel-cache invalidation intent under a deadline.
+//
+// server.InodeNotify / EntryNotify do not honor a context and can wedge — on an
+// internal go-fuse lock, or a backed-up kernel-notify queue — with no way to
+// interrupt them. A create's write-back once hung the whole FUSE handler that
+// way until a manual `systemctl restart` (#277). Running the intent in a
+// goroutine and selecting on kernelNotifyTimeout bounds it: on a wedge the stuck
+// goroutine is LEAKED (unavoidable — the call is uninterruptible) and control
+// returns to the caller, so the handler completes instead of hanging forever.
+// The abandoned directory's kernel cache stays stale until its TTL;
+// recordNotifyTimeout + a WARN log make that legible.
+//
+// A persistent wedge leaks one goroutine per mutation. That is accepted
+// deliberately — no circuit breaker (grilled 2026-07-17): mutations are
+// interactive-rate so the leak grows slowly, and the counter names the condition
+// for an operator restart, which a truly wedged notify warrants anyway. Trading
+// the leak for a breaker would only swap it for silent permanent staleness.
+func boundedNotify(intent string, run func()) {
+	// Buffered so the goroutine's send never blocks after a timeout moved on.
+	done := make(chan struct{}, 1)
+	go func() {
+		run()
+		done <- struct{}{}
+	}()
+	timer := time.NewTimer(kernelNotifyTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		recordNotifyTimeout(intent)
+		log.Printf("Warning: kernel-notify %q exceeded %s and was abandoned; the guard goroutine is leaked and this directory's cache may be stale until its TTL — restart linearfs if this persists (#277)", intent, kernelNotifyTimeout)
+	}
+}
 
 // kernelNotify owns the filesystem's one coupling to the FUSE server: the two
 // raw kernel-cache primitives (InodeNotify / EntryNotify) and the intent
@@ -32,16 +77,33 @@ func (k *kernelNotify) InvalidateKernelEntry(parent uint64, name string) {
 
 // InvalidateCreated / Deleted / Updated / Renamed name what happened; the
 // coherence policy (below) picks the correct notifies. fileIno/name may be zero
-// where the policy allows.
+// where the policy allows. Each runs its notify sequence through boundedNotify,
+// so a wedged InodeNotify/EntryNotify can no longer hang the calling handler
+// (#277). The nil-server short-circuit keeps the pre-mount / fixture no-op AND
+// avoids spawning a guard goroutine when there is nothing to notify.
 func (k *kernelNotify) InvalidateCreated(dirIno uint64, name string) {
-	invalidateCreated(k, dirIno, name)
+	if k.server == nil {
+		return
+	}
+	boundedNotify("created", func() { invalidateCreated(k, dirIno, name) })
 }
 func (k *kernelNotify) InvalidateDeleted(dirIno uint64, name string) {
-	invalidateDeleted(k, dirIno, name)
+	if k.server == nil {
+		return
+	}
+	boundedNotify("deleted", func() { invalidateDeleted(k, dirIno, name) })
 }
-func (k *kernelNotify) InvalidateUpdated(fileIno uint64) { invalidateUpdated(k, fileIno) }
+func (k *kernelNotify) InvalidateUpdated(fileIno uint64) {
+	if k.server == nil {
+		return
+	}
+	boundedNotify("updated", func() { invalidateUpdated(k, fileIno) })
+}
 func (k *kernelNotify) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
-	invalidateRenamed(k, dirIno, oldName, newName, fileIno)
+	if k.server == nil {
+		return
+	}
+	boundedNotify("renamed", func() { invalidateRenamed(k, dirIno, oldName, newName, fileIno) })
 }
 
 // Kernel-cache coherence policy.

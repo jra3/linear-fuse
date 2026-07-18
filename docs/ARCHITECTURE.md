@@ -558,7 +558,12 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `InvalidateUpdated` / `InvalidateDeleted` / `InvalidateRenamed`. Handlers
    never hand-pick the raw `InodeNotify`/`EntryNotify` primitives; hand-picked
    combinations drifted (missed dir inodes, un-notified unlinks) before the
-   policy module existed.
+   policy module existed. Each intent runs its notify sequence under a 5s
+   deadline (`boundedNotify`): the raw primitives do not honor a context and can
+   wedge, so on the deadline the stuck goroutine is leaked and control returns to
+   the handler — a wedged notify degrades to "handler completes, that dir's cache
+   is briefly stale" plus a `linearfs.fuse.notify_timeouts` count, instead of
+   hanging the write until a manual restart (#277).
 
 **Delete flow:** `rm` of a comment/doc/label/relation/… or `rmdir`-archive of
 an issue/project goes through `commitDelete`: API delete first, then a

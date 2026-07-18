@@ -31,9 +31,10 @@ import (
 )
 
 type fuseMetrics struct {
-	ops      metric.Int64Counter     // linearfs.fuse.ops {op, outcome}
-	duration metric.Float64Histogram // linearfs.fuse.duration {op}, seconds
-	embedded metric.Int64Counter     // linearfs.embedded_files.fetch {source}
+	ops            metric.Int64Counter     // linearfs.fuse.ops {op, outcome}
+	duration       metric.Float64Histogram // linearfs.fuse.duration {op}, seconds
+	embedded       metric.Int64Counter     // linearfs.embedded_files.fetch {source}
+	notifyTimeouts metric.Int64Counter     // linearfs.fuse.notify_timeouts {intent}
 }
 
 var (
@@ -52,6 +53,8 @@ func fuseMetricsInstance() fuseMetrics {
 				metric.WithDescription("FUSE operation duration by op")),
 			embedded: telemetry.MustInt64Counter(m, "linearfs.embedded_files.fetch",
 				metric.WithDescription("Embedded-file byte fetches, by serving tier (memory|disk|cdn)")),
+			notifyTimeouts: telemetry.MustInt64Counter(m, "linearfs.fuse.notify_timeouts",
+				metric.WithDescription("Kernel-cache invalidations abandoned after the guard deadline, by intent (created|deleted|updated|renamed) — a wedged InodeNotify/EntryNotify; nonzero means a leaked notify goroutine and possibly-stale cache")),
 		}
 	})
 	return fuseMetricsInst
@@ -98,4 +101,13 @@ func recordFuseOp(ctx context.Context, op string, start time.Time, errno syscall
 func recordEmbeddedFetch(ctx context.Context, source string) {
 	fuseMetricsInstance().embedded.Add(ctx, 1,
 		metric.WithAttributes(attribute.String("source", source)))
+}
+
+// recordNotifyTimeout counts one kernel-cache invalidation abandoned after the
+// guard deadline (a wedged InodeNotify/EntryNotify), by intent. It uses a
+// background context: the notify runs after the FUSE handler's request ctx is
+// out of scope (#277).
+func recordNotifyTimeout(intent string) {
+	fuseMetricsInstance().notifyTimeouts.Add(context.Background(), 1,
+		metric.WithAttributes(attribute.String("intent", intent)))
 }

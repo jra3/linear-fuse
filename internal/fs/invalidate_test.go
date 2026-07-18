@@ -3,6 +3,7 @@ package fs
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // recordingNotifier captures the notify calls the coherence policy makes, in
@@ -69,4 +70,52 @@ func TestInvalidateRenamed(t *testing.T) {
 		invalidateRenamed(r, 3, "Old.md", "New.md", 0)
 		eq(t, r.calls, []string{`entry(3,"Old.md")`, `entry(3,"New.md")`})
 	})
+}
+
+// TestBoundedNotify_FastPathRunsSynchronously: a notify that returns promptly is
+// run to completion before boundedNotify returns — the guard adds only a
+// goroutine hop on the happy path, so callers still see synchronous coherence.
+func TestBoundedNotify_FastPathRunsSynchronously(t *testing.T) {
+	ran := make(chan struct{}, 1)
+	boundedNotify("created", func() { ran <- struct{}{} })
+	select {
+	case <-ran:
+	default:
+		t.Fatal("intent did not run before boundedNotify returned (happy path must be synchronous)")
+	}
+}
+
+// TestBoundedNotify_TimesOutLeaksAndCounts is the #277 guard: a wedged notify
+// must NOT hang the caller. boundedNotify returns after the deadline, records the
+// timeout, and leaves the stuck intent goroutine parked (leaked). Deterministic:
+// a block-forever intent + a lowered timeout always trips.
+func TestBoundedNotify_TimesOutLeaksAndCounts(t *testing.T) {
+	saved := kernelNotifyTimeout
+	kernelNotifyTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { kernelNotifyTimeout = saved })
+
+	before := counterValue(t, "linearfs.fuse.notify_timeouts", map[string]string{"intent": "updated"})
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) }) // release the leaked goroutine when the test ends
+	started := make(chan struct{})
+	returned := make(chan struct{})
+	go func() {
+		boundedNotify("updated", func() {
+			close(started)
+			<-block // wedge: never completes until cleanup
+		})
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("boundedNotify hung on a wedged intent (10ms guard) — the whole point of #277 is that it must not")
+	}
+	<-started // the intent did start and is now leaked, still blocked on `block`
+
+	if after := counterValue(t, "linearfs.fuse.notify_timeouts", map[string]string{"intent": "updated"}); after != before+1 {
+		t.Errorf("notify_timeouts{intent=updated} = %d, want %d", after, before+1)
+	}
 }
