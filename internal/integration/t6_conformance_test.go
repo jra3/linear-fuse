@@ -294,13 +294,16 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 		t.Error("relations/.last has no entry after a relation create")
 	}
 
-	// An attachment create reports its identity to attachments/.last.
+	// An attachment create reports its identity to attachments/.last. Created on
+	// a throwaway issue (unique per run), never shared TST-1, so it doesn't
+	// accumulate into the fixture attachment count on a -count rerun.
+	attIssue := createRefreshTestIssue(t, "T6 Attachment Probe")
 	attURL := "https://example.com/trio-probe/1"
-	if err := os.WriteFile(filepath.Join(attachmentsPath(testTeamKey, "TST-1"), "_create"), []byte(attURL+" Trio Probe"), 0200); err != nil {
+	if err := os.WriteFile(filepath.Join(attachmentsPath(testTeamKey, attIssue), "_create"), []byte(attURL+" Trio Probe"), 0200); err != nil {
 		t.Fatalf("create attachment: %v", err)
 	}
 	afound := false
-	for _, e := range parseLastSidecar(t, filepath.Join(attachmentsPath(testTeamKey, "TST-1"), ".last")) {
+	for _, e := range parseLastSidecar(t, filepath.Join(attachmentsPath(testTeamKey, attIssue), ".last")) {
 		if e["url"] == attURL {
 			afound = true
 		}
@@ -470,13 +473,16 @@ func TestWriteContractAgentLoop(t *testing.T) {
 	}
 
 	// (a2) A non-issue create surface also reports to its .last: create a comment
-	// on TST-1 and confirm comments/.last gains an entry (guards the other five
-	// AppendWriteSuccess producers beyond team-issue creates).
+	// on a throwaway issue (unique per run, not shared TST-1 — else the comment
+	// accumulates into the fixture comment count on a -count rerun) and confirm
+	// comments/.last gains an entry (guards the other five AppendWriteSuccess
+	// producers beyond team-issue creates).
+	commentIssue := createRefreshTestIssue(t, "T6 Comment Probe")
 	commentBody := "agentloop comment marker"
-	if err := os.WriteFile(newCommentPath(testTeamKey, "TST-1"), []byte(commentBody), 0200); err != nil {
+	if err := os.WriteFile(newCommentPath(testTeamKey, commentIssue), []byte(commentBody), 0200); err != nil {
 		t.Fatalf("create comment: %v", err)
 	}
-	commentsLast := filepath.Join(commentsPath(testTeamKey, "TST-1"), ".last")
+	commentsLast := filepath.Join(commentsPath(testTeamKey, commentIssue), ".last")
 	cfound := false
 	for _, e := range parseLastSidecar(t, commentsLast) {
 		if strings.Contains(e["title"], "agentloop comment marker") {

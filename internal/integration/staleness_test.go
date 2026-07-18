@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -27,14 +28,40 @@ import (
 // stale content is the latent bug, confirmed end-to-end.
 func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	ctx := context.Background()
-	path := mountPoint + "/teams/TST/issues/TST-1/issue.md"
+	if testStore == nil {
+		t.Skip("store-backed staleness simulation requires fixture mode")
+	}
+
+	// Drive the remote-update dance on a THROWAWAY issue (unique per run), never
+	// the shared TST-1 fixture: mutating TST-1 left the fixture readers — and
+	// every -count rerun's own baseline read — seeing "Renamed By Remote Sync".
+	// A store-upserted issue is served through the mount's dynamic issue Lookup,
+	// and the go-fuse node-reuse path under test is identical on a fresh node.
+	team := fixtures.FixtureAPITeam()
+	uniq := time.Now().UnixNano()
+	issueID := fmt.Sprintf("iso-issue-%d", uniq)
+	identifier := fmt.Sprintf("TST-%d", 90000+uniq%10000)
+	seedRow, err := db.APIIssueToDBIssue(fixtures.FixtureAPIIssue(
+		fixtures.WithIssueID(issueID, identifier),
+		fixtures.WithTitle("Isolation Probe Original"),
+		fixtures.WithTeam(&team),
+	))
+	if err != nil {
+		t.Fatalf("convert seed: %v", err)
+	}
+	if err := testStore.Queries().UpsertIssue(ctx, seedRow.ToUpsertParams()); err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+	t.Cleanup(func() { _ = testStore.Queries().DeleteIssue(context.Background(), issueID) })
+
+	path := mountPoint + "/teams/" + testTeamKey + "/issues/" + identifier + "/issue.md"
 
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	if !strings.Contains(string(before), "Test Issue 1") {
-		t.Fatalf("fixture issue not served, got:\n%s", before)
+	if !strings.Contains(string(before), "Isolation Probe Original") {
+		t.Fatalf("throwaway issue not served, got:\n%s", before)
 	}
 
 	// Pin the inode chain: an open descriptor keeps the kernel from
@@ -52,9 +79,8 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	// Simulate the sync worker landing a remote edit: same issue, new title,
 	// newer updatedAt — written straight to the store, no kernel notification
 	// (faithful to production sync).
-	team := fixtures.FixtureAPITeam()
 	renamed := fixtures.FixtureAPIIssue(
-		fixtures.WithIssueID("issue-1", "TST-1"),
+		fixtures.WithIssueID(issueID, identifier),
 		fixtures.WithTitle("Renamed By Remote Sync"),
 		fixtures.WithTeam(&team),
 	)
@@ -62,9 +88,6 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	row, err := db.APIIssueToDBIssue(renamed)
 	if err != nil {
 		t.Fatalf("convert: %v", err)
-	}
-	if testStore == nil {
-		t.Skip("store-backed staleness simulation requires fixture mode")
 	}
 	if err := testStore.Queries().UpsertIssue(ctx, row.ToUpsertParams()); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -103,7 +126,7 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	// every read (the freshestByID pattern) instead of trusting the captured
 	// entity. If .meta is fresh while issue.md is stale, the mechanism is
 	// pinned: go-fuse node reuse + entity captured at first Lookup.
-	meta, err := os.ReadFile(mountPoint + "/teams/TST/issues/TST-1/issue.meta")
+	meta, err := os.ReadFile(mountPoint + "/teams/" + testTeamKey + "/issues/" + identifier + "/issue.meta")
 	if err != nil {
 		t.Fatalf("read issue.meta: %v", err)
 	}
@@ -205,35 +228,51 @@ func TestRejectedSaveKeepsDirtyContentReadable(t *testing.T) {
 // took on when it moved these nodes off auto-assigned inos.
 func TestRemoteTeamUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	ctx := context.Background()
-	teamDir := mountPoint + "/teams/" + testTeamKey
+	if testStore == nil {
+		t.Skip("store-backed staleness simulation requires fixture mode")
+	}
+
+	// Drive the remote-update dance on a THROWAWAY team (unique key per run),
+	// never the shared TST team: renaming TST left every -count rerun's baseline
+	// read — and any later team.md reader — seeing "Renamed Team By Remote Sync".
+	// TeamsNode.Lookup resolves teams dynamically from the store, so a fresh
+	// upserted team is served, and the node-reuse path under test is identical.
+	uniq := time.Now().UnixNano()
+	teamID := fmt.Sprintf("iso-team-%d", uniq)
+	teamKey := fmt.Sprintf("IS%d", uniq%100000)
+	team := fixtures.FixtureAPITeam()
+	team.ID = teamID
+	team.Key = teamKey
+	team.Name = "Isolation Team Original"
+	if err := testStore.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testStore.DB().Exec("DELETE FROM teams WHERE id = ?", teamID) })
+
+	teamDir := mountPoint + "/teams/" + teamKey
 	teamFile := teamDir + "/team.md"
 
 	before, err := os.ReadFile(teamFile)
 	if err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	if !strings.Contains(string(before), "Test Team") {
-		t.Fatalf("fixture team not served, got:\n%s", before)
+	if !strings.Contains(string(before), "Isolation Team Original") {
+		t.Fatalf("throwaway team not served, got:\n%s", before)
 	}
 
 	// Pin the team directory: an open descriptor keeps the kernel from
 	// FORGETting the dir inode and its ancestor dentries, so the post-expiry
-	// re-Lookup of "TST" hits the ALREADY-KNOWN TeamNode — the go-fuse reuse
-	// path this test exists to guard.
+	// re-Lookup hits the ALREADY-KNOWN TeamNode — the go-fuse reuse path this
+	// test exists to guard.
 	pin, err := os.Open(teamDir)
 	if err != nil {
 		t.Fatalf("pin open: %v", err)
 	}
 	defer pin.Close()
 
-	if testStore == nil {
-		t.Skip("store-backed staleness simulation requires fixture mode")
-	}
-
 	// Simulate the sync worker landing a remote team edit: same team, new
 	// name, newer updatedAt — written straight to the store, no kernel
 	// notification (faithful to production sync).
-	team := fixtures.FixtureAPITeam()
 	team.Name = "Renamed Team By Remote Sync"
 	team.UpdatedAt = time.Now()
 	if err := testStore.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {

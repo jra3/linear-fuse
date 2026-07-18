@@ -85,14 +85,17 @@ func TestOffline_AtomicRenameEditPersists(t *testing.T) {
 	}
 	enableMockMutations(t)
 
-	path := issueFilePath(testTeamKey, "TST-1")
+	// Operate on a throwaway issue (unique per run), never the shared TST-1
+	// fixture: the atomic save consumes a scratch node (#280), and a mount-write
+	// restore of that reused node is unreliable across -count reruns (it
+	// oscillated pass/fail). A disposable issue needs no restore and cannot
+	// pollute the fixture readers.
+	identifier := createRefreshTestIssue(t, "Atomic Rename Persist Probe")
+	path := issueFilePath(testTeamKey, identifier)
 	orig, err := readFileWithRetry(path, defaultWaitTime)
 	if err != nil {
 		t.Fatalf("read issue.md: %v", err)
 	}
-	// Restore the original content through the mount so the shared fixture issue
-	// is left unchanged for other tests.
-	t.Cleanup(func() { claudeToolWrite(t, path, orig) })
 
 	doc, err := marshal.Parse(orig)
 	if err != nil {
