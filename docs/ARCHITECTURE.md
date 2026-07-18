@@ -188,7 +188,10 @@ lift each connection through `connAt` / `firstPageThenDrain` (first page +
 `drain` tail), and the batch walks each alias — so a null parent object,
 connection, or alias is an error, not a silent empty result a sync prune would
 read as "everything was removed". Mutations use their own envelope (`exec.go`),
-which gates on the `success` flag before decoding.
+which gates on the `success` flag before decoding and then applies the same
+null-terminal-is-an-error rule (shared `isJSONNull` predicate): a `success:true`
+payload whose entity field is absent or explicitly null is an error, not a
+silent zero-value entity.
 
 Operational guards:
 

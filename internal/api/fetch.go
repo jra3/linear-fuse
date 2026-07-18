@@ -26,6 +26,15 @@ import (
 //
 // The helpers never mutate the caller's vars map.
 
+// isJSONNull reports whether a raw JSON value is absent or an explicit null —
+// the single definition of the envelope's "null terminal is an error" rule,
+// shared by walkPath (read side) and execMutation (mutation side). A map miss
+// yields a nil RawMessage (len 0); an explicit JSON null is the four bytes
+// "null". Both fail the policy; a present, non-null value passes.
+func isJSONNull(raw json.RawMessage) bool {
+	return len(raw) == 0 || string(raw) == "null"
+}
+
 // walkPath descends path from the decoded data root and returns the raw
 // terminal value. A missing or null element errors naming the path walked so
 // far. Errors carry no module prefix — callers wrap ("fetch: %w" here,
@@ -36,8 +45,8 @@ func walkPath(root map[string]json.RawMessage, path []string) (json.RawMessage, 
 	}
 	cur := root
 	for i, elem := range path {
-		raw, ok := cur[elem]
-		if !ok || string(raw) == "null" {
+		raw := cur[elem]
+		if isJSONNull(raw) {
 			return nil, fmt.Errorf("%q missing or null in response", strings.Join(path[:i+1], "."))
 		}
 		if i == len(path)-1 {
