@@ -999,3 +999,49 @@ func TestIssueRoundtrip(t *testing.T) {
 		})
 	}
 }
+
+// TestIssueScalarFieldsWiring pins the declarative field table's contract (#227):
+// each editable scalar field maps its frontmatter key to the exact API key the
+// render/update/create loops emit, with the right removal semantics. As a
+// change-detector over the single source of field truth, it catches a typo'd
+// apiKey, a dropped field, or a wrong removable flag — the drift class the table
+// exists to eliminate.
+func TestIssueScalarFieldsWiring(t *testing.T) {
+	t.Parallel()
+	wantAPIKey := map[string]string{
+		"title":     "title",
+		"status":    "stateId",
+		"assignee":  "assigneeId",
+		"due":       "dueDate",
+		"parent":    "parentId",
+		"project":   "projectId",
+		"milestone": "projectMilestoneId",
+		"cycle":     "cycleId",
+	}
+	seen := map[string]bool{}
+	for _, f := range issueScalarFields {
+		if seen[f.yamlKey] {
+			t.Errorf("duplicate yamlKey %q in issueScalarFields", f.yamlKey)
+		}
+		seen[f.yamlKey] = true
+
+		want, ok := wantAPIKey[f.yamlKey]
+		if !ok {
+			t.Errorf("unexpected field %q in table (update wantAPIKey if intentional)", f.yamlKey)
+			continue
+		}
+		if f.apiKey != want {
+			t.Errorf("field %q apiKey = %q, want %q", f.yamlKey, f.apiKey, want)
+		}
+		// title and status have no removal semantics; everything else clears on absence.
+		wantRemovable := f.yamlKey != "title" && f.yamlKey != "status"
+		if f.removable != wantRemovable {
+			t.Errorf("field %q removable = %v, want %v", f.yamlKey, f.removable, wantRemovable)
+		}
+	}
+	for k := range wantAPIKey {
+		if !seen[k] {
+			t.Errorf("expected field %q missing from issueScalarFields", k)
+		}
+	}
+}

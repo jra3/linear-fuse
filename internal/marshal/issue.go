@@ -36,6 +36,66 @@ func invertRelationType(relType string) string {
 	}
 }
 
+// issueScalarField declares one editable scalar issue frontmatter field once, so
+// the three parallel field walks — render (IssueToMarkdown), diff-update
+// (MarkdownToIssueUpdate), and create (MarkdownToIssueCreate) — share one row per
+// field instead of three hand-maintained blocks that drift (#227). Only the
+// homogeneous scalar fields live here; priority, estimate, and labels keep their
+// bespoke coercion/compare below.
+//
+// current returns the field's present value on an issue and whether it is set —
+// the SAME nil/ID check backs both the render source and the update diff's
+// "original", so each field states that condition exactly once.
+type issueScalarField struct {
+	yamlKey string // frontmatter key, e.g. "status"
+	apiKey  string // update/create map key, e.g. "stateId"
+	current func(*api.Issue) (value string, present bool)
+	// removable: an absent key on a field that was set clears it (apiKey: nil).
+	// Off for title/status, which have no removal semantics.
+	removable bool
+}
+
+var issueScalarFields = []issueScalarField{
+	{"title", "title", func(i *api.Issue) (string, bool) { return i.Title, true }, false},
+	{"status", "stateId", func(i *api.Issue) (string, bool) { return i.State.Name, i.State.ID != "" }, false},
+	{"assignee", "assigneeId", func(i *api.Issue) (string, bool) {
+		if i.Assignee != nil {
+			return i.Assignee.Email, true
+		}
+		return "", false
+	}, true},
+	{"due", "dueDate", func(i *api.Issue) (string, bool) {
+		if i.DueDate != nil {
+			return *i.DueDate, true
+		}
+		return "", false
+	}, true},
+	{"parent", "parentId", func(i *api.Issue) (string, bool) {
+		if i.Parent != nil {
+			return i.Parent.Identifier, true
+		}
+		return "", false
+	}, true},
+	{"project", "projectId", func(i *api.Issue) (string, bool) {
+		if i.Project != nil {
+			return i.Project.Name, true
+		}
+		return "", false
+	}, true},
+	{"milestone", "projectMilestoneId", func(i *api.Issue) (string, bool) {
+		if i.ProjectMilestone != nil {
+			return i.ProjectMilestone.Name, true
+		}
+		return "", false
+	}, true},
+	{"cycle", "cycleId", func(i *api.Issue) (string, bool) {
+		if i.Cycle != nil {
+			return i.Cycle.Name, true
+		}
+		return "", false
+	}, true},
+}
+
 // IssueToMarkdown converts a Linear issue to the editable-only markdown surface
 // (issue.md): the fields a writer may set, plus the description body. Server-
 // managed and write-volatile fields (id, url, updated, …) live in the read-only
@@ -45,16 +105,18 @@ func invertRelationType(relType string) string {
 func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 	fm := make(map[string]any)
 
-	// Editable fields
-	fm["title"] = issue.Title
-	if issue.State.ID != "" {
-		fm["status"] = issue.State.Name
+	// Editable scalar fields, table-driven (title, status, assignee, due, parent,
+	// project, milestone, cycle). team is read-only (an issue's team is fixed) — it
+	// lives in issue.meta, not here, so issue.md carries no editable-looking-but-
+	// ignored fields (#148).
+	for _, f := range issueScalarFields {
+		if v, present := f.current(issue); present {
+			fm[f.yamlKey] = v
+		}
 	}
-	fm["priority"] = api.PriorityName(issue.Priority)
 
-	if issue.Assignee != nil {
-		fm["assignee"] = issue.Assignee.Email
-	}
+	// Priority always renders (it has no unset state — 0 is "none").
+	fm["priority"] = api.PriorityName(issue.Priority)
 
 	if len(issue.Labels.Nodes) > 0 {
 		labels := make([]string, len(issue.Labels.Nodes))
@@ -64,31 +126,8 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 		fm["labels"] = labels
 	}
 
-	if issue.DueDate != nil {
-		fm["due"] = *issue.DueDate
-	}
-
 	if issue.Estimate != nil {
 		fm["estimate"] = *issue.Estimate
-	}
-
-	// team is read-only (an issue's team is fixed) — it lives in issue.meta, not
-	// here, so issue.md contains no editable-looking-but-ignored fields (#148).
-
-	if issue.Project != nil {
-		fm["project"] = issue.Project.Name
-	}
-
-	if issue.ProjectMilestone != nil {
-		fm["milestone"] = issue.ProjectMilestone.Name
-	}
-
-	if issue.Parent != nil {
-		fm["parent"] = issue.Parent.Identifier
-	}
-
-	if issue.Cycle != nil {
-		fm["cycle"] = issue.Cycle.Name
 	}
 
 	// Body is just the description
@@ -199,21 +238,19 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	// which the create path already avoids). "Present but empty" is treated as
 	// "not set"; explicit removal is keyed on the field being absent entirely.
 
-	if v, present := fm["title"]; present {
-		if title := ScalarToString(v); title != "" && title != original.Title {
-			update["title"] = title
-		}
-	}
-
-	if v, present := fm["status"]; present {
-		if status := ScalarToString(v); status != "" {
-			origStatus := ""
-			if original.State.ID != "" {
-				origStatus = original.State.Name
+	// Scalar fields (title, status, assignee, due, parent, project, milestone,
+	// cycle), table-driven: a present, non-empty value that differs from the
+	// current one is applied under the field's apiKey; a removable field absent
+	// from the frontmatter clears a value that was set. The apiKey names carry
+	// human values here — resolveIssueUpdate turns the relational ones into IDs.
+	for _, f := range issueScalarFields {
+		origVal, origPresent := f.current(original)
+		if v, present := fm[f.yamlKey]; present {
+			if s := ScalarToString(v); s != "" && s != origVal {
+				update[f.apiKey] = s
 			}
-			if status != origStatus {
-				update["stateId"] = status // Will need to resolve to actual state ID
-			}
+		} else if f.removable && origPresent {
+			update[f.apiKey] = nil // removed
 		}
 	}
 
@@ -225,36 +262,6 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 		if set && newPriority != original.Priority {
 			update["priority"] = newPriority
 		}
-	}
-
-	// Assignee
-	if v, present := fm["assignee"]; present {
-		if assignee := ScalarToString(v); assignee != "" {
-			origAssignee := ""
-			if original.Assignee != nil {
-				origAssignee = original.Assignee.Email
-			}
-			if assignee != origAssignee {
-				update["assigneeId"] = assignee // Will need to resolve to actual user ID
-			}
-		}
-	} else if original.Assignee != nil {
-		update["assigneeId"] = nil // removed
-	}
-
-	// Due date
-	if v, present := fm["due"]; present {
-		if due := ScalarToString(v); due != "" {
-			origDue := ""
-			if original.DueDate != nil {
-				origDue = *original.DueDate
-			}
-			if due != origDue {
-				update["dueDate"] = due
-			}
-		}
-	} else if original.DueDate != nil {
-		update["dueDate"] = nil // removed
 	}
 
 	// Estimate — accepts int, float (truncated), or numeric string. An
@@ -290,66 +297,6 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 		update["labelIds"] = []string{} // removed
 	}
 
-	// Parent
-	if v, present := fm["parent"]; present {
-		if parent := ScalarToString(v); parent != "" {
-			origParent := ""
-			if original.Parent != nil {
-				origParent = original.Parent.Identifier
-			}
-			if parent != origParent {
-				update["parentId"] = parent // Will need to resolve to actual issue ID
-			}
-		}
-	} else if original.Parent != nil {
-		update["parentId"] = nil // removed
-	}
-
-	// Project
-	if v, present := fm["project"]; present {
-		if project := ScalarToString(v); project != "" {
-			origProject := ""
-			if original.Project != nil {
-				origProject = original.Project.Name
-			}
-			if project != origProject {
-				update["projectId"] = project // Will need to resolve to actual project ID
-			}
-		}
-	} else if original.Project != nil {
-		update["projectId"] = nil // removed
-	}
-
-	// Milestone
-	if v, present := fm["milestone"]; present {
-		if milestone := ScalarToString(v); milestone != "" {
-			origMilestone := ""
-			if original.ProjectMilestone != nil {
-				origMilestone = original.ProjectMilestone.Name
-			}
-			if milestone != origMilestone {
-				update["projectMilestoneId"] = milestone // Will need to resolve to actual milestone ID
-			}
-		}
-	} else if original.ProjectMilestone != nil {
-		update["projectMilestoneId"] = nil // removed
-	}
-
-	// Cycle
-	if v, present := fm["cycle"]; present {
-		if cycle := ScalarToString(v); cycle != "" {
-			origCycle := ""
-			if original.Cycle != nil {
-				origCycle = original.Cycle.Name
-			}
-			if cycle != origCycle {
-				update["cycleId"] = cycle // Will need to resolve to actual cycle ID
-			}
-		}
-	} else if original.Cycle != nil {
-		update["cycleId"] = nil // removed
-	}
-
 	// Description (body). IssueToMarkdown renders a `# <Title>` placeholder for an
 	// empty description; a no-op rewrite of such an issue must not push that
 	// placeholder back as a real description (the byte-stable-write contract).
@@ -374,19 +321,16 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	fm := doc.Frontmatter
 	create := make(map[string]any)
 
-	// Coerce scalars rather than silently dropping wrong-typed values — a bare
-	// `due: 2026-02-01` parses as time.Time, `priority: 2` as int, etc. Silent
-	// field-drops are exactly the #148 failure mode this surface exists to kill.
-	if v, ok := fm["title"]; ok {
-		if s := ScalarToString(v); s != "" {
-			create["title"] = s
+	// Scalar fields, table-driven. There is no original to diff against, so every
+	// present, non-empty value is emitted under its apiKey (relational names
+	// resolved to IDs downstream). Values are coerced via ScalarToString so a
+	// wrong-typed-but-meaningful value — a bare `due: 2026-02-01` (time.Time), a
+	// numeric name (`cycle: 42`) — is applied, not silently dropped (#148); a
+	// missing key coerces to "" and is skipped, and unknown keys are ignored.
+	for _, f := range issueScalarFields {
+		if s := ScalarToString(fm[f.yamlKey]); s != "" {
+			create[f.apiKey] = s
 		}
-	}
-	// Relational fields are coerced to their string name (via ScalarToString)
-	// rather than bare `.(string)` — a numeric name (`cycle: 42`) or other
-	// non-string scalar must not be silently dropped (#148).
-	if s := ScalarToString(fm["status"]); s != "" {
-		create["stateId"] = s // resolved to state ID
 	}
 	if v, ok := fm["priority"]; ok {
 		n, set, err := coercePriority(v)
@@ -397,33 +341,13 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 			create["priority"] = n
 		}
 	}
-	if s := ScalarToString(fm["assignee"]); s != "" {
-		create["assigneeId"] = s // resolved to user ID
-	}
 	if labels := StringSliceFromYAML(fm["labels"]); len(labels) > 0 {
 		create["labelIds"] = labels // resolved to label IDs
-	}
-	if v, ok := fm["due"]; ok {
-		if s := dueToString(v); s != "" {
-			create["dueDate"] = s
-		}
 	}
 	if v, ok := fm["estimate"]; ok {
 		if n, valid := coerceEstimate(v); valid {
 			create["estimate"] = n // Linear estimate is an integer
 		}
-	}
-	if s := ScalarToString(fm["project"]); s != "" {
-		create["projectId"] = s // resolved to project ID
-	}
-	if s := ScalarToString(fm["milestone"]); s != "" {
-		create["projectMilestoneId"] = s // resolved to milestone ID
-	}
-	if s := ScalarToString(fm["cycle"]); s != "" {
-		create["cycleId"] = s // resolved to cycle ID
-	}
-	if s := ScalarToString(fm["parent"]); s != "" {
-		create["parentId"] = s // resolved to issue ID
 	}
 	if body := doc.Body; body != "" {
 		create["description"] = body
@@ -445,15 +369,6 @@ func ScalarToString(v any) string {
 	default:
 		return fmt.Sprint(s)
 	}
-}
-
-// dueToString coerces a due-date value to YYYY-MM-DD. Unquoted YAML dates parse
-// as time.Time; quoted ones as string.
-func dueToString(v any) string {
-	if t, ok := v.(time.Time); ok {
-		return t.Format("2006-01-02")
-	}
-	return ScalarToString(v)
 }
 
 // StringSliceFromYAML coerces a YAML value into a []string. It accepts a list
