@@ -77,6 +77,7 @@ Naming: `linearfs.<layer>.<what>`; meter scopes are `linearfs/process`,
 |---|---|---|---|
 | `linearfs.fuse.ops` | counter | `op`, `outcome` = `ok` \| `einval` \| `eio` \| `eagain` \| `enoent` \| `eperm` \| `exdev` \| `eacces` \| `other` | one per completed op at the cheap choke points — the **four** commit tails (`op` = `create` \| `delete` \| `flush` \| `rename`; `rename` added in #294 so entity renames stop reading as "no renames happen") plus the editBuffer `read`/`write` and renderFile `read` entry points. `outcome` is `outcomeForErrno` — a closed enum so cardinality stays bounded |
 | `linearfs.fuse.duration` | histogram (s) | `op` | same sites, wall time of the op |
+| `linearfs.fuse.notify_timeouts` | counter | `intent` = `created` \| `deleted` \| `updated` \| `renamed` | one per kernel-cache invalidation abandoned after the `kernelNotifyTimeout` (5s) guard — a wedged `InodeNotify`/`EntryNotify` (#277). Nonzero means a leaked notify goroutine and possibly-stale cache for that intent's directory; a growing count is a persistent wedge warranting a restart |
 | `linearfs.embedded_files.fetch` | counter | `source` = `memory` \| `disk` \| `cdn` | one per embedded-file byte fetch, by the tier that served it |
 
 Coverage is deliberately the shared tails, not every node type: Lookup and
