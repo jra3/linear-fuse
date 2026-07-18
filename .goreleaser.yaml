@@ -1,0 +1,92 @@
+# goreleaser configuration — https://goreleaser.com
+# Cut a release by pushing a tag: `git tag -a v0.1.0 -m ... && git push origin v0.1.0`
+# The release workflow (.github/workflows/release.yml) runs this on tag push.
+version: 2
+
+project_name: linearfs
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: linearfs
+    main: ./cmd/linearfs
+    binary: linearfs
+    # go-fuse is pure Go, so cgo is not needed and cross-compilation is clean.
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/jra3/linear-fuse/internal/cmd.Version={{.Version}}
+      - -X github.com/jra3/linear-fuse/internal/cmd.GitCommit={{.ShortCommit}}
+      - -X github.com/jra3/linear-fuse/internal/cmd.BuildDate={{.CommitDate}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: linearfs
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - INSTALL.md
+      - KNOWN_ISSUES.md
+      - src: contrib/**/*
+        strip_parent: false
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?:'
+      order: 1
+    - title: Refactors
+      regexp: '^refactor(\(.+\))?:'
+      order: 2
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: jra3
+    name: linear-fuse
+  # v0.x tags remain flagged as pre-release until a stable line exists.
+  prerelease: auto
+  header: |
+    ## LinearFS {{ .Tag }}
+
+    A `v0` tool — no stability guarantees; breaking changes are expected.
+    See [README](https://github.com/jra3/linear-fuse#readme) and
+    [INSTALL.md](https://github.com/jra3/linear-fuse/blob/main/INSTALL.md).
+
+    **macOS binaries require [macFUSE](https://osxfuse.github.io) installed at runtime.**
+  footer: |
+    ---
+    Install from source instead: `go install github.com/jra3/linear-fuse/cmd/linearfs@{{ .Tag }}`
