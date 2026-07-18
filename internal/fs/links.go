@@ -203,7 +203,7 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 	// against Linear before skipping; a phantom (not live) falls through to a real
 	// create. If the verify itself fails we keep the cache-trust skip — protecting
 	// against a duplicate is the safer default when we cannot confirm.
-	if url := strings.SplitN(content, " ", 2)[0]; url != "" {
+	if url, _ := parseLinkInput(content); url != "" {
 		if existing, err := n.getLinks(ctx); err == nil {
 			for _, l := range existing {
 				if linkURLsEqual(l.URL, url) {
@@ -224,13 +224,7 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 			if content == "" {
 				return nil, &FieldError{Field: "content", Message: `empty content. Write "<url> [label]".`}
 			}
-			// Parse "url [label]" or just "url" (label defaults to the URL).
-			parts := strings.SplitN(content, " ", 2)
-			url := parts[0]
-			label := url
-			if len(parts) > 1 {
-				label = parts[1]
-			}
+			url, label := parseLinkInput(content)
 
 			input := map[string]any{"url": url, "label": label}
 			if n.projectID != "" {

@@ -1,8 +1,27 @@
 package fs
 
 import (
+	"strings"
+
 	"github.com/jra3/linear-fuse/internal/api"
 )
+
+// parseLinkInput parses a links/attachments _create command — "<url> [label]",
+// or just "<url>" (label defaults to the url) — into its two fields. Whitespace
+// is trimmed off the whole command first; the empty-content guard stays with
+// each caller, which keeps its own "[label]"/"[title]" help text. Pure and
+// mount-free, so it is the fuzz seam for the write-only link/attachment create
+// surface — the command-syntax sibling of parseRelationInput.
+func parseLinkInput(content string) (url, label string) {
+	content = strings.TrimSpace(content)
+	parts := strings.SplitN(content, " ", 2)
+	url = parts[0]
+	label = url
+	if len(parts) > 1 {
+		label = parts[1]
+	}
+	return url, label
+}
 
 // linkListing owns the filenames of a links/ directory — the project/initiative
 // "Links / Resources" surface. Unlike attachmentListing it holds one item family
