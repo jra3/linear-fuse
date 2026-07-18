@@ -81,6 +81,39 @@ fusermount3 -u ~/linear
 # or Ctrl+C if running in foreground
 ```
 
+## Checking status
+
+`linearfs status` prints a health snapshot — the live mount, the local cache
+(workspace size, last full sync, pending detail-sync backlog), and, when the
+JSONL metrics export is enabled, the current rate-limit budget. It reads the
+local cache and config read-only, so it works whether or not the daemon is
+running:
+
+```bash
+$ linearfs status
+linearfs v0.1.0 (abc1234), built 2026-07-18T…, go1.25 linux/amd64
+
+Mount:
+  /home/you/linear  [live]
+
+Cache:
+  db:        ~/.config/linearfs/cache.db
+  size:      41.3 MiB
+  teams:     4
+  issues:    3397
+  last full sync: 9m (2026-07-18 10:36)
+  pending detail sync: 0 issues
+
+Budget:
+  requests:   10 / 2,500 used (0.4%), resets in 59m
+  complexity: 9,372 / 3,000,000 used (0.3%), resets in 59m
+```
+
+A wedged mount ("Transport endpoint is not connected") is reported with the
+`fusermount3 -uz` recovery command. The budget line needs the JSONL export on
+(`telemetry.file.enabled: true`); otherwise it points you at the journald
+summary.
+
 ## File Permissions
 
 Use `ls -l` to see what operations are allowed on each file:
