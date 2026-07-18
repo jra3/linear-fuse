@@ -22,6 +22,13 @@ ExecStop=/usr/bin/fusermount3 -uz ${LINEARFS_MOUNT}
 Restart=on-failure
 RestartSec=5
 SyslogIdentifier=linearfs
+# Don't let journald's per-service rate limiter drop our logs. The always-on
+# metrics summary is one line every 5 minutes, but a cold-start burst of sync
+# logs can trip journald's default RateLimitBurst and silently suppress
+# subsequent lines — including the summary — leaving stale/sparse metrics in the
+# journal (#256: only 2 metrics dumps landed in 93 minutes). This service is
+# low-volume in steady state, so disabling the limiter is safe.
+LogRateLimitIntervalSec=0
 # Deliberately NO sandboxing directives (ProtectHome/ProtectSystem/
 # PrivateTmp/...): the mount lives in $HOME and the config + SQLite cache
 # live under ~/.config/linearfs — hardening those away breaks the service.

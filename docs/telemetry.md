@@ -167,7 +167,17 @@ To stay one readable line, attribute sets are **projected onto a keep-list**
 `collection`, `version`, `commit`. Keys not in the list (notably the ~30-value
 `op`) are dropped and the collided series **merged** (values and
 count/sum summed). Full cardinality is only in the JSONL export — the summary
-is deliberately the compact projection. Source:
+is deliberately the compact projection.
+
+**journald rate-limiting caveat:** the summary is one `log.Printf` line every 5
+minutes, but journald rate-limits per service, so a cold-start burst of sync
+logs can trip the default `RateLimitBurst` and silently drop later lines —
+including the summary — leaving stale/sparse metrics in the journal (#256: only
+2 dumps landed in 93 minutes, and the surviving early dump's honest
+`uptime_seconds≈300` read as a bug at 93 min wall-clock). The systemd unit sets
+`LogRateLimitIntervalSec=0` so this service's logs are never dropped; a
+free-standing run should either disable the limiter or read metrics from the
+JSONL export instead. Source:
 `internal/telemetry/summary.go`.
 
 ## The JSONL file
