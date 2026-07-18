@@ -1,0 +1,64 @@
+name: Bug report
+description: Something in the filesystem behaves incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. The single most useful thing you can include is the
+        contents of the relevant `.error` file — LinearFS writes the reason for every
+        failed write there (next to the file you wrote, or in the collection directory).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, and what went wrong?
+      placeholder: |
+        I edited `issue.md` to set priority: high and saved, but the write failed with EINVAL.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: error-file
+    attributes:
+      label: .error contents (if a write failed)
+      description: "`cat` the relevant `.error` file and paste it here."
+      render: text
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The exact filesystem commands (ls / cat / echo > _create / mv / rm …).
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `linearfs version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Platform
+      options:
+        - Linux (systemd)
+        - macOS (launchd)
+        - Linux (manual mount)
+        - macOS (manual mount)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "e.g. `journalctl --user -u linearfs -n 50` (Linux). Redact any secrets."
+      render: shell

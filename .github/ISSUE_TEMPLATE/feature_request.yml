@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest a filesystem surface, mapping, or capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem / use case
+      description: What are you trying to do that LinearFS doesn't support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed filesystem behavior
+      description: |
+        LinearFS maps filesystem operations to Linear actions. Describe the surface you'd want —
+        a path, a file, and what reading/writing/`mkdir`/`rm` on it should do.
+      placeholder: |
+        `cat teams/ENG/issues/ENG-1/attachments/report.pdf` should stream the attachment bytes.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
