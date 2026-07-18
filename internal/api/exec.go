@@ -18,13 +18,23 @@ import (
 
 // execMutation runs a mutation and decodes the entity at
 // data.<opField>.<entityField> into T, failing if success is false or absent.
+//
+// A success:true payload whose entity field is absent or an explicit null is an
+// error, not a silent zero-value T — the same "null terminal is an error" rule
+// the read side enforces via walkPath (#273). Absent already errored on decode
+// ("unexpected end of JSON input"); an explicit null decoded cleanly into a
+// zero value, so it is the case the guard adds.
 func execMutation[T any](ctx context.Context, c *Client, query string, vars map[string]any, opField, entityField string) (*T, error) {
 	payload, err := execEnvelope(ctx, c, query, vars, opField)
 	if err != nil {
 		return nil, err
 	}
+	raw := payload[entityField]
+	if isJSONNull(raw) {
+		return nil, fmt.Errorf("%s: %s missing or null in a success response", opField, entityField)
+	}
 	var entity T
-	if err := json.Unmarshal(payload[entityField], &entity); err != nil {
+	if err := json.Unmarshal(raw, &entity); err != nil {
 		return nil, fmt.Errorf("%s: decode %s: %w", opField, entityField, err)
 	}
 	return &entity, nil
