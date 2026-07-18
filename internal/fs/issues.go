@@ -180,8 +180,11 @@ func retryableCreateErr(err error) bool {
 	}
 	// Rate-limit detection is the shared predicate's job; the circuit breaker
 	// stays here — it is a client-side connectivity transient (worth retrying),
-	// not the server rate limiting us, so api.IsRateLimited excludes it.
-	return api.IsRateLimited(err) || strings.Contains(err.Error(), "circuit breaker")
+	// not the server rate limiting us, so api.IsRateLimited excludes it. A local
+	// budget deferral (api.IsDeferred) is also transient — it clears next cycle,
+	// so a deferred write should retry (EAGAIN), not fail hard (#257). Now that
+	// IsRateLimited excludes deferrals, it must be checked explicitly.
+	return api.IsRateLimited(err) || api.IsDeferred(err) || strings.Contains(err.Error(), "circuit breaker")
 }
 
 // Mkdir creates a new issue from a directory name

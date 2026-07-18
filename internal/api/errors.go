@@ -5,6 +5,23 @@ import (
 	"strings"
 )
 
+// ErrDeferred marks an error as the client's OWN admission ladder deferring a
+// request — the local rate budget said "not right now". It is deliberately
+// distinct from a server rate limit (IsRateLimited): a defer clears on the
+// ladder's minute-scale timescale (retry next cycle), whereas a server
+// RATELIMITED warrants a long pause until the window resets. Conflating them
+// cost an hour of detail-sync latency on deploy day when the worker paused for a
+// full hour on a local defer (#257). The pagination-preflight ErrBudget is the
+// same class; IsDeferred recognizes both.
+var ErrDeferred = errors.New("request deferred: rate-limit budget low")
+
+// IsDeferred reports whether err is a local budget deferral (ErrDeferred or the
+// pagination-preflight ErrBudget) rather than a server rate limit. Callers that
+// back off hard on a server rate limit must treat a defer as skip-this-cycle.
+func IsDeferred(err error) bool {
+	return errors.Is(err, ErrDeferred) || errors.Is(err, ErrBudget)
+}
+
 // Error predicates: the package-level classification of Linear API failures.
 //
 // Every layer above the client (fs mutation handlers, the repo's orphan
@@ -29,6 +46,13 @@ import (
 // callers that retry on both (retryableCreateErr) check it separately.
 func IsRateLimited(err error) bool {
 	if err == nil {
+		return false
+	}
+	// A local budget deferral is NOT a server rate limit — it clears on the
+	// admission ladder's own timescale, so it must not trip a long server-rate-
+	// limit backoff (#257). The typed check takes precedence over the message
+	// fallback below.
+	if IsDeferred(err) {
 		return false
 	}
 	var gqlErr *GraphQLError

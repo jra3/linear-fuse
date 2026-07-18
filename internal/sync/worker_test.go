@@ -1017,6 +1017,46 @@ func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
 	}
 }
 
+// TestDeferredDetailBatchDoesNotRateLimit is the #257 regression guard: when the
+// detail-batch fetch fails with a LOCAL budget deferral (api.ErrDeferred), the
+// worker must skip this cycle (queue the issues) WITHOUT entering the long
+// server-rate-limit backoff. Before the fix, the deferral message matched
+// api.IsRateLimited and the worker paused detail sync for a full hour.
+func TestDeferredDetailBatchDoesNotRateLimit(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	// A local admission-ladder deferral. The message deliberately contains
+	// "rate limit" — the historical phrasing that tripped the misclassification —
+	// so this proves the TYPED ErrDeferred wins over the string fallback, not
+	// merely that the message was reworded.
+	mock.simulateError = fmt.Errorf("rate limit: query IssueDetailsBatch deferred (reserve): %w", api.ErrDeferred)
+
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+	issues := []issueRef{{ID: "issue-1", Identifier: "TST-1"}, {ID: "issue-2", Identifier: "TST-2"}}
+
+	outcome := worker.syncDetails(ctx, issues)
+	if !outcome.gated {
+		t.Error("a deferred fetch should gate the outcome (issues survive in the pending queue)")
+	}
+	// The crux: a LOCAL defer must NOT set the server-rate-limit pause.
+	if worker.isRateLimited() {
+		t.Error("worker entered the rate-limit backoff on a local budget deferral (#257 regression)")
+	}
+
+	// The issues must still be queued for the next cycle (same as a rate limit).
+	pending, err := store.Queries().ListPendingDetailSync(ctx)
+	if err != nil {
+		t.Fatalf("ListPendingDetailSync: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("pending = %d, want 2 (deferred issues must survive)", len(pending))
+	}
+}
+
 // TestDetailsSyncPrunesStaleRows: the details sync must delete rows Linear no
 // longer returns — a comment deleted in Linear, or a phantom left by a delete
 // whose SQLite forget failed (the store is the listing source of truth, so an

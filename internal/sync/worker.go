@@ -1408,8 +1408,16 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 	// Fetch all details in one API call
 	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
 	if err != nil {
+		if api.IsDeferred(err) {
+			// Gate 3a: our OWN admission ladder deferred this batch — a local,
+			// minute-scale condition that clears next cycle, NOT the server rate
+			// limiting us. Skip this cycle (the issues survive in the pending
+			// queue) WITHOUT the long setRateLimited pause (#257).
+			log.Printf("[sync] detail batch deferred by budget ladder, retrying next cycle: %v", err)
+			return deferAll()
+		}
 		if isRateLimitError(err) {
-			// Gate 3: rate limited mid-fetch.
+			// Gate 3: server rate limited mid-fetch.
 			w.setRateLimited()
 			return deferAll()
 		}

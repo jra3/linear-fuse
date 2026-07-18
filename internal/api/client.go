@@ -168,7 +168,11 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		adm, dec = c.budget.admit(opName, tier)
 	}
 	if adm == nil {
-		return fmt.Errorf("rate limit: query %s deferred (%s)", opName, dec.reason)
+		// Typed as ErrDeferred: the LOCAL admission ladder declined this, which
+		// clears next cycle — not a server rate limit that warrants a long pause
+		// (#257). The "rate limit:" prefix was dropped precisely because it made
+		// IsRateLimited's message fallback misclassify this as a server 429.
+		return fmt.Errorf("query %s deferred by budget ladder (%s): %w", opName, dec.reason, ErrDeferred)
 	}
 	// The admission must be settled exactly once. The success and
 	// rate-limited paths settle explicitly below (observe/rateLimited);
