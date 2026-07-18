@@ -281,7 +281,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 	// cache pre-check returns 0 without a .last entry (nothing was created);
 	// the authoritative post-failure re-check inside mutate treats a stale-cache
 	// miss as the created attachment.
-	if url := strings.SplitN(content, " ", 2)[0]; url != "" {
+	if url, _ := parseLinkInput(content); url != "" {
 		if existing, err := n.lfs.repo.GetIssueAttachments(ctx, n.issueID); err == nil {
 			for _, att := range existing {
 				if attachmentURLsEqual(att.URL, url) {
@@ -299,14 +299,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 			if content == "" {
 				return nil, &FieldError{Field: "content", Message: `empty content. Write "<url> [title]".`}
 			}
-			// Parse the content: "url [title]" or just "url" (title defaults
-			// to the URL).
-			parts := strings.SplitN(content, " ", 2)
-			url := parts[0]
-			title := url
-			if len(parts) > 1 {
-				title = parts[1]
-			}
+			url, title := parseLinkInput(content)
 
 			att, err := n.lfs.mutator().LinkURL(ctx, n.issueID, url, title)
 			if err == nil {
