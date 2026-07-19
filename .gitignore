@@ -42,3 +42,9 @@ coverage.out
 # stray root build artifacts (goreleaser uses dist/)
 /linearfs
 dist/
+
+# AUR package build artifacts
+contrib/aur/src/
+contrib/aur/pkg/
+contrib/aur/*.pkg.tar.*
+contrib/aur/*.tar.gz

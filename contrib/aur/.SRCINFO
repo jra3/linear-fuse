@@ -1,0 +1,20 @@
+pkgbase = linearfs-bin
+	pkgdesc = Mount your Linear workspace as a FUSE filesystem — browse and edit issues as markdown (prebuilt binary)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/jra3/linear-fuse
+	install = linearfs-bin.install
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	depends = fuse3
+	provides = linearfs
+	conflicts = linearfs
+	options = !strip
+	options = !debug
+	source_x86_64 = linearfs-0.1.0-x86_64.tar.gz::https://github.com/jra3/linear-fuse/releases/download/v0.1.0/linearfs_0.1.0_linux_amd64.tar.gz
+	sha256sums_x86_64 = 12be306b356a8b7b678833ab3a598182363e3ffcd464960522082ae29ac1ae1b
+	source_aarch64 = linearfs-0.1.0-aarch64.tar.gz::https://github.com/jra3/linear-fuse/releases/download/v0.1.0/linearfs_0.1.0_linux_arm64.tar.gz
+	sha256sums_aarch64 = 9d7e208902b4680bf0e84a995ac0f21c25a525dc61726a62e1a4f2974e1c10d7
+
+pkgname = linearfs-bin
