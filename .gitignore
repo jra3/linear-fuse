@@ -37,6 +37,7 @@ docs/*
 !docs/adr/
 !docs/telemetry.md
 !docs/ARCHITECTURE.md
+!docs/THREAT-MODEL.md
 coverage.out
 
 # stray root build artifacts (goreleaser uses dist/)

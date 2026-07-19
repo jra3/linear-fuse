@@ -1,0 +1,150 @@
+# LinearFS Threat Model
+
+This is the security reference for LinearFS: who we defend against, where
+untrusted data crosses into the process, and what we deliberately do *not*
+defend against. It is the companion to `docs/ARCHITECTURE.md` — the architecture
+doc says how the system works; this doc says where it can be attacked.
+
+It exists to answer one recurring question: **"is this change security-relevant?"**
+If a change moves remote data closer to a filename, a symlink target, a disk
+write, a subprocess, or the secret — or changes a file mode, a fetch URL, or the
+build/release path — it crosses a boundary described here and warrants a look.
+
+> Maintained under the same discipline as `docs/ARCHITECTURE.md`: when a change
+> adds, removes, or reshapes a trust boundary — a new consumer of remote data, a
+> new on-disk artifact, a new network caller, a change to how names become paths
+> — update this doc **in the same change**. The discipline is the guard; there is
+> no automated test for it.
+
+## What LinearFS is, in security terms
+
+A single-user daemon that mounts one person's Linear workspace as a FUSE
+filesystem. Linear is the source of truth; SQLite is a local cache; the
+filesystem is the UI. The process holds one secret (the Linear API key), talks
+to exactly two remote origins (Linear's GraphQL API and Linear's uploads CDN),
+and writes several artifacts to local disk (the SQLite cache, embedded-file
+bytes, and optional telemetry/request logs).
+
+The security-interesting fact is that **almost everything the process handles is
+attacker-controllable data from a SaaS other people can write to.** A coworker
+who can edit an issue in your Linear workspace controls issue titles, project
+and document slugs, label names, markdown bodies, and attachment URLs — and this
+code turns those into filenames, symlink targets, local disk writes, and SQLite
+rows. That is the primary threat, and it is not the threat a generic web-app
+checklist looks for.
+
+## Personas in scope
+
+| # | Persona | Controls | Attacks via |
+|---|---------|----------|-------------|
+| **P1** | Malicious / compromised Linear **workspace member** | Issue titles, project & doc slugs, label names, markdown bodies, attachment titles & URLs, user display names | Filenames, directory names, symlink targets, disk-write paths, SQLite rows — reaching path traversal, arbitrary write, or serving the wrong file |
+| **P2** | Compromised **CDN / attachment host** | The bytes returned for an embedded-file fetch, and (via P1) the URL that fetch targets | The embedded-file download path: SSRF (URL pointed at localhost / metadata endpoints), arbitrary local write, unbounded download → disk/memory exhaustion |
+| **P3** | Another **local user** on the machine | Nothing in-process; reads whatever LinearFS leaves on disk | The API key (config file, logs) and the cached workspace (SQLite DB, embedded files, telemetry) if their modes are world-readable |
+| **P4** | **Supply chain** | The build/release path | The `linearfs-bin` AUR package (PKGBUILD integrity, checksums), CI workflow token scope & unpinned actions, Go module dependencies |
+
+## Trust boundaries
+
+The boundaries below are keyed to the data-flow in `docs/ARCHITECTURE.md`. Each
+is a point where data the process does not control enters a context where it can
+do harm.
+
+### TB1 — Remote data → filesystem surface (P1)
+
+The load-bearing boundary. Remote strings enter at `api.Client` (from the Linear
+GraphQL API) and flow, unchanged in trust, through `internal/marshal` (render)
+and into `internal/fs`, where they become **names and targets on a real
+filesystem**:
+
+- **Filenames / directory names** — `sanitizeFilename` (`internal/fs/
+  attachmentlisting.go`) for attachment `.link` and embedded-file names, plus the
+  doc-slug, label-name, milestone-name, and project-slug derivations behind the
+  listing family (`namedListing`, `indexedListing`, `attachmentListing`,
+  `relationListing`, `linkListing`).
+- **Symlink targets** — `symlinkNode` backs every symlink view (`by/`, `cycles/`,
+  `recent/`, `users/`, `my/`, `children/`, project issue links, initiative→project
+  links). A target is remote-derived.
+- **Disk-write paths** — the embedded-file cache writes bytes to a path derived
+  from remote data (see also TB2).
+
+The questions this boundary raises: does a title/slug/label containing `..`, `/`,
+a NUL, a leading `-`, an empty string, or a unicode-normalization trick survive
+into a path that escapes the mount or the cache dir, collides with another
+entity, or serves the wrong file? Names that are *resolution keys* (labels and
+milestones resolve by name; `.rel` names feed `rm`) carry extra risk — a
+mangled name that resolves elsewhere is worse than a broken one.
+
+Note the in-scope sliver of the "malicious server" idea lives here too: the
+GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear
+hosts, because that is the difference between "P1 sends hostile data" (in scope)
+and a network attacker injecting it (which the transport must prevent).
+
+### TB2 — Linear CDN → local bytes on disk (P2)
+
+Embedded-attachment bytes are fetched lazily: `embeddedFileCache` calls
+`api.CDNClient.Get` on read, and `internal/reconcile`'s `Extractor` calls
+`CDNClient.Size` (a HEAD) during sync. The **URL** is parsed out of a
+remote-controlled markdown body (P1 supplies it); the **bytes** come from
+whatever answers that URL (P2). This boundary asks: is the fetch host pinned to
+Linear's CDN (else SSRF via a crafted attachment URL)? Are redirects followed to
+arbitrary hosts? Is there a size cap (else an unbounded body exhausts disk or
+memory)? Is the local write path constructed safely from remote data?
+
+### TB3 — The secret and the cache, at rest and in transit (P3)
+
+One secret: the Linear API key, loaded by `internal/config` from
+`LINEAR_API_KEY` or `~/.config/linearfs/config.yaml`, sent to Linear as a raw
+`Authorization` header (`api/client.go`). Two questions: **at rest** — is the
+config file's mode restrictive, or world-readable? — and **in transit through
+our own logs** — can the key leak into `requests.jsonl` (the optional request
+trace), `metrics.jsonl`, `.error` files, error strings, or the `status`
+command's output?
+
+Alongside the secret, the whole cached workspace lands on disk: the SQLite cache
+DB (`os.UserConfigDir()/linearfs/cache.db`), embedded-file bytes, and the
+optional telemetry/request logs. Their file and parent-directory modes decide
+whether another local user can read a colleague's entire issue tracker. The
+`allow_other` config option, when enabled, widens who can traverse the mount
+itself and is part of this boundary.
+
+### TB4 — Build & release (P4)
+
+The path from source to running binary: the `linearfs-bin` AUR package (PKGBUILD
+integrity, checksum pinning, build reproducibility), the CI workflows (token
+scopes, handling of untrusted input in workflow runs, whether third-party
+actions are pinned by commit SHA), and the Go module dependency set.
+
+## Out of scope
+
+Ruled beyond this effort's destination. These are scoping decisions, not
+oversights:
+
+- **Linear-the-company as a fully malicious server.** Linear is the source of
+  truth; if it is adversarial, the game is over by definition. It collapses into
+  P1/P2 (a hostile server sends the same hostile *data* a hostile workspace
+  member can). Only the transport sliver — HTTPS pinning, no redirect to
+  non-Linear hosts — is kept, and it lives under TB1/TB2.
+- **General DoS / resource-exhaustion hardening.** In scope only where *remote
+  data* sizes memory or disk (unbounded CDN downloads, unbounded cache growth) —
+  i.e. under TB2. "Survive a hostile 10GB issue body" as a standalone robustness
+  campaign is not a goal.
+
+## Non-goals
+
+Not merely deprioritized — explicitly not this system's job:
+
+- **The user's own agent/LLM misusing the mount.** LinearFS faithfully exposes
+  what the user's Linear credentials can already reach. Constraining what the
+  operator (or an agent acting for them) may do *within* their own permissions is
+  Linear's authorization model, not the filesystem's. LinearFS holds one key and
+  acts wholly as that one user.
+- **Multi-tenant isolation.** LinearFS is a single-user daemon. There is no
+  in-process notion of separate principals to isolate.
+
+## How findings are handled
+
+Findings from the audit that produced this doc are filed as public,
+`security`-labelled issues on `jra3/linear-fuse`, severity-ranked
+(`sev:high` / `sev:medium` / `sev:low`). The realistic blast radius —
+local access or a hostile workspace member, on a single-user daemon — makes
+public disclosure the right default; anything judged remotely exploitable would
+instead go through a GitHub private security advisory first (see `SECURITY.md`).

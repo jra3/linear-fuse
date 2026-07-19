@@ -206,6 +206,22 @@ entity's fragment") rather than the tally where you can. There is no automated
 test guarding this doc — the discipline is the guard, so treat the architecture
 doc as part of the diff, not a follow-up.
 
+### Threat model (security reference)
+
+`docs/THREAT-MODEL.md` is the security companion to the architecture doc: the
+personas LinearFS defends against, the four trust boundaries where untrusted data
+(remote Linear strings, CDN bytes, the API key, the build path) crosses into the
+process, and the explicit out-of-scope/non-goals. It answers "is this change
+security-relevant?" and is the reference the audit's review passes key off.
+
+**When a change adds, removes, or reshapes a trust boundary — a new consumer of
+remote data, a new on-disk artifact, a new network caller, a change to how a
+remote string becomes a filename/symlink target/path, a new file mode, or a
+change to the fetch/build/release path — you MUST update `docs/THREAT-MODEL.md`
+in the same change**, exactly like the architecture doc. There is no automated
+test guarding it; the discipline is the guard. The operator-facing `SECURITY.md`
+(reporting, key/cache handling) points at it and moves far less often.
+
 ### GraphQL Query Design
 
 Queries in `internal/api/queries.go` use GraphQL fragments to avoid field duplication:
