@@ -1,5 +1,11 @@
 # Security Policy
 
+LinearFS's threat model — the personas it defends against, the trust boundaries
+where untrusted data enters, and what it deliberately does not defend against —
+is documented in [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md). This file is the
+operator-facing policy: how to report an issue and how to handle your key and
+cache safely.
+
 ## Reporting a vulnerability
 
 **Please do not report security issues through public GitHub issues.**
