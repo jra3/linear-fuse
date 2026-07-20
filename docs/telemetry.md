@@ -60,9 +60,9 @@ documented in its own section below.
 ## Instruments
 
 Naming: `linearfs.<layer>.<what>`; meter scopes are `linearfs/process`,
-`linearfs/fuse`, `linearfs/api`, `linearfs/budget`, `linearfs/sync`,
-`linearfs/swr`. Histograms use the SDK default buckets; durations are in
-**seconds**.
+`linearfs/fuse`, `linearfs/api`, `linearfs/cdn`, `linearfs/budget`,
+`linearfs/sync`, `linearfs/swr`, `linearfs/atrest`. Histograms use the SDK
+default buckets; durations are in **seconds**.
 
 ### Process heartbeats — `internal/telemetry/heartbeat.go`
 
@@ -98,6 +98,16 @@ the journald line merges the per-op series (see below).
 
 `op` is the GraphQL operation name (`extractOpName`, ~30 values — e.g.
 `TeamIssuesByUpdatedAt`, `IssueDetailsBatch`, `GetViewer`).
+
+### CDN layer — `internal/api/cdn.go` (`cdnMetrics`, bound at `NewCDNClient`)
+
+| Instrument | Kind | Attributes | Recorded |
+|---|---|---|---|
+| `linearfs.cdn.requests` | counter | `method` = `get` \| `head`, `outcome` = `ok` \| `error` | at `CDNClient.do` completion, one per CDN request (embedded-file byte GETs, sync HEAD sizes). The CDN has no rate-limit tier of its own, so `outcome` is the two-value form |
+| `linearfs.cdn.duration` | histogram (s) | `method` | same site, wall time of the request |
+
+`method` is not in the summary keep-list, so the journald line merges the
+get/head series; the split is in the JSONL export.
 
 ### Budget layer — `internal/api/metrics.go` (`budgetMetrics` + `registerBudgetGauges`, owned by `rateBudget`)
 
@@ -157,6 +167,18 @@ budget; `api.requests`/`api.complexity` are the spend. Round 18's leak
 `api.requests{op=GetIssueDetails}` growth and `budget.remaining{axis=complexity}`
 decay — on one view.
 
+### At-rest posture — `internal/atrest/atrest.go` (lazy-bound, like `sync.prunes`)
+
+| Instrument | Kind | Attributes | Recorded |
+|---|---|---|---|
+| `linearfs.atrest.chmod_failures` | counter | `artifact` = `db` \| `embedded` \| `logs` | inside `atrest.Chmod` when a tighten **genuinely fails** (#352) — a missing artifact records nothing (it simply does not exist yet). Nonzero means an on-disk artifact silently kept a loose mode (e.g. foreign-owner `EPERM`); the `0700` parent dir still bounds group/other reach, so this is defense-in-depth degradation, not exposure — but it is the drift a dashboard should catch |
+
+`artifact` is a closed enum, never a path (embedded-file paths are unbounded
+remote-derived strings). The instrument binds lazily on the first counted
+failure and is constructed against the bare otel API — `internal/telemetry`
+imports `atrest` (rotate.go tightens the log files), so the shared `Must*`
+helpers would cycle.
+
 ## The journald summary line
 
 Format: `metrics: name{k=v,...}=value ...` — counters/gauges as plain values
@@ -165,7 +187,7 @@ Format: `metrics: name{k=v,...}=value ...` — counters/gauges as plain values
 
 To stay one readable line, attribute sets are **projected onto a keep-list**
 (`summaryAttrKeys`): `outcome`, `decision`, `tier`, `axis`, `kind`,
-`collection`, `version`, `commit`. Keys not in the list (notably the ~30-value
+`collection`, `version`, `commit`, `artifact`. Keys not in the list (notably the ~30-value
 `op`) are dropped and the collided series **merged** (values and
 count/sum summed). Full cardinality is only in the JSONL export — the summary
 is deliberately the compact projection.
