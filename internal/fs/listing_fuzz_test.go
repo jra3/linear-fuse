@@ -327,7 +327,7 @@ func FuzzSanitizeFilename(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		out := sanitizeFilename(s)
+		out := sanitizeFilename(s, "att-fallback-id")
 		if strings.Contains(out, "/") {
 			t.Errorf("sanitizeFilename(%q) = %q contains '/'", s, out)
 		}
@@ -336,6 +336,11 @@ func FuzzSanitizeFilename(f *testing.F) {
 		}
 		if strings.Contains(out, "\x00") {
 			t.Errorf("sanitizeFilename(%q) = %q contains NUL", s, out)
+		}
+		for _, r := range out {
+			if r < 0x20 {
+				t.Errorf("sanitizeFilename(%q) = %q contains C0 control %#x", s, out, r)
+			}
 		}
 		if out == "" || out == "." || out == ".." {
 			t.Errorf("sanitizeFilename(%q) = %q is not a usable filename", s, out)

@@ -47,12 +47,16 @@ func TestUserDirName(t *testing.T) {
 			want: "johnny",
 		},
 		{
-			name: "empty displayName and email",
+			// Degenerate: no name, no email, no ID. safeName never yields an
+			// empty directory name (that would be an invalid, un-openable dir),
+			// so the ultimate fallback is "unnamed". In practice a user always
+			// has an ID, so an empty name falls back to that ID, not here.
+			name: "empty displayName, email and id",
 			user: api.User{
 				DisplayName: "",
 				Email:       "",
 			},
-			want: "",
+			want: "unnamed",
 		},
 	}
 

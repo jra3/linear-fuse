@@ -44,6 +44,9 @@ jobs:
       - name: staticcheck
         run: make staticcheck
 
+      - name: safeName chokepoint (no-bypass grep-rule, #345)
+        run: make check-safename
+
   govulncheck:
     name: Vulnerability scan
     runs-on: ubuntu-latest

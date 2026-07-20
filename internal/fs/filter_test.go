@@ -56,7 +56,9 @@ func TestAssigneeHandle(t *testing.T) {
 				DisplayName: "",
 				Email:       "",
 			},
-			want: "",
+			// No name, no email, no ID → safeName never yields "" (invalid dir),
+			// so the ultimate fallback is "unnamed". A real user has an ID.
+			want: "unnamed",
 		},
 	}
 

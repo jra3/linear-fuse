@@ -89,7 +89,9 @@ func TestLabelFilename(t *testing.T) {
 		{
 			name:  "empty name",
 			label: api.Label{Name: ""},
-			want:  ".md",
+			// Empty name + empty ID → "unnamed" fallback (never a bare ".md"); a
+			// real label has an ID to fall back to.
+			want: "unnamed.md",
 		},
 	}
 

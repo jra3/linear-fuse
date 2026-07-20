@@ -160,17 +160,21 @@ func (p *ProjectsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 // names (projects, initiatives, initiative projects).
 var dirNameUnsafe = regexp.MustCompile(`[^a-z0-9-]`)
 
-// projectDirName returns a safe directory name for a project
+// projectDirName returns a safe directory name for a project. The cosmetic
+// slug-casing transform (lowercase, space→hyphen, strip non-[a-z0-9-]) stays
+// and already excludes traversal/control chars; safeName is the final chokepoint
+// pass that also holds for the Slug fallback and escapes any reserved-literal
+// collision. Its dirNameUnsafe strip means benign names are unaffected.
 func projectDirName(project api.Project) string {
 	// Sanitize name: lowercase, replace spaces with hyphens, remove special chars
 	name := strings.ToLower(project.Name)
 	name = strings.ReplaceAll(name, " ", "-")
 	name = dirNameUnsafe.ReplaceAllString(name, "")
-	if name != "" {
-		return name
+	if name == "" {
+		// Fallback to slug if name sanitizes to empty
+		name = project.Slug
 	}
-	// Fallback to slug if name sanitizes to empty
-	return project.Slug
+	return safeName(name, project.Slug)
 }
 
 // ProjectNode represents a single project directory
@@ -236,7 +240,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	}
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			target := fmt.Sprintf("../../issues/%s", issue.Identifier)
+			target := fmt.Sprintf("../../issues/%s", safeName(issue.Identifier, issue.ID))
 			return p.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}

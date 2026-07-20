@@ -114,11 +114,13 @@ func TestLinkName(t *testing.T) {
 	cases := []struct{ title, want string }{
 		{"Spec doc", "Spec doc.link"},
 		{"a/b\\c", "a-b-c.link"},
-		{"  trimmed. ", "trimmed.link"},
-		{"", "untitled.link"},
+		// safeName trims TRAILING spaces/dots only (per the #345 spec); an empty
+		// title falls back to the attachment ID (replacing the old "untitled").
+		{"  trailing. ", "  trailing.link"},
+		{"", "att-fallback.link"},
 	}
 	for _, c := range cases {
-		if got := linkName(api.Attachment{Title: c.title}); got != c.want {
+		if got := linkName(api.Attachment{ID: "att-fallback", Title: c.title}); got != c.want {
 			t.Errorf("linkName(%q) = %q, want %q", c.title, got, c.want)
 		}
 	}

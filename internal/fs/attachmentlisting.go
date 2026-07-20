@@ -49,7 +49,7 @@ type attachmentEntry struct {
 // The create surface reuses it for its .last path and kernel-entry name, so
 // the derivation is written exactly once.
 func linkName(att api.Attachment) string {
-	return sanitizeFilename(att.Title) + ".link"
+	return sanitizeFilename(att.Title, att.ID) + ".link"
 }
 
 // entries derives every entry's final name through one shared dedup counter,
@@ -103,16 +103,10 @@ func deduplicateFilename(name string, nameCount map[string]int) string {
 	return fmt.Sprintf("%s (%d)%s", base, count, ext)
 }
 
-// sanitizeFilename converts a string to a safe filename by replacing problematic characters
-func sanitizeFilename(s string) string {
-	// Replace path separators and null bytes
-	s = strings.ReplaceAll(s, "/", "-")
-	s = strings.ReplaceAll(s, "\\", "-")
-	s = strings.ReplaceAll(s, "\x00", "")
-	// Trim spaces and dots from ends
-	s = strings.Trim(s, " .")
-	if s == "" {
-		return "untitled"
-	}
-	return s
+// sanitizeFilename converts a string to a safe filename. It is a thin wrapper
+// over the shared safeName chokepoint: id (the attachment ID) is the stable
+// fallback when the title sanitizes to empty, replacing the old "untitled"
+// literal so an empty-titled attachment stays addressable and distinct.
+func sanitizeFilename(s, id string) string {
+	return safeName(s, id)
 }

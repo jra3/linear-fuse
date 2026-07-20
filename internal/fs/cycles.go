@@ -13,13 +13,15 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// cycleDirName returns the directory name for a cycle (name with spaces as hyphens)
+// cycleDirName returns the directory name for a cycle (name with spaces as
+// hyphens). The cosmetic transform stays; safeName is the final safety pass
+// (traversal/control chars, and escaping the reserved "current" alias).
 func cycleDirName(cycle api.Cycle) string {
 	name := cycle.Name
 	if name == "" {
 		name = fmt.Sprintf("Cycle %d", cycle.Number)
 	}
-	return strings.ReplaceAll(name, " ", "-")
+	return safeName(strings.ReplaceAll(name, " ", "-"), cycle.ID)
 }
 
 // CyclesNode represents the /teams/{KEY}/cycles directory. It holds a team
@@ -178,8 +180,9 @@ func (c *CycleDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			// Path from /teams/ENG/cycles/Cycle-22/ENG-123 to /teams/ENG/issues/ENG-123/
-			target := fmt.Sprintf("../../issues/%s", issue.Identifier)
+			// Path from /teams/ENG/cycles/Cycle-22/ENG-123 to /teams/ENG/issues/ENG-123/.
+			// safeName keeps the interpolated identifier a single path-safe component.
+			target := fmt.Sprintf("../../issues/%s", safeName(issue.Identifier, issue.ID))
 			return c.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}

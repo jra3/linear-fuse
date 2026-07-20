@@ -87,5 +87,9 @@ func teamIssueTarget(issue api.Issue) (string, syscall.Errno) {
 	if issue.Team == nil || issue.Team.Key == "" {
 		return "", syscall.ENOENT
 	}
-	return fmt.Sprintf("../../teams/%s/issues/%s", issue.Team.Key, issue.Identifier), 0
+	// Team key and identifier are remote strings interpolated into a symlink
+	// target; safeName keeps each a single path-safe component so a hostile
+	// value can never traverse out of teams/.
+	return fmt.Sprintf("../../teams/%s/issues/%s",
+		safeName(issue.Team.Key, issue.Team.ID), safeName(issue.Identifier, issue.ID)), 0
 }

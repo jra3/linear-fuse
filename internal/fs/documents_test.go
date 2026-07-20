@@ -59,7 +59,8 @@ func TestDocumentFilename(t *testing.T) {
 				SlugID: "",
 				Title:  "",
 			},
-			want: ".md",
+			// Empty title + slug + ID → "unnamed" fallback (never a bare ".md").
+			want: "unnamed.md",
 		},
 		{
 			name: "slugId takes precedence",

@@ -76,11 +76,13 @@ func TestExternalLinkName(t *testing.T) {
 	cases := []struct{ label, want string }{
 		{"Spec doc", "Spec doc.link"},
 		{"a/b\\c", "a-b-c.link"},
-		{"  trimmed. ", "trimmed.link"},
-		{"", "untitled.link"},
+		// safeName trims TRAILING spaces/dots only (per the #345 spec); an empty
+		// label falls back to the link ID (replacing the old "untitled").
+		{"  trailing. ", "  trailing.link"},
+		{"", "link-fallback.link"},
 	}
 	for _, c := range cases {
-		if got := externalLinkName(api.EntityExternalLink{Label: c.label}); got != c.want {
+		if got := externalLinkName(api.EntityExternalLink{ID: "link-fallback", Label: c.label}); got != c.want {
 			t.Errorf("externalLinkName(%q) = %q, want %q", c.label, got, c.want)
 		}
 	}

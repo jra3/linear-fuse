@@ -30,7 +30,7 @@ func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, len(teams))
 	for i, team := range teams {
 		entries[i] = fuse.DirEntry{
-			Name: team.Key,
+			Name: safeName(team.Key, team.ID),
 			Mode: syscall.S_IFDIR,
 		}
 	}

@@ -55,23 +55,38 @@ GraphQL API) and flow, unchanged in trust, through `internal/marshal` (render)
 and into `internal/fs`, where they become **names and targets on a real
 filesystem**:
 
-- **Filenames / directory names** — `sanitizeFilename` (`internal/fs/
-  attachmentlisting.go`) for attachment `.link` and embedded-file names, plus the
-  doc-slug, label-name, milestone-name, and project-slug derivations behind the
-  listing family (`namedListing`, `indexedListing`, `attachmentListing`,
-  `relationListing`, `linkListing`).
+- **Filenames / directory names** — every name/target builder in `internal/fs`
+  routes its output through the single `safeName(raw, id)` chokepoint
+  (`internal/fs/safename.go`, #345): `cycleDirName`, `userDirName`,
+  `sanitizeFilename` (attachment/link `.link` + embedded-file names),
+  `labelFilename`, `documentFilename`, `milestoneFilename`, `projectDirName`,
+  `initiativeDirName`, `initiativeProjectDirName`, and the `by/` status/label/
+  assignee value names. `safeName` replaces `/`, `\`, NUL, and C0 controls with
+  `-`, trims trailing spaces/dots, falls back to the stable entity id when the
+  result is `""`/`.`/`..`, and escapes an exact collision with a reserved control
+  literal (`_create`, `.error`, `.last`, `.meta`, `current`, `unassigned`) by
+  appending `-<id>`. Each builder keeps its own cosmetic transform; `safeName` is
+  the final safety pass layered over it. A CI grep-rule
+  (`scripts/check-safename.sh`, `make check-safename`) flags any builder
+  returning a raw remote name field without it.
 - **Symlink targets** — `symlinkNode` backs every symlink view (`by/`, `cycles/`,
   `recent/`, `users/`, `my/`, `children/`, project issue links, initiative→project
-  links). A target is remote-derived.
+  links). A target is remote-derived; every interpolated component (issue
+  identifier, team key, project dir name) passes through `safeName` so a hostile
+  value cannot traverse out of its directory.
 - **Disk-write paths** — the embedded-file cache writes bytes to a path derived
   from remote data (see also TB2).
 
 The questions this boundary raises: does a title/slug/label containing `..`, `/`,
 a NUL, a leading `-`, an empty string, or a unicode-normalization trick survive
 into a path that escapes the mount or the cache dir, collides with another
-entity, or serves the wrong file? Names that are *resolution keys* (labels and
-milestones resolve by name; `.rel` names feed `rm`) carry extra risk — a
-mangled name that resolves elsewhere is worse than a broken one.
+entity, or serves the wrong file? `safeName` is the answer for the name/target
+surfaces; the corpus test (`internal/fs/safename_test.go`, #341) drives the
+hostile inputs through every builder. Names that are *resolution keys* (labels
+and milestones resolve by name; `.rel` names feed `rm`) carry extra risk — a
+mangled name that resolves elsewhere is worse than a broken one, so `safeName`
+is deterministic (same raw+id → same output) and does not deduplicate (collision
+policy is unchanged; see `namedListing`).
 
 Note the in-scope sliver of the "malicious server" idea lives here too: the
 GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear

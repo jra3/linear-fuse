@@ -57,17 +57,21 @@ func (u *UsersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	return nil, syscall.ENOENT
 }
 
-// userDirName returns the directory name for a user (email without domain)
+// userDirName returns the directory name for a user (display name, or email
+// local part). safeName is the final safety pass over the chosen handle
+// (traversal/control chars, empty fallback to the user ID).
 func userDirName(user api.User) string {
 	// Use DisplayName as directory name (this is the user's handle)
-	if user.DisplayName != "" {
-		return user.DisplayName
+	handle := user.DisplayName
+	if handle == "" {
+		// Fallback to email local part if DisplayName not set
+		if idx := strings.Index(user.Email, "@"); idx != -1 {
+			handle = user.Email[:idx]
+		} else {
+			handle = user.Email
+		}
 	}
-	// Fallback to email local part if DisplayName not set
-	if idx := strings.Index(user.Email, "@"); idx != -1 {
-		return user.Email[:idx]
-	}
-	return user.Email
+	return safeName(handle, user.ID)
 }
 
 // UserNode represents a single user's directory (e.g., /users/alice).
