@@ -9,6 +9,7 @@ import (
 	gosync "sync"
 
 	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/atrest"
 )
 
 // embeddedFileCache owns the bytes of embedded attachment files (the *.png/*.pdf
@@ -49,6 +50,14 @@ func embeddedFileCacheDir() string {
 // on-disk path and size (best-effort), a late-bound closure because the repo it
 // reaches is wired after the LinearFS exists.
 func newEmbeddedFileCache(dir string, cdn *api.CDNClient, persist func(ctx context.Context, fileID, path string, size int64) error) *embeddedFileCache {
+	// The byte cache holds a local copy of the user's attachment files and is
+	// owner-only (#339). Create the dir 0700 and self-heal a loose pre-existing
+	// one (an older binary made it 0755). Best-effort: a failure here does not
+	// block a mount — the 0700 dir bounds reach and a fetch simply re-downloads.
+	if err := os.MkdirAll(dir, atrest.DirMode); err != nil {
+		log.Printf("[cache] Warning: failed to create cache dir %s: %v", dir, err)
+	}
+	atrest.Chmod(dir, atrest.DirMode)
 	return &embeddedFileCache{
 		dir:     dir,
 		cdn:     cdn,
@@ -89,11 +98,16 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 	// source of truth. `content` is returned this call regardless, and a cache
 	// miss next time simply re-fetches from the CDN — so a failed write self-
 	// corrects with no divergence to surface. (#278)
-	if err := os.WriteFile(diskPath, content, 0644); err != nil {
+	if err := os.WriteFile(diskPath, content, atrest.FileMode); err != nil {
 		log.Printf("[cache] Warning: failed to cache file %s: %v", file.Filename, err)
-	} else if c.persist != nil {
-		if err := c.persist(ctx, file.ID, diskPath, int64(len(content))); err != nil {
-			log.Printf("[cache] Warning: failed to update cache path: %v", err)
+	} else {
+		// Self-heal an existing byte file an older binary wrote 0644; WriteFile
+		// leaves an existing file's mode untouched, so tighten explicitly (#339).
+		atrest.Chmod(diskPath, atrest.FileMode)
+		if c.persist != nil {
+			if err := c.persist(ctx, file.ID, diskPath, int64(len(content))); err != nil {
+				log.Printf("[cache] Warning: failed to update cache path: %v", err)
+			}
 		}
 	}
 

@@ -4,8 +4,81 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// TestRotatingWriterTightensArtifacts guards #339: the telemetry dir is 0700
+// and both the live log and its rotated .1 sidecar are 0600. Run under a zero
+// umask so the assertion reflects the requested mode, not the ambient umask.
+func TestRotatingWriterTightensArtifacts(t *testing.T) {
+	prev := syscall.Umask(0)
+	defer syscall.Umask(prev)
+
+	// A nested dir the writer must create, pre-loosened to prove self-heal.
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "requests.jsonl")
+
+	w, err := newRotatingWriter(path, 4)
+	if err != nil {
+		t.Fatalf("newRotatingWriter: %v", err)
+	}
+	defer w.Close()
+
+	// Two writes past the tiny cap force a rollover, creating path.1.
+	if _, err := w.Write([]byte("aaaa\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := w.Write([]byte("bbbb\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	check := func(p string, want os.FileMode) {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat %s: %v", p, err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %04o, want %04o", p, got, want)
+		}
+	}
+	check(dir, 0o700)
+	check(path, 0o600)
+	check(path+".1", 0o600)
+}
+
+// TestRotatingWriterSelfHealsLooseFile guards the self-heal contract: an
+// existing 0644 log left by an older binary is tightened to 0600 when the
+// writer reopens it (O_APPEND leaves an existing file's mode untouched).
+func TestRotatingWriterSelfHealsLooseFile(t *testing.T) {
+	prev := syscall.Umask(0)
+	defer syscall.Umask(prev)
+
+	path := filepath.Join(t.TempDir(), "metrics.jsonl")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	w, err := newRotatingWriter(path, 1024)
+	if err != nil {
+		t.Fatalf("newRotatingWriter: %v", err)
+	}
+	defer w.Close()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("reopened log mode = %04o, want 0600 (self-heal)", got)
+	}
+}
 
 func TestRotatingWriterAppendsUnderCap(t *testing.T) {
 	t.Parallel()

@@ -365,6 +365,15 @@ Design conventions:
   Durability is `busy_timeout` plus single-statement upserts, with the
   reconcile clean-guard providing prune safety; a `Store.WithTx` helper was
   deleted after accruing zero production callers.
+- **At-rest posture:** `cache.db` and its dir are owner-only (`0600`/`0700`).
+  The SQLite driver creates the db file, so `Open` chmods it *after* open (the
+  MkdirAll mode cannot reach it); the `-wal`/`-shm` sidecars are tightened
+  alongside and otherwise live inside the `0700` dir. The mode constants and the
+  best-effort self-heal chmod are shared with every other on-disk artifact via
+  `internal/atrest` (see the threat model's TB3). This is one of three
+  artifact-creating sites — the others are the embedded-file byte cache
+  (`internal/fs/embeddedfilecache.go`) and the telemetry/request logs
+  (`internal/telemetry/rotate.go`).
 - **Time-format gotcha (read side):** the driver uses `_time_format=sqlite`, so
   timestamps come back space-separated, not RFC3339 `T`, and
   `time.Parse(time.RFC3339, …)` fails silently. Always use `ParseSQLiteTime` /
@@ -647,7 +656,10 @@ degrades to summary-only — telemetry must never take the mount down.
 
 1. `config.Load()` — reads `LINEAR_API_KEY` (env overrides file) and
    `~/.config/linearfs/config.yaml` (or `$XDG_CONFIG_HOME`); loading itself
-   succeeds without a key.
+   succeeds without a key. One hard refusal: if the key's source is the config
+   file (not the env escape hatch) and the file is group/other-accessible
+   (`mode & 0o077 != 0`), load fails and names the fix (`chmod 600`) — see the
+   threat model's TB3.
 2. `fs.PreflightMountpoint(...)` — detects and heals a wedged/stale FUSE mount
    at the target before mounting over it.
 3. `telemetry.Init(...)` — metrics pipeline up before anything records.

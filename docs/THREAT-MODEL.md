@@ -121,6 +121,24 @@ whether another local user can read a colleague's entire issue tracker. The
 `allow_other` config option, when enabled, widens who can traverse the mount
 itself and is part of this boundary.
 
+**At-rest posture (enforced).** Every on-disk artifact LinearFS writes is
+owner-only: `0700` directories, `0600` files. The mode constants and the
+best-effort `Chmod` self-heal live in one place, `internal/atrest`, and every
+artifact-creating site routes through it — the SQLite dir + `cache.db` (chmodded
+*after* open, since the driver creates the file; its `-wal`/`-shm` sidecars are
+tightened alongside and otherwise sit inside the `0700` dir), the embedded-file
+cache dir + byte files (`internal/fs/embeddedfilecache.go`), and the
+telemetry/request logs + their rotated `.1` sidecars (`internal/telemetry/rotate.go`).
+The chmod runs at startup on every known artifact regardless of creator, so a
+`0644` file an older binary left is tightened on the next start (self-heal) and
+future drift self-corrects; a chmod that fails (foreign owner, removed under us)
+is logged and swallowed rather than blocking the mount. Separately, `internal/config`
+**hard-refuses** to load when the API key's source is `config.yaml` and that file
+is group/other-accessible (`mode & 0o077 != 0`), naming the fix (`chmod 600`);
+the `LINEAR_API_KEY` env path is the escape hatch and is unaffected. The
+mountpoint itself stays `0755` — the FUSE mount is owner-only regardless without
+`allow_other`, so tightening it is cosmetic.
+
 ### TB4 — Build & release (P4)
 
 The path from source to running binary: the `linearfs-bin` AUR package (PKGBUILD

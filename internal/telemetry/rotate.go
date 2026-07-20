@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/jra3/linear-fuse/internal/atrest"
 )
 
 // rotatingWriter is a size-capped io.Writer over a single file with one
@@ -21,10 +23,14 @@ type rotatingWriter struct {
 // newRotatingWriter opens path for appending (creating parent directories as
 // needed) and caps it at maxBytes before rollover.
 func newRotatingWriter(path string, maxBytes int64) (*rotatingWriter, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// The telemetry/request logs record every GraphQL request (including the
+	// full variables map) and are owner-only (#339): dir 0700, files 0600.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, atrest.DirMode); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	atrest.Chmod(dir, atrest.DirMode)
+	f, err := openLog(path)
 	if err != nil {
 		return nil, err
 	}
@@ -34,6 +40,18 @@ func newRotatingWriter(path string, maxBytes int64) (*rotatingWriter, error) {
 		return nil, err
 	}
 	return &rotatingWriter{path: path, max: maxBytes, f: f, size: st.Size()}, nil
+}
+
+// openLog opens path for appending, creating it 0600 and self-healing an
+// existing loose (e.g. 0644) log — O_APPEND leaves an existing file's mode
+// untouched, so tighten explicitly after open.
+func openLog(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, atrest.FileMode)
+	if err != nil {
+		return nil, err
+	}
+	atrest.Chmod(path, atrest.FileMode)
+	return f, nil
 }
 
 func (w *rotatingWriter) Write(p []byte) (int, error) {
@@ -55,11 +73,14 @@ func (w *rotatingWriter) rotateLocked() error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}
-	// os.Rename replaces an existing path.1 — the single-slot rollover.
+	// os.Rename replaces an existing path.1 — the single-slot rollover. The
+	// renamed .1 keeps the original 0600 mode; the fresh path is opened 0600 by
+	// openLog. (After the rename path no longer exists, so O_APPEND creates it
+	// empty — equivalent to the old O_TRUNC create.)
 	if err := os.Rename(w.path, w.path+".1"); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := openLog(w.path)
 	if err != nil {
 		return err
 	}
