@@ -32,6 +32,28 @@ import (
 // (e.g. unmount) still applies on top.
 const cdnTimeout = 120 * time.Second
 
+// maxCDNBytes caps how many bytes a single CDN GET will read into memory. Real
+// Linear attachments top out at 10–25 MB (plan upload limits), so 100 MiB is a
+// pure denial-of-service bound, never a functional one — a body over it is an
+// error, not a truncation (a truncated cache entry is silently corrupt). HEAD
+// requests read no body and are uncapped. Hardcoded, no config knob (#335).
+const maxCDNBytes = 100 << 20
+
+// errCDNRedirect refuses every CDN redirect. Linear's uploads CDN
+// (uploads.linear.app) serves attachment bytes directly with 200-and-bytes — it
+// does NOT redirect to presigned storage (confirmed by probing real cached
+// attachment URLs). So a 3xx from the CDN is anomalous, and following it is a
+// live SSRF / credential-leak hazard: the Authorization header carries the
+// Linear API key, and Go's default redirect handling would replay it onto the
+// redirect target — an attacker-controlled host, an internal address
+// (loopback / RFC1918 / 169.254 metadata), or a cleartext http downgrade.
+// Refusing all redirects is the tightest policy that closes both #336 (SSRF) and
+// #337 (key-downgrade) while leaving the verified direct-serve happy path
+// untouched.
+func errCDNRedirect(req *http.Request, _ []*http.Request) error {
+	return fmt.Errorf("cdn: refusing redirect to %s (linear cdn serves directly; a redirect is not trusted)", req.URL)
+}
+
 type CDNClient struct {
 	httpClient *http.Client
 	auth       func() string
@@ -42,14 +64,20 @@ type CDNClient struct {
 // Authorization header value Client.AuthHeader returns.
 func NewCDNClient(auth func() string) *CDNClient {
 	return &CDNClient{
-		httpClient: &http.Client{Timeout: cdnTimeout},
+		httpClient: &http.Client{Timeout: cdnTimeout, CheckRedirect: errCDNRedirect},
 		auth:       auth,
 		metrics:    newCDNMetrics(),
 	}
 }
 
 // SetHTTPClient overrides the transport, for testing against an httptest CDN.
-func (c *CDNClient) SetHTTPClient(h *http.Client) { c.httpClient = h }
+// The redirect-refusal policy is re-applied so it holds regardless of the
+// injected client — the security contract is a property of CDNClient, not of
+// whatever *http.Client a test happens to pass in.
+func (c *CDNClient) SetHTTPClient(h *http.Client) {
+	h.CheckRedirect = errCDNRedirect
+	c.httpClient = h
+}
 
 // Get downloads the full bytes of a CDN object, authenticated. A non-200
 // response is an error. Records linearfs.cdn.* under method "get".
@@ -96,8 +124,16 @@ func (c *CDNClient) do(ctx context.Context, method, url string, readBody bool) (
 		return nil, 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 	if readBody {
-		if body, err = io.ReadAll(resp.Body); err != nil {
+		// Cap the read at maxCDNBytes. Read one extra byte so an overrun is
+		// detectable: if LimitReader yields more than maxCDNBytes, the body was
+		// too large and we error rather than cache a truncated (silently
+		// corrupt) entry — no partial bytes are returned (#335).
+		body, err = io.ReadAll(io.LimitReader(resp.Body, maxCDNBytes+1))
+		if err != nil {
 			return nil, 0, err
+		}
+		if int64(len(body)) > maxCDNBytes {
+			return nil, 0, fmt.Errorf("cdn: body exceeds %d-byte cap", int64(maxCDNBytes))
 		}
 	}
 	return body, resp.ContentLength, nil
