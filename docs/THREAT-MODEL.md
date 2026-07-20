@@ -146,6 +146,16 @@ integrity, checksum pinning, build reproducibility), the CI workflows (token
 scopes, handling of untrusted input in workflow runs, whether third-party
 actions are pinned by commit SHA), and the Go module dependency set.
 
+**Provenance posture (enforced, #354).** Every release artifact (the archives
+and `checksums.txt`) carries SLSA build provenance: the release workflow's
+attest step signs, via GitHub's OIDC identity (keyless Sigstore), a statement
+binding the artifact's digest to this repo, the workflow, and the source
+commit. `checksums.txt` alone authenticates nothing — it is produced and
+uploadable by the same job that builds the binaries — so verification means
+`gh attestation verify <file> -R jra3/linear-fuse` (see SECURITY.md), which
+detects an artifact swapped after the build even by an actor holding release
+credentials.
+
 ## Out of scope
 
 Ruled beyond this effort's destination. These are scoping decisions, not

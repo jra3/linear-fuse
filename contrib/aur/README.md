@@ -38,9 +38,12 @@ When a new `vX.Y.Z` is tagged and its release assets exist:
 
 1. Set `pkgver=X.Y.Z` and reset `pkgrel=1` in `PKGBUILD`.
 2. Update **both** `sha256sums_x86_64` and `sha256sums_aarch64` from the
-   release's `checksums.txt`:
+   release's `checksums.txt` — download it, then **verify its build provenance
+   before pinning anything from it** (#354; a checksums file swapped in the
+   release would otherwise ride straight into the PKGBUILD):
    ```bash
-   curl -fsSL https://github.com/jra3/linear-fuse/releases/download/vX.Y.Z/checksums.txt
+   curl -fsSLO https://github.com/jra3/linear-fuse/releases/download/vX.Y.Z/checksums.txt
+   gh attestation verify checksums.txt -R jra3/linear-fuse
    ```
    (Match `linearfs_X.Y.Z_linux_amd64.tar.gz` → `_x86_64`, `_linux_arm64` → `_aarch64`.)
 3. Regenerate the metadata: `makepkg --printsrcinfo > .SRCINFO`.
