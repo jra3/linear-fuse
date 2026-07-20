@@ -52,6 +52,12 @@ lint:
 staticcheck:
 	go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
+# The "no bypass" grep-rule guarding the fs name/target safety chokepoint
+# (safeName, #345): fails if a builder returns a raw remote name field without
+# routing through safeName(). CI runs this alongside staticcheck.
+check-safename:
+	./scripts/check-safename.sh
+
 # Pinned so regeneration doesn't churn version comments in generated files
 sqlc:
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate

@@ -57,8 +57,10 @@ func (lfs *LinearFS) issueCreateSpec(teamID, op, key string, dir uint64, mutate 
 		persist: func(ctx context.Context, i *api.Issue) error {
 			return lfs.UpsertIssue(ctx, *i)
 		},
-		dir:       dir,
-		entryName: func(i *api.Issue) string { return i.Identifier },
+		dir: dir,
+		// Structured Linear identifier (TEAM-NNN), used as a kernel-cache entry
+		// key; the issue-dir listing renders the same identifier verbatim.
+		entryName: func(i *api.Issue) string { return i.Identifier }, // safename:ok structured id
 		invalidateExtra: func(i *api.Issue) {
 			// A fresh issue must appear in recent/ immediately, not after the
 			// dir cache TTL (the #148 design's known staleness bound).
@@ -582,8 +584,9 @@ func (n *ChildrenNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	for _, child := range children {
 		if child.Identifier == name {
 			// The link lives at issues/{PARENT}/children/{ID}; the sibling
-			// issue dir is two levels up.
-			target := "../../" + child.Identifier
+			// issue dir is two levels up. safeName keeps the interpolated
+			// identifier a single path-safe component.
+			target := "../../" + safeName(child.Identifier, child.ID)
 			return n.newSymlinkInode(ctx, out, target, child.CreatedAt, child.UpdatedAt), 0
 		}
 	}

@@ -57,17 +57,19 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	return nil, syscall.ENOENT
 }
 
-// initiativeDirName returns a safe directory name for an initiative
+// initiativeDirName returns a safe directory name for an initiative. Cosmetic
+// slug-casing transform stays; safeName is the final chokepoint pass, holding
+// for the ID fallback and escaping any reserved-literal collision.
 func initiativeDirName(init api.Initiative) string {
 	// Always derive from name (Linear's slugId for initiatives is not human-readable)
 	name := strings.ToLower(init.Name)
 	name = strings.ReplaceAll(name, " ", "-")
 	name = dirNameUnsafe.ReplaceAllString(name, "")
-	if name != "" {
-		return name
+	if name == "" {
+		// Fallback to ID only if name is empty
+		name = init.ID
 	}
-	// Fallback to ID only if name is empty
-	return init.ID
+	return safeName(name, init.ID)
 }
 
 // InitiativeNode represents a single initiative directory
@@ -404,25 +406,32 @@ func (p *InitiativeProjectsNode) resolveProjectTarget(ctx context.Context, proje
 		return "", time.Time{}, time.Time{}, syscall.ENOENT
 	}
 	// The symlink lives at initiatives/{slug}/projects/{name}, three levels
-	// below the mount root.
-	target := fmt.Sprintf("../../../teams/%s/projects/%s", teamKey, projectDirName(*full))
+	// below the mount root. teamKey and the project dir both come from remote
+	// strings; safeName keeps each a single path-safe component so the target
+	// can never traverse out of teams/. projectDirName is already safe; the
+	// team key is the sibling risk #330 called out.
+	target := fmt.Sprintf("../../../teams/%s/projects/%s", safeName(teamKey, projectID), projectDirName(*full))
 	return target, full.CreatedAt, full.UpdatedAt, 0
 }
 
-// initiativeProjectDirName returns a safe directory name for an initiative project
+// initiativeProjectDirName returns a safe directory name for an initiative
+// project. Cosmetic slug-casing transform stays; safeName is the final
+// chokepoint pass, holding for the slug/ID fallback and escaping any
+// reserved-literal collision.
 func initiativeProjectDirName(proj api.InitiativeProject) string {
 	// Derive from name (not slugId, which is an opaque hash in Linear)
 	name := strings.ToLower(proj.Name)
 	name = strings.ReplaceAll(name, " ", "-")
 	name = dirNameUnsafe.ReplaceAllString(name, "")
-	if name != "" {
-		return name
+	// Fallback to slug/ID only if name sanitizes to empty.
+	fallback := proj.Slug
+	if fallback == "" {
+		fallback = proj.ID
 	}
-	// Fallback to slug/ID only if name sanitizes to empty
-	if proj.Slug != "" {
-		return proj.Slug
+	if name == "" {
+		name = fallback
 	}
-	return proj.ID
+	return safeName(name, fallback)
 }
 
 // InitiativeUpdatesNode represents /initiatives/{slug}/updates/

@@ -51,7 +51,7 @@ type linkEntry struct {
 // create surface reuses it for its .last path and kernel-entry name, so the
 // derivation is written exactly once.
 func externalLinkName(link api.EntityExternalLink) string {
-	return sanitizeFilename(link.Label) + ".link"
+	return sanitizeFilename(link.Label, link.ID) + ".link"
 }
 
 // entries derives every entry's final name through one shared dedup counter —

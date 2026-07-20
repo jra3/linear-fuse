@@ -81,7 +81,7 @@ func (n *RecentNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 	for _, issue := range issues {
 		if issue.Identifier == name {
-			target := fmt.Sprintf("../issues/%s", issue.Identifier)
+			target := fmt.Sprintf("../issues/%s", safeName(issue.Identifier, issue.ID))
 			return n.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}

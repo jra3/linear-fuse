@@ -118,12 +118,12 @@ func (n *LabelsNode) Create(ctx context.Context, name string, flags uint32, mode
 	return n.collection().create(ctx, name, flags, out, n.createLabel)
 }
 
-// labelFilename returns the filename for a label
+// labelFilename returns the filename for a label. The cosmetic transform
+// (space→hyphen) stays; safeName is the final safety pass over the base name
+// before the .md suffix (traversal/control chars, empty fallback to label ID).
 func labelFilename(label api.Label) string {
-	// Sanitize name for filename
 	name := strings.ReplaceAll(label.Name, " ", "-")
-	name = strings.ReplaceAll(name, "/", "-")
-	return name + ".md"
+	return safeName(name, label.ID) + ".md"
 }
 
 // LabelFileNode represents a single label file (read-write)

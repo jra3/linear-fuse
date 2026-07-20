@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"log"
-	"strings"
 	"syscall"
 	"time"
 
@@ -95,12 +94,12 @@ func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	return n.collection().unlink(ctx, name)
 }
 
-// milestoneFilename returns the filename for a milestone
+// milestoneFilename returns the filename for a milestone. safeName is the final
+// safety pass over the name before the .md suffix (traversal/control chars,
+// empty fallback to milestone ID). The name is otherwise preserved verbatim
+// (milestone names allow spaces).
 func milestoneFilename(m api.ProjectMilestone) string {
-	// Sanitize name for filename
-	name := strings.ReplaceAll(m.Name, "/", "-")
-	name = strings.ReplaceAll(name, "\\", "-")
-	return name + ".md"
+	return safeName(m.Name, m.ID) + ".md"
 }
 
 // MilestoneFileNode represents a single milestone file (read-write)

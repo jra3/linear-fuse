@@ -12,19 +12,27 @@ import (
 	"github.com/jra3/linear-fuse/internal/api"
 )
 
-// assigneeHandle returns the handle for an assignee (prefers DisplayName, falls back to email local part)
+// assigneeHandle returns the handle for an assignee (prefers DisplayName, falls
+// back to email local part). safeName is the final safety pass: it strips
+// traversal/control chars from the handle and, critically for #332, escapes a
+// handle that lands exactly on the "unassigned" bucket literal so a real user
+// named "unassigned" cannot shadow the unassigned view. Both the by/assignee
+// value list and resolveAssigneeID derive through this one function, so the
+// sanitized handle stays a consistent resolution key.
 func assigneeHandle(user *api.User) string {
 	if user == nil {
 		return ""
 	}
-	if user.DisplayName != "" {
-		return user.DisplayName
+	handle := user.DisplayName
+	if handle == "" {
+		// Fallback to email local part
+		if idx := strings.Index(user.Email, "@"); idx != -1 {
+			handle = user.Email[:idx]
+		} else {
+			handle = user.Email
+		}
 	}
-	// Fallback to email local part
-	if idx := strings.Index(user.Email, "@"); idx != -1 {
-		return user.Email[:idx]
-	}
-	return user.Email
+	return safeName(handle, user.ID)
 }
 
 // FilterRootNode represents the by/ directory. It holds a team snapshot and
@@ -135,27 +143,30 @@ func (f *FilterCategoryNode) getUniqueValues(ctx context.Context) ([]string, err
 	teamID := f.entity().ID
 	switch f.category {
 	case "status":
-		// Use team states from API - much faster than scanning all issues
+		// Use team states from API - much faster than scanning all issues.
+		// The state name is a remote string, so the directory value is the
+		// safeName of it (traversal/control chars, reserved-literal escape).
 		states, err := f.lfs.repo.GetTeamStates(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
 		values := make([]string, len(states))
 		for i, state := range states {
-			values[i] = state.Name
+			values[i] = safeName(state.Name, state.ID)
 		}
 		sort.Strings(values)
 		return values, nil
 
 	case "label":
-		// Use team labels from API - much faster than scanning all issues
+		// Use team labels from API - much faster than scanning all issues.
+		// The label name is a remote string; the directory value is its safeName.
 		labels, err := f.lfs.repo.GetTeamLabels(ctx, teamID)
 		if err != nil {
 			return nil, err
 		}
 		values := make([]string, len(labels))
 		for i, label := range labels {
-			values[i] = label.Name
+			values[i] = safeName(label.Name, label.ID)
 		}
 		sort.Strings(values)
 		return values, nil
@@ -224,7 +235,7 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	for _, issue := range issues {
 		if issue.Identifier == name {
 			// From by/category/value/ go up 3 levels to team dir, then into issues/
-			target := fmt.Sprintf("../../../issues/%s", issue.Identifier)
+			target := fmt.Sprintf("../../../issues/%s", safeName(issue.Identifier, issue.ID))
 			return f.newSymlinkInode(ctx, out, target, issue.CreatedAt, issue.UpdatedAt), 0
 		}
 	}
@@ -233,12 +244,22 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 
 func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, error) {
 	teamID := f.entity().ID
-	// Use server-side filtering for much better performance
+	// Use server-side filtering for much better performance. f.value is the
+	// safeName'd directory name, so resolve it back to the entity's real name
+	// (GetStateByName/GetLabelByName match the raw remote name) before filtering.
 	switch f.category {
 	case "status":
-		return f.lfs.GetFilteredIssuesByStatus(ctx, teamID, f.value)
+		name, err := f.resolveStateName(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return f.lfs.GetFilteredIssuesByStatus(ctx, teamID, name)
 	case "label":
-		return f.lfs.GetFilteredIssuesByLabel(ctx, teamID, f.value)
+		name, err := f.resolveLabelName(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return f.lfs.GetFilteredIssuesByLabel(ctx, teamID, name)
 	case "assignee":
 		if f.value == "unassigned" {
 			return f.lfs.repo.GetUnassignedIssues(ctx, teamID)
@@ -252,6 +273,38 @@ func (f *FilterValueNode) getFilteredIssues(ctx context.Context) ([]api.Issue, e
 	default:
 		return nil, fmt.Errorf("unknown filter category: %s", f.category)
 	}
+}
+
+// resolveStateName maps the safeName'd status directory value back to a state's
+// real remote name, which the name-keyed filter query matches. An unresolvable
+// value (a state that vanished since the listing) yields the raw value, which
+// GetStateByName then reports as no-match (empty result).
+func (f *FilterValueNode) resolveStateName(ctx context.Context) (string, error) {
+	states, err := f.lfs.repo.GetTeamStates(ctx, f.entity().ID)
+	if err != nil {
+		return "", err
+	}
+	for _, state := range states {
+		if safeName(state.Name, state.ID) == f.value {
+			return state.Name, nil // safename:ok resolution key (feeds GetStateByName, not a path)
+		}
+	}
+	return f.value, nil
+}
+
+// resolveLabelName maps the safeName'd label directory value back to a label's
+// real remote name for the name-keyed filter query, mirroring resolveStateName.
+func (f *FilterValueNode) resolveLabelName(ctx context.Context) (string, error) {
+	labels, err := f.lfs.repo.GetTeamLabels(ctx, f.entity().ID)
+	if err != nil {
+		return "", err
+	}
+	for _, label := range labels {
+		if safeName(label.Name, label.ID) == f.value {
+			return label.Name, nil // safename:ok resolution key (feeds GetLabelByName, not a path)
+		}
+	}
+	return f.value, nil
 }
 
 // resolveAssigneeID converts an assignee handle (display name or email prefix) to user ID

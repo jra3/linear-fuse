@@ -611,7 +611,7 @@ func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateNam
 			return "", err
 		}
 		return resolveByName(states, stateName, "state",
-			func(s api.State) string { return s.Name }, func(s api.State) string { return s.ID })
+			func(s api.State) string { return s.Name /* safename:ok resolution key */ }, func(s api.State) string { return s.ID })
 	})
 }
 
@@ -668,7 +668,7 @@ func (lfs *LinearFS) ResolveProjectID(ctx context.Context, teamID string, projec
 			return "", err
 		}
 		return resolveByName(projects, projectName, "project",
-			func(p api.Project) string { return p.Name }, func(p api.Project) string { return p.ID })
+			func(p api.Project) string { return p.Name /* safename:ok resolution key */ }, func(p api.Project) string { return p.ID })
 	})
 }
 
@@ -705,7 +705,7 @@ func (lfs *LinearFS) ResolveMilestoneID(ctx context.Context, projectID string, m
 			return "", err
 		}
 		return resolveByName(milestones, milestoneName, "milestone",
-			func(m api.ProjectMilestone) string { return m.Name }, func(m api.ProjectMilestone) string { return m.ID })
+			func(m api.ProjectMilestone) string { return m.Name /* safename:ok resolution key */ }, func(m api.ProjectMilestone) string { return m.ID })
 	})
 }
 
@@ -718,7 +718,7 @@ func (lfs *LinearFS) ResolveCycleID(ctx context.Context, teamID string, cycleNam
 			return "", err
 		}
 		return resolveByName(cycles, cycleName, "cycle",
-			func(c api.Cycle) string { return c.Name }, func(c api.Cycle) string { return c.ID })
+			func(c api.Cycle) string { return c.Name /* safename:ok resolution key */ }, func(c api.Cycle) string { return c.ID })
 	})
 }
 
@@ -731,7 +731,7 @@ func (lfs *LinearFS) ResolveInitiativeID(ctx context.Context, initiativeName str
 			return "", err
 		}
 		return resolveByName(initiatives, initiativeName, "initiative",
-			func(i api.Initiative) string { return i.Name }, func(i api.Initiative) string { return i.ID })
+			func(i api.Initiative) string { return i.Name /* safename:ok resolution key */ }, func(i api.Initiative) string { return i.ID })
 	})
 }
 

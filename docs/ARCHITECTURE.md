@@ -498,6 +498,17 @@ building blocks:
   filename is *not* a resolution key (attachments, links); where it is (labels/
   milestones resolve by name, `.rel` names feed `rm`), collisions shadow
   first-match/emit-once — a suffixed name would resolve nowhere.
+- `safeName(raw, id)` (`safename.go`) — the single name/target **safety
+  chokepoint**. Every name/target builder (the `*DirName`/`*Filename` family,
+  `sanitizeFilename`, the `by/` value names, and every symlink-target component)
+  routes its cosmetically-transformed output through it: `/`\`, NUL, and C0
+  controls become `-`, trailing spaces/dots are trimmed, an empty/`.`/`..` result
+  falls back to the entity id, and an exact collision with a reserved control
+  literal (`_create`/`.error`/`.last`/`.meta`/`current`/`unassigned`) is escaped
+  with `-<id>`. It unifies the safety *invariant*, not cosmetic style (each
+  builder keeps its own casing), and is a non-breaking pass — only pathological
+  names change. A CI grep-rule (`scripts/check-safename.sh`) guards against a new
+  builder bypassing it. This is the TB1 name/target defense in the threat model.
 - `editBuffer` — the read/write buffer under every editable file, and
   `collectionTrio` + `createFileNode` — the writable-collection kit: the trio
   guarantees every writable directory serves `_create`/`.error`/`.last`

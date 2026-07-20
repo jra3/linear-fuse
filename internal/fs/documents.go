@@ -162,17 +162,18 @@ func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode u
 	return n.collection().create(ctx, name, flags, out, n.createDocument(name))
 }
 
-// documentFilename returns the filename for a document
+// documentFilename returns the filename for a document. Cosmetic transform
+// (slugId when present, else lowercased space→hyphen title) stays; safeName is
+// the final safety pass over the base name before the .md suffix
+// (traversal/control chars, empty fallback to document ID).
 func documentFilename(doc api.Document) string {
 	// Use slugId if available, otherwise sanitize title
 	if doc.SlugID != "" {
-		return doc.SlugID + ".md"
+		return safeName(doc.SlugID, doc.ID) + ".md"
 	}
-	// Sanitize title for filename
 	name := strings.ToLower(doc.Title)
 	name = strings.ReplaceAll(name, " ", "-")
-	name = strings.ReplaceAll(name, "/", "-")
-	return name + ".md"
+	return safeName(name, doc.ID) + ".md"
 }
 
 // DocumentFileNode represents a single document file (read-write)
