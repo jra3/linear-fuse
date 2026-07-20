@@ -132,7 +132,8 @@ telemetry/request logs + their rotated `.1` sidecars (`internal/telemetry/rotate
 The chmod runs at startup on every known artifact regardless of creator, so a
 `0644` file an older binary left is tightened on the next start (self-heal) and
 future drift self-corrects; a chmod that fails (foreign owner, removed under us)
-is logged and swallowed rather than blocking the mount. Separately, `internal/config`
+is logged, counted (`linearfs.atrest.chmod_failures{artifact}`, #352), and
+swallowed rather than blocking the mount. Separately, `internal/config`
 **hard-refuses** to load when the API key's source is `config.yaml` and that file
 is group/other-accessible (`mode & 0o077 != 0`), naming the fix (`chmod 600`);
 the `LINEAR_API_KEY` env path is the escape hatch and is unaffected. The

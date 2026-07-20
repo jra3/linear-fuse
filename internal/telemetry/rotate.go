@@ -29,7 +29,7 @@ func newRotatingWriter(path string, maxBytes int64) (*rotatingWriter, error) {
 	if err := os.MkdirAll(dir, atrest.DirMode); err != nil {
 		return nil, err
 	}
-	atrest.Chmod(dir, atrest.DirMode)
+	atrest.Chmod(dir, atrest.DirMode, atrest.ArtifactLogs)
 	f, err := openLog(path)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func openLog(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	atrest.Chmod(path, atrest.FileMode)
+	atrest.Chmod(path, atrest.FileMode, atrest.ArtifactLogs)
 	return f, nil
 }
 

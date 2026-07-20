@@ -57,7 +57,7 @@ func newEmbeddedFileCache(dir string, cdn *api.CDNClient, persist func(ctx conte
 	if err := os.MkdirAll(dir, atrest.DirMode); err != nil {
 		log.Printf("[cache] Warning: failed to create cache dir %s: %v", dir, err)
 	}
-	atrest.Chmod(dir, atrest.DirMode)
+	atrest.Chmod(dir, atrest.DirMode, atrest.ArtifactEmbedded)
 	return &embeddedFileCache{
 		dir:     dir,
 		cdn:     cdn,
@@ -103,7 +103,7 @@ func (c *embeddedFileCache) FetchEmbeddedFile(ctx context.Context, file api.Embe
 	} else {
 		// Self-heal an existing byte file an older binary wrote 0644; WriteFile
 		// leaves an existing file's mode untouched, so tighten explicitly (#339).
-		atrest.Chmod(diskPath, atrest.FileMode)
+		atrest.Chmod(diskPath, atrest.FileMode, atrest.ArtifactEmbedded)
 		if c.persist != nil {
 			if err := c.persist(ctx, file.ID, diskPath, int64(len(content))); err != nil {
 				log.Printf("[cache] Warning: failed to update cache path: %v", err)

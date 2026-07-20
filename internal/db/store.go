@@ -64,7 +64,7 @@ func openDB(dbPath string) (*Store, error) {
 	if err := os.MkdirAll(dir, atrest.DirMode); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
-	atrest.Chmod(dir, atrest.DirMode)
+	atrest.Chmod(dir, atrest.DirMode, atrest.ArtifactDB)
 
 	// Use file: URI format to properly handle paths with spaces and query params
 	// Escape spaces in path for URI format
@@ -116,9 +116,9 @@ func openDB(dbPath string) (*Store, error) {
 
 // tightenDBFiles chmods cache.db and its WAL/SHM sidecars to 0600, best-effort.
 func tightenDBFiles(dbPath string) {
-	atrest.Chmod(dbPath, atrest.FileMode)
-	atrest.Chmod(dbPath+"-wal", atrest.FileMode)
-	atrest.Chmod(dbPath+"-shm", atrest.FileMode)
+	atrest.Chmod(dbPath, atrest.FileMode, atrest.ArtifactDB)
+	atrest.Chmod(dbPath+"-wal", atrest.FileMode, atrest.ArtifactDB)
+	atrest.Chmod(dbPath+"-shm", atrest.FileMode, atrest.ArtifactDB)
 }
 
 // migrateSchema applies idempotent bootstrap-ALTER migrations to a database

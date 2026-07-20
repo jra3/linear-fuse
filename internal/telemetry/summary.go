@@ -57,6 +57,7 @@ var summaryAttrKeys = map[string]bool{
 	"collection": true, // phase-3 sync instruments
 	"version":    true, // build.info
 	"commit":     true, // build.info
+	"artifact":   true, // atrest.chmod_failures (#352) — 3 bounded values
 }
 
 // renderSummary is the pure projection from collected metric data to the one
