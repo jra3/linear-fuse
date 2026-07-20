@@ -41,6 +41,12 @@ var reservedNames = map[string]struct{}{
 //   - if the result is "", ".", or ".." → returns id;
 //   - if the result exactly equals a reserved literal → appends "-" + id.
 func safeName(raw, id string) string {
+	// id is both the empty-result fallback and the reserved-literal suffix, so it
+	// must itself be a safe, non-empty component or the invariant leaks (a caller
+	// with an empty slug could otherwise make safeName return "" / "." / "..").
+	if id == "" || id == "." || id == ".." {
+		id = "unnamed"
+	}
 	var b strings.Builder
 	b.Grow(len(raw))
 	for _, r := range raw {

@@ -50,6 +50,10 @@ type relationEntry struct {
 // it for its .last path and kernel-entry name, so the format string exists
 // exactly once.
 func relationFileName(relType, identifier string) string {
+	// relType is a controlled enum (blocks/related/…) and identifier is a
+	// server-assigned issue identifier (TEAM-NNN) — neither can carry a path
+	// separator or control char, so this .rel name (which also feeds rm) needs no
+	// safeName pass. safename:ok structured id
 	return fmt.Sprintf("%s-%s.rel", relType, identifier)
 }
 

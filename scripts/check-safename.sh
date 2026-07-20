@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
-# check-safename.sh — the "no bypass" grep-rule guarding the fs name/target
-# safety chokepoint (safeName, see internal/fs/safename.go and issue #345).
+# check-safename.sh — a lightweight lint guarding the fs name/target safety
+# chokepoint (safeName, see internal/fs/safename.go and issue #345).
 #
-# A static proof that every builder routes through safeName is impossible in Go,
-# so this is a lightweight lint: it flags any `return <expr>.<Field>` inside
-# internal/fs where the returned expression is a raw remote name field (Name /
-# Title / Label / Identifier / Key / DisplayName) NOT wrapped in safeName(...).
-# Those are exactly the strings that become directory names, filenames, or
-# symlink-target components; each MUST pass through safeName so a hostile remote
-# value cannot escape its directory or shadow a control file.
+# SCOPE (read this — the guard is deliberately partial). A static proof that
+# every builder routes through safeName is impossible in Go. This grep covers
+# only the RETURN-FORM builders: `return <expr>.<Field>` inside internal/fs where
+# the returned expression is a raw remote name field (Name / Title / Label /
+# Identifier / Key / DisplayName) NOT wrapped in safeName(...). Those are the
+# name/dir/file builders (cycleDirName, labelFilename, …); each MUST pass through
+# safeName so a hostile remote value cannot escape its directory or shadow a
+# control file.
 #
-# False positives (a raw field legitimately returned for a non-path use) are
-# suppressed with a trailing `// safename:ok` comment on the line.
+# It deliberately does NOT try to catch the ASSIGNMENT form (`x = ent.Name`) or
+# Sprintf-interpolated SYMLINK TARGETS: builders routinely do `name := ent.Name`
+# as an intermediate step *before* the final safeName, so a grep for those forms
+# is ~all false positives (verified: 13 legitimate intermediate assignments).
+# Those two surfaces — the by/ value lists in filter.go and every
+# `fmt.Sprintf(".../%s", …)` target — are instead guarded by
+# TestBuilders_HostileCorpus, which drives assigneeHandle and teamIssueTarget
+# through the hostile corpus. WHEN YOU ADD a new by/-value or symlink-target
+# surface, add it to that test — the grep will not catch it for you.
+#
+# False positives (a raw field legitimately returned for a non-path use, e.g. a
+# structured TEAM-NNN identifier) are suppressed with a trailing `// safename:ok`.
 #
 # Exit non-zero (fails CI) if any un-wrapped, un-annotated return is found.
 

@@ -154,6 +154,20 @@ func TestBuilders_HostileCorpus(t *testing.T) {
 
 		// assigneeHandle (by/assignee value)
 		assertSafe(t, "assigneeHandle", raw, assigneeHandle(&api.User{ID: "usr-2", DisplayName: raw}))
+
+		// teamIssueTarget (symlink target): both remote-derived components — the
+		// team key and the issue identifier — must be safeName'd, so a hostile
+		// value can never inject a path segment into .../teams/<k>/issues/<i>.
+		// Checked prefix-agnostically via the suffix; reverting either component
+		// to a raw field breaks it (a raw '/' would inject extra segments).
+		// An empty team key legitimately ENOENTs (degenerate); only assert the
+		// safe-component invariant when a target is actually produced.
+		if gotTarget, errno := teamIssueTarget(api.Issue{ID: "iss-1", Identifier: raw, Team: &api.Team{ID: "team-1", Key: raw}}); errno == 0 {
+			wantSuffix := "/teams/" + safeName(raw, "team-1") + "/issues/" + safeName(raw, "iss-1")
+			if !strings.HasSuffix(gotTarget, wantSuffix) {
+				t.Errorf("teamIssueTarget(%q) = %q: components must be safeName'd (want suffix %q)", raw, gotTarget, wantSuffix)
+			}
+		}
 	}
 }
 
