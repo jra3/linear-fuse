@@ -161,12 +161,15 @@ traffic has one auth header, one timeout policy, and one set of OTEL instruments
 (`linearfs.cdn.*`) instead of each wiring its own invisible `http.Client`:
 `internal/fs`'s `embeddedFileCache` calls `CDNClient.Get` for bytes on read, and
 `internal/reconcile`'s `Extractor` calls `CDNClient.Size` (a HEAD) for embedded-file
-sizes during sync. Its transport is hardened: it **refuses every redirect**
-(`CheckRedirect`) because the uploads CDN serves attachment bytes directly, so a
-3xx would only leak the Authorization key onward (SSRF / http-downgrade), and it
-**caps each GET body at 100 MiB** (`maxCDNBytes`), erroring rather than caching a
-truncated entry. Its only internal dependency is the small `internal/telemetry`
-instrument-constructor helpers. Exposes 26 query methods (`GetTeamIssuesPage`,
+sizes during sync. Both transports are hardened: **each client refuses every
+redirect** (`CheckRedirect` — `errCDNRedirect` and `errAPIRedirect`), because a
+3xx is never legitimate (the uploads CDN serves attachment bytes directly; the
+GraphQL endpoint is a pinned constant) and following one would only replay the
+Authorization key onto the redirect target (SSRF / http-downgrade). The CDN
+client additionally **caps each GET body at 100 MiB** (`maxCDNBytes`), erroring
+rather than caching a truncated entry. The package's only internal dependency
+is the small `internal/telemetry` instrument-constructor helpers. It exposes
+26 query methods (`GetTeamIssuesPage`,
 `GetTeamMetadata`, `GetInitiativesProbe`, `GetIssueDetailsBatch`, …) backed by
 31 named GraphQL operations — combined fetches like `GetTeamMetadata` issue
 several (metadata query + drain-page twins) — and ~30 mutation methods

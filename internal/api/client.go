@@ -35,6 +35,18 @@ const (
 // and the sync worker's queues retry it.
 const maxWriteWait = 30 * time.Second
 
+// errAPIRedirect refuses every GraphQL-endpoint redirect — the API-client twin
+// of the CDN's errCDNRedirect (#353, symmetry with #336/#337). The endpoint is
+// the pinned https constant defaultAPIURL, so a 3xx can only come from the real
+// Linear server misbehaving or a forged TLS peer — no in-scope persona can
+// inject one. But Go's default redirect handling would replay the Authorization
+// header (the raw lin_api_ key) onto whatever target a redirect names, so
+// refusing all redirects makes "no Linear secret ever rides a redirect" a
+// property of both network callers, not just the CDN.
+func errAPIRedirect(req *http.Request, _ []*http.Request) error {
+	return fmt.Errorf("api: refusing redirect to %s (the graphql endpoint is pinned; a redirect is not trusted)", req.URL)
+}
+
 type Client struct {
 	apiKey     string
 	apiURL     string
@@ -80,7 +92,7 @@ func NewClient(apiKey string) *Client {
 	return &Client{
 		apiKey:     apiKey,
 		apiURL:     defaultAPIURL,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: 30 * time.Second, CheckRedirect: errAPIRedirect},
 		metrics:    newAPIMetrics(),
 		budget:     newRateBudget(time.Now),
 		limiter:    limiter,

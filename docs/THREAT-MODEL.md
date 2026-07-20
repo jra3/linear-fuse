@@ -91,7 +91,10 @@ policy is unchanged; see `namedListing`).
 Note the in-scope sliver of the "malicious server" idea lives here too: the
 GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear
 hosts, because that is the difference between "P1 sends hostile data" (in scope)
-and a network attacker injecting it (which the transport must prevent).
+and a network attacker injecting it (which the transport must prevent). Enforced:
+both network callers refuse every redirect via `CheckRedirect` (`errCDNRedirect`
+in the CDN client, #348; `errAPIRedirect` in the GraphQL client, #353), so no
+request carrying the API key ever makes a second hop.
 
 ### TB2 — Linear CDN → local bytes on disk (P2)
 
