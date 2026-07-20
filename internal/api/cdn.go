@@ -50,7 +50,7 @@ const maxCDNBytes = 100 << 20
 // Refusing all redirects is the tightest policy that closes both #336 (SSRF) and
 // #337 (key-downgrade) while leaving the verified direct-serve happy path
 // untouched.
-func errCDNRedirect(req *http.Request, via []*http.Request) error {
+func errCDNRedirect(req *http.Request, _ []*http.Request) error {
 	return fmt.Errorf("cdn: refusing redirect to %s (linear cdn serves directly; a redirect is not trusted)", req.URL)
 }
 

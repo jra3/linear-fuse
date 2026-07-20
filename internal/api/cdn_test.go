@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -152,16 +153,20 @@ func TestCDNClientSizeCap(t *testing.T) {
 }
 
 // TestCDNClientRefusesRedirect proves the redirect policy (#336 SSRF, #337
-// key-downgrade): the CDN client refuses to follow any redirect. Linear's
-// uploads CDN serves attachment bytes directly (200), so a 3xx is anomalous and
-// following it could (a) leak the Authorization key to an attacker-controlled
-// or internal host (SSRF) or (b) downgrade the key onto cleartext http. The key
-// is never sent to the redirect target because we never make the second hop.
+// key-downgrade): the CDN client follows NO redirect, for GET and HEAD alike, at
+// every redirect status. Refusal is target-agnostic, so we deliberately do NOT
+// enumerate internal SSRF hosts — the guarantee is that the second hop is never
+// made, so the Authorization key cannot ride onto ANY target (internal, external,
+// or a cleartext downgrade). Each case points the redirect at a REACHABLE
+// recording sink: a regression that starts following redirects is then observed
+// instantly as sinkReached, rather than passing the err!=nil check for the wrong
+// reason (a slow dial failure to a dead address, which the earlier
+// internal-address cases silently did).
 func TestCDNClientRefusesRedirect(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// A sink that records whether it was ever reached / whether it saw the key.
+	// A reachable sink that records whether it was ever reached / saw the key.
 	var sinkReached, sinkSawAuth bool
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sinkReached = true
@@ -172,43 +177,32 @@ func TestCDNClientRefusesRedirect(t *testing.T) {
 	}))
 	defer sink.Close()
 
-	cases := []struct {
-		name   string
-		target string
-	}{
-		{"loopback", "http://127.0.0.1:9/x"},
-		{"metadata", "http://169.254.169.254/latest/meta-data/"},
-		{"rfc1918", "http://10.0.0.1/x"},
-		{"linklocal", "http://169.254.0.1/x"},
-		{"https-to-http-downgrade", ""}, // filled below with sink (http) URL
-		{"external-https", ""},          // filled below with sink URL forced https-ish
-	}
+	// Every redirect status must be refused — Go treats 301/302/303/307/308 all
+	// as follow-worthy by default, so each must be independently blocked.
+	for _, code := range []int{
+		http.StatusMovedPermanently,  // 301
+		http.StatusFound,             // 302
+		http.StatusSeeOther,          // 303
+		http.StatusTemporaryRedirect, // 307
+		http.StatusPermanentRedirect, // 308
+	} {
+		code := code
+		redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", sink.URL+"/leak")
+			w.WriteHeader(code)
+		}))
 
-	for i := range cases {
-		if cases[i].target == "" {
-			// Point the downgrade / external cases at the http sink so we can
-			// assert the key never arrives there.
-			cases[i].target = sink.URL + "/leak"
-		}
-	}
+		c := NewCDNClient(func() string { return "Bearer test" })
+		c.SetHTTPClient(redir.Client())
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(fmt.Sprintf("get-%d", code), func(t *testing.T) {
 			sinkReached, sinkSawAuth = false, false
-
-			redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Location", tc.target)
-				w.WriteHeader(http.StatusFound) // 302
-			}))
-			defer redir.Close()
-
-			c := NewCDNClient(func() string { return "Bearer test" })
-			c.SetHTTPClient(redir.Client())
-
 			body, err := c.Get(ctx, redir.URL+"/f.png")
 			if err == nil {
-				t.Fatalf("Get should refuse redirect to %s", tc.target)
+				t.Fatal("Get should refuse the redirect")
+			}
+			if !strings.Contains(err.Error(), "refusing redirect") {
+				t.Errorf("error = %q, want it to name the redirect refusal", err)
 			}
 			if body != nil {
 				t.Errorf("refused redirect returned %d bytes, want nil", len(body))
@@ -220,6 +214,21 @@ func TestCDNClientRefusesRedirect(t *testing.T) {
 				t.Error("Authorization key leaked to redirect target")
 			}
 		})
+
+		t.Run(fmt.Sprintf("head-%d", code), func(t *testing.T) {
+			sinkReached, sinkSawAuth = false, false
+			// Size swallows transport errors to 0; the security guarantee under
+			// test is that the sink is never reached (so the key never rides the
+			// HEAD redirect either).
+			if sz := c.Size(ctx, redir.URL+"/f.png"); sz != 0 {
+				t.Errorf("Size on refused redirect = %d, want 0", sz)
+			}
+			if sinkReached {
+				t.Error("HEAD redirect target was followed — should have been refused")
+			}
+		})
+
+		redir.Close()
 	}
 }
 
