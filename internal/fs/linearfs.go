@@ -121,11 +121,9 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		requestLog = w
 	}
 
-	// Initialize file cache directory
+	// The embedded-file cache dir is created (and tightened to 0700) by
+	// newEmbeddedFileCache below, which owns its own at-rest posture (#339).
 	cacheDir := embeddedFileCacheDir()
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		log.Printf("[linearfs] Warning: failed to create cache dir: %v", err)
-	}
 
 	lfs := &LinearFS{
 		uid:            uid,

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -85,6 +86,49 @@ func TestEmbeddedFileCacheTiers(t *testing.T) {
 	}
 	if served != 1 {
 		t.Errorf("disk tier hit the CDN: served=%d", served)
+	}
+}
+
+// TestEmbeddedFileCacheTightensArtifacts guards #339: the on-disk byte cache is
+// owner-only. newEmbeddedFileCache creates its dir 0700 (self-healing a loose
+// pre-existing one), and a downloaded byte file lands 0600. Run under a zero
+// umask so the assertion reflects the requested mode, not the ambient umask.
+func TestEmbeddedFileCacheTightensArtifacts(t *testing.T) {
+	prev := syscall.Umask(0)
+	defer syscall.Umask(prev)
+
+	ctx := context.Background()
+	// Pre-create the dir 0755 to prove the self-heal tightens an existing dir.
+	dir := filepath.Join(t.TempDir(), "files")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("PNGDATA"))
+	}))
+	defer srv.Close()
+
+	cdn := api.NewCDNClient(func() string { return "" })
+	cdn.SetHTTPClient(srv.Client())
+	c := newEmbeddedFileCache(dir, cdn, nil)
+
+	if info, err := os.Stat(dir); err != nil {
+		t.Fatalf("stat cache dir: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("cache dir mode = %04o, want 0700", got)
+	}
+
+	file := api.EmbeddedFile{ID: "f1", URL: srv.URL + "/f1.png", Filename: "f1.png"}
+	if _, err := c.FetchEmbeddedFile(ctx, file); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "f1"))
+	if err != nil {
+		t.Fatalf("stat cached byte file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("cached byte file mode = %04o, want 0600", got)
 	}
 }
 

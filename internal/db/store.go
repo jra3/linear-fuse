@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/atrest"
 	_ "modernc.org/sqlite"
 )
 
@@ -55,11 +56,15 @@ func Open(dbPath string) (*Store, error) {
 
 // openDB is the internal function that opens the database
 func openDB(dbPath string) (*Store, error) {
-	// Ensure parent directory exists
+	// Ensure parent directory exists. 0700: the SQLite cache holds a full local
+	// copy of the user's Linear data (issue bodies, comments, ...) and must be
+	// owner-only (#339). atrest.Chmod self-heals an existing loose dir that an
+	// older binary created 0755.
 	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, atrest.DirMode); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
+	atrest.Chmod(dir, atrest.DirMode)
 
 	// Use file: URI format to properly handle paths with spaces and query params
 	// Escape spaces in path for URI format
@@ -93,12 +98,27 @@ func openDB(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
+	// Tighten the db file to 0600 (#339). The SQLite driver creates cache.db —
+	// so the dir's 0700 does not reach it and the MkdirAll mode arg cannot; an
+	// explicit chmod after open is the only lever. This also self-heals a
+	// pre-existing 0644 db from an older binary. The WAL/SHM sidecars exist by
+	// now (journal_mode=WAL + the schema exec above), so tighten them too; any
+	// created later are still inside the 0700 dir, out of group/other reach.
+	tightenDBFiles(dbPath)
+
 	qdb := ctxDetachDBTX{inner: db}
 	return &Store{
 		db:      db,
 		queries: New(qdb),
 		qdb:     qdb,
 	}, nil
+}
+
+// tightenDBFiles chmods cache.db and its WAL/SHM sidecars to 0600, best-effort.
+func tightenDBFiles(dbPath string) {
+	atrest.Chmod(dbPath, atrest.FileMode)
+	atrest.Chmod(dbPath+"-wal", atrest.FileMode)
+	atrest.Chmod(dbPath+"-shm", atrest.FileMode)
 }
 
 // migrateSchema applies idempotent bootstrap-ALTER migrations to a database

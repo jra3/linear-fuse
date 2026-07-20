@@ -140,9 +140,11 @@ func LoadWithEnv(getenv func(string) string) (*Config, error) {
 func loadPath(getenv func(string) string, path string, explicit bool) (*Config, error) {
 	cfg := DefaultConfig()
 
+	fileRead := false
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
+		fileRead = true
 		if err := yaml.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 		}
@@ -150,12 +152,45 @@ func loadPath(getenv func(string) string, path string, explicit bool) (*Config, 
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// The api_key came from the file unless the env var overrides it below.
+	keyFromFile := fileRead && cfg.APIKey != ""
+
 	// Environment variables override config file
 	if apiKey := getenv("LINEAR_API_KEY"); apiKey != "" {
 		cfg.APIKey = apiKey
+		keyFromFile = false
+	}
+
+	// #338: when the API key's source is the config file (not the env-var
+	// escape hatch), the file must be owner-only — group or other access to a
+	// file holding a secret is refused, ssh StrictModes style. The env path is
+	// deliberately untouched: the systemd EnvironmentFile is systemd's to
+	// protect, and an operator exporting LINEAR_API_KEY has opted out of the
+	// on-disk key entirely.
+	if keyFromFile {
+		if err := requireOwnerOnly(path); err != nil {
+			return nil, err
+		}
 	}
 
 	return cfg, nil
+}
+
+// requireOwnerOnly refuses a config file that holds the API key and is
+// accessible to group or other (mode & 0o077 != 0). The error names the fix so
+// an operator can act on it directly.
+func requireOwnerOnly(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat config file %s: %w", path, err)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Errorf(
+			"config file %s is group/other-accessible (mode %04o) but holds an api_key; "+
+				"refusing to load — run: chmod 600 %s",
+			path, perm, path)
+	}
+	return nil
 }
 
 func getConfigPathWithEnv(getenv func(string) string) string {

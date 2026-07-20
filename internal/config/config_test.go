@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -231,7 +233,9 @@ log:
   level: debug
   file: /var/log/linearfs.log
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	// 0600: a config.yaml carrying an api_key must be owner-only, else Load
+	// refuses it (see TestLoadRefusesLooseKeyFile).
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -285,7 +289,7 @@ log:
   level: debug
   api_stats: true
 `
-	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configContent), 0600); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -462,7 +466,11 @@ cache:
 func TestLoadFrom(t *testing.T) {
 	t.Run("explicit file loads", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "custom.yaml")
-		if err := os.WriteFile(path, []byte("api_key: from-file\n"), 0644); err != nil {
+		// 0600: a key-bearing config file must be owner-only or Load refuses it.
+		if err := os.WriteFile(path, []byte("api_key: from-file\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0600); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("LINEAR_API_KEY", "")
@@ -496,6 +504,116 @@ func TestLoadFrom(t *testing.T) {
 		}
 		if cfg.APIKey != "from-env" {
 			t.Errorf("LoadFrom() APIKey = %q, want %q", cfg.APIKey, "from-env")
+		}
+	})
+}
+
+// TestLoadRefusesLooseKeyFile guards #338: a config.yaml that carries an
+// api_key and is group- or world-accessible (mode & 0o077 != 0) is refused at
+// load with a message that names the fix (chmod 600). An owner-only (0600)
+// file is accepted, and — the escape hatch — a loose file whose key is
+// overridden by LINEAR_API_KEY is unaffected (the env is the key source, so
+// the file's mode is irrelevant).
+func TestLoadRefusesLooseKeyFile(t *testing.T) {
+	// group/world-readable modes that must all be refused when a key is present.
+	looseModes := []os.FileMode{0640, 0604, 0644, 0660, 0666, 0700 | 0044}
+	for _, mode := range looseModes {
+		mode := mode
+		t.Run(fmt.Sprintf("refuse mode %04o", mode), func(t *testing.T) {
+			tmpDir := t.TempDir()
+			configDir := filepath.Join(tmpDir, "linearfs")
+			if err := os.MkdirAll(configDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(configDir, "config.yaml")
+			if err := os.WriteFile(path, []byte("api_key: secret\n"), mode); err != nil {
+				t.Fatal(err)
+			}
+			// os.WriteFile is subject to umask; force the intended loose bits.
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadWithEnv(mockEnv(map[string]string{"XDG_CONFIG_HOME": tmpDir}))
+			if err == nil {
+				t.Fatalf("LoadWithEnv() with %04o key file: want refusal, got nil", mode)
+			}
+			if !strings.Contains(err.Error(), "chmod 600") {
+				t.Errorf("refusal error %q: want it to name the fix (chmod 600)", err.Error())
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("refusal error %q: want it to name the file %q", err.Error(), path)
+			}
+		})
+	}
+
+	t.Run("accepts 0600 key file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configDir := filepath.Join(tmpDir, "linearfs")
+		if err := os.MkdirAll(configDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(configDir, "config.yaml")
+		if err := os.WriteFile(path, []byte("api_key: secret\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadWithEnv(mockEnv(map[string]string{"XDG_CONFIG_HOME": tmpDir}))
+		if err != nil {
+			t.Fatalf("LoadWithEnv() with 0600 key file: %v", err)
+		}
+		if cfg.APIKey != "secret" {
+			t.Errorf("APIKey = %q, want %q", cfg.APIKey, "secret")
+		}
+	})
+
+	t.Run("env override makes loose file irrelevant", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configDir := filepath.Join(tmpDir, "linearfs")
+		if err := os.MkdirAll(configDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(configDir, "config.yaml")
+		if err := os.WriteFile(path, []byte("api_key: file-secret\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadWithEnv(mockEnv(map[string]string{
+			"XDG_CONFIG_HOME": tmpDir,
+			"LINEAR_API_KEY":  "env-secret",
+		}))
+		if err != nil {
+			t.Fatalf("LoadWithEnv() with env override of loose file: %v", err)
+		}
+		if cfg.APIKey != "env-secret" {
+			t.Errorf("APIKey = %q, want env-secret (env is the source)", cfg.APIKey)
+		}
+	})
+
+	t.Run("loose file with no api_key is fine", func(t *testing.T) {
+		// A config.yaml that carries only non-secret settings never triggers
+		// the refusal — the check keys on a present api_key, not the file.
+		tmpDir := t.TempDir()
+		configDir := filepath.Join(tmpDir, "linearfs")
+		if err := os.MkdirAll(configDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(configDir, "config.yaml")
+		if err := os.WriteFile(path, []byte("log:\n  level: debug\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadWithEnv(mockEnv(map[string]string{"XDG_CONFIG_HOME": tmpDir}))
+		if err != nil {
+			t.Fatalf("LoadWithEnv() with keyless loose file: %v", err)
+		}
+		if cfg.Log.Level != "debug" {
+			t.Errorf("Log.Level = %q, want debug", cfg.Log.Level)
 		}
 	})
 }
