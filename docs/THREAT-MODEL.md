@@ -91,7 +91,10 @@ policy is unchanged; see `namedListing`).
 Note the in-scope sliver of the "malicious server" idea lives here too: the
 GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear
 hosts, because that is the difference between "P1 sends hostile data" (in scope)
-and a network attacker injecting it (which the transport must prevent).
+and a network attacker injecting it (which the transport must prevent). Enforced:
+both network callers refuse every redirect via `CheckRedirect` (`errCDNRedirect`
+in the CDN client, #348; `errAPIRedirect` in the GraphQL client, #353), so no
+request carrying the API key ever makes a second hop.
 
 ### TB2 — Linear CDN → local bytes on disk (P2)
 
@@ -118,8 +121,9 @@ Alongside the secret, the whole cached workspace lands on disk: the SQLite cache
 DB (`os.UserConfigDir()/linearfs/cache.db`), embedded-file bytes, and the
 optional telemetry/request logs. Their file and parent-directory modes decide
 whether another local user can read a colleague's entire issue tracker. The
-`allow_other` config option, when enabled, widens who can traverse the mount
-itself and is part of this boundary.
+mount itself is always owner-only: FUSE denies other users by default, and
+LinearFS never sets `fuse.MountOptions.AllowOther` (the `allow_other` config
+key that once suggested otherwise was a dead knob, removed in #355).
 
 **At-rest posture (enforced).** Every on-disk artifact LinearFS writes is
 owner-only: `0700` directories, `0600` files. The mode constants and the
@@ -136,8 +140,8 @@ is logged and swallowed rather than blocking the mount. Separately, `internal/co
 **hard-refuses** to load when the API key's source is `config.yaml` and that file
 is group/other-accessible (`mode & 0o077 != 0`), naming the fix (`chmod 600`);
 the `LINEAR_API_KEY` env path is the escape hatch and is unaffected. The
-mountpoint itself stays `0755` — the FUSE mount is owner-only regardless without
-`allow_other`, so tightening it is cosmetic.
+mountpoint itself stays `0755` — the FUSE mount is owner-only regardless
+(AllowOther is never set), so tightening it is cosmetic.
 
 ### TB4 — Build & release (P4)
 

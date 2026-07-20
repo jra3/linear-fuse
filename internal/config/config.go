@@ -22,9 +22,12 @@ type CacheConfig struct {
 	MaxEntries int           `yaml:"max_entries"`
 }
 
+// MountConfig configures the mount. The allow_other key that used to live
+// here was a dead knob (never wired to fuse.MountOptions — the mount is
+// always owner-only) and is gone (#355); yaml.v3 ignores unknown keys, so
+// old config files carrying it still parse.
 type MountConfig struct {
 	DefaultPath string `yaml:"default_path"`
-	AllowOther  bool   `yaml:"allow_other"`
 }
 
 // LogConfig configures logging. The api_stats key that used to live here is
@@ -72,7 +75,6 @@ func DefaultConfig() *Config {
 		},
 		Mount: MountConfig{
 			DefaultPath: "",
-			AllowOther:  false,
 		},
 		Log: LogConfig{
 			Level: "info",

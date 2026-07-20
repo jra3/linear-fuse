@@ -38,9 +38,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Mount.DefaultPath != "" {
 		t.Errorf("DefaultConfig() Mount.DefaultPath = %q, want empty", cfg.Mount.DefaultPath)
 	}
-	if cfg.Mount.AllowOther != false {
-		t.Error("DefaultConfig() Mount.AllowOther should be false")
-	}
 
 	// Check default log level
 	if cfg.Log.Level != "info" {
@@ -228,7 +225,6 @@ cache:
   max_entries: 5000
 mount:
   default_path: ~/linear
-  allow_other: true
 log:
   level: debug
   file: /var/log/linearfs.log
@@ -262,9 +258,6 @@ log:
 	if cfg.Mount.DefaultPath != "~/linear" {
 		t.Errorf("LoadWithEnv() Mount.DefaultPath = %q, want %q", cfg.Mount.DefaultPath, "~/linear")
 	}
-	if cfg.Mount.AllowOther != true {
-		t.Error("LoadWithEnv() Mount.AllowOther should be true")
-	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("LoadWithEnv() Log.Level = %q, want %q", cfg.Log.Level, "debug")
 	}
@@ -273,10 +266,11 @@ log:
 	}
 }
 
-// TestLoadToleratesRemovedAPIStatsKey: existing user config files may still
-// carry log.api_stats (the field died with APIStats); yaml.v3 ignores
-// unknown keys, so such a file must keep parsing.
-func TestLoadToleratesRemovedAPIStatsKey(t *testing.T) {
+// TestLoadToleratesRemovedKeys: existing user config files may still carry
+// keys whose fields have been removed — log.api_stats (died with APIStats)
+// and mount.allow_other (dead knob removed in #355; the mount was always
+// owner-only). yaml.v3 ignores unknown keys, so such a file must keep parsing.
+func TestLoadToleratesRemovedKeys(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "linearfs")
@@ -285,6 +279,8 @@ func TestLoadToleratesRemovedAPIStatsKey(t *testing.T) {
 	}
 	configContent := `
 api_key: "key_with_stale_field"
+mount:
+  allow_other: true
 log:
   level: debug
   api_stats: true
