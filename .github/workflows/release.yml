@@ -5,8 +5,17 @@ on:
     tags:
       - 'v*'
 
+# contents: write — goreleaser creates the GitHub release and uploads assets.
+# id-token + attestations: write — SLSA build provenance (#354): the attest
+# step signs, via GitHub's OIDC identity (keyless Sigstore), a statement
+# binding each artifact's digest to this repo, workflow, and commit. A
+# downstream verifier (`gh attestation verify <file> -R jra3/linear-fuse`)
+# can then detect a swapped artifact: checksums.txt alone is written by this
+# same job, so it authenticates nothing by itself.
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   goreleaser:
@@ -32,3 +41,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Attest everything a downstream consumer verifies: the release archives
+      # and checksums.txt (the AUR PKGBUILD pins its sha256sums from it).
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/checksums.txt
