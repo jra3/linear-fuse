@@ -163,11 +163,12 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 
 The `README.md` at the mount root (e.g. `~/linear/README.md`) is **generated at
 runtime**, not a checked-in file. `ReadmeNode` (`internal/fs/root.go`) serves it,
-and `generateReadme(mountPoint)` builds the content — the directory-structure map,
-`<operations>`, frontmatter templates, `<permissions>`, `<_create_behavior>`,
-`<validation_errors>`, and `<claude_code_instructions>`. It is the primary usage
-doc an LLM/agent reads to learn the filesystem, so it is part of the product, not
-a comment.
+and `generateReadme(mountPoint, userFeedback)` builds the content — the
+directory-structure map, `<operations>`, frontmatter templates, `<permissions>`,
+`<_create_behavior>`, `<validation_errors>`, and `<claude_code_instructions>`,
+plus the opt-in `<agent_feedback_protocol>` (see Configuration). It is the
+primary usage doc an LLM/agent reads to learn the filesystem, so it is part of
+the product, not a comment.
 
 **This means the generated README can silently lie about behavior.** When you
 change a filesystem surface or contract — add/rename a virtual file (`.error`,
@@ -209,10 +210,12 @@ doc as part of the diff, not a follow-up.
 ### Threat model (security reference)
 
 `docs/THREAT-MODEL.md` is the security companion to the architecture doc: the
-personas LinearFS defends against, the four trust boundaries where untrusted data
+personas LinearFS defends against, the trust boundaries where untrusted data
 (remote Linear strings, CDN bytes, the API key, the build path) crosses into the
-process, and the explicit out-of-scope/non-goals. It answers "is this change
-security-relevant?" and is the reference the audit's review passes key off.
+process — plus the one where LinearFS tells an agent to send workspace-derived
+content *out* of it (feedback mode, TB5) — and the explicit out-of-scope and
+non-goal sections. It answers "is this change security-relevant?" and is the
+reference the audit's review passes key off.
 
 **When a change adds, removes, or reshapes a trust boundary — a new consumer of
 remote data, a new on-disk artifact, a new network caller, a change to how a
@@ -336,7 +339,20 @@ API key via `LINEAR_API_KEY` env var or `~/.config/linearfs/config.yaml`:
 api_key: "lin_api_xxxxx"
 cache:
   ttl: 60s
+user_feedback: false   # or USER_FEEDBACK=1
 ```
+
+`USER_FEEDBACK` (env, or `user_feedback` in the file; default off) appends the
+agent self-reporting protocol to the generated README — the agent reading the
+mount is told to file friction with these contracts as a `dx-friction` issue on
+this repo. Off means off: the generated README is byte-for-byte unchanged, so the
+protocol text lives in one static const (`agentFeedbackProtocol` in
+`internal/fs/root.go`) appended after `generateReadme`'s template.
+
+That const is an outbound data path from a private workspace to a public repo
+(`docs/THREAT-MODEL.md`, TB5), so its REDACTION block — report the shape, not the
+payload — is load-bearing: keep it, and keep the REPORT BODY bullets consistent
+with it. `internal/fs/readme_test.go` pins the rule.
 
 ## Linear API Reference
 

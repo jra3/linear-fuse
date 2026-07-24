@@ -333,6 +333,59 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 	}
 }
 
+// TestLoadUserFeedbackFlag pins the USER_FEEDBACK contract: default off, opt-in
+// by a truthy value, and explicitly falsey values (including a file-set true)
+// stay off — the flag gates an agent-visible README section, so an accidental
+// on is worse than an accidental off.
+func TestLoadUserFeedbackFlag(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		env  string
+		file string
+		want bool
+	}{
+		{name: "unset", want: false},
+		{name: "one", env: "1", want: true},
+		{name: "true", env: "true", want: true},
+		{name: "mixed case", env: "TRUE", want: true},
+		{name: "zero", env: "0", want: false},
+		{name: "false", env: "false", want: false},
+		{name: "off", env: "off", want: false},
+		{name: "file only", file: "user_feedback: true\n", want: true},
+		{name: "env disables file", env: "0", file: "user_feedback: true\n", want: false},
+		{name: "env enables without file", env: "1", want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmpDir := t.TempDir()
+			env := map[string]string{"XDG_CONFIG_HOME": tmpDir}
+			if tc.env != "" {
+				env["USER_FEEDBACK"] = tc.env
+			}
+			if tc.file != "" {
+				configDir := filepath.Join(tmpDir, "linearfs")
+				if err := os.MkdirAll(configDir, 0755); err != nil {
+					t.Fatalf("create config dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(tc.file), 0644); err != nil {
+					t.Fatalf("write config file: %v", err)
+				}
+			}
+
+			cfg, err := LoadWithEnv(mockEnv(env))
+			if err != nil {
+				t.Fatalf("LoadWithEnv() error: %v", err)
+			}
+			if cfg.UserFeedback != tc.want {
+				t.Errorf("UserFeedback = %v, want %v (env=%q file=%q)", cfg.UserFeedback, tc.want, tc.env, tc.file)
+			}
+		})
+	}
+}
+
 func TestLoadNoConfigFile(t *testing.T) {
 	t.Parallel()
 	// Create a temp directory with no config file

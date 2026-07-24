@@ -347,6 +347,45 @@ linearfs mount ~/linear
 
 ---
 
+## Environment Variables
+
+Every platform's Configure step above sets `LINEAR_API_KEY`. These are the
+environment variables LinearFS reads (all optional except the API key, which can
+equally live in `config.yaml`; `HOME` is also consulted as a fallback when the
+user config/cache dir cannot be resolved):
+
+| Variable | Config key | Default | Effect |
+|---|---|---|---|
+| `LINEAR_API_KEY` | `api_key` | — | Linear API key; the env var overrides the config file |
+| `USER_FEEDBACK` | `user_feedback` | off | Opt-in agent feedback mode (see below) |
+| `XDG_CONFIG_HOME` | — | `~/.config` | Where the config file is looked up: `$XDG_CONFIG_HOME/linearfs/config.yaml`; on Linux it also moves the state files beside it (`cache.db`, `metrics.jsonl`) |
+| `XDG_CACHE_HOME` | — | `~/.cache` | Linux only: root of the attachment byte cache, `$XDG_CACHE_HOME/linearfs/files` (macOS always uses `~/Library/Caches`) |
+| `LINEARFS_MOUNT` | — | `~/linear` | Mount point, read by the systemd/launchd service files |
+| `LINEARFS_DEBUG_API` | — | off | Any non-empty value logs every GraphQL request/response (verbose; may echo workspace content) |
+| `LINEARFS_DEBUG_RATE` | — | off | Any non-empty value logs rate-limit budget accounting |
+
+### `USER_FEEDBACK` — agent feedback mode (opt-in, off by default)
+
+```bash
+export USER_FEEDBACK=1
+```
+
+With this set, the generated `<mount>/README.md` — the doc an agent reads to
+learn the filesystem — gains an **agent feedback protocol** section telling the
+agent to treat friction with LinearFS's contracts as a bug and file it on the
+tool's own repo (`gh issue create --repo jra3/linear-fuse --label dx-friction`),
+deduped against open issues, batched to a natural break in its task, leaving a
+one-line receipt for you.
+
+Turn it on only if you are dogfooding LinearFS with an agent and want that
+friction to reach the issue tracker — `jra3/linear-fuse` is a public repo, so the
+protocol tells the agent to report the *shape* of the friction (errno, elided
+`.error` reason, placeholder paths) and never to paste workspace content. Left
+off — the env var unset *and* `user_feedback` not enabled in `config.yaml` — the
+generated README is byte-for-byte the normal one, so a normal install never sees
+it. A set env value wins over the file either way: `USER_FEEDBACK=0` (or
+`false`/`no`/`off`) turns it off even when the file says true.
+
 ## Verification
 
 After mounting, verify LinearFS is working:

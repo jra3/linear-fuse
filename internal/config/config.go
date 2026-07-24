@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -15,6 +16,13 @@ type Config struct {
 	Mount     MountConfig     `yaml:"mount"`
 	Log       LogConfig       `yaml:"log"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
+
+	// UserFeedback (env USER_FEEDBACK, or user_feedback in the file; default
+	// off) appends the agent self-reporting protocol to the generated
+	// README.md, telling an agent reading the mount to file friction with these
+	// contracts as issues on linearfs itself. Dogfooding only: with it unset
+	// the generated README is byte-for-byte the normal one.
+	UserFeedback bool `yaml:"user_feedback"`
 }
 
 type CacheConfig struct {
@@ -174,6 +182,9 @@ func loadPath(getenv func(string) string, path string, explicit bool) (*Config, 
 			return nil, err
 		}
 	}
+	if v := getenv("USER_FEEDBACK"); v != "" {
+		cfg.UserFeedback = truthy(v)
+	}
 
 	return cfg, nil
 }
@@ -193,6 +204,18 @@ func requireOwnerOnly(path string) error {
 			path, perm, path)
 	}
 	return nil
+}
+
+// truthy interprets an env flag value. Anything unset or explicitly falsey
+// ("0", "false", "no", "off") leaves the feature off; every other non-empty
+// value opts in.
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func getConfigPathWithEnv(getenv func(string) string) string {
