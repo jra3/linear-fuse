@@ -163,11 +163,12 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 
 The `README.md` at the mount root (e.g. `~/linear/README.md`) is **generated at
 runtime**, not a checked-in file. `ReadmeNode` (`internal/fs/root.go`) serves it,
-and `generateReadme(mountPoint)` builds the content — the directory-structure map,
-`<operations>`, frontmatter templates, `<permissions>`, `<_create_behavior>`,
-`<validation_errors>`, and `<claude_code_instructions>`. It is the primary usage
-doc an LLM/agent reads to learn the filesystem, so it is part of the product, not
-a comment.
+and `generateReadme(mountPoint, userFeedback)` builds the content — the
+directory-structure map, `<operations>`, frontmatter templates, `<permissions>`,
+`<_create_behavior>`, `<validation_errors>`, and `<claude_code_instructions>`,
+plus the opt-in `<agent_feedback_protocol>` (see Configuration). It is the
+primary usage doc an LLM/agent reads to learn the filesystem, so it is part of
+the product, not a comment.
 
 **This means the generated README can silently lie about behavior.** When you
 change a filesystem surface or contract — add/rename a virtual file (`.error`,
@@ -209,10 +210,12 @@ doc as part of the diff, not a follow-up.
 ### Threat model (security reference)
 
 `docs/THREAT-MODEL.md` is the security companion to the architecture doc: the
-personas LinearFS defends against, the four trust boundaries where untrusted data
+personas LinearFS defends against, the trust boundaries where untrusted data
 (remote Linear strings, CDN bytes, the API key, the build path) crosses into the
-process, and the explicit out-of-scope/non-goals. It answers "is this change
-security-relevant?" and is the reference the audit's review passes key off.
+process — plus the one where LinearFS tells an agent to send workspace-derived
+content *out* of it (feedback mode, TB5) — and the explicit out-of-scope and
+non-goal sections. It answers "is this change security-relevant?" and is the
+reference the audit's review passes key off.
 
 **When a change adds, removes, or reshapes a trust boundary — a new consumer of
 remote data, a new on-disk artifact, a new network caller, a change to how a

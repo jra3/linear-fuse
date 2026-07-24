@@ -358,7 +358,8 @@ user config/cache dir cannot be resolved):
 |---|---|---|---|
 | `LINEAR_API_KEY` | `api_key` | — | Linear API key; the env var overrides the config file |
 | `USER_FEEDBACK` | `user_feedback` | off | Opt-in agent feedback mode (see below) |
-| `XDG_CONFIG_HOME` | — | `~/.config` | Where the config file is looked up: `$XDG_CONFIG_HOME/linearfs/config.yaml` |
+| `XDG_CONFIG_HOME` | — | `~/.config` | Where the config file is looked up: `$XDG_CONFIG_HOME/linearfs/config.yaml`; on Linux it also moves the state files beside it (`cache.db`, `metrics.jsonl`) |
+| `XDG_CACHE_HOME` | — | `~/.cache` | Linux only: root of the attachment byte cache, `$XDG_CACHE_HOME/linearfs/files` (macOS always uses `~/Library/Caches`) |
 | `LINEARFS_MOUNT` | — | `~/linear` | Mount point, read by the systemd/launchd service files |
 | `LINEARFS_DEBUG_API` | — | off | Any non-empty value logs every GraphQL request/response (verbose; may echo workspace content) |
 | `LINEARFS_DEBUG_RATE` | — | off | Any non-empty value logs rate-limit budget accounting |

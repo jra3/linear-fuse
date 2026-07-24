@@ -544,8 +544,8 @@ user_feedback: false  # or use USER_FEEDBACK env var (see below)
 | `LINEARFS_DEBUG_API` | Any non-empty value logs every GraphQL request/response |
 | `LINEARFS_DEBUG_RATE` | Any non-empty value logs rate-limit budget accounting |
 
-See [INSTALL.md](INSTALL.md#environment-variables) for the same table with
-defaults and config-file keys.
+The common ones; see [INSTALL.md](INSTALL.md#environment-variables) for the full
+table with defaults and config-file keys.
 
 #### `USER_FEEDBACK` — agent feedback mode
 

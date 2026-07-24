@@ -1,9 +1,10 @@
 # LinearFS Threat Model
 
 This is the security reference for LinearFS: who we defend against, where
-untrusted data crosses into the process, and what we deliberately do *not*
-defend against. It is the companion to `docs/ARCHITECTURE.md` — the architecture
-doc says how the system works; this doc says where it can be attacked.
+untrusted data crosses into the process (and where workspace content can cross
+back out), and what we deliberately do *not* defend against. It is the companion
+to `docs/ARCHITECTURE.md` — the architecture doc says how the system works; this
+doc says where it can be attacked.
 
 It exists to answer one recurring question: **"is this change security-relevant?"**
 If a change moves remote data closer to a filename, a symlink target, a disk
@@ -49,7 +50,7 @@ checklist looks for.
 
 The boundaries below are keyed to the data-flow in `docs/ARCHITECTURE.md`. Each
 is a point where data the process does not control enters a context where it can
-do harm.
+do harm — or, for TB5, where content from inside the mount leaves for one.
 
 ### TB1 — Remote data → filesystem surface (P1)
 
