@@ -7,8 +7,9 @@ doc says how the system works; this doc says where it can be attacked.
 
 It exists to answer one recurring question: **"is this change security-relevant?"**
 If a change moves remote data closer to a filename, a symlink target, a disk
-write, a subprocess, or the secret — or changes a file mode, a fetch URL, or the
-build/release path — it crosses a boundary described here and warrants a look.
+write, a subprocess, the secret, or off the machine entirely — or changes a file
+mode, a fetch URL, or the build/release path — it crosses a boundary described
+here and warrants a look.
 
 > Maintained under the same discipline as `docs/ARCHITECTURE.md`: when a change
 > adds, removes, or reshapes a trust boundary — a new consumer of remote data, a
@@ -23,7 +24,9 @@ filesystem. Linear is the source of truth; SQLite is a local cache; the
 filesystem is the UI. The process holds one secret (the Linear API key), talks
 to exactly two remote origins (Linear's GraphQL API and Linear's uploads CDN),
 and writes several artifacts to local disk (the SQLite cache, embedded-file
-bytes, and optional telemetry/request logs).
+bytes, and optional telemetry/request logs). It never initiates a third outbound
+origin itself — but with feedback mode on it *instructs* the operator's agent to
+publish to one (TB5).
 
 The security-interesting fact is that **almost everything the process handles is
 attacker-controllable data from a SaaS other people can write to.** A coworker
@@ -161,6 +164,46 @@ uploadable by the same job that builds the binaries — so verification means
 detects an artifact swapped after the build even by an actor holding release
 credentials.
 
+### TB5 — Mount content → a public GitHub issue, via the operator's agent (P1)
+
+**Off by default; opt-in per operator.** With `USER_FEEDBACK` set (env, or
+`user_feedback` in `config.yaml`), the generated `<mount>/README.md` gains one
+static section — `agentFeedbackProtocol` in `internal/fs/root.go` — telling the
+agent reading the mount to treat friction with LinearFS's contracts as a bug and
+file it on `jra3/linear-fuse` itself, autonomously, without human approval. That
+makes LinearFS the *origin* of an outbound path: it is the only place the tool
+tells anyone to move workspace-derived content off the machine.
+
+The content at risk is P1's. A hostile workspace member controls the issue
+titles, bodies, label names, and field values that a `.error` echoes back, so an
+unredacted report carries two harms: **disclosure** (private workspace strings
+published to a public repo) and **injection** (attacker-authored text landing in
+the maintainer's triage context).
+
+Mitigations, in order of load-bearing-ness:
+
+1. **Off by default, and off means off.** The flag-off README is byte-for-byte
+   the plain one — the protocol is not merely inert, it is absent, so a normal
+   install never carries the instruction. Enabling it is an operator decision
+   about one specific mount.
+2. **Report the shape, not the payload.** The protocol carries an explicit
+   REDACTION block: the errno and the `.error` reason line with any echoed field
+   *value* elided; paths with the team key and issue identifier replaced by
+   placeholders (`teams/<TEAM>/issues/<ID>/issue.md`); from `.last`, only whether
+   the entity is present; never titles, bodies, assignee names or emails,
+   project/initiative/milestone/label names, or URLs into the workspace; and
+   never a verbatim quote of text the agent did not author — summarize it, or
+   skip filing. `internal/fs/readme_test.go` pins the rule so it cannot silently
+   drop out of the const.
+
+**Residual risk, accepted.** This is best-effort, not an enforcement boundary. The
+redaction rule is in-context instruction to an LLM, and nothing in LinearFS
+inspects, filters, or even sees what the agent posts — there is no egress
+chokepoint to enforce at. An operator who turns feedback mode on accepts that a
+hostile workspace-member-controlled string could still reach a public issue or a
+maintainer's triage context. The opt-in *is* the control: do not enable feedback
+mode on a mount of a workspace whose contents you would not publish.
+
 ## Out of scope
 
 Ruled beyond this effort's destination. These are scoping decisions, not
@@ -184,7 +227,10 @@ Not merely deprioritized — explicitly not this system's job:
   what the user's Linear credentials can already reach. Constraining what the
   operator (or an agent acting for them) may do *within* their own permissions is
   Linear's authorization model, not the filesystem's. LinearFS holds one key and
-  acts wholly as that one user.
+  acts wholly as that one user. **This covers only what the agent decides to do
+  on its own.** Where LinearFS itself *instructs* the agent to move workspace
+  content somewhere — feedback mode's public issue filing — the instruction is
+  ours, and so is the mitigation: that is TB5, in scope, not this non-goal.
 - **Multi-tenant isolation.** LinearFS is a single-user daemon. There is no
   in-process notion of separate principals to isolate.
 

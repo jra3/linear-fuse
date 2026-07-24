@@ -47,6 +47,26 @@ func TestGenerateReadmeFeedbackFlag(t *testing.T) {
 			t.Errorf("feedback protocol does not mention %q", want)
 		}
 	}
+
+	// The protocol tells an agent to file on a PUBLIC repo from inside a mount
+	// full of private workspace content, so the redaction rule is load-bearing:
+	// pin it here so it cannot silently drop out of the const later.
+	for _, want := range []string{
+		"REDACTION",
+		"PUBLIC",
+		"never paste",
+		"teams/<TEAM>/issues/<ID>/",
+		"summarize it, never quote it verbatim",
+		"redacted per the rule above",
+	} {
+		if !strings.Contains(on, want) {
+			t.Errorf("feedback protocol does not pin the redaction rule: missing %q", want)
+		}
+	}
+	// And the body must not go back to telling the agent to paste raw output.
+	if strings.Contains(on, "paste the raw output") {
+		t.Error("feedback protocol tells the agent to paste raw mount output into a public issue")
+	}
 }
 
 // TestNewLinearFSCarriesFeedbackFlag pins the config → filesystem wiring: the

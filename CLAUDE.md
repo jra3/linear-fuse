@@ -346,6 +346,11 @@ this repo. Off means off: the generated README is byte-for-byte unchanged, so th
 protocol text lives in one static const (`agentFeedbackProtocol` in
 `internal/fs/root.go`) appended after `generateReadme`'s template.
 
+That const is an outbound data path from a private workspace to a public repo
+(`docs/THREAT-MODEL.md`, TB5), so its REDACTION block — report the shape, not the
+payload — is load-bearing: keep it, and keep the REPORT BODY bullets consistent
+with it. `internal/fs/readme_test.go` pins the rule.
+
 ## Linear API Reference
 
 The full Linear GraphQL schema is available locally at `docs/linear-schema.graphql` (gitignored).

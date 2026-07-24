@@ -2,10 +2,14 @@ package integration
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jra3/linear-fuse/internal/config"
 	"github.com/jra3/linear-fuse/internal/fs"
 )
@@ -185,8 +189,16 @@ func TestUserFeedbackReadmeThroughMount(t *testing.T) {
 		t.Fatalf("mount filesystem: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = srv.Unmount()
+		unmounted := unmountBestEffort(t, srv, mnt)
 		lfs.Close()
+		// Only walk the directory once it is really a plain directory again.
+		// RemoveAll on a live mount readdirs *through* the filesystem, and this
+		// FS deliberately has no store behind it, so a lookup there would panic
+		// the whole test binary (go-fuse does not recover in the request path).
+		if !unmounted {
+			t.Logf("leaving %s in place: still mounted", mnt)
+			return
+		}
 		os.RemoveAll(mnt)
 	})
 
@@ -215,4 +227,35 @@ func TestUserFeedbackReadmeThroughMount(t *testing.T) {
 			t.Errorf("USER_FEEDBACK README lost %q; the protocol must only append", want)
 		}
 	}
+}
+
+// unmountBestEffort tears down a test's own mount the way the suite's cleanup()
+// does: unmount, and on EBUSY (a straggling fd) retry once, then lazy-detach so
+// the kernel completes the unmount when the last fd closes. It reports whether
+// the path is a plain directory again — a caller must not walk or remove it
+// otherwise, since that would issue FUSE requests against a torn-down server.
+func unmountBestEffort(t *testing.T, srv *fuse.Server, mnt string) bool {
+	t.Helper()
+	err := srv.Unmount()
+	if err == nil {
+		return true
+	}
+	time.Sleep(200 * time.Millisecond)
+	if err := srv.Unmount(); err == nil {
+		return true
+	}
+	// An unprivileged umount2 is not permitted on FUSE; the setuid helper
+	// lazy-detaches instead (darwin has no fusermount3).
+	cmd := exec.Command("fusermount3", "-uz", mnt)
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("umount", "-f", mnt)
+	}
+	if out, lerr := cmd.CombinedOutput(); lerr != nil {
+		t.Logf("Warning: unmount %s failed (%v), lazy detach failed too (%v: %s); clean it manually", mnt, err, lerr, out)
+		return false
+	}
+	// Lazy: the mount goes away when the last fd closes, which may be after
+	// this returns, so the directory is not safe to walk yet.
+	t.Logf("Note: %s was busy at cleanup; lazy-detached", mnt)
+	return false
 }

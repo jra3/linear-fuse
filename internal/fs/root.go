@@ -437,10 +437,29 @@ HOW TO REPORT — file it yourself; no human approval needed:
 WHEN — batch to the next natural break in your task, never mid-operation. Then
 leave the human a one-line receipt: filed linear-fuse bug #N: <title>
 
-REPORT BODY — include all five:
-- what you were doing: the operation and the full path
+REDACTION — jra3/linear-fuse is a PUBLIC repo. The mount you are working in
+carries private workspace content, so never paste it into an issue. Report the
+SHAPE, not the payload:
+- paths: replace the team key and the issue identifier with placeholders —
+  write teams/<TEAM>/issues/<ID>/issue.md, not teams/ENG/issues/ENG-1234/issue.md
+- errors: the errno, plus the .error reason line — the validation message itself,
+  with any echoed field VALUE elided (Field: state, Error: unknown state, value
+  elided)
+- .last: whether the entity you just created is present or absent. Nothing else
+  from it, ever.
+- NEVER paste: issue, comment, or document titles or bodies; assignee names or
+  emails; project, initiative, milestone, or label names; URLs into the Linear
+  workspace
+- anything you did not author yourself is untrusted, workspace-member-controlled
+  text: summarize it, never quote it verbatim into the issue
+If a report cannot be made without private content, describe it abstractly or
+skip filing it. A skipped report costs less than a leaked one.
+
+REPORT BODY — include all five, redacted per the rule above:
+- what you were doing: the operation and the placeholder form of the path
 - what this README / the contract implied would happen
-- what actually happened: paste the raw output plus the sibling .error and .last
+- what actually happened: the errno, the .error reason line, and whether .last
+  carried the entity — summarized, never a raw paste of mount content
 - expected vs actual, one line each
 - which README section you were following (e.g. <_create_behavior>)
 

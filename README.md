@@ -538,7 +538,14 @@ user_feedback: false  # or use USER_FEEDBACK env var (see below)
 | Variable | Effect |
 |---|---|
 | `LINEAR_API_KEY` | API key; overrides `api_key` in the config file |
-| `USER_FEEDBACK` | Opt-in agent feedback mode (default off) |
+| `USER_FEEDBACK` | Opt-in agent feedback mode (default off); overrides `user_feedback` in the config file |
+| `XDG_CONFIG_HOME` | Config lookup root — `$XDG_CONFIG_HOME/linearfs/config.yaml` (default `~/.config`) |
+| `LINEARFS_MOUNT` | Mount point used by the systemd/launchd service files (default `~/linear`) |
+| `LINEARFS_DEBUG_API` | Any non-empty value logs every GraphQL request/response |
+| `LINEARFS_DEBUG_RATE` | Any non-empty value logs rate-limit budget accounting |
+
+See [INSTALL.md](INSTALL.md#environment-variables) for the same table with
+defaults and config-file keys.
 
 #### `USER_FEEDBACK` — agent feedback mode
 
@@ -550,10 +557,19 @@ to file it on this repo itself — `gh issue create --repo jra3/linear-fuse --la
 dx-friction`, deduped against open issues, batched to a natural break in its
 task, with a one-line receipt for the human.
 
-It is off by default, and off means off: with the flag unset the generated README
-is byte-for-byte the normal one. Turn it on if you are dogfooding LinearFS with
-an agent and want its friction to reach the issue tracker; leave it off
-otherwise. Reported friction lands under the
+Because this repo is public, the protocol also carries a redaction rule: the
+agent reports the *shape* of the friction — the errno, the `.error` reason line
+with any echoed field value elided, paths with the team key and issue identifier
+replaced by placeholders — and never pastes issue/document titles or bodies,
+people's names, or anything else it read out of your workspace. That rule is an
+instruction to an LLM, not an enforced boundary; see
+[docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) (TB5) for the accepted residual risk.
+
+It is off by default, and off means off: with the env var unset *and*
+`user_feedback` not enabled in `config.yaml`, the generated README is
+byte-for-byte the normal one. Turn it on if you are dogfooding LinearFS with an
+agent and want its friction to reach the issue tracker; leave it off otherwise.
+Reported friction lands under the
 [`dx-friction`](https://github.com/jra3/linear-fuse/labels/dx-friction) label.
 
 ## Running as a Service
