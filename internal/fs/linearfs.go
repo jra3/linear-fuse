@@ -775,6 +775,12 @@ func (lfs *LinearFS) projectLabelNames(ctx context.Context, ids []string) []stri
 func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error) {
 	root := &RootNode{BaseNode: BaseNode{lfs: lfs}}
 
+	// Publish the mount path *before* fs.Mount starts the serve loop. Handlers
+	// read it (MountPoint, for the generated README) from goroutines the serve
+	// loop spawns, so a write after fs.Mount has no happens-before edge to them
+	// — a plain data race the first README lookup can hit.
+	lfs.mountPoint = mountpoint
+
 	// Use longer timeouts to reduce kernel→userspace calls
 	attrTimeout := 60 * time.Second
 	entryTimeout := 30 * time.Second
@@ -805,7 +811,6 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error)
 	}
 
 	lfs.SetServer(server)
-	lfs.mountPoint = mountpoint
 	return server, nil
 }
 
