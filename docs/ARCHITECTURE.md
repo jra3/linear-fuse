@@ -631,7 +631,11 @@ gate above.
 - **Generated README:** the mount root's `README.md` is generated at runtime by
   `generateReadme` (`root.go`) and is the primary doc agents read. Any change to
   a filesystem surface or contract must update it in the same change;
-  `TestGeneratedReadmeMatchesBehavior` guards against drift.
+  `TestGeneratedReadmeMatchesBehavior` guards against drift. It has one
+  conditional section: with `cfg.UserFeedback` set (env `USER_FEEDBACK`, plumbed
+  to `lfs.userFeedback`), a static const carrying the agent self-reporting
+  protocol is *appended* — the flag-off render is byte-identical to the plain
+  README, which is what makes the opt-in free.
 
 **Consumed by** `internal/cmd` (which mounts it).
 
@@ -657,10 +661,10 @@ degrades to summary-only — telemetry must never take the mount down.
 (with `--foreground`/`-f`, `--debug`/`-d`) and `version`. **Startup order**
 (`mount.go` → `linearfs.go`):
 
-1. `config.Load()` — reads `LINEAR_API_KEY` (env overrides file) and
-   `~/.config/linearfs/config.yaml` (or `$XDG_CONFIG_HOME`); loading itself
-   succeeds without a key. One hard refusal: if the key's source is the config
-   file (not the env escape hatch) and the file is group/other-accessible
+1. `config.Load()` — reads `LINEAR_API_KEY` and `USER_FEEDBACK` (env overrides
+   file) and `~/.config/linearfs/config.yaml` (or `$XDG_CONFIG_HOME`); loading
+   itself succeeds without a key. One hard refusal: if the key's source is the
+   config file (not the env escape hatch) and the file is group/other-accessible
    (`mode & 0o077 != 0`), load fails and names the fix (`chmod 600`) — see the
    threat model's TB3.
 2. `fs.PreflightMountpoint(...)` — detects and heals a wedged/stale FUSE mount

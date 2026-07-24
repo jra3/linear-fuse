@@ -48,6 +48,11 @@ type LinearFS struct {
 	gid        uint32 // Owner GID for files/dirs
 	mountPoint string // Filesystem mount path (for README generation)
 
+	// userFeedback (config UserFeedback / env USER_FEEDBACK, default off) makes
+	// the generated README carry the agent self-reporting protocol. Read only
+	// by generateReadme; off means the README is unchanged.
+	userFeedback bool
+
 	// Mount lifetime: every background goroutine LinearFS launches derives its
 	// ctx from lifeCtx via spawn, so Close can cancel + wait before tearing
 	// down the store the goroutines read (see spawn / Close).
@@ -134,6 +139,7 @@ func NewLinearFS(cfg *config.Config, debug bool) (*LinearFS, error) {
 		liveReaderImpl: client,
 		requestLog:     requestLog,
 		debug:          debug,
+		userFeedback:   cfg.UserFeedback,
 	}
 	// Mint the mount-lifetime context. Background is correct here: the mount's
 	// lifetime is bounded by Close, not by any caller's request ctx.

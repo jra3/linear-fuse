@@ -529,7 +529,32 @@ mount:
 
 log:
   level: info
+
+user_feedback: false  # or use USER_FEEDBACK env var (see below)
 ```
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `LINEAR_API_KEY` | API key; overrides `api_key` in the config file |
+| `USER_FEEDBACK` | Opt-in agent feedback mode (default off) |
+
+#### `USER_FEEDBACK` — agent feedback mode
+
+Set `USER_FEEDBACK=1` and the generated `<mount>/README.md` gains an **agent
+feedback protocol** section: an agent reading the mount is told to treat any
+friction with the filesystem's contracts (a confusing `.error`, a write that
+appears to no-op, a doc that turned out not to be true) as a bug in LinearFS and
+to file it on this repo itself — `gh issue create --repo jra3/linear-fuse --label
+dx-friction`, deduped against open issues, batched to a natural break in its
+task, with a one-line receipt for the human.
+
+It is off by default, and off means off: with the flag unset the generated README
+is byte-for-byte the normal one. Turn it on if you are dogfooding LinearFS with
+an agent and want its friction to reach the issue tracker; leave it off
+otherwise. Reported friction lands under the
+[`dx-friction`](https://github.com/jra3/linear-fuse/labels/dx-friction) label.
 
 ## Running as a Service
 

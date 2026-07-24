@@ -336,7 +336,15 @@ API key via `LINEAR_API_KEY` env var or `~/.config/linearfs/config.yaml`:
 api_key: "lin_api_xxxxx"
 cache:
   ttl: 60s
+user_feedback: false   # or USER_FEEDBACK=1
 ```
+
+`USER_FEEDBACK` (env, or `user_feedback` in the file; default off) appends the
+agent self-reporting protocol to the generated README — the agent reading the
+mount is told to file friction with these contracts as a `dx-friction` issue on
+this repo. Off means off: the generated README is byte-for-byte unchanged, so the
+protocol text lives in one static const (`agentFeedbackProtocol` in
+`internal/fs/root.go`) appended after `generateReadme`'s template.
 
 ## Linear API Reference
 

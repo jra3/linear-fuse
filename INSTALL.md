@@ -347,6 +347,36 @@ linearfs mount ~/linear
 
 ---
 
+## Environment Variables
+
+Every platform's Configure step above sets `LINEAR_API_KEY`. These are the
+environment variables LinearFS reads (all optional except the API key, which can
+equally live in `config.yaml`):
+
+| Variable | Config key | Default | Effect |
+|---|---|---|---|
+| `LINEAR_API_KEY` | `api_key` | — | Linear API key; the env var overrides the config file |
+| `USER_FEEDBACK` | `user_feedback` | off | Opt-in agent feedback mode (see below) |
+| `LINEARFS_MOUNT` | — | `~/linear` | Mount point, read by the systemd/launchd service files |
+
+### `USER_FEEDBACK` — agent feedback mode (opt-in, off by default)
+
+```bash
+export USER_FEEDBACK=1
+```
+
+With this set, the generated `<mount>/README.md` — the doc an agent reads to
+learn the filesystem — gains an **agent feedback protocol** section telling the
+agent to treat friction with LinearFS's contracts as a bug and file it on the
+tool's own repo (`gh issue create --repo jra3/linear-fuse --label dx-friction`),
+deduped against open issues, batched to a natural break in its task, leaving a
+one-line receipt for you.
+
+Turn it on only if you are dogfooding LinearFS with an agent and want that
+friction to reach the issue tracker. Unset or `0` (and `false`/`no`/`off`) means
+the generated README is byte-for-byte the normal one, so a normal install never
+sees it.
+
 ## Verification
 
 After mounting, verify LinearFS is working:
