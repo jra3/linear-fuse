@@ -533,7 +533,12 @@ bespoke `entity()/setEntity` under `attrNode.stateMu`. `attrNode.stateMu` now
 guards only `nodeAttr` (re-stamped by the seam), disjoint from the cell's lock
 and never read jointly with it. The seven editBuffer file nodes go through
 `editBuffer.refresh` — **a dirty buffer always wins** (a user's in-flight
-edit is never clobbered by background sync) — with Getattr snapshotting
+edit is never clobbered by background sync), **and a just-authored buffer also
+wins** (serve-your-own-writes, #365: `editFlush` marks the buffer authored after a
+write persists, and while set `refresh` keeps the exact written bytes so a client's
+byte-for-byte read-back cannot race the async refresh; a fresh `Open` ends the
+window and the next refresh converges to the normalized render — see
+[[edit-buffer]]) — with Getattr snapshotting
 size+times under one lock; renderFile swaps its closure under `renderMu`
 (embedders with entity fields shadow `refreshFrom` and reuse that lock);
 `EmbeddedFileNode` swaps its file metadata under its own mu. The old
@@ -659,9 +664,19 @@ mount (`entitycell_test.go`).
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file
 node — the edit-side twin of `createFileNode`'s buffer. `editBuffer`
-(`internal/fs/editbuffer.go`) is `{mu, content, dirty}` and provides the FUSE
-buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into the
-node** the way `attrNode` promotes `Getattr`. Each of the seven editable file
+(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored}` and provides the
+FUSE buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into
+the node** the way `attrNode` promotes `Getattr`. `authored` is the
+serve-your-own-writes flag (#365): `editFlush` sets it after a write **commits
+successfully** (`errno == 0` — the buffer still holds the exact bytes the user
+wrote, since `adopt` swaps only the entity, not `content`), and while set `refresh`
+refuses to replace the buffer with Linear's normalized render, so a client
+verifying a write by re-reading gets a byte-for-byte match instead of racing the
+async refresh. It is deliberately NOT armed on a fatal read-your-writes divergence
+(a silent revert or truncation, where `commitWriteBack` returns EIO) — serving the
+written bytes there would mask the loss from the very re-read the `.error` asks for.
+A fresh `Open` clears it, so independent later readers converge to what persisted.
+See [[node-refresh]]. Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`

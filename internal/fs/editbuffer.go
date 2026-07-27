@@ -25,6 +25,14 @@ type editBuffer struct {
 	mu      sync.Mutex
 	content []byte
 	dirty   bool
+	// authored is the serve-your-own-writes flag (#365). editFlush sets it after
+	// a write persists — the buffer is now clean but still holds the exact bytes
+	// the user wrote (adopt swaps only the entity, not content). While set,
+	// refresh refuses to replace the buffer with Linear's normalized render, so a
+	// client that verifies a write by re-reading sees its own bytes byte-for-byte
+	// across the write→verify window instead of racing an async refresh. A fresh
+	// Open clears it, so independent later readers converge to what persisted.
+	authored bool
 }
 
 // size is the current buffer length, for a node's Getattr.
@@ -35,14 +43,16 @@ func (b *editBuffer) size() int {
 }
 
 // refresh adopts freshly-rendered content — the editBuffer half of a node's
-// nodeRefresher implementation (see refresh.go) — UNLESS an edit is in
-// flight: a dirty buffer is the user's, and always wins over background
-// sync. entitySwap runs under the same lock iff the refresh proceeds, so the
-// node's entity fields and its content swap atomically.
+// nodeRefresher implementation (see refresh.go) — UNLESS the buffer is already
+// serving the user's own bytes: a dirty buffer is an in-flight edit, and an
+// authored buffer holds a just-persisted write (#365). Both always win over a
+// background sync, so the served bytes stay the user's until a fresh Open ends
+// the window. entitySwap runs under the same lock iff the refresh proceeds, so
+// the node's entity fields and its content swap atomically.
 func (b *editBuffer) refresh(freshContent []byte, entitySwap func()) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.dirty {
+	if b.dirty || b.authored {
 		return
 	}
 	b.content = append([]byte(nil), freshContent...)
@@ -62,7 +72,15 @@ func (b *editBuffer) truncateBuffer() {
 	b.dirty = true
 }
 
+// Open ends any serve-your-own-writes window (#365): a fresh open means the
+// write→verify cycle that authored the buffer is over, so clear the flag and let
+// the next background refresh converge to what actually persisted. The write's
+// own Open ran before Flush set the flag, so a write can never clear its own
+// authored bytes — only a genuinely later open does.
 func (b *editBuffer) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	b.mu.Lock()
+	b.authored = false
+	b.mu.Unlock()
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }
 

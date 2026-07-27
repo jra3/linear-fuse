@@ -110,5 +110,20 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 		sink.InvalidateUpdated(ino)
 	}
 	eb.dirty = false
+	// Serve-your-own-writes (#365): adopt swapped only the entity, so the buffer
+	// still holds the exact bytes the user wrote while SQLite and i.<entity> hold
+	// Linear's normalized render. Mark it authored so a background refresh leaves
+	// those bytes intact until the next fresh Open — a client verifying the write
+	// by re-reading gets a byte-for-byte match instead of racing the refresh.
+	//
+	// ONLY on a fully successful commit (errno == 0). A fatal read-your-writes
+	// divergence — a silent revert or substantial truncation (commitWriteBack
+	// returns EIO) — means the write did NOT persist as written; serving W there
+	// would hide the loss from the very byte-count re-read the .error tells the
+	// agent to make ("re-read to see the stored value"). The benign reformat this
+	// flag exists to smooth over is errno == 0, so the fix still lands.
+	if errno == 0 {
+		eb.authored = true
+	}
 	return errno
 }

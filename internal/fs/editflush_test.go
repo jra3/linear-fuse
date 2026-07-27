@@ -117,6 +117,95 @@ func TestEditFlushProceedCommitsAdoptsInvalidates(t *testing.T) {
 	}
 }
 
+func TestEditFlushProceedMarksAuthored(t *testing.T) {
+	t.Parallel()
+	eb := dirtyBuffer()
+	sink := &recordingFlushSink{}
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+		writeBack: writeBackSpec[fakeEntity]{
+			errKey:  "k",
+			fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 7}, nil },
+			compare: func(*fakeEntity) []writeBackResult { return nil },
+		},
+		adopt:     func(*fakeEntity) {},
+		coherence: []uint64{10},
+	})
+	if errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	// A completed write opens the serve-your-own-writes window (#365): the buffer
+	// still holds the exact written bytes and must resist a background refresh
+	// until the next fresh Open.
+	if !eb.authored {
+		t.Error("a completed write did not mark the buffer authored; the read-back window is unprotected")
+	}
+}
+
+func TestEditFlushNoChangeDoesNotMarkAuthored(t *testing.T) {
+	t.Parallel()
+	eb := dirtyBuffer()
+	sink := &recordingFlushSink{}
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate:    func(context.Context) (bool, syscall.Errno) { return false, 0 },
+		writeBack: writeBackSpec[fakeEntity]{errKey: "k"},
+		adopt:     func(*fakeEntity) {},
+		coherence: []uint64{1},
+	})
+	if errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	if eb.authored {
+		t.Error("a no-op flush marked the buffer authored; only a persisted write should")
+	}
+}
+
+func TestEditFlushFailDoesNotMarkAuthored(t *testing.T) {
+	t.Parallel()
+	eb := dirtyBuffer()
+	sink := &recordingFlushSink{}
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate:    func(context.Context) (bool, syscall.Errno) { return false, syscall.EINVAL },
+		writeBack: writeBackSpec[fakeEntity]{errKey: "k"},
+		adopt:     func(*fakeEntity) {},
+		coherence: []uint64{1},
+	})
+	if errno != syscall.EINVAL {
+		t.Fatalf("errno = %v, want EINVAL", errno)
+	}
+	if eb.authored {
+		t.Error("a failed flush marked the buffer authored; nothing persisted")
+	}
+}
+
+func TestEditFlushFatalDivergenceDoesNotMarkAuthored(t *testing.T) {
+	t.Parallel()
+	eb := dirtyBuffer()
+	sink := &recordingFlushSink{}
+	// proceed=true, but the read-your-writes compare reports a FATAL divergence
+	// (silent revert / truncation) → commitWriteBack returns EIO. Serving the
+	// written bytes here would mask real data loss from a re-reading verifier, so
+	// the buffer must NOT be armed authored.
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+		writeBack: writeBackSpec[fakeEntity]{
+			errKey: "k",
+			fetch:  func(context.Context) (*fakeEntity, error) { return &fakeEntity{}, nil },
+			compare: func(*fakeEntity) []writeBackResult {
+				return []writeBackResult{{message: "Field: body\nError: reverted", fatal: true}}
+			},
+		},
+		adopt:     func(*fakeEntity) {},
+		coherence: []uint64{1},
+	})
+	if errno != syscall.EIO {
+		t.Fatalf("errno = %v, want EIO (fatal divergence)", errno)
+	}
+	if eb.authored {
+		t.Error("a fatal read-your-writes divergence armed authored — SYOW would mask the loss from a byte-count re-read")
+	}
+}
+
 func TestEditFlushInvalidatesAfterPersist(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()

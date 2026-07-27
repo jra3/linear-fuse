@@ -531,7 +531,14 @@ building blocks:
   keeps the first node per inode), with a load-bearing conflict rule: **a dirty
   edit buffer always wins** — a user's in-flight edit is never clobbered by
   background sync, and Lookup reports the kept node's size so a fresh twin
-  can't truncate kernel reads of longer dirty content.
+  can't truncate kernel reads of longer dirty content. A **just-authored** buffer
+  wins the same way (serve-your-own-writes, #365): after a write commits cleanly
+  (`errno == 0`), `editFlush` marks the buffer authored, and `refresh` keeps the
+  exact written bytes until the next fresh `Open` — so a client that verifies a
+  write by re-reading gets a byte-for-byte match instead of racing the async
+  refresh, while persistence (SQLite and the entity) already holds Linear's
+  normalized render. It is not armed on a fatal read-your-writes divergence (a
+  revert or truncation, EIO), so a real loss is never masked from a re-read.
 - `resolveByName` — collapses the five regular single-name→ID resolvers
   (state, project, milestone, cycle, initiative); user, issue-identifier,
   label, and project-slug resolution remain bespoke.
