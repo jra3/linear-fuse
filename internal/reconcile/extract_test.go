@@ -321,3 +321,150 @@ https://uploads.linear.app/ws1/i1/design-spec.pdf.`
 		t.Errorf("want no specs for plain content, got %d", len(got))
 	}
 }
+
+// legitCDNURL is a genuine Linear CDN URL used as the "must not over-reject"
+// control alongside each hostile lookalike below.
+const legitCDNURL = "https://uploads.linear.app/ws/f/good.png"
+
+// TestLinearCDNPatternAdversarialHosts is the #362 receipt (TB2 residual): the
+// bare-URL fallback regex is the host pin — only https://uploads.linear.app/…
+// URLs ever become embedded-file fetch specs, so a P1-controlled attachment URL
+// in a markdown body can never point CDNClient.Get/Size at another host. The
+// pin is sound by construction (the char after "app" must be "/", and "\." only
+// matches a literal dot), but before this the only negative case was a plain
+// example.com. This corpus drives the crafted lookalikes that a suffix/userinfo/
+// separator/scheme trick would exploit if the regex were loose, asserting each
+// yields NOTHING — while a legitimate URL adjacent to each still extracts, so
+// the pin doesn't over-reject. Pure regex-level, no I/O (guards the first line
+// of TB2 defense; the CheckRedirect refusal from #348 is the second).
+func TestLinearCDNPatternAdversarialHosts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		content  string
+		expected []string
+	}{
+		// Suffix-extended host: "app" is followed by ".", not "/", so
+		// uploads.linear.app.evil.com never satisfies the "app/" anchor.
+		{"suffix-extended host", "https://uploads.linear.app.evil.com/x/y/z.png", nil},
+		{"suffix-extended host + legit adjacent",
+			"hostile https://uploads.linear.app.evil.com/x/y/z.png legit " + legitCDNURL,
+			[]string{legitCDNURL}},
+
+		// Userinfo trick: the "@evil.com" authority is likewise gated out — "app"
+		// is followed by "@", not "/".
+		{"userinfo authority", "https://uploads.linear.app@evil.com/x.png", nil},
+		{"userinfo authority + legit adjacent",
+			"hostile https://uploads.linear.app@evil.com/x.png legit " + legitCDNURL,
+			[]string{legitCDNURL}},
+
+		// Separator lookalikes: the escaped "\." matches only a literal dot, so a
+		// dash (or any other char) between "uploads" and "linear" fails to match.
+		{"dash separator lookalike", "https://uploads-linear.app/x.png", nil},
+		{"non-dot separator lookalike", "https://uploadsXlinear.app/x.png", nil},
+
+		// Scheme downgrade: the pattern requires https://, so plain http:// to the
+		// real host is not extracted (and a real CDN https URL beside it still is).
+		{"scheme downgrade to http", "http://uploads.linear.app/x.png", nil},
+		{"scheme downgrade + legit https",
+			"http://uploads.linear.app/x.png then " + legitCDNURL,
+			[]string{legitCDNURL}},
+
+		// Pin string embedded mid-URL. The bare fallback DOES match the inner,
+		// genuine CDN URL here (leftmost scan finds it) — assessed benign: the
+		// EXTRACTED host is uploads.linear.app, so CDNClient fetches the real CDN,
+		// never evil.com. The pin is about where the fetch lands, and it lands on
+		// the CDN. (markdownLinkPattern, "(" -anchored, does not match this — see
+		// TestMarkdownLinkPatternAdversarialHosts.)
+		{"pin string in path (mid-URL)",
+			"https://evil.com/https://uploads.linear.app/x.png",
+			[]string{"https://uploads.linear.app/x.png"}},
+
+		// All hostile lookalikes at once → nothing; add one legit → only it.
+		{"all hostile, no legit",
+			"https://uploads.linear.app.evil.com/a.png " +
+				"https://uploads.linear.app@evil.com/b.png " +
+				"https://uploads-linear.app/c.png " +
+				"http://uploads.linear.app/d.png",
+			nil},
+		{"all hostile + one legit",
+			"https://uploads.linear.app.evil.com/a.png " +
+				"https://uploads.linear.app@evil.com/b.png " +
+				"https://uploads-linear.app/c.png " +
+				"http://uploads.linear.app/d.png " + legitCDNURL,
+			[]string{legitCDNURL}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := linearCDNPattern.FindAllString(tt.content, -1)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("matched %d URLs, want %d\n got:  %v\n want: %v", len(got), len(tt.expected), got, tt.expected)
+			}
+			for i, want := range tt.expected {
+				if got[i] != want {
+					t.Errorf("URL[%d] = %q, want %q", i, got[i], want)
+				}
+			}
+		})
+	}
+}
+
+// TestMarkdownLinkPatternAdversarialHosts is the markdown-syntax companion to
+// TestLinearCDNPatternAdversarialHosts: markdownLinkPattern is the other half of
+// the #362 host pin. Its URL group is anchored right after the link's "(", which
+// gates out the same lookalike families AND the mid-URL trick the bare fallback
+// tolerates — the URL must BEGIN with https://uploads.linear.app/. This asserts
+// the captured URL (group 2) is empty for each hostile link and the genuine URL
+// for the legit control.
+func TestMarkdownLinkPatternAdversarialHosts(t *testing.T) {
+	t.Parallel()
+
+	extractURLs := func(content string) []string {
+		var urls []string
+		for _, m := range markdownLinkPattern.FindAllStringSubmatch(content, -1) {
+			if len(m) >= 3 {
+				urls = append(urls, m[2])
+			}
+		}
+		return urls
+	}
+
+	tests := []struct {
+		name     string
+		content  string
+		expected []string
+	}{
+		{"suffix-extended host", "![shot](https://uploads.linear.app.evil.com/x.png)", nil},
+		{"userinfo authority", "![shot](https://uploads.linear.app@evil.com/x.png)", nil},
+		{"dash separator lookalike", "![shot](https://uploads-linear.app/x.png)", nil},
+		{"scheme downgrade to http", "![shot](http://uploads.linear.app/x.png)", nil},
+		// Anchored "(" defeats the mid-URL trick that the bare fallback matched:
+		// the URL group must start immediately after "(", and here it starts with
+		// https://evil.com.
+		{"pin string in path (mid-URL)", "![shot](https://evil.com/https://uploads.linear.app/x.png)", nil},
+		// Legit control, and a legit link beside a hostile one — neither
+		// over-rejected nor tricked.
+		{"legit link (control)", "![shot](" + legitCDNURL + ")", []string{legitCDNURL}},
+		{"legit link beside hostile",
+			"![a](https://uploads.linear.app.evil.com/x.png) ![b](" + legitCDNURL + ")",
+			[]string{legitCDNURL}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractURLs(tt.content)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("captured %d URLs, want %d\n got:  %v\n want: %v", len(got), len(tt.expected), got, tt.expected)
+			}
+			for i, want := range tt.expected {
+				if got[i] != want {
+					t.Errorf("URL[%d] = %q, want %q", i, got[i], want)
+				}
+			}
+		})
+	}
+}
