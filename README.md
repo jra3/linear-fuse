@@ -618,9 +618,11 @@ See [INSTALL.md](INSTALL.md#running-as-a-launchd-service-automatic-startup) for 
 ### Linux (systemd)
 
 ```bash
-# Install the service
+# Install the service — skip these two lines if you installed the AUR/.deb/.rpm
+# package, which already ships the unit pointed at /usr/bin/linearfs
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/linearfs.service ~/.config/systemd/user/
+
 systemctl --user enable linearfs.service
 systemctl --user start linearfs.service
 ```

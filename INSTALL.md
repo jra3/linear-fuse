@@ -1,10 +1,13 @@
 # Installation Guide
 
-This guide covers installing LinearFS on macOS, Arch Linux, and Ubuntu/Debian.
+This guide covers installing LinearFS on macOS and on Linux — Arch, Ubuntu/Debian,
+Fedora/RHEL/openSUSE, and [anything else](#other-linux-distributions). On Linux,
+start at [Linux — pick your install](#linux--pick-your-install) for the
+prebuilt-package options.
 
 ## Prerequisites (All Platforms)
 
-- **Go 1.21+** - for building from source
+- **Go 1.21+** - for building from source (not needed for the prebuilt Linux packages)
 - **Linear API Key** - get one from [Linear Settings → API](https://linear.app/settings/api)
 
 ## Mount Point
@@ -607,6 +610,12 @@ linearfs mount -d ~~/linear
 
 To have LinearFS start automatically on login, set up a systemd user service.
 
+> **Installed from a package?** The AUR, `.deb`, and `.rpm` packages already ship
+> the unit at `/usr/lib/systemd/user/linearfs.service`, repointed at
+> `/usr/bin/linearfs` — skip step 1. (Copying the in-repo unit over it would
+> point `ExecStart` back at `~/.local/bin/linearfs`, which a package install
+> does not create.)
+
 ### 1. Copy the Service File
 
 ```bash
@@ -733,7 +742,17 @@ make install    # Copy to ~/.local/bin
 
 ## Updating LinearFS
 
-To update to the latest version:
+Installed from a package? Update through the same channel:
+
+```bash
+yay -S linearfs-bin                                      # Arch (AUR)
+sudo apt install ./linearfs_<version>_linux_amd64.deb    # Debian/Ubuntu — download the new .deb first
+sudo dnf install ./linearfs_<version>_linux_amd64.rpm    # Fedora/RHEL (openSUSE: zypper install)
+```
+
+Then restart the service if you run one: `systemctl --user restart linearfs.service`.
+
+Built from source:
 
 ```bash
 cd linear-fuse
