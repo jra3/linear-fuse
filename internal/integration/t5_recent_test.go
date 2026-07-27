@@ -48,7 +48,7 @@ func TestT5_RecentViewOrdered(t *testing.T) {
 	}
 
 	// recent/ appears in the team listing.
-	if !dirContains(teamPath(testTeamKey), "recent") {
+	if !dirContains(t, teamPath(testTeamKey), "recent") {
 		t.Fatal("recent/ not listed in team directory")
 	}
 

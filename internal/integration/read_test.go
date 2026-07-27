@@ -138,20 +138,12 @@ func TestTeamsListing(t *testing.T) {
 }
 
 func TestTeamDirectoryContents(t *testing.T) {
-	entries, err := os.ReadDir(teamPath(testTeamKey))
-	if err != nil {
-		t.Fatalf("Failed to read team directory: %v", err)
-	}
-
 	expected := []string{"team.md", "states.md", "labels.md", "by", "issues", "cycles", "projects"}
-	entryNames := make(map[string]bool)
-	for _, e := range entries {
-		entryNames[e.Name()] = true
-	}
+	entryNames := dirNames(t, teamPath(testTeamKey))
 
 	for _, name := range expected {
 		if !entryNames[name] {
-			t.Errorf("Expected %q in team directory", name)
+			t.Errorf("Expected %q in team directory (got %v)", name, entryNames)
 		}
 	}
 }
@@ -448,20 +440,12 @@ func TestIssueWithNoAssignee(t *testing.T) {
 // =============================================================================
 
 func TestMyDirectoryContents(t *testing.T) {
-	entries, err := os.ReadDir(myPath())
-	if err != nil {
-		t.Fatalf("Failed to read my directory: %v", err)
-	}
-
 	expected := []string{"assigned", "created", "active"}
-	entryNames := make(map[string]bool)
-	for _, e := range entries {
-		entryNames[e.Name()] = true
-	}
+	entryNames := dirNames(t, myPath())
 
 	for _, name := range expected {
 		if !entryNames[name] {
-			t.Errorf("Expected %q in /my/ directory", name)
+			t.Errorf("Expected %q in /my/ directory (got %v)", name, entryNames)
 		}
 	}
 }

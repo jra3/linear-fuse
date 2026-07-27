@@ -361,7 +361,7 @@ func TestStatusChangeByDirectoryVisibility(t *testing.T) {
 
 	// Verify issue appears in initial status directory
 	fromStatusPath := byStatusPath(testTeamKey, fromState.Name)
-	if !dirContains(fromStatusPath, issue.Identifier) {
+	if !dirContains(t, fromStatusPath, issue.Identifier) {
 		t.Fatalf("Issue not found in initial status directory %s", fromState.Name)
 	}
 
@@ -385,12 +385,12 @@ func TestStatusChangeByDirectoryVisibility(t *testing.T) {
 	toStatusPath := byStatusPath(testTeamKey, toState.Name)
 
 	// Issue should now be in the new status directory
-	if !dirContains(toStatusPath, issue.Identifier) {
+	if !dirContains(t, toStatusPath, issue.Identifier) {
 		t.Errorf("Issue not immediately visible in new status directory %s", toState.Name)
 	}
 
 	// Issue should no longer be in the old status directory
-	if dirContains(fromStatusPath, issue.Identifier) {
+	if dirContains(t, fromStatusPath, issue.Identifier) {
 		t.Errorf("Issue still visible in old status directory %s after status change", fromState.Name)
 	}
 }
@@ -434,7 +434,7 @@ func TestIssueArchiveImmediateVisibility(t *testing.T) {
 	}
 
 	// Verify issue is in the listing
-	if !dirContains(issuesDir, issueIdentifier) {
+	if !dirContains(t, issuesDir, issueIdentifier) {
 		t.Fatalf("Issue not visible in issues directory before archive")
 	}
 
@@ -445,7 +445,7 @@ func TestIssueArchiveImmediateVisibility(t *testing.T) {
 	}
 
 	// Immediately check listing - NO wait needed after filesystem write
-	if dirContains(issuesDir, issueIdentifier) {
+	if dirContains(t, issuesDir, issueIdentifier) {
 		t.Errorf("Issue still visible in issues directory immediately after archive")
 	}
 }

@@ -22,19 +22,19 @@ import (
 )
 
 var (
-	mountPoint  string
-	stateDir    string // fixture mode: holds the SQLite db, OUTSIDE the mount (see setupSQLiteFixtures)
-	server      *fuse.Server
-	lfs         *fs.LinearFS
-	testStore   *db.Store // fixture mode: the store behind the mount, for tests simulating sync-side writes
-	apiClient   *api.Client
+	mountPoint string
+	stateDir   string // fixture mode: holds the SQLite db, OUTSIDE the mount (see setupSQLiteFixtures)
+	server     *fuse.Server
+	lfs        *fs.LinearFS
+	testStore  *db.Store // fixture mode: the store behind the mount, for tests simulating sync-side writes
+	apiClient  *api.Client
 
 	// offlineAPIServer is where fixture-mode's real client is pointed so an
 	// un-mocked mutation/verify call fails instantly and locally instead of
 	// reaching api.linear.app with the dummy key and 401-ing (#197).
 	offlineAPIServer *httptest.Server
-	testTeamID  string
-	testTeamKey string
+	testTeamID       string
+	testTeamKey      string
 
 	// liveAPIMode indicates if tests are running against real Linear API
 	liveAPIMode bool
@@ -234,6 +234,22 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 	labels := fixtures.FixtureAPILabels()
 	users := fixtures.FixtureAPIUsers()
 
+	// #363 (TB1 residual): a hostile team member whose DisplayName is literally
+	// "unassigned" must NOT shadow the synthetic by/assignee/unassigned bucket.
+	// safeName escapes the exact-collision handle to "unassigned-<id>", so this
+	// member surfaces under by/assignee/unassigned-user-shadow/ while the
+	// assignee-less issues keep the plain unassigned/ bucket. Added to the shared
+	// fixture set (user + team member + two issues below); the assembled,
+	// mount-level behavior is asserted in TestAssigneeUnassignedNotShadowed.
+	shadowUser := api.User{
+		ID:          "user-shadow",
+		Name:        "Shadow User",
+		Email:       "shadow@example.com",
+		DisplayName: "unassigned",
+		Active:      true,
+	}
+	users = append(users, shadowUser)
+
 	// Create a project, pre-labeled with a group child + a retired label (the
 	// carried-through case: labelIds is a full-set write, so a save that keeps
 	// Legacy must re-send it and pass validation).
@@ -313,6 +329,25 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 			fixtures.WithDescription("This issue is in a sprint/cycle"),
 			fixtures.WithState(fixtures.FixtureAPIState("started")),
 			fixtures.WithCycle(&api.IssueCycle{ID: "cycle-1", Name: "Sprint 42", Number: 42}),
+		),
+		// #363: issue assigned to the hostile "unassigned"-named user. It must
+		// route to the escaped by/assignee/unassigned-user-shadow/ bucket, never
+		// the synthetic unassigned/ one.
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-shadow-assigned", "TST-90"),
+			fixtures.WithTitle("Assigned to the unassigned-named user"),
+			fixtures.WithDescription("Assignee DisplayName is literally \"unassigned\""),
+			fixtures.WithState(fixtures.FixtureAPIState("unstarted")),
+			fixtures.WithAssignee(&shadowUser),
+		),
+		// #363: a genuinely assignee-less issue. It must stay in the synthetic
+		// by/assignee/unassigned/ bucket (proving the bucket is not shadowed).
+		fixtures.FixtureAPIIssue(
+			fixtures.WithIssueID("issue-shadow-unassigned", "TST-91"),
+			fixtures.WithTitle("Genuinely unassigned issue"),
+			fixtures.WithDescription("No assignee; belongs in the synthetic unassigned bucket"),
+			fixtures.WithState(fixtures.FixtureAPIState("unstarted")),
+			fixtures.WithAssignee(nil),
 		),
 	}
 

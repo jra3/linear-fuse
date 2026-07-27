@@ -288,14 +288,7 @@ func TestFixtureByAssigneeMembers(t *testing.T) {
 		t.Skip("fixture-mode: asserts the seeded synthetic membership")
 	}
 
-	entries, err := os.ReadDir(byAssigneePath(testTeamKey))
-	if err != nil {
-		t.Fatalf("read by/assignee: %v", err)
-	}
-	names := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		names[e.Name()] = true
-	}
+	names := dirNames(t, byAssigneePath(testTeamKey))
 	// assigneeHandle prefers DisplayName; see FixtureAPIUsers.
 	for _, want := range []string{"unassigned", "Test User", "Jane", "Bob"} {
 		if !names[want] {

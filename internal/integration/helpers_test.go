@@ -298,7 +298,7 @@ const defaultWaitTime = 500 * time.Millisecond
 // never needs. Use dirHas where the entry SHOULD now appear and dirLacks where
 // it SHOULD now be gone; the one-shot dirContains stays for pre-existing
 // fixture entries that never raced a mutation.
-func dirHas(path, name string) bool  { return waitForDirEntry(path, name, defaultWaitTime) == nil }
+func dirHas(path, name string) bool   { return waitForDirEntry(path, name, defaultWaitTime) == nil }
 func dirLacks(path, name string) bool { return waitForNoDirEntry(path, name, defaultWaitTime) == nil }
 
 // waitForCacheExpiry waits for the internal cache to expire.
@@ -340,16 +340,31 @@ func removeFrontmatterField(content []byte, field string) ([]byte, error) {
 
 // Directory listing helpers
 
-func dirContains(path, name string) bool {
+// dirNames reads path and returns the set of entry names, failing the test
+// loudly (with the ReadDir error) if the directory can't be read. Use it for
+// one-shot listing assertions on fixture/pre-existing entries: it collapses the
+// hand-rolled `names := make(map[string]bool)` + range loop, and the returned
+// set gives callers a `got %v` diagnostic for free. For post-mutation listings
+// that race async kernel-cache invalidation, use the polling dirHas/dirLacks.
+func dirNames(t *testing.T, path string) map[string]bool {
+	t.Helper()
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return false
+		t.Fatalf("read dir %s: %v", path, err)
 	}
-
+	names := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		if e.Name() == name {
-			return true
-		}
+		names[e.Name()] = true
 	}
-	return false
+	return names
+}
+
+// dirContains reports whether path has an entry named name. It routes through
+// dirNames, so a ReadDir failure is a loud t.Fatalf rather than a silent false
+// (the old error-swallowing form was strictly worse than a hand-rolled loop
+// when the assertion failed — it hid the failure). For entries that may race a
+// just-issued mutation, use the polling dirHas/dirLacks instead.
+func dirContains(t *testing.T, path, name string) bool {
+	t.Helper()
+	return dirNames(t, path)[name]
 }

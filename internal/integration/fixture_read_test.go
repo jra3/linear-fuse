@@ -607,21 +607,12 @@ func TestFixtureByStatusListing(t *testing.T) {
 
 func TestFixtureByStatusContainsIssues(t *testing.T) {
 	// "In Progress" should contain TST-1, TST-4, TST-6
-	inProgressPath := byStatusPath(testTeamKey, "In Progress")
-	entries, err := os.ReadDir(inProgressPath)
-	if err != nil {
-		t.Fatalf("Failed to read by/status/In Progress: %v", err)
-	}
-
-	found := make(map[string]bool)
-	for _, entry := range entries {
-		found[entry.Name()] = true
-	}
+	found := dirNames(t, byStatusPath(testTeamKey, "In Progress"))
 
 	expectedIssues := []string{"TST-1", "TST-4", "TST-6"}
 	for _, id := range expectedIssues {
 		if !found[id] {
-			t.Errorf("Expected %s in by/status/In Progress", id)
+			t.Errorf("Expected %s in by/status/In Progress (got %v)", id, found)
 		}
 	}
 }
