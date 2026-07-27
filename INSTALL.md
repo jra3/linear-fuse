@@ -7,7 +7,7 @@ prebuilt-package options.
 
 ## Prerequisites (All Platforms)
 
-- **Go 1.21+** - for building from source (not needed for the prebuilt Linux packages)
+- **Go 1.25+** - for building from source (not needed for the prebuilt Linux packages)
 - **Linear API Key** - get one from [Linear Settings → API](https://linear.app/settings/api)
 
 ## Mount Point
@@ -356,9 +356,9 @@ sudo apt install golang-go
 
 # Option 2: From Go website (recommended for latest version)
 # Check https://go.dev/dl/ for the latest version
-wget https://go.dev/dl/go1.23.linux-amd64.tar.gz  # Replace with latest
+wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz  # Replace with latest
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.23.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -735,7 +735,7 @@ Now you can ask Claude Code things like:
 ## Building from Source
 
 Requirements:
-- Go 1.21+
+- Go 1.25+
 - make
 
 ```bash
