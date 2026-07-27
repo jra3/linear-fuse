@@ -195,6 +195,32 @@ tail -f /tmp/linearfs.err   # Error output
 
 ---
 
+## Linux — pick your install
+
+Every prebuilt package installs the binary to `/usr/bin/linearfs`, a systemd
+**user** service, and the docs, and pulls in `fuse3`. Packages are built for
+`x86_64` (amd64) and `aarch64` (arm64) — swap `_linux_amd64` → `_linux_arm64` on ARM.
+
+| Distro family | Method | Command |
+|---|---|---|
+| Arch, Manjaro, EndeavourOS | AUR | `yay -S linearfs-bin` |
+| Debian, Ubuntu, Mint, Pop!_OS | `.deb` from the release | `sudo apt install ./linearfs_<version>_linux_amd64.deb` |
+| Fedora, RHEL, CentOS Stream, openSUSE | `.rpm` from the release | `sudo dnf install ./linearfs_<version>_linux_amd64.rpm` |
+| Anything else | prebuilt tarball or `go install` | see [Other Linux distributions](#other-linux-distributions) |
+
+The archives, `.deb`, and `.rpm` all carry SLSA build provenance — verify any
+download before installing (see
+[docs/THREAT-MODEL.md](https://github.com/jra3/linear-fuse/blob/main/docs/THREAT-MODEL.md)):
+
+```bash
+gh attestation verify <downloaded-file> -R jra3/linear-fuse
+```
+
+Each distro's section below covers the prebuilt install, a from-source build,
+and troubleshooting.
+
+---
+
 ## Arch Linux
 
 ### Install from the AUR (recommended)
@@ -304,8 +330,7 @@ chmod 600 ~/.config/linearfs/env
 systemctl --user enable --now linearfs.service
 ```
 
-Fedora/RHEL/openSUSE users: the same release carries `.rpm` packages —
-`sudo dnf install ./linearfs_<version>_linux_amd64.rpm`.
+(Fedora/RHEL/openSUSE users: see the [`.rpm` section](#fedora--rhel--opensuse) below.)
 
 ### Build from source
 
@@ -380,6 +405,87 @@ linearfs mount ~/linear
 | "fuse: device not found" | `sudo modprobe fuse` |
 | "Permission denied" | Add user to `fuse` group, or run with sudo |
 | Mount point busy | `fusermount3 -uz ~/linear` to force unmount |
+
+---
+
+## Fedora / RHEL / openSUSE
+
+### Install from a released `.rpm` (recommended)
+
+Grab the `.rpm` for your architecture from the
+[latest release](https://github.com/jra3/linear-fuse/releases/latest)
+(`linearfs_<version>_linux_amd64.rpm` for x86_64, `_linux_arm64.rpm` for ARM), then:
+
+```bash
+# Optional but recommended: verify SLSA build provenance first
+gh attestation verify linearfs_<version>_linux_amd64.rpm -R jra3/linear-fuse
+
+sudo dnf install ./linearfs_<version>_linux_amd64.rpm     # openSUSE: sudo zypper install ./linearfs_<version>_linux_amd64.rpm
+```
+
+This installs `/usr/bin/linearfs` and a systemd **user** unit at
+`/usr/lib/systemd/user/linearfs.service`, and pulls in `fuse3`. Set your API key
+(the *Configure* step from any section above applies verbatim), then to run it
+on login:
+
+```bash
+mkdir -p ~/.config/linearfs
+printf 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE\nLINEARFS_MOUNT=%s/linear\n' "$HOME" > ~/.config/linearfs/env
+chmod 600 ~/.config/linearfs/env
+systemctl --user enable --now linearfs.service
+```
+
+### Build from source
+
+Identical to the Ubuntu/Debian source build, swapping the package manager:
+
+```bash
+sudo dnf install fuse3 fuse3-devel golang    # openSUSE: sudo zypper install fuse3 fuse3-devel go
+git clone https://github.com/jra3/linear-fuse.git && cd linear-fuse
+make build && make install                   # copies to ~/bin (ensure it's on PATH)
+```
+
+### Fedora/RHEL/openSUSE Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| "fusermount3: command not found" | `sudo dnf install fuse3` (openSUSE: `zypper install fuse3`) |
+| "fuse: device not found" | `sudo modprobe fuse` |
+| "Permission denied" | Run with sudo, or ensure `/dev/fuse` is accessible |
+| Mount point busy | `fusermount3 -uz ~/linear` to force unmount |
+
+---
+
+## Other Linux distributions
+
+No native package for your distro? Install `fuse3` from your package manager
+first (it provides `fusermount3`), then use one of:
+
+### Prebuilt binary tarball
+
+Download `linearfs_<version>_linux_amd64.tar.gz` (or `_linux_arm64`) from the
+[latest release](https://github.com/jra3/linear-fuse/releases/latest):
+
+```bash
+gh attestation verify linearfs_<version>_linux_amd64.tar.gz -R jra3/linear-fuse   # optional
+tar -xzf linearfs_<version>_linux_amd64.tar.gz
+
+# The bundled systemd unit expects the binary at ~/.local/bin/linearfs:
+mkdir -p ~/.local/bin && install -m755 linearfs ~/.local/bin/linearfs
+
+# Optional: install the systemd user service shipped inside the archive
+mkdir -p ~/.config/systemd/user
+install -m644 contrib/systemd/linearfs.service ~/.config/systemd/user/linearfs.service
+```
+
+### From Go
+
+```bash
+go install github.com/jra3/linear-fuse/cmd/linearfs@latest   # builds to $(go env GOPATH)/bin
+```
+
+Then configure (API key + `~/.config/linearfs/env`) and enable the user service
+as shown in the sections above.
 
 ---
 

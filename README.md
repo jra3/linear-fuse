@@ -71,7 +71,7 @@ make install
 - **FUSE filesystem:**
   - **macOS:** macFUSE (`brew install --cask macfuse`)
     - ⚠️ Apple Silicon requires enabling kernel extensions in Recovery Mode
-  - **Linux:** FUSE3 (`sudo pacman -S fuse3` on Arch, `sudo apt install fuse3` on Ubuntu/Debian)
+  - **Linux:** FUSE3 (`sudo pacman -S fuse3` on Arch, `sudo apt install fuse3` on Debian/Ubuntu, `sudo dnf install fuse3` on Fedora) — installed automatically by the prebuilt packages
 
 ## Usage
 
