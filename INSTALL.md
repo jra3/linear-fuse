@@ -13,7 +13,10 @@ prebuilt-package options.
 ## Mount Point
 
 The recommended mount point is `~/linear` on every platform — a directory in
-your own home, so no `sudo` is involved and the service files can default to it.
+your own home, so no `sudo` is involved. The macOS launchd service falls back to
+it when unset; the Linux systemd service has **no** default and requires
+`LINEARFS_MOUNT` to be set to an absolute path in `~/.config/linearfs/env` (see
+[Running as a systemd User Service](#running-as-a-systemd-user-service-linux)).
 
 Create the mount point before first use:
 
@@ -486,19 +489,13 @@ go install github.com/jra3/linear-fuse/cmd/linearfs@latest   # builds to $(go en
 mkdir -p ~/.local/bin && install -m755 "$(go env GOPATH)/bin/linearfs" ~/.local/bin/linearfs
 ```
 
-There is no repo checkout on this path, so fetch the unit from a release tarball
-(`contrib/systemd/linearfs.service`, as in the tarball steps above) or straight
-from the repo, then install it:
+`go install` ships the binary only — no systemd unit. Take the unit from the
+release tarball for the version you installed, as in
+[Prebuilt binary tarball](#prebuilt-binary-tarball) above; that copy is
+attestable and matches the tagged code, which a branch fetch would not.
 
-```bash
-mkdir -p ~/.config/systemd/user
-curl -fsSL https://raw.githubusercontent.com/jra3/linear-fuse/main/contrib/systemd/linearfs.service \
-  -o ~/.config/systemd/user/linearfs.service
-```
-
-(Prefer keeping `linearfs` in `~/.local/bin` — otherwise edit the unit's
-`ExecStart` to the path `go install` actually used.) Then configure (API key +
-`~/.config/linearfs/env`) and enable the user service as shown in
+Then configure (API key + `~/.config/linearfs/env`) and enable the user service
+as shown in
 [Running as a systemd User Service](#running-as-a-systemd-user-service-linux).
 
 ---
