@@ -22,7 +22,7 @@
             mkdir -p "$LINEARFS_MOUNT"
 
             # Start linearfs in foreground mode
-            exec "$HOME/bin/linearfs" mount -f "$LINEARFS_MOUNT"
+            exec "$HOME/.local/bin/linearfs" mount -f "$LINEARFS_MOUNT"
         </string>
     </array>
 
