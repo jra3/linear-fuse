@@ -169,14 +169,23 @@ SECURITY.md), which detects an artifact swapped after the build even by an actor
 holding release credentials. An apt/dnf user can verify the downloaded package
 the same way before installing it.
 
-**Maintainer scripts.** `apt`/`dnf` run a package's maintainer scripts as root,
-so they are part of what provenance verification is protecting. LinearFS ships
-exactly one — `contrib/nfpm/postinstall.sh`, wired in as nfpm's
-`scripts.postinstall` — and it only prints setup guidance: it creates no files,
-touches nothing under the installing user's `$HOME`, and runs no network or
-package-manager commands. Everything else the packages place on disk is static
-content (the binary, the systemd user unit, docs, LICENSE). Keep it that way;
-a maintainer script that acts is a root-privileged step no user reviews.
+**Maintainer scripts.** `apt`/`dnf`/`pacman` run a package's maintainer scripts
+as root, so they are part of what provenance verification is protecting. The
+invariant across every channel: **the maintainer scripts LinearFS ships only
+print setup guidance — none of them act.** They create no files, touch nothing
+under the installing user's `$HOME`, and run no network or package-manager
+commands. Two exist:
+
+- `contrib/nfpm/postinstall.sh` — the `.deb`/`.rpm`, wired in as nfpm's
+  `scripts.postinstall`.
+- `contrib/aur/linearfs-bin.install` — the AUR package's `post_install` and
+  `post_upgrade`. `post_upgrade` additionally *queries* whether the user unit is
+  running (`systemctl --user is-active`) so it can print a restart hint; that is
+  a read-only check, not a state change.
+
+Everything else the packages place on disk is static content (the binary, the
+systemd user unit, docs, LICENSE). Keep it that way; a maintainer script that
+acts is a root-privileged step no user reviews.
 
 ### TB5 — Mount content → a public GitHub issue, via the operator's agent (P1)
 

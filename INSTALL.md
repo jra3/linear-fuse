@@ -12,22 +12,16 @@ prebuilt-package options.
 
 ## Mount Point
 
-The recommended mount point varies by platform:
-
-- **Linux**: `~/linear` (system-wide location)
-- **macOS**: `~~/linear` (user home directory)
+The recommended mount point is `~/linear` on every platform — a directory in
+your own home, so no `sudo` is involved and the service files can default to it.
 
 Create the mount point before first use:
 
 ```bash
-# Linux
-sudo mkdir -p ~/linear && sudo chown $USER:$USER ~/linear
-
-# macOS
-mkdir -p ~~/linear
+mkdir -p ~/linear
 ```
 
-> **Note:** You can use any mount point you prefer. The examples below use the platform-specific defaults.
+> **Note:** You can use any mount point you prefer. The examples below use this default.
 
 ## macOS
 
@@ -118,7 +112,7 @@ export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ### 5. Mount
 
 ```bash
-linearfs mount ~~/linear
+linearfs mount ~/linear
 ```
 
 ### macOS Troubleshooting
@@ -143,13 +137,13 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 
 #### 2. Configure Mount Point
 
-The default mount point is `~~/linear`. To customize it, edit the env file:
+The default mount point is `~/linear`. To customize it, edit the env file:
 
 ```bash
 mkdir -p ~/.config/linearfs
 cat > ~/.config/linearfs/env << 'EOF'
 LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-LINEARFS_MOUNT=~~/linear
+LINEARFS_MOUNT=~/linear
 EOF
 chmod 600 ~/.config/linearfs/env
 ```
@@ -169,7 +163,7 @@ chmod 600 ~/.config/linearfs/config.yaml
 #### 3. Create Mount Point
 
 ```bash
-mkdir -p ~~/linear
+mkdir -p ~/linear
 ```
 
 #### 4. Load and Start
@@ -341,7 +335,7 @@ systemctl --user enable --now linearfs.service
 
 ```bash
 sudo apt update
-sudo apt install fuse3 libfuse3-dev
+sudo apt install fuse3
 ```
 
 ### 2. Add User to fuse Group
@@ -485,10 +479,27 @@ install -m644 contrib/systemd/linearfs.service ~/.config/systemd/user/linearfs.s
 
 ```bash
 go install github.com/jra3/linear-fuse/cmd/linearfs@latest   # builds to $(go env GOPATH)/bin
+
+# The bundled systemd unit's ExecStart is %h/.local/bin/linearfs, which
+# $(go env GOPATH)/bin (usually ~/go/bin) is NOT — enabling the unit without
+# this copy fails with status=203/EXEC:
+mkdir -p ~/.local/bin && install -m755 "$(go env GOPATH)/bin/linearfs" ~/.local/bin/linearfs
 ```
 
-Then configure (API key + `~/.config/linearfs/env`) and enable the user service
-as shown in the sections above.
+There is no repo checkout on this path, so fetch the unit from a release tarball
+(`contrib/systemd/linearfs.service`, as in the tarball steps above) or straight
+from the repo, then install it:
+
+```bash
+mkdir -p ~/.config/systemd/user
+curl -fsSL https://raw.githubusercontent.com/jra3/linear-fuse/main/contrib/systemd/linearfs.service \
+  -o ~/.config/systemd/user/linearfs.service
+```
+
+(Prefer keeping `linearfs` in `~/.local/bin` — otherwise edit the unit's
+`ExecStart` to the path `go install` actually used.) Then configure (API key +
+`~/.config/linearfs/env`) and enable the user service as shown in
+[Running as a systemd User Service](#running-as-a-systemd-user-service-linux).
 
 ---
 
@@ -539,13 +550,11 @@ After mounting, verify LinearFS is working:
 # Check mount
 mount | grep linear
 
-# List teams (use ~~/linear on macOS, ~/linear on Linux)
-ls ~/linear/teams/        # Linux
-ls ~~/linear/teams/       # macOS
+# List teams
+ls ~/linear/teams/
 
 # Read an issue (replace TEAM with your team key, e.g., ENG, PROD)
-cat ~/linear/teams/TEAM/issues/TEAM-123/issue.md        # Linux
-cat ~~/linear/teams/TEAM/issues/TEAM-123/issue.md       # macOS
+cat ~/linear/teams/TEAM/issues/TEAM-123/issue.md
 ```
 
 ## Unmounting
@@ -558,7 +567,7 @@ fusermount3 -u ~/linear
 fusermount3 -uz ~/linear
 
 # macOS - Unmount
-umount ~~/linear
+umount ~/linear
 ```
 
 ## Common Issues
@@ -586,8 +595,8 @@ fusermount3 -uz ~/linear
 linearfs mount ~/linear
 
 # macOS
-umount ~~/linear
-linearfs mount ~~/linear
+umount ~/linear
+linearfs mount ~/linear
 ```
 
 ### "Input/output error"
@@ -603,7 +612,7 @@ Run with debug mode for more info:
 linearfs mount -d ~/linear
 
 # macOS
-linearfs mount -d ~~/linear
+linearfs mount -d ~/linear
 ```
 
 ## Running as a systemd User Service (Linux)
@@ -625,14 +634,14 @@ cp contrib/systemd/linearfs.service ~/.config/systemd/user/
 
 ### 2. Create the Environment File
 
-The service reads configuration from `~/.config/linearfs/env`:
+The service reads configuration from `~/.config/linearfs/env`. `LINEARFS_MOUNT`
+must be an **absolute path** — systemd's `EnvironmentFile=` does not expand `~`,
+so a literal `~/linear` would make the unit create a directory named `~` and
+mount under it:
 
 ```bash
 mkdir -p ~/.config/linearfs
-cat > ~/.config/linearfs/env << 'EOF'
-LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-LINEARFS_MOUNT=~/linear
-EOF
+printf 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE\nLINEARFS_MOUNT=%s/linear\n' "$HOME" > ~/.config/linearfs/env
 chmod 600 ~/.config/linearfs/env  # Restrict permissions
 ```
 
@@ -673,7 +682,7 @@ Add these permissions to your `~/.claude/settings.json` (adjust the path for you
 ```json
 {
   "allow": [
-    "Read(/~/linear/**)",
+    "Read(~/linear/**)",
     "Bash(ls ~/linear/:*)",
     "Bash(cat ~/linear/:*)"
   ]
@@ -684,9 +693,9 @@ Add these permissions to your `~/.claude/settings.json` (adjust the path for you
 ```json
 {
   "allow": [
-    "Read(//Users/YOUR_USERNAME~/linear/**)",
-    "Bash(ls ~~/linear/:*)",
-    "Bash(cat ~~/linear/:*)"
+    "Read(/Users/YOUR_USERNAME/linear/**)",
+    "Bash(ls ~/linear/:*)",
+    "Bash(cat ~/linear/:*)"
   ]
 }
 ```
@@ -709,10 +718,10 @@ Add to your global `~/.claude/CLAUDE.md` (adjust path for your platform):
 **macOS:**
 ```markdown
 # Linear.app issues via FUSE mount on disk
-- data is found in ~~/linear
+- data is found in ~/linear
 - the README.md file should be fully read and understood before reading/writing data there
 
-@~~/linear/README.md
+@~/linear/README.md
 ```
 
 The `@` directive automatically imports the mounted filesystem's documentation into Claude's context, giving it full knowledge of the directory structure and available operations.

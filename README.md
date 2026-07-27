@@ -610,7 +610,7 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.linearfs.mount.plist
 launchctl start com.linearfs.mount
 
-# Your Linear workspace will now be mounted at ~~/linear on every login
+# Your Linear workspace will now be mounted at ~/linear on every login
 ```
 
 See [INSTALL.md](INSTALL.md#running-as-a-launchd-service-automatic-startup) for details.

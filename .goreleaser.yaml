@@ -11,9 +11,11 @@ before:
     # deb/rpm ship the systemd *user* unit repointed at /usr/bin/linearfs (the
     # source unit targets %h/.local/bin for from-source installs) — the same
     # transform the AUR PKGBUILD's package() applies, kept single-source so the
-    # unit can't drift between package formats. Written outside dist/ because
-    # --clean wipes dist/ after this hook runs. The post-condition is load-
-    # bearing: a sed that silently matches nothing (unit reworded, path quoted
+    # unit can't drift between package formats. Written to .build/, not dist/:
+    # goreleaser cleans and creates dist/ around these hooks, so it is not a
+    # reliable place for hook output, and a non-empty dist/ also trips its
+    # "dist is not empty" check on runs without --clean. The post-condition is
+    # load-bearing: a sed that silently matches nothing (unit reworded, path quoted
     # or split) would otherwise ship a package whose ExecStart points at
     # %h/.local/bin/linearfs — a path no package install populates — and the
     # first signal would be 203/EXEC on a user's machine.
@@ -50,10 +52,11 @@ archives:
       - README.md
       - LICENSE
       - INSTALL.md
-      # Runtime service files only — NOT contrib/aur/** (AUR packaging sources a
-      # binary-tarball user has no use for). KNOWN_ISSUES.md is intentionally not
-      # shipped: known issues are tracked as GitHub issues, not a dated doc.
-      # (`*` not `**/*` — these dirs hold files directly; `**/*` matches none.)
+      # Runtime service files only. Naming the two dirs explicitly, rather than
+      # the previous `contrib/**/*`, is what drops contrib/aur/** (AUR packaging
+      # sources a binary-tarball user has no use for) while keeping the systemd
+      # unit and launchd plist. KNOWN_ISSUES.md is intentionally not shipped:
+      # known issues are tracked as GitHub issues, not a dated doc.
       - src: contrib/systemd/*
         strip_parent: false
       - src: contrib/launchd/*
