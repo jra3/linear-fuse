@@ -8,6 +8,12 @@ project_name: linearfs
 before:
   hooks:
     - go mod tidy
+    # deb/rpm ship the systemd *user* unit repointed at /usr/bin/linearfs (the
+    # source unit targets %h/.local/bin for from-source installs) — the same
+    # transform the AUR PKGBUILD's package() applies, kept single-source so the
+    # unit can't drift between package formats. Written outside dist/ because
+    # --clean wipes dist/ after this hook runs.
+    - sh -c 'mkdir -p .build && sed "s|%h/.local/bin/linearfs|/usr/bin/linearfs|" contrib/systemd/linearfs.service > .build/linearfs.service'
 
 builds:
   - id: linearfs
@@ -43,6 +49,48 @@ archives:
       - KNOWN_ISSUES.md
       - src: contrib/**/*
         strip_parent: false
+
+# Linux system packages (Debian/Ubuntu .deb, Fedora/RHEL/openSUSE .rpm) built
+# from the same binaries as the archives, via nfpm. goreleaser restricts these
+# to the linux builds automatically. The checksum + attest steps pick them up
+# alongside the archives, so a .deb carries the same SLSA provenance a tarball
+# does (verify: `gh attestation verify <file> -R jra3/linear-fuse`).
+nfpms:
+  - id: linearfs
+    package_name: linearfs
+    vendor: John Allen
+    homepage: https://github.com/jra3/linear-fuse
+    maintainer: John Allen <github@porcnick.com>
+    description: |-
+      Mount your Linear workspace as a FUSE filesystem.
+      Browse and edit Linear issues, comments, docs, and projects as markdown files.
+    license: MIT
+    section: utils
+    priority: optional
+    formats:
+      - deb
+      - rpm
+    # fuse3 provides fusermount3, which the mount + the systemd unit's
+    # ExecStartPre/ExecStop invoke. Named `fuse3` on Debian/Ubuntu, Fedora, and
+    # openSUSE alike.
+    dependencies:
+      - fuse3
+    bindir: /usr/bin
+    # Plain files, not type: doc/license — nfpm's deb backend drops doc/license-
+    # typed content entirely (the rpm keeps them), so typing them would ship a
+    # .deb with no docs or LICENSE at all. Plain entries land in both formats.
+    contents:
+      # systemd *user* unit, repointed at /usr/bin/linearfs by the before hook.
+      - src: .build/linearfs.service
+        dst: /usr/lib/systemd/user/linearfs.service
+      - src: LICENSE
+        dst: /usr/share/licenses/linearfs/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/linearfs/README.md
+      - src: INSTALL.md
+        dst: /usr/share/doc/linearfs/INSTALL.md
+      - src: KNOWN_ISSUES.md
+        dst: /usr/share/doc/linearfs/KNOWN_ISSUES.md
 
 checksum:
   name_template: "checksums.txt"

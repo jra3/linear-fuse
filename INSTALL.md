@@ -197,6 +197,22 @@ tail -f /tmp/linearfs.err   # Error output
 
 ## Arch Linux
 
+### Install from the AUR (recommended)
+
+[`linearfs-bin`](https://aur.archlinux.org/packages/linearfs-bin) is a
+prebuilt-binary package: it installs `/usr/bin/linearfs`, the systemd **user**
+service, and the docs, and pulls in `fuse3`.
+
+```bash
+yay -S linearfs-bin        # or: paru -S linearfs-bin
+```
+
+Then set your API key (the *Configure* step below). The AUR bump checklist
+(`contrib/aur/README.md`) verifies each release's `checksums.txt` provenance
+before pinning, so the package's checksums trace back to a signed build.
+
+### Build from source
+
 ### 1. Install FUSE
 
 ```bash
@@ -263,6 +279,35 @@ linearfs mount ~/linear
 ---
 
 ## Ubuntu / Debian
+
+### Install from a released `.deb` (recommended)
+
+Grab the `.deb` for your architecture from the
+[latest release](https://github.com/jra3/linear-fuse/releases/latest)
+(`linearfs_<version>_linux_amd64.deb` for x86_64, `_linux_arm64.deb` for ARM), then:
+
+```bash
+# Optional but recommended: verify SLSA build provenance first (see docs/THREAT-MODEL.md)
+gh attestation verify linearfs_<version>_linux_amd64.deb -R jra3/linear-fuse
+
+sudo apt install ./linearfs_<version>_linux_amd64.deb   # resolves the fuse3 dependency
+```
+
+This installs `/usr/bin/linearfs` and a systemd **user** unit at
+`/usr/lib/systemd/user/linearfs.service`. Set your API key (the *Configure* step
+below), then to run it on login:
+
+```bash
+mkdir -p ~/.config/linearfs
+printf 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE\nLINEARFS_MOUNT=%s/linear\n' "$HOME" > ~/.config/linearfs/env
+chmod 600 ~/.config/linearfs/env
+systemctl --user enable --now linearfs.service
+```
+
+Fedora/RHEL/openSUSE users: the same release carries `.rpm` packages —
+`sudo dnf install ./linearfs_<version>_linux_amd64.rpm`.
+
+### Build from source
 
 ### 1. Install FUSE
 

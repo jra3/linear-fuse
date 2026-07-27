@@ -29,7 +29,33 @@ and **contributions are welcome** — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 See [INSTALL.md](INSTALL.md) for detailed platform-specific installation instructions.
 
-### Quick Start
+### Prebuilt packages (recommended)
+
+**Arch Linux** — [`linearfs-bin`](https://aur.archlinux.org/packages/linearfs-bin) on the AUR:
+
+```bash
+yay -S linearfs-bin        # or: paru -S linearfs-bin
+```
+
+**Debian/Ubuntu (`.deb`) and Fedora/RHEL/openSUSE (`.rpm`)** — download the package
+for your architecture from the [latest release](https://github.com/jra3/linear-fuse/releases/latest):
+
+```bash
+# Debian/Ubuntu (swap _linux_arm64 for ARM)
+sudo apt install ./linearfs_<version>_linux_amd64.deb
+
+# Fedora/RHEL/openSUSE
+sudo dnf install ./linearfs_<version>_linux_amd64.rpm
+```
+
+Every release artifact carries [SLSA build provenance](docs/THREAT-MODEL.md) —
+verify it before installing:
+
+```bash
+gh attestation verify linearfs_<version>_linux_amd64.deb -R jra3/linear-fuse
+```
+
+### Build from source
 
 ```bash
 # Build from source
