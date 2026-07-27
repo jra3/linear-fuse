@@ -271,23 +271,14 @@ sudo apt update
 sudo apt install fuse3 libfuse3-dev
 ```
 
-### 2. Configure FUSE (Optional)
-
-To allow non-root users to mount FUSE filesystems:
-
-```bash
-sudo nano /etc/fuse.conf
-# Uncomment the line: user_allow_other
-```
-
-### 3. Add User to fuse Group
+### 2. Add User to fuse Group
 
 ```bash
 sudo usermod -aG fuse $USER
 # Log out and back in for group change to take effect
 ```
 
-### 4. Install Go
+### 3. Install Go
 
 ```bash
 # Option 1: From official repo (may be outdated)
@@ -302,7 +293,7 @@ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### 5. Build and Install LinearFS
+### 4. Build and Install LinearFS
 
 ```bash
 git clone https://github.com/jra3/linear-fuse.git
@@ -316,7 +307,7 @@ make install  # Copies binary to ~/bin
 > echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 > ```
 
-### 6. Configure
+### 5. Configure
 
 ```bash
 mkdir -p ~/.config/linearfs
@@ -330,7 +321,7 @@ Or set the environment variable:
 export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ```
 
-### 7. Mount
+### 6. Mount
 
 ```bash
 linearfs mount ~/linear
@@ -342,7 +333,7 @@ linearfs mount ~/linear
 |-------|----------|
 | "fusermount3: command not found" | `sudo apt install fuse3` |
 | "fuse: device not found" | `sudo modprobe fuse` |
-| "Permission denied" | Add user to `fuse` group and edit `/etc/fuse.conf` |
+| "Permission denied" | Add user to `fuse` group, or run with sudo |
 | Mount point busy | `fusermount3 -uz ~/linear` to force unmount |
 
 ---

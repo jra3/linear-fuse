@@ -31,7 +31,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y fuse3 libfuse3-dev
-          sudo sed -i 's/#user_allow_other/user_allow_other/' /etc/fuse.conf
 
       - name: Build
         run: make build
