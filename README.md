@@ -61,7 +61,7 @@ gh attestation verify linearfs_<version>_linux_amd64.deb -R jra3/linear-fuse
 # Build from source
 make build
 
-# Install to ~/bin
+# Install to ~/.local/bin
 make install
 ```
 

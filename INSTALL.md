@@ -90,12 +90,12 @@ brew install go
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build
-make install  # Copies binary to ~/bin
+make install  # Copies binary to ~/.local/bin
 ```
 
-> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> **Note:** Ensure `~/.local/bin` is in your PATH. Add to your shell profile if needed:
 > ```bash
-> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 > ```
 
 ### 4. Configure
@@ -266,12 +266,12 @@ sudo pacman -S go
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build
-make install  # Copies binary to ~/bin
+make install  # Copies binary to ~/.local/bin
 ```
 
-> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> **Note:** Ensure `~/.local/bin` is in your PATH. Add to your shell profile if needed:
 > ```bash
-> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 > ```
 
 ### 5. Configure
@@ -369,12 +369,12 @@ source ~/.bashrc
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build
-make install  # Copies binary to ~/bin
+make install  # Copies binary to ~/.local/bin
 ```
 
-> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> **Note:** Ensure `~/.local/bin` is in your PATH. Add to your shell profile if needed:
 > ```bash
-> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 > ```
 
 ### 5. Configure
@@ -440,9 +440,9 @@ systemctl --user enable --now linearfs.service
 Identical to the Ubuntu/Debian source build, swapping the package manager:
 
 ```bash
-sudo dnf install fuse3 fuse3-devel golang    # openSUSE: sudo zypper install fuse3 fuse3-devel go
+sudo dnf install fuse3 golang    # openSUSE: sudo zypper install fuse3 go
 git clone https://github.com/jra3/linear-fuse.git && cd linear-fuse
-make build && make install                   # copies to ~/bin (ensure it's on PATH)
+make build && make install       # copies to ~/.local/bin (ensure it's on PATH)
 ```
 
 ### Fedora/RHEL/openSUSE Troubleshooting
@@ -728,7 +728,7 @@ git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build      # Build binary to bin/linearfs
 make test       # Run tests
-make install    # Copy to ~/bin
+make install    # Copy to ~/.local/bin
 ```
 
 ## Updating LinearFS

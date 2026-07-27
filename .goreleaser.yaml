@@ -12,8 +12,12 @@ before:
     # source unit targets %h/.local/bin for from-source installs) — the same
     # transform the AUR PKGBUILD's package() applies, kept single-source so the
     # unit can't drift between package formats. Written outside dist/ because
-    # --clean wipes dist/ after this hook runs.
-    - sh -c 'mkdir -p .build && sed "s|%h/.local/bin/linearfs|/usr/bin/linearfs|" contrib/systemd/linearfs.service > .build/linearfs.service'
+    # --clean wipes dist/ after this hook runs. The post-condition is load-
+    # bearing: a sed that silently matches nothing (unit reworded, path quoted
+    # or split) would otherwise ship a package whose ExecStart points at
+    # %h/.local/bin/linearfs — a path no package install populates — and the
+    # first signal would be 203/EXEC on a user's machine.
+    - sh -c 'mkdir -p .build && sed "s|%h/.local/bin/linearfs|/usr/bin/linearfs|" contrib/systemd/linearfs.service > .build/linearfs.service && grep -q "^ExecStart=/usr/bin/linearfs " .build/linearfs.service || { echo "ERROR - could not repoint the systemd user unit at /usr/bin/linearfs; contrib/systemd/linearfs.service no longer has a %h/.local/bin/linearfs ExecStart, so fix the sed in .goreleaser.yaml before releasing" >&2; exit 1; }'
 
 builds:
   - id: linearfs
@@ -81,6 +85,11 @@ nfpms:
     dependencies:
       - fuse3
     bindir: /usr/bin
+    # Prints the post-install setup an apt/dnf user would otherwise only find in
+    # INSTALL.md — parity with the AUR package's post_install. It runs as root,
+    # so it only echoes; the setup it describes is in the user's $HOME.
+    scripts:
+      postinstall: contrib/nfpm/postinstall.sh
     # Plain files, not type: doc/license — nfpm's deb backend drops doc/license-
     # typed content entirely (the rpm keeps them), so typing them would ship a
     # .deb with no docs or LICENSE at all. Plain entries land in both formats.
