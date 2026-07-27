@@ -46,8 +46,13 @@ archives:
       - README.md
       - LICENSE
       - INSTALL.md
-      - KNOWN_ISSUES.md
-      - src: contrib/**/*
+      # Runtime service files only — NOT contrib/aur/** (AUR packaging sources a
+      # binary-tarball user has no use for). KNOWN_ISSUES.md is intentionally not
+      # shipped: known issues are tracked as GitHub issues, not a dated doc.
+      # (`*` not `**/*` — these dirs hold files directly; `**/*` matches none.)
+      - src: contrib/systemd/*
+        strip_parent: false
+      - src: contrib/launchd/*
         strip_parent: false
 
 # Linux system packages (Debian/Ubuntu .deb, Fedora/RHEL/openSUSE .rpm) built
@@ -89,8 +94,6 @@ nfpms:
         dst: /usr/share/doc/linearfs/README.md
       - src: INSTALL.md
         dst: /usr/share/doc/linearfs/INSTALL.md
-      - src: KNOWN_ISSUES.md
-        dst: /usr/share/doc/linearfs/KNOWN_ISSUES.md
 
 checksum:
   name_template: "checksums.txt"

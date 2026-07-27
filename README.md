@@ -13,7 +13,7 @@ and **contributions are welcome** — see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Not for:** real-time collaboration (sync is eventually consistent) or production tooling
   that needs a stable API — use Linear's [official API](https://developers.linear.app) for that.
 - **Handling secrets?** Read [SECURITY.md](SECURITY.md) before mounting, especially on a shared machine.
-- **Known limitations** are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+- **Known limitations & bugs** are tracked as [GitHub issues](https://github.com/jra3/linear-fuse/issues).
 
 ## Features
 

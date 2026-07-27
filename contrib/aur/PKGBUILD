@@ -31,7 +31,9 @@ package() {
 	install -Dm644 linearfs.service.pkg "$pkgdir/usr/lib/systemd/user/linearfs.service"
 
 	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-	for doc in README.md INSTALL.md KNOWN_ISSUES.md; do
+	# KNOWN_ISSUES.md is intentionally not shipped — known issues live as GitHub
+	# issues, not a dated in-tree doc.
+	for doc in README.md INSTALL.md; do
 		install -Dm644 "$doc" "$pkgdir/usr/share/doc/$pkgname/$doc"
 	done
 }
