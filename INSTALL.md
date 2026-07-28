@@ -268,7 +268,7 @@ linearfs mount ~/linear
 
 ```bash
 sudo apt update
-sudo apt install fuse3 libfuse3-dev
+sudo apt install fuse3
 ```
 
 ### 2. Add User to fuse Group

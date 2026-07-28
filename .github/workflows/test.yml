@@ -84,7 +84,7 @@ jobs:
       - name: Install FUSE
         run: |
           sudo apt-get update
-          sudo apt-get install -y fuse3 libfuse3-dev
+          sudo apt-get install -y fuse3
 
       - name: Build
         run: make build
@@ -117,7 +117,7 @@ jobs:
       - name: Install FUSE
         run: |
           sudo apt-get update
-          sudo apt-get install -y fuse3 libfuse3-dev
+          sudo apt-get install -y fuse3
 
       - name: Build
         run: make build
