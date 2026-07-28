@@ -86,6 +86,57 @@ func TestCreateAttachmentIdempotentOnDuplicate(t *testing.T) {
 	}
 }
 
+// TestCreateAttachmentCollisionRecordsDedupedName is the #333 Gap-2 regression for
+// the attachments surface (twin of the links test): a new external attachment whose
+// title collides with an existing one must record (in .last) and invalidate the
+// DEDUPLICATED name Readdir/Lookup resolve (`Docs (2).link`), not the pre-dedup base
+// (`Docs.link`) that first-matches the other attachment. .last's path and the
+// kernel-notify name share one derivation, so .last stands in for both.
+func TestCreateAttachmentCollisionRecordsDedupedName(t *testing.T) {
+	lfs, store := linkTestLFS(t)
+	ctx := context.Background()
+
+	const issueID = "issue-collide"
+	dir := &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, issueID: issueID}
+	key := collectionErrorKey("attachments", issueID)
+
+	// Seed an existing "Docs" attachment that sorts FIRST. The create path leaves
+	// created_at NULL, and so does this seed, so ORDER BY created_at,id tie-breaks on
+	// id: the "aaa-" prefix sorts before the mock's "mock-attachment-N", forcing the
+	// new colliding attachment into the "(2)" slot deterministically.
+	seed := api.Attachment{ID: "aaa-seed-docs", Title: "Docs", URL: "https://example.com/seed"}
+	data, _ := json.Marshal(seed)
+	if err := store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
+		ID: seed.ID, IssueID: issueID, Title: seed.Title, Url: seed.URL,
+		Metadata: json.RawMessage("{}"), SyncedAt: time.Now(), Data: data,
+	}); err != nil {
+		t.Fatalf("seed UpsertAttachment: %v", err)
+	}
+
+	// Create a second "Docs" attachment with a distinct URL, so it is a real create
+	// and not an idempotent URL-match skip.
+	const newURL = "https://example.com/new-docs"
+	if errno := dir.createAttachment(ctx, []byte(newURL+" Docs")); errno != 0 {
+		t.Fatalf("createAttachment: errno = %v, want 0", errno)
+	}
+
+	got := lfs.GetWriteSuccess(key)
+	if len(got) != 1 {
+		t.Fatalf("want 1 .last entry, got %d: %+v", len(got), got)
+	}
+	recorded := got[0].Path
+
+	// The recorded name must resolve — through the shared listing derivation — back
+	// to the attachment that was actually created (matched by its unique URL).
+	entry, ok := dir.listing(ctx, nil).find(recorded)
+	if !ok {
+		t.Fatalf(".last recorded name %q is not resolvable by the listing", recorded)
+	}
+	if entry.external == nil || entry.external.URL != newURL {
+		t.Errorf(".last recorded %q, which does not resolve to the created attachment %q (#333 strand)", recorded, newURL)
+	}
+}
+
 // TestCreateAttachmentPersistFailureFailsLoud is the #284 regression (twin of
 // #283): an attachment link whose SQLite reflection fails must fail loud (EIO)
 // with a de-dupe .error, not report success. The bug was that the persist closure

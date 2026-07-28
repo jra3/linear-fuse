@@ -130,6 +130,22 @@ func (n *LinksNode) listing(ctx context.Context, fetchErr *error) linkListing {
 	return linkListing{links: links}
 }
 
+// listedName returns the deduplicated on-disk name the links listing resolves for
+// link (matched by ID) — the same name Readdir/Lookup serve — or the pre-dedup
+// base name when a re-list can't place it (fetch error, or not yet visible). The
+// create tail derives its .last path and kernel-notify name through this so a
+// label collision records/invalidates the name the item is actually reachable at,
+// not the base that first-matches a sibling (#333).
+func (n *LinksNode) listedName(ctx context.Context, link api.EntityExternalLink) string {
+	var ferr error
+	for _, e := range n.listing(ctx, &ferr).entries() {
+		if e.link != nil && e.link.ID == link.ID {
+			return e.name
+		}
+	}
+	return externalLinkName(link)
+}
+
 // trio declares the links collection's writable surfaces.
 func (n *LinksNode) trio() collectionTrio {
 	return collectionTrio{kind: "links", parentID: n.parentID(), onFlush: n.createLink}
@@ -217,6 +233,22 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 		}
 	}
 
+	// #333: record the .last path and invalidate the kernel entry under the SAME
+	// deduplicated name Readdir/Lookup resolve — not the pre-dedup base. On a label
+	// collision the base first-matches a sibling, so recording it strands this link
+	// at a name the reader can't open (and invalidates the wrong entry). persist (in
+	// commitCreate) runs before result/entryName, so the listing already includes
+	// this link; deriving through it keeps create and Lookup on one name. Memoized so
+	// .last and the kernel-notify entry never derive two lists that could disagree.
+	var cachedName string
+	var haveName bool
+	nameFor := func(l *api.EntityExternalLink) string {
+		if !haveName {
+			haveName, cachedName = true, n.listedName(ctx, *l)
+		}
+		return cachedName
+	}
+
 	_, errno := commitCreate(ctx, n.lfs, createSpec[api.EntityExternalLink]{
 		op:  "create link",
 		key: collectionErrorKey("links", n.parentID()),
@@ -250,13 +282,13 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 			return nil, err
 		},
 		result: func(l *api.EntityExternalLink) WriteResult {
-			return WriteResult{URL: l.URL, Path: externalLinkName(*l), Title: l.Label}
+			return WriteResult{URL: l.URL, Path: nameFor(l), Title: l.Label}
 		},
 		persist: func(ctx context.Context, l *api.EntityExternalLink) error {
 			return n.upsertLink(ctx, *l)
 		},
 		dir:       linksDirIno(n.parentID()),
-		entryName: func(l *api.EntityExternalLink) string { return externalLinkName(*l) },
+		entryName: func(l *api.EntityExternalLink) string { return nameFor(l) },
 	})
 	return errno
 }

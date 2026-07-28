@@ -115,6 +115,62 @@ func (m recheckMutator) GetIssueAttachments(ctx context.Context, issueID string)
 	return m.atts, nil
 }
 
+// TestCreateLinkCollisionRecordsDedupedName is the #333 Gap-2 regression: when a
+// new external link's label collides with an existing one, the create tail must
+// record (in .last) and invalidate the DEDUPLICATED name Readdir/Lookup resolve
+// (`Docs (2).link`), not the pre-dedup base (`Docs.link`). The base name resolves
+// — by the listing's first match — to the OTHER link, so recording it strands the
+// new link at a name the reader can't open (and invalidates the wrong kernel
+// entry). .last's path and the kernel-notify name share one derivation, so the
+// user-visible .last path stands in for both.
+func TestCreateLinkCollisionRecordsDedupedName(t *testing.T) {
+	lfs, store := linkTestLFS(t)
+
+	const projectID = "proj-collide"
+	dir := &LinksNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, projectID: projectID}
+	key := collectionErrorKey("links", dir.parentID())
+
+	// Seed an existing link labelled "Docs" that sorts FIRST — sort_order -1 is
+	// below the mock create's default 0, so ORDER BY sort_order,id forces the new
+	// colliding link into the "(2)" slot deterministically (ID string-sort aside).
+	seed := api.EntityExternalLink{
+		ID: "aaa-seed-docs", Label: "Docs", URL: "https://example.com/seed",
+		SortOrder: -1, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}
+	params, err := db.APIEntityExternalLinkToDB(seed, projectID, "")
+	if err != nil {
+		t.Fatalf("APIEntityExternalLinkToDB: %v", err)
+	}
+	if err := store.Queries().UpsertEntityExternalLink(context.Background(), params); err != nil {
+		t.Fatalf("seed upsert: %v", err)
+	}
+
+	// Create a second "Docs" link with a distinct URL, so it is a real create and
+	// not an idempotent URL-match skip.
+	const newURL = "https://example.com/new-docs"
+	if errno := dir.createLink(context.Background(), []byte(newURL+" Docs")); errno != 0 {
+		t.Fatalf("createLink: errno = %v, want 0", errno)
+	}
+
+	got := lfs.GetWriteSuccess(key)
+	if len(got) != 1 {
+		t.Fatalf("want 1 .last entry, got %d: %+v", len(got), got)
+	}
+	recorded := got[0].Path
+
+	// The recorded name must resolve — through the shared listing derivation — back
+	// to the link that was actually created (matched by its unique URL), not the seed.
+	listing := dir.listing(context.Background(), nil)
+	entry, ok := listing.find(recorded)
+	if !ok {
+		t.Fatalf(".last recorded name %q is not resolvable by the listing", recorded)
+	}
+	if entry.link.URL != newURL {
+		t.Errorf(".last recorded %q, which resolves to link URL %q; want it to resolve to the created link %q (#333 strand)",
+			recorded, entry.link.URL, newURL)
+	}
+}
+
 // TestCreateLinkMutateFailureRechecksLive covers links.go's post-mutation
 // re-check: CreateEntityExternalLink fails, yet the authoritative live list
 // already has the URL, so createLink adopts the live link as an idempotent success

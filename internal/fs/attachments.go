@@ -98,6 +98,23 @@ func (n *AttachmentsNode) listing(ctx context.Context, fetchErr *error) attachme
 	return attachmentListing{embedded: files, external: attachments}
 }
 
+// listedName returns the deduplicated on-disk name the attachments listing
+// resolves for att (matched by ID) — the same name Readdir/Lookup serve — or the
+// pre-dedup base name when a re-list can't place it (fetch error, or not yet
+// visible). The create tail derives its .last path and kernel-notify name through
+// this so a title collision (with another attachment or an embedded file)
+// records/invalidates the name the item is actually reachable at, not the base
+// that first-matches a sibling (#333).
+func (n *AttachmentsNode) listedName(ctx context.Context, att api.Attachment) string {
+	var ferr error
+	for _, e := range n.listing(ctx, &ferr).entries() {
+		if e.external != nil && e.external.ID == att.ID {
+			return e.name
+		}
+	}
+	return linkName(att)
+}
+
 // trio declares the attachments collection's writable surfaces.
 func (n *AttachmentsNode) trio() collectionTrio {
 	return collectionTrio{kind: "attachments", parentID: n.issueID, onFlush: n.createAttachment}
@@ -292,6 +309,23 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 		}
 	}
 
+	// #333: record the .last path and invalidate the kernel entry under the SAME
+	// deduplicated name Readdir/Lookup resolve — not the pre-dedup base. On a title
+	// collision (with another attachment or an embedded file) the base first-matches
+	// a sibling, so recording it strands this attachment at a name the reader can't
+	// open (and invalidates the wrong entry). persist (in commitCreate) runs before
+	// result/entryName, so the listing already includes this attachment; deriving
+	// through it keeps create and Lookup on one name. Memoized so .last and the
+	// kernel-notify entry never derive two lists that could disagree.
+	var cachedName string
+	var haveName bool
+	nameFor := func(a *api.Attachment) string {
+		if !haveName {
+			haveName, cachedName = true, n.listedName(ctx, *a)
+		}
+		return cachedName
+	}
+
 	_, errno := commitCreate(ctx, n.lfs, createSpec[api.Attachment]{
 		op:  "create attachment",
 		key: collectionErrorKey("attachments", n.issueID),
@@ -324,7 +358,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 		result: func(a *api.Attachment) WriteResult {
 			return WriteResult{
 				URL:   a.URL,
-				Path:  linkName(*a),
+				Path:  nameFor(a),
 				Title: a.Title,
 			}
 		},
@@ -332,7 +366,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 			return n.upsertAttachment(ctx, *a)
 		},
 		dir:       attachmentsDirIno(n.issueID),
-		entryName: func(a *api.Attachment) string { return linkName(*a) },
+		entryName: func(a *api.Attachment) string { return nameFor(a) },
 	})
 	return errno
 }

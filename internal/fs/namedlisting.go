@@ -31,6 +31,14 @@ import (
 // *policy*: a disambiguated name like "Bug (2).md" would resolve nowhere, since
 // ResolveMilestoneID and GetLabelByName match the raw entity name — the whole
 // name->entity stack is already assume-first. See CONTEXT.md "Named listing".
+//
+// The *adversarial* case — a hostile workspace member deliberately forging a
+// colliding name to shadow or strand a victim's entity — is an accepted LOW risk
+// for the same reasons (first-match is bounded to this name-addressed projection;
+// disambiguation would break the assume-first resolution). See #333 and
+// docs/THREAT-MODEL.md TB1 "Accepted collision risk". The heterogeneous
+// collections deduplicate instead (attachmentListing/linkListing) because nothing
+// name-resolves them by title.
 type namedListing[T any] struct {
 	items  []T
 	nameOf func(T) string
