@@ -33,7 +33,7 @@ are just how the codebase stays navigable.
 
 ## Getting set up
 
-Requirements: **Go 1.25+** and FUSE (`fuse3`/`libfuse3-dev` on Linux, macFUSE on macOS —
+Requirements: **Go 1.25+** and FUSE (`fuse3` on Linux, macFUSE on macOS —
 see [`INSTALL.md`](INSTALL.md)).
 
 ```bash
