@@ -231,6 +231,11 @@ milestone: "Phase 1"                [milestone within project]
 cycle: "Sprint 42"
 ---
 Description body (editable)
+
+Quote any value that starts with a YAML indicator ([ ] { } * & ! | > %% @ #
+, or a leading -), or YAML reads it as structure and the write fails — e.g.
+title: "[1] Verify" not title: [1] Verify. On failure .error names the field
+and echoes the quoting hint. (Same rule for project.md / initiative.md.)
 </issue_frontmatter>
 
 <project_frontmatter>
