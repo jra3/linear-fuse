@@ -741,20 +741,3 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 - **Time handling** is the most common footgun — both directions: parse reads
   via `ParseSQLiteTime*`, stamp writes via `db.Now()` (UTC). Inside the worker,
   scheduling goes through the injected clock seam.
-
-## Observations worth a maintainer's attention
-
-These surfaced while mapping the code and are noted as-is, not as prescriptions:
-
-- **Embedded-file cache path is macOS-only.** `linearfs.go` hardcodes
-  `~/Library/Caches/linearfs/files` even on Linux (where `~/.cache/linearfs`
-  per XDG would be expected). Embedded-file downloads land there regardless of
-  OS. (The SQLite cache DB itself is XDG-correct via `os.UserConfigDir()`.)
-- **`--config` flag is inert.** `root.go` defines `--config`/`-c`, but
-  `mount.go` calls `config.Load()` with no path, so the config location is
-  effectively hardcoded to the XDG default.
-- **Three `SyncedAt` stamps bypass `db.Now()`** and bind local-zone
-  `time.Now()` values: the history cache (`repo/sqlite.go`, benign — never
-  cutoff-pruned) and the attachment/relation write tails (`fs/attachments.go`,
-  `fs/relations.go`), which *do* feed cutoff-compared prunes — latent
-  misorder bugs east of UTC.
