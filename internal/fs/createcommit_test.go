@@ -16,6 +16,9 @@ type fakeCreateSink struct {
 	appendKey     string
 	appendResult  WriteResult
 	appends       int
+	failAppendKey string
+	failAppendMsg string
+	failAppends   int
 	invalidateDir uint64
 	invalidateNam string
 	invalidates   int
@@ -24,6 +27,11 @@ type fakeCreateSink struct {
 func (f *fakeCreateSink) AppendWriteSuccess(key string, r WriteResult) {
 	f.appendKey, f.appendResult = key, r
 	f.appends++
+}
+
+func (f *fakeCreateSink) AppendWriteFailure(key, msg string) {
+	f.failAppendKey, f.failAppendMsg = key, msg
+	f.failAppends++
 }
 
 func (f *fakeCreateSink) InvalidateCreated(dirIno uint64, name string) {
@@ -70,6 +78,9 @@ func TestCommitCreate_Success(t *testing.T) {
 	}
 	if sink.appends != 1 || sink.appendKey != "K" || sink.appendResult.Title != "made" {
 		t.Errorf(".last append: calls=%d key=%q result=%+v", sink.appends, sink.appendKey, sink.appendResult)
+	}
+	if sink.failAppends != 0 {
+		t.Errorf("AppendWriteFailure ran on success: calls=%d, want 0", sink.failAppends)
 	}
 	if persists != 1 {
 		t.Errorf("persist calls = %d, want 1", persists)
@@ -144,6 +155,12 @@ func TestCommitCreate_Classification(t *testing.T) {
 				(tc.wantErrno == syscall.EAGAIN || tc.wantErrno == syscall.EIO) {
 				t.Errorf(".error = %q, want the op name in API-failure messages", sink.setMsg)
 			}
+			// A clean failure appends one countable outcome to .last (#370),
+			// carrying the same reason .error got.
+			if sink.failAppends != 1 || sink.failAppendKey != "K" || sink.failAppendMsg != sink.setMsg {
+				t.Errorf("AppendWriteFailure: calls=%d key=%q msg=%q, want 1 on K carrying the .error msg",
+					sink.failAppends, sink.failAppendKey, sink.failAppendMsg)
+			}
 			// The failure path must not run any of the success tail.
 			if sink.clears != 0 || sink.appends != 0 || persists != 0 || sink.invalidates != 0 || extras != 0 {
 				t.Errorf("success tail ran on failure: clears=%d appends=%d persists=%d invalidates=%d extras=%d",
@@ -177,10 +194,12 @@ func TestCommitCreate_PersistFailureFailsLoud(t *testing.T) {
 			t.Errorf(".error = %q, want it to contain %q", sink.setMsg, want)
 		}
 	}
-	// A create the local cache can't serve must not be advertised or cohered.
-	if sink.appends != 0 || sink.clears != 0 || sink.invalidates != 0 || extras != 0 {
-		t.Errorf("success tail ran on unconfirmed reflection: appends=%d clears=%d invalidates=%d extras=%d",
-			sink.appends, sink.clears, sink.invalidates, extras)
+	// A create the local cache can't serve must not be advertised or cohered —
+	// and, crucially, must not be logged to .last as a failure either: it
+	// SUCCEEDED on Linear (#276), so a failure entry would misreport it.
+	if sink.appends != 0 || sink.failAppends != 0 || sink.clears != 0 || sink.invalidates != 0 || extras != 0 {
+		t.Errorf("success/failure tail ran on unconfirmed reflection: appends=%d failAppends=%d clears=%d invalidates=%d extras=%d",
+			sink.appends, sink.failAppends, sink.clears, sink.invalidates, extras)
 	}
 }
 

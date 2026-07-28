@@ -41,7 +41,10 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	// swallowed the second write, so nothing documented it).
 	// "targeted catalog refresh" pins the stale-catalog self-healing doc (#246):
 	// a local name→ID miss refreshes the catalog once and retries before .error.
-	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item", "targeted catalog refresh"} {
+	// "outcome: failed" pins the .last outcome-log contract (#370): a failed
+	// create appends a countable failure entry rather than .error collapsing to
+	// only the last failure of a batch.
+	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item", "targeted catalog refresh", "outcome: failed"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not mention %q", want)
 		}

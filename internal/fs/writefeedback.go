@@ -23,9 +23,10 @@ type writeFeedback struct {
 	errorsMu gosync.RWMutex
 	errors   map[string]*WriteError
 
-	// successes holds recent creates per collection key (capped, newest-last).
-	successesMu gosync.RWMutex
-	successes   map[string][]*WriteResult
+	// outcomes holds recent create outcomes per collection key (successes and
+	// failures, capped, newest-last); surfaced at `.last`.
+	outcomesMu gosync.RWMutex
+	outcomes   map[string][]*WriteResult
 }
 
 // newWriteFeedback builds an initialized feedback store. invalidate is the
@@ -38,6 +39,6 @@ func newWriteFeedback(invalidate func(ino uint64)) writeFeedback {
 	return writeFeedback{
 		invalidate: invalidate,
 		errors:     make(map[string]*WriteError),
-		successes:  make(map[string][]*WriteResult),
+		outcomes:   make(map[string][]*WriteResult),
 	}
 }

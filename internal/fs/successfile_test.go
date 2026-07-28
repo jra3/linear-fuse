@@ -2,6 +2,7 @@ package fs
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -85,5 +86,55 @@ func TestRenderWriteSuccessYAML(t *testing.T) {
 		if _, ok := entries[0][k]; !ok {
 			t.Errorf("rendered entry missing key %q", k)
 		}
+	}
+}
+
+// TestAppendWriteFailureOutcome: a failed create appends a typed `outcome: failed`
+// entry to .last so a scripted batch can count failures (#370). Successes and
+// failures interleave in order; GetWriteSuccess stays successes-only while
+// GetWriteOutcomes and the rendered .last carry both.
+func TestAppendWriteFailureOutcome(t *testing.T) {
+	lfs := newSuccessTestFS()
+	key := collectionSuccessKey("issues", "team-1")
+
+	lfs.AppendWriteSuccess(key, WriteResult{Identifier: "TST-1", Path: "TST-1", Title: "ok one"})
+	lfs.AppendWriteFailure(key, "Field: frontmatter\nError: yaml: did not find expected key")
+	lfs.AppendWriteFailure(key, "Field: frontmatter\nError: yaml: did not find expected key")
+
+	// GetWriteSuccess excludes failures; GetWriteOutcomes is the full log.
+	if got := lfs.GetWriteSuccess(key); len(got) != 1 || got[0].Identifier != "TST-1" {
+		t.Fatalf("GetWriteSuccess = %+v, want the one success TST-1", got)
+	}
+	if got := lfs.GetWriteOutcomes(key); len(got) != 3 {
+		t.Fatalf("GetWriteOutcomes len = %d, want 3 (1 success + 2 failures)", len(got))
+	}
+
+	var entries []map[string]string
+	if err := yaml.Unmarshal(lfs.renderWriteSuccess(key), &entries); err != nil {
+		t.Fatalf("render is not a YAML list: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("want 3 rendered entries, got %d", len(entries))
+	}
+	// Newest-last order: the success is first, the two failures follow.
+	if entries[0]["identifier"] != "TST-1" {
+		t.Errorf("entry 0 identifier = %q, want TST-1 (success first)", entries[0]["identifier"])
+	}
+	failed := 0
+	for _, e := range entries {
+		if e["outcome"] != "failed" {
+			continue
+		}
+		failed++
+		if !strings.Contains(e["error"], "did not find expected key") {
+			t.Errorf("failure entry error = %q, want the yaml reason (first line)", e["error"])
+		}
+		// The reason is the compact first line, not the multi-line .error blob.
+		if strings.Contains(e["error"], "\n") {
+			t.Errorf("failure entry error is multi-line %q, want firstLine only", e["error"])
+		}
+	}
+	if failed != 2 {
+		t.Errorf("counted %d `outcome: failed` entries in .last, want 2", failed)
 	}
 }

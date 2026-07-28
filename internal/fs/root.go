@@ -104,7 +104,7 @@ teams/{KEY}/
   issues/                           [mkdir "Title" for quick create]
     _create                         [write full frontmatter+body to create one issue with all fields]
     .error                          [read-only: last failed issue creation]
-    .last                           [read-only: YAML list of recent creations {identifier,url,path,title,status}]
+    .last                           [read-only: YAML outcome log; success={identifier,url,path,title,status}, failure={outcome: failed, error}]
   recent/                           [read-only: issue symlinks, newest-first by updatedAt (ls recent/ | head)]
   issues/{ID}/
     issue.md                        [read/write: editable fields + body ONLY]
@@ -300,8 +300,11 @@ _create is a write-only trigger file (like /proc/sysrq-trigger):
 - Use piped output: echo "text" > _create, cat file > _create
 - Created items appear as separate files (e.g., 001-2025-01-15.md). Every create
   surface (issues, children, comments, docs, labels, projects, milestones,
-  attachments, relations, updates) exposes a sibling .last with the new identity;
-  read .error for a failure.
+  attachments, relations, updates) exposes a sibling .last outcome log: a success
+  appends the new identity, a failed create appends an "outcome: failed" entry,
+  and .error holds the full reason for the most recent failure. So a scripted
+  batch of N _create writes can read .last back to count how many of N succeeded
+  and which failed, instead of .error collapsing to only the last failure.
 - Each open-write-close cycle creates one item: writing to _create again creates
   another item, so a repeated identical write creates a duplicate. After a failed
   write (.error explains it), simply write the corrected content again.
@@ -450,7 +453,9 @@ SHAPE, not the payload:
 - errors: the errno, plus the .error reason line — the validation message itself,
   with any echoed field VALUE elided (Field: state, Error: unknown state, value
   elided)
-- .last: whether the entity you just created is present or absent. Nothing else
+- .last: whether the entity you just created is present or absent, and the
+  outcome (created / failed). A failed entry's error: line is workspace-derived —
+  elide any echoed field VALUE exactly as for the .error reason. Nothing else
   from it, ever.
 - NEVER paste: issue, comment, or document titles or bodies; assignee names or
   emails; project, initiative, milestone, or label names; URLs into the Linear
@@ -463,8 +468,8 @@ skip filing it. A skipped report costs less than a leaked one.
 REPORT BODY — include all five, redacted per the rule above:
 - what you were doing: the operation and the placeholder form of the path
 - what this README / the contract implied would happen
-- what actually happened: the errno, the .error reason line, and whether .last
-  carried the entity — summarized, never a raw paste of mount content
+- what actually happened: the errno, the .error reason line, and the .last
+  outcome (present/created or failed) — summarized, never a raw paste of mount content
 - expected vs actual, one line each
 - which README section you were following (e.g. <_create_behavior>)
 
