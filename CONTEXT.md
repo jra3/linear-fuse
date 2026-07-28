@@ -851,11 +851,11 @@ embedded files (CDN-backed bytes, named by filename) and external attachments
 (`.link` files, named by sanitized title). `attachmentListing{embedded,
 external}` (`internal/fs/attachmentlisting.go`) exposes `entries()` (Readdir)
 and `find(name)` (Lookup) returning a tagged entry, and owns
-`deduplicateFilename`, `sanitizeFilename`, and `linkName` (the `.link`
-derivation the create surface's `.last` path and kernel-entry name reuse —
-formerly restated at four sites). Before it, Readdir and Lookup each rebuilt
-the dedup map independently, duplicate-titled externals emitted *duplicate
-dirents* (kernel-collapsed shadowing), and the dedup algorithm had zero tests.
+`deduplicateFilename`, `sanitizeFilename`, and `linkName` (the *pre-dedup*
+`.link` derivation, written exactly once — formerly restated at four sites).
+Before it, Readdir and Lookup each rebuilt the dedup map independently,
+duplicate-titled externals emitted *duplicate dirents* (kernel-collapsed
+shadowing), and the dedup algorithm had zero tests.
 
 **Collisions are deduplicated (`foo (2).link`) — deliberately the opposite of
 [[named-listing]]'s first-match/shadow policy, licensed by that policy's own
@@ -875,6 +875,25 @@ distinguishes not-found (`ENOENT`) from couldn't-look (`EIO`) via the
 `listing(ctx, &fetchErr)` seam. Pure of the repo; unit-tested on literal
 slices (`TestAttachmentListing*`: round-trip, cross-family dedup, extension
 edges, linkName), no mount.
+
+**The create tail derives its name through the listing, never from the base
+(#333).** `AttachmentsNode.listedName` — and its `linkListing` twin
+`LinksNode.listedName` — finds the just-created entity by ID in the
+post-persist listing (`persist` runs before `result`/`entryName` in the
+[[create-tail]], so it is already visible) and returns `entries()`'
+deduplicated name, so the `.last` `path` and the kernel-notify entry name are
+the *same* name Readdir/Lookup serve; the pre-dedup `linkName`/
+`externalLinkName` is the fallback only when a re-list can't place the item
+(fetch error, or not yet visible). Recording the pre-dedup base
+stranded a colliding create at a name the reader could not open, and
+invalidated the sibling's entry instead. One memoized closure feeds both
+consumers, so they cannot derive two lists that disagree.
+`TestCreateAttachmentCollisionRecordsDedupedName` /
+`TestCreateLinkCollisionRecordsDedupedName` pin the round-trip. The
+heterogeneous collections can do this precisely because they dedup;
+[[named-listing]]'s first-match surfaces keep recording the derived name (the
+adversarial shadow/strand there is an accepted low risk — see
+`docs/THREAT-MODEL.md` TB1).
 
 ### Relation listing (`relationListing`)
 The **deep module** owning the `{type}-{ID}.rel` filenames of the relations

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -83,6 +84,67 @@ func TestCreateAttachmentIdempotentOnDuplicate(t *testing.T) {
 	}
 	if e := lfs.GetWriteError(attErrKey); e != nil {
 		t.Errorf("expected .error cleared after idempotent no-op, got %q", e.Message)
+	}
+}
+
+// TestCreateAttachmentCollisionRecordsDedupedName is the #333 Gap-2 regression for
+// the attachments surface (twin of the links test): a new external attachment whose
+// title collides with an existing one must record (in .last) and invalidate the
+// DEDUPLICATED name Readdir/Lookup resolve (`Docs (2).link`), not the pre-dedup base
+// (`Docs.link`) that first-matches the other attachment. .last's path and the
+// kernel-notify name share one derivation, so .last stands in for both.
+func TestCreateAttachmentCollisionRecordsDedupedName(t *testing.T) {
+	lfs, store := linkTestLFS(t)
+	ctx := context.Background()
+
+	const issueID = "issue-collide"
+	dir := &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, issueID: issueID}
+	key := collectionErrorKey("attachments", issueID)
+
+	// Seed an existing "Docs" attachment that sorts FIRST the way production data
+	// does: an already-synced sibling carries a real, EARLIER created_at (the mock
+	// mutator stamps its creates at a fixed 2026-01-01), so ORDER BY created_at,id
+	// puts the seed first and the new colliding attachment in the "(2)" slot.
+	seedCreated := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	seed := api.Attachment{ID: "seed-docs", Title: "Docs", URL: "https://example.com/seed", CreatedAt: seedCreated, UpdatedAt: seedCreated}
+	data, _ := json.Marshal(seed)
+	if err := store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
+		ID: seed.ID, IssueID: issueID, Title: seed.Title, Url: seed.URL,
+		Metadata:  json.RawMessage("{}"),
+		CreatedAt: sql.NullTime{Time: seedCreated, Valid: true},
+		UpdatedAt: sql.NullTime{Time: seedCreated, Valid: true},
+		SyncedAt:  time.Now(), Data: data,
+	}); err != nil {
+		t.Fatalf("seed UpsertAttachment: %v", err)
+	}
+
+	// Create a second "Docs" attachment with a distinct URL, so it is a real create
+	// and not an idempotent URL-match skip.
+	const newURL = "https://example.com/new-docs"
+	if errno := dir.createAttachment(ctx, []byte(newURL+" Docs")); errno != 0 {
+		t.Fatalf("createAttachment: errno = %v, want 0", errno)
+	}
+
+	got := lfs.GetWriteSuccess(key)
+	if len(got) != 1 {
+		t.Fatalf("want 1 .last entry, got %d: %+v", len(got), got)
+	}
+	recorded := got[0].Path
+
+	// The recorded name must resolve — through the shared listing derivation — back
+	// to the attachment that was actually created (matched by its unique URL).
+	entry, ok := dir.listing(ctx, nil).find(recorded)
+	if !ok {
+		t.Fatalf(".last recorded name %q is not resolvable by the listing", recorded)
+	}
+	if entry.external == nil || entry.external.URL != newURL {
+		t.Errorf(".last recorded %q, which does not resolve to the created attachment %q (#333 strand)", recorded, newURL)
+	}
+	// The created attachment sorts second only because the create path persisted its
+	// real created_at; a NULL one would sort first and silently flip the suffix on
+	// the next sync.
+	if recorded != "Docs (2).link" {
+		t.Errorf(".last recorded %q, want %q — the newer attachment must take the deduped slot", recorded, "Docs (2).link")
 	}
 }
 

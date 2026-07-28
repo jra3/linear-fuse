@@ -92,6 +92,20 @@ mangled name that resolves elsewhere is worse than a broken one, so `safeName`
 is deterministic (same raw+id → same output) and does not deduplicate (collision
 policy is unchanged; see `namedListing`).
 
+**Accepted collision risk (P1, #333).** Linear permits duplicate label/document/
+milestone names, so a hostile member can *deliberately* forge a name that collides
+with a victim's to **shadow** it (their entity resolves first) or **strand** it
+(the victim's is visible in `readdir`, but Lookup serves the other). The
+first-match/emit-once policy holds anyway: the bound is low — confined to the
+name-addressed projection (no traversal, no arbitrary write), and Linear itself
+shadows same-named entities in-product — and disambiguating (`Bug (2).md`) would
+resolve *nowhere*, since `ResolveMilestoneID`/`GetLabelByName` match the raw entity
+name; the whole name→entity stack is assume-first. The heterogeneous collections
+(attachments/links) *do* deduplicate, because nothing name-resolves them by title;
+#333 also aligned their create tail to record and invalidate the **same**
+deduplicated name Lookup serves, closing a round-trip strand where a colliding
+create landed at a name the reader could not open.
+
 Note the in-scope sliver of the "malicious server" idea lives here too: the
 GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear
 hosts, because that is the difference between "P1 sends hostile data" (in scope)

@@ -47,9 +47,11 @@ type linkEntry struct {
 	link *api.EntityExternalLink
 }
 
-// externalLinkName derives an external link's base filename (before dedup). The
-// create surface reuses it for its .last path and kernel-entry name, so the
-// derivation is written exactly once.
+// externalLinkName derives an external link's base filename (before dedup) — the
+// pre-dedup input to entries(). It is written exactly once here; the create tail
+// resolves its final .last path and kernel-entry name through the listing
+// (LinksNode.listedName) so it agrees with Readdir/Lookup on collisions (#333),
+// falling back to this base name only when the item can't be placed.
 func externalLinkName(link api.EntityExternalLink) string {
 	return sanitizeFilename(link.Label, link.ID) + ".link"
 }

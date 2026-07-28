@@ -45,9 +45,11 @@ type attachmentEntry struct {
 	external *api.Attachment
 }
 
-// linkName derives an external attachment's base filename (before dedup).
-// The create surface reuses it for its .last path and kernel-entry name, so
-// the derivation is written exactly once.
+// linkName derives an external attachment's base filename (before dedup) — the
+// pre-dedup input to entries(). It is written exactly once here; the create tail
+// resolves its final .last path and kernel-entry name through the listing
+// (AttachmentsNode.listedName) so it agrees with Readdir/Lookup on collisions
+// (#333), falling back to this base name only when the item can't be placed.
 func linkName(att api.Attachment) string {
 	return sanitizeFilename(att.Title, att.ID) + ".link"
 }
