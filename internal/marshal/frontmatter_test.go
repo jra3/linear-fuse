@@ -142,6 +142,67 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseQuotingHint(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		content  string
+		wantErr  bool
+		wantHint bool   // error mentions quoting
+		hintKey  string // substring the hint should name (when wantHint)
+	}{
+		{
+			name:     "unquoted flow-sequence title",
+			content:  "---\ntitle: [1] Verify auto context-file generation\n---\nBody",
+			wantErr:  true,
+			wantHint: true,
+			hintKey:  "title",
+		},
+		{
+			name:     "unquoted alias value",
+			content:  "---\nname: *ref\n---\nBody",
+			wantErr:  true,
+			wantHint: true,
+			hintKey:  "name",
+		},
+		{
+			name:    "quoted flow-sequence title parses",
+			content: "---\ntitle: \"[1] Verify auto context-file generation\"\n---\nBody",
+			wantErr: false,
+		},
+		{
+			name:    "balanced flow sequence is valid",
+			content: "---\nlabels: [Bug, Backend]\n---\nBody",
+			wantErr: false,
+		},
+		{
+			name:     "non-indicator parse error carries no quoting hint",
+			content:  "---\nkey:\n\tnested: 1\n---\nBody", // tab indentation is illegal YAML
+			wantErr:  true,
+			wantHint: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.content))
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("Parse() err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				return
+			}
+			msg := err.Error()
+			mentionsQuote := strings.Contains(msg, "quote")
+			if mentionsQuote != tt.wantHint {
+				t.Fatalf("Parse() error = %q; quoting hint present = %v, want %v", msg, mentionsQuote, tt.wantHint)
+			}
+			if tt.wantHint && !strings.Contains(msg, tt.hintKey) {
+				t.Errorf("Parse() hint = %q, want it to name key %q", msg, tt.hintKey)
+			}
+		})
+	}
+}
+
 func TestRender(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
