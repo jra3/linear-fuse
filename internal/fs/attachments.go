@@ -106,8 +106,7 @@ func (n *AttachmentsNode) listing(ctx context.Context, fetchErr *error) attachme
 // records/invalidates the name the item is actually reachable at, not the base
 // that first-matches a sibling (#333).
 func (n *AttachmentsNode) listedName(ctx context.Context, att api.Attachment) string {
-	var ferr error
-	for _, e := range n.listing(ctx, &ferr).entries() {
+	for _, e := range n.listing(ctx, nil).entries() {
 		if e.external != nil && e.external.ID == att.ID {
 			return e.name
 		}
@@ -388,6 +387,8 @@ func (n *AttachmentsNode) upsertAttachment(ctx context.Context, att api.Attachme
 		Url:        att.URL,
 		SourceType: sql.NullString{String: att.SourceType, Valid: att.SourceType != ""},
 		Metadata:   json.RawMessage("{}"),
+		CreatedAt:  sql.NullTime{Time: att.CreatedAt, Valid: !att.CreatedAt.IsZero()},
+		UpdatedAt:  sql.NullTime{Time: att.UpdatedAt, Valid: !att.UpdatedAt.IsZero()},
 		SyncedAt:   db.Now(),
 		Data:       data,
 	})

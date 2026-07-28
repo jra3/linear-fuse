@@ -137,8 +137,7 @@ func (n *LinksNode) listing(ctx context.Context, fetchErr *error) linkListing {
 // label collision records/invalidates the name the item is actually reachable at,
 // not the base that first-matches a sibling (#333).
 func (n *LinksNode) listedName(ctx context.Context, link api.EntityExternalLink) string {
-	var ferr error
-	for _, e := range n.listing(ctx, &ferr).entries() {
+	for _, e := range n.listing(ctx, nil).entries() {
 		if e.link != nil && e.link.ID == link.ID {
 			return e.name
 		}

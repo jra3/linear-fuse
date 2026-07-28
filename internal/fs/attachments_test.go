@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -100,15 +101,19 @@ func TestCreateAttachmentCollisionRecordsDedupedName(t *testing.T) {
 	dir := &AttachmentsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}}, issueID: issueID}
 	key := collectionErrorKey("attachments", issueID)
 
-	// Seed an existing "Docs" attachment that sorts FIRST. The create path leaves
-	// created_at NULL, and so does this seed, so ORDER BY created_at,id tie-breaks on
-	// id: the "aaa-" prefix sorts before the mock's "mock-attachment-N", forcing the
-	// new colliding attachment into the "(2)" slot deterministically.
-	seed := api.Attachment{ID: "aaa-seed-docs", Title: "Docs", URL: "https://example.com/seed"}
+	// Seed an existing "Docs" attachment that sorts FIRST the way production data
+	// does: an already-synced sibling carries a real, EARLIER created_at (the mock
+	// mutator stamps its creates at a fixed 2026-01-01), so ORDER BY created_at,id
+	// puts the seed first and the new colliding attachment in the "(2)" slot.
+	seedCreated := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	seed := api.Attachment{ID: "seed-docs", Title: "Docs", URL: "https://example.com/seed", CreatedAt: seedCreated, UpdatedAt: seedCreated}
 	data, _ := json.Marshal(seed)
 	if err := store.Queries().UpsertAttachment(ctx, db.UpsertAttachmentParams{
 		ID: seed.ID, IssueID: issueID, Title: seed.Title, Url: seed.URL,
-		Metadata: json.RawMessage("{}"), SyncedAt: time.Now(), Data: data,
+		Metadata:  json.RawMessage("{}"),
+		CreatedAt: sql.NullTime{Time: seedCreated, Valid: true},
+		UpdatedAt: sql.NullTime{Time: seedCreated, Valid: true},
+		SyncedAt:  time.Now(), Data: data,
 	}); err != nil {
 		t.Fatalf("seed UpsertAttachment: %v", err)
 	}
@@ -134,6 +139,12 @@ func TestCreateAttachmentCollisionRecordsDedupedName(t *testing.T) {
 	}
 	if entry.external == nil || entry.external.URL != newURL {
 		t.Errorf(".last recorded %q, which does not resolve to the created attachment %q (#333 strand)", recorded, newURL)
+	}
+	// The created attachment sorts second only because the create path persisted its
+	// real created_at; a NULL one would sort first and silently flip the suffix on
+	// the next sync.
+	if recorded != "Docs (2).link" {
+		t.Errorf(".last recorded %q, want %q — the newer attachment must take the deduped slot", recorded, "Docs (2).link")
 	}
 }
 
