@@ -243,7 +243,7 @@ func TestMarkdownToProjectEditRoundTrip(t *testing.T) {
 	}
 }
 
-// TestProjectContentBodyIsNotLengthCapped pins KNOWN_ISSUES #5: the project
+// TestProjectContentBodyIsNotLengthCapped pins the project body→content mapping: the project
 // body maps to Linear's uncapped `content`, so a multi-paragraph write-up far
 // longer than the ≤255 `description` limit round-trips through render→parse
 // intact (previously it was routed to `description` and rejected by the API).

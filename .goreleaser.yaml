@@ -8,6 +8,18 @@ project_name: linearfs
 before:
   hooks:
     - go mod tidy
+    # deb/rpm ship the systemd *user* unit repointed at /usr/bin/linearfs (the
+    # source unit targets %h/.local/bin for from-source installs) — the same
+    # transform the AUR PKGBUILD's package() applies, kept single-source so the
+    # unit can't drift between package formats. Written to .build/, not dist/:
+    # goreleaser cleans and creates dist/ around these hooks, so it is not a
+    # reliable place for hook output, and a non-empty dist/ also trips its
+    # "dist is not empty" check on runs without --clean. The post-condition is
+    # load-bearing: a sed that silently matches nothing (unit reworded, path quoted
+    # or split) would otherwise ship a package whose ExecStart points at
+    # %h/.local/bin/linearfs — a path no package install populates — and the
+    # first signal would be 203/EXEC on a user's machine.
+    - sh -c 'mkdir -p .build && sed "s|%h/.local/bin/linearfs|/usr/bin/linearfs|" contrib/systemd/linearfs.service > .build/linearfs.service && grep -q "^ExecStart=/usr/bin/linearfs " .build/linearfs.service || { echo "ERROR - could not repoint the systemd user unit at /usr/bin/linearfs; contrib/systemd/linearfs.service no longer has a %h/.local/bin/linearfs ExecStart, so fix the sed in .goreleaser.yaml before releasing" >&2; exit 1; }'
 
 builds:
   - id: linearfs
@@ -40,9 +52,60 @@ archives:
       - README.md
       - LICENSE
       - INSTALL.md
-      - KNOWN_ISSUES.md
-      - src: contrib/**/*
+      # Runtime service files only. Naming the two dirs explicitly, rather than
+      # the previous `contrib/**/*`, is what drops contrib/aur/** (AUR packaging
+      # sources a binary-tarball user has no use for) while keeping the systemd
+      # unit and launchd plist. KNOWN_ISSUES.md is intentionally not shipped:
+      # known issues are tracked as GitHub issues, not a dated doc.
+      - src: contrib/systemd/*
         strip_parent: false
+      - src: contrib/launchd/*
+        strip_parent: false
+
+# Linux system packages (Debian/Ubuntu .deb, Fedora/RHEL/openSUSE .rpm) built
+# from the same binaries as the archives, via nfpm. goreleaser restricts these
+# to the linux builds automatically. The checksum + attest steps pick them up
+# alongside the archives, so a .deb carries the same SLSA provenance a tarball
+# does (verify: `gh attestation verify <file> -R jra3/linear-fuse`).
+nfpms:
+  - id: linearfs
+    package_name: linearfs
+    vendor: John Allen
+    homepage: https://github.com/jra3/linear-fuse
+    maintainer: John Allen <github@porcnick.com>
+    description: |-
+      Mount your Linear workspace as a FUSE filesystem.
+      Browse and edit Linear issues, comments, docs, and projects as markdown files.
+    license: MIT
+    section: utils
+    priority: optional
+    formats:
+      - deb
+      - rpm
+    # fuse3 provides fusermount3, which the mount + the systemd unit's
+    # ExecStartPre/ExecStop invoke. Named `fuse3` on Debian/Ubuntu, Fedora, and
+    # openSUSE alike.
+    dependencies:
+      - fuse3
+    bindir: /usr/bin
+    # Prints the post-install setup an apt/dnf user would otherwise only find in
+    # INSTALL.md — parity with the AUR package's post_install. It runs as root,
+    # so it only echoes; the setup it describes is in the user's $HOME.
+    scripts:
+      postinstall: contrib/nfpm/postinstall.sh
+    # Plain files, not type: doc/license — nfpm's deb backend drops doc/license-
+    # typed content entirely (the rpm keeps them), so typing them would ship a
+    # .deb with no docs or LICENSE at all. Plain entries land in both formats.
+    contents:
+      # systemd *user* unit, repointed at /usr/bin/linearfs by the before hook.
+      - src: .build/linearfs.service
+        dst: /usr/lib/systemd/user/linearfs.service
+      - src: LICENSE
+        dst: /usr/share/licenses/linearfs/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/linearfs/README.md
+      - src: INSTALL.md
+        dst: /usr/share/doc/linearfs/INSTALL.md
 
 checksum:
   name_template: "checksums.txt"

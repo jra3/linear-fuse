@@ -22,7 +22,7 @@ import (
 // body carried a rendered "# <Name>" H1 heading that Flush (comparing
 // TrimSpace(body) against the field) folded into the value on every write,
 // doubling the heading with each save. (The body maps to Linear's long
-// `content` field, not the ≤255 `description` — see KNOWN_ISSUES #5.)
+// `content` field, not the ≤255 `description`.)
 func TestInitiativeContentBodyRoundTripsContent(t *testing.T) {
 	node := &InitiativeInfoNode{
 		initiative: api.Initiative{

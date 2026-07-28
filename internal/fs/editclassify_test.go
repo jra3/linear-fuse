@@ -118,7 +118,7 @@ func TestLabelEditFlush_BackendFailureStaysEIO(t *testing.T) {
 	}
 }
 
-// TestClassifyMutationErr_TooLongIsEMSGSIZE pins KNOWN_ISSUES #6: a length-cap
+// TestClassifyMutationErr_TooLongIsEMSGSIZE pins the length-cap errno: a length-cap
 // rejection is a size error, so the errno itself hints (EMSGSIZE) rather than a
 // bare EINVAL — while the reason still lands in .error. A userError that is NOT
 // a length limit stays EINVAL.

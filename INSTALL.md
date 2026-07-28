@@ -1,30 +1,30 @@
 # Installation Guide
 
-This guide covers installing LinearFS on macOS, Arch Linux, and Ubuntu/Debian.
+This guide covers installing LinearFS on macOS and on Linux — Arch, Ubuntu/Debian,
+Fedora/RHEL/openSUSE, and [anything else](#other-linux-distributions). On Linux,
+start at [Linux — pick your install](#linux--pick-your-install) for the
+prebuilt-package options.
 
 ## Prerequisites (All Platforms)
 
-- **Go 1.21+** - for building from source
+- **Go 1.25+** - for building from source (not needed for the prebuilt Linux packages)
 - **Linear API Key** - get one from [Linear Settings → API](https://linear.app/settings/api)
 
 ## Mount Point
 
-The recommended mount point varies by platform:
-
-- **Linux**: `~/linear` (system-wide location)
-- **macOS**: `~~/linear` (user home directory)
+The recommended mount point is `~/linear` on every platform — a directory in
+your own home, so no `sudo` is involved. The macOS launchd service falls back to
+it when unset; the Linux systemd service has **no** default and requires
+`LINEARFS_MOUNT` to be set to an absolute path in `~/.config/linearfs/env` (see
+[Running as a systemd User Service](#running-as-a-systemd-user-service-linux)).
 
 Create the mount point before first use:
 
 ```bash
-# Linux
-sudo mkdir -p ~/linear && sudo chown $USER:$USER ~/linear
-
-# macOS
-mkdir -p ~~/linear
+mkdir -p ~/linear
 ```
 
-> **Note:** You can use any mount point you prefer. The examples below use the platform-specific defaults.
+> **Note:** You can use any mount point you prefer. The examples below use this default.
 
 ## macOS
 
@@ -90,12 +90,12 @@ brew install go
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build
-make install  # Copies binary to ~/bin
+make install  # Copies binary to ~/.local/bin
 ```
 
-> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> **Note:** Ensure `~/.local/bin` is in your PATH. Add to your shell profile if needed:
 > ```bash
-> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 > ```
 
 ### 4. Configure
@@ -115,7 +115,7 @@ export LINEAR_API_KEY="lin_api_YOUR_KEY_HERE"
 ### 5. Mount
 
 ```bash
-linearfs mount ~~/linear
+linearfs mount ~/linear
 ```
 
 ### macOS Troubleshooting
@@ -140,13 +140,13 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 
 #### 2. Configure Mount Point
 
-The default mount point is `~~/linear`. To customize it, edit the env file:
+The default mount point is `~/linear`. To customize it, edit the env file:
 
 ```bash
 mkdir -p ~/.config/linearfs
 cat > ~/.config/linearfs/env << 'EOF'
 LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-LINEARFS_MOUNT=~~/linear
+LINEARFS_MOUNT=~/linear
 EOF
 chmod 600 ~/.config/linearfs/env
 ```
@@ -166,7 +166,7 @@ chmod 600 ~/.config/linearfs/config.yaml
 #### 3. Create Mount Point
 
 ```bash
-mkdir -p ~~/linear
+mkdir -p ~/linear
 ```
 
 #### 4. Load and Start
@@ -195,7 +195,49 @@ tail -f /tmp/linearfs.err   # Error output
 
 ---
 
+## Linux — pick your install
+
+Every prebuilt package installs the binary to `/usr/bin/linearfs`, a systemd
+**user** service, and the docs, and pulls in `fuse3`. Packages are built for
+`x86_64` (amd64) and `aarch64` (arm64) — swap `_linux_amd64` → `_linux_arm64` on ARM.
+
+| Distro family | Method | Command |
+|---|---|---|
+| Arch, Manjaro, EndeavourOS | AUR | `yay -S linearfs-bin` |
+| Debian, Ubuntu, Mint, Pop!_OS | `.deb` from the release | `sudo apt install ./linearfs_<version>_linux_amd64.deb` |
+| Fedora, RHEL, CentOS Stream, openSUSE | `.rpm` from the release | `sudo dnf install ./linearfs_<version>_linux_amd64.rpm` |
+| Anything else | prebuilt tarball or `go install` | see [Other Linux distributions](#other-linux-distributions) |
+
+The archives, `.deb`, and `.rpm` all carry SLSA build provenance — verify any
+download before installing (see
+[docs/THREAT-MODEL.md](https://github.com/jra3/linear-fuse/blob/main/docs/THREAT-MODEL.md)):
+
+```bash
+gh attestation verify <downloaded-file> -R jra3/linear-fuse
+```
+
+Each distro's section below covers the prebuilt install, a from-source build,
+and troubleshooting.
+
+---
+
 ## Arch Linux
+
+### Install from the AUR (recommended)
+
+[`linearfs-bin`](https://aur.archlinux.org/packages/linearfs-bin) is a
+prebuilt-binary package: it installs `/usr/bin/linearfs`, the systemd **user**
+service, and the docs, and pulls in `fuse3`.
+
+```bash
+yay -S linearfs-bin        # or: paru -S linearfs-bin
+```
+
+Then set your API key (the *Configure* step below). The AUR bump checklist
+(`contrib/aur/README.md`) verifies each release's `checksums.txt` provenance
+before pinning, so the package's checksums trace back to a signed build.
+
+### Build from source
 
 ### 1. Install FUSE
 
@@ -224,12 +266,12 @@ sudo pacman -S go
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build
-make install  # Copies binary to ~/bin
+make install  # Copies binary to ~/.local/bin
 ```
 
-> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> **Note:** Ensure `~/.local/bin` is in your PATH. Add to your shell profile if needed:
 > ```bash
-> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
 > ```
 
 ### 5. Configure
@@ -264,6 +306,34 @@ linearfs mount ~/linear
 
 ## Ubuntu / Debian
 
+### Install from a released `.deb` (recommended)
+
+Grab the `.deb` for your architecture from the
+[latest release](https://github.com/jra3/linear-fuse/releases/latest)
+(`linearfs_<version>_linux_amd64.deb` for x86_64, `_linux_arm64.deb` for ARM), then:
+
+```bash
+# Optional but recommended: verify SLSA build provenance first (see docs/THREAT-MODEL.md)
+gh attestation verify linearfs_<version>_linux_amd64.deb -R jra3/linear-fuse
+
+sudo apt install ./linearfs_<version>_linux_amd64.deb   # resolves the fuse3 dependency
+```
+
+This installs `/usr/bin/linearfs` and a systemd **user** unit at
+`/usr/lib/systemd/user/linearfs.service`. Set your API key (the *Configure* step
+below), then to run it on login:
+
+```bash
+mkdir -p ~/.config/linearfs
+printf 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE\nLINEARFS_MOUNT=%s/linear\n' "$HOME" > ~/.config/linearfs/env
+chmod 600 ~/.config/linearfs/env
+systemctl --user enable --now linearfs.service
+```
+
+(Fedora/RHEL/openSUSE users: see the [`.rpm` section](#fedora--rhel--opensuse) below.)
+
+### Build from source
+
 ### 1. Install FUSE
 
 ```bash
@@ -286,9 +356,9 @@ sudo apt install golang-go
 
 # Option 2: From Go website (recommended for latest version)
 # Check https://go.dev/dl/ for the latest version
-wget https://go.dev/dl/go1.23.linux-amd64.tar.gz  # Replace with latest
+wget https://go.dev/dl/go1.25.0.linux-amd64.tar.gz  # Replace with latest
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.23.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.25.0.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -299,12 +369,12 @@ source ~/.bashrc
 git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build
-make install  # Copies binary to ~/bin
+make install  # Copies binary to ~/.local/bin
 ```
 
-> **Note:** Ensure `~/bin` is in your PATH. Add to your shell profile if needed:
+> **Note:** Ensure `~/.local/bin` is in your PATH. Add to your shell profile if needed:
 > ```bash
-> echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 > ```
 
 ### 5. Configure
@@ -335,6 +405,98 @@ linearfs mount ~/linear
 | "fuse: device not found" | `sudo modprobe fuse` |
 | "Permission denied" | Add user to `fuse` group, or run with sudo |
 | Mount point busy | `fusermount3 -uz ~/linear` to force unmount |
+
+---
+
+## Fedora / RHEL / openSUSE
+
+### Install from a released `.rpm` (recommended)
+
+Grab the `.rpm` for your architecture from the
+[latest release](https://github.com/jra3/linear-fuse/releases/latest)
+(`linearfs_<version>_linux_amd64.rpm` for x86_64, `_linux_arm64.rpm` for ARM), then:
+
+```bash
+# Optional but recommended: verify SLSA build provenance first
+gh attestation verify linearfs_<version>_linux_amd64.rpm -R jra3/linear-fuse
+
+sudo dnf install ./linearfs_<version>_linux_amd64.rpm     # openSUSE: sudo zypper install ./linearfs_<version>_linux_amd64.rpm
+```
+
+This installs `/usr/bin/linearfs` and a systemd **user** unit at
+`/usr/lib/systemd/user/linearfs.service`, and pulls in `fuse3`. Set your API key
+(the *Configure* step from any section above applies verbatim), then to run it
+on login:
+
+```bash
+mkdir -p ~/.config/linearfs
+printf 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE\nLINEARFS_MOUNT=%s/linear\n' "$HOME" > ~/.config/linearfs/env
+chmod 600 ~/.config/linearfs/env
+systemctl --user enable --now linearfs.service
+```
+
+### Build from source
+
+Identical to the Ubuntu/Debian source build, swapping the package manager:
+
+```bash
+sudo dnf install fuse3 golang    # openSUSE: sudo zypper install fuse3 go
+git clone https://github.com/jra3/linear-fuse.git && cd linear-fuse
+make build && make install       # copies to ~/.local/bin (ensure it's on PATH)
+```
+
+### Fedora/RHEL/openSUSE Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| "fusermount3: command not found" | `sudo dnf install fuse3` (openSUSE: `zypper install fuse3`) |
+| "fuse: device not found" | `sudo modprobe fuse` |
+| "Permission denied" | Run with sudo, or ensure `/dev/fuse` is accessible |
+| Mount point busy | `fusermount3 -uz ~/linear` to force unmount |
+
+---
+
+## Other Linux distributions
+
+No native package for your distro? Install `fuse3` from your package manager
+first (it provides `fusermount3`), then use one of:
+
+### Prebuilt binary tarball
+
+Download `linearfs_<version>_linux_amd64.tar.gz` (or `_linux_arm64`) from the
+[latest release](https://github.com/jra3/linear-fuse/releases/latest):
+
+```bash
+gh attestation verify linearfs_<version>_linux_amd64.tar.gz -R jra3/linear-fuse   # optional
+tar -xzf linearfs_<version>_linux_amd64.tar.gz
+
+# The bundled systemd unit expects the binary at ~/.local/bin/linearfs:
+mkdir -p ~/.local/bin && install -m755 linearfs ~/.local/bin/linearfs
+
+# Optional: install the systemd user service shipped inside the archive
+mkdir -p ~/.config/systemd/user
+install -m644 contrib/systemd/linearfs.service ~/.config/systemd/user/linearfs.service
+```
+
+### From Go
+
+```bash
+go install github.com/jra3/linear-fuse/cmd/linearfs@latest   # builds to $(go env GOPATH)/bin
+
+# The bundled systemd unit's ExecStart is %h/.local/bin/linearfs, which
+# $(go env GOPATH)/bin (usually ~/go/bin) is NOT — enabling the unit without
+# this copy fails with status=203/EXEC:
+mkdir -p ~/.local/bin && install -m755 "$(go env GOPATH)/bin/linearfs" ~/.local/bin/linearfs
+```
+
+`go install` ships the binary only — no systemd unit. Take the unit from the
+release tarball for the version you installed, as in
+[Prebuilt binary tarball](#prebuilt-binary-tarball) above; that copy is
+attestable and matches the tagged code, which a branch fetch would not.
+
+Then configure (API key + `~/.config/linearfs/env`) and enable the user service
+as shown in
+[Running as a systemd User Service](#running-as-a-systemd-user-service-linux).
 
 ---
 
@@ -385,13 +547,11 @@ After mounting, verify LinearFS is working:
 # Check mount
 mount | grep linear
 
-# List teams (use ~~/linear on macOS, ~/linear on Linux)
-ls ~/linear/teams/        # Linux
-ls ~~/linear/teams/       # macOS
+# List teams
+ls ~/linear/teams/
 
 # Read an issue (replace TEAM with your team key, e.g., ENG, PROD)
-cat ~/linear/teams/TEAM/issues/TEAM-123/issue.md        # Linux
-cat ~~/linear/teams/TEAM/issues/TEAM-123/issue.md       # macOS
+cat ~/linear/teams/TEAM/issues/TEAM-123/issue.md
 ```
 
 ## Unmounting
@@ -404,7 +564,7 @@ fusermount3 -u ~/linear
 fusermount3 -uz ~/linear
 
 # macOS - Unmount
-umount ~~/linear
+umount ~/linear
 ```
 
 ## Common Issues
@@ -432,8 +592,8 @@ fusermount3 -uz ~/linear
 linearfs mount ~/linear
 
 # macOS
-umount ~~/linear
-linearfs mount ~~/linear
+umount ~/linear
+linearfs mount ~/linear
 ```
 
 ### "Input/output error"
@@ -449,12 +609,18 @@ Run with debug mode for more info:
 linearfs mount -d ~/linear
 
 # macOS
-linearfs mount -d ~~/linear
+linearfs mount -d ~/linear
 ```
 
 ## Running as a systemd User Service (Linux)
 
 To have LinearFS start automatically on login, set up a systemd user service.
+
+> **Installed from a package?** The AUR, `.deb`, and `.rpm` packages already ship
+> the unit at `/usr/lib/systemd/user/linearfs.service`, repointed at
+> `/usr/bin/linearfs` — skip step 1. (Copying the in-repo unit over it would
+> point `ExecStart` back at `~/.local/bin/linearfs`, which a package install
+> does not create.)
 
 ### 1. Copy the Service File
 
@@ -465,14 +631,14 @@ cp contrib/systemd/linearfs.service ~/.config/systemd/user/
 
 ### 2. Create the Environment File
 
-The service reads configuration from `~/.config/linearfs/env`:
+The service reads configuration from `~/.config/linearfs/env`. `LINEARFS_MOUNT`
+must be an **absolute path** — systemd's `EnvironmentFile=` does not expand `~`,
+so a literal `~/linear` would make the unit create a directory named `~` and
+mount under it:
 
 ```bash
 mkdir -p ~/.config/linearfs
-cat > ~/.config/linearfs/env << 'EOF'
-LINEAR_API_KEY=lin_api_YOUR_KEY_HERE
-LINEARFS_MOUNT=~/linear
-EOF
+printf 'LINEAR_API_KEY=lin_api_YOUR_KEY_HERE\nLINEARFS_MOUNT=%s/linear\n' "$HOME" > ~/.config/linearfs/env
 chmod 600 ~/.config/linearfs/env  # Restrict permissions
 ```
 
@@ -513,7 +679,7 @@ Add these permissions to your `~/.claude/settings.json` (adjust the path for you
 ```json
 {
   "allow": [
-    "Read(/~/linear/**)",
+    "Read(~/linear/**)",
     "Bash(ls ~/linear/:*)",
     "Bash(cat ~/linear/:*)"
   ]
@@ -524,9 +690,9 @@ Add these permissions to your `~/.claude/settings.json` (adjust the path for you
 ```json
 {
   "allow": [
-    "Read(//Users/YOUR_USERNAME~/linear/**)",
-    "Bash(ls ~~/linear/:*)",
-    "Bash(cat ~~/linear/:*)"
+    "Read(/Users/YOUR_USERNAME/linear/**)",
+    "Bash(ls ~/linear/:*)",
+    "Bash(cat ~/linear/:*)"
   ]
 }
 ```
@@ -549,10 +715,10 @@ Add to your global `~/.claude/CLAUDE.md` (adjust path for your platform):
 **macOS:**
 ```markdown
 # Linear.app issues via FUSE mount on disk
-- data is found in ~~/linear
+- data is found in ~/linear
 - the README.md file should be fully read and understood before reading/writing data there
 
-@~~/linear/README.md
+@~/linear/README.md
 ```
 
 The `@` directive automatically imports the mounted filesystem's documentation into Claude's context, giving it full knowledge of the directory structure and available operations.
@@ -569,7 +735,7 @@ Now you can ask Claude Code things like:
 ## Building from Source
 
 Requirements:
-- Go 1.21+
+- Go 1.25+
 - make
 
 ```bash
@@ -577,12 +743,22 @@ git clone https://github.com/jra3/linear-fuse.git
 cd linear-fuse
 make build      # Build binary to bin/linearfs
 make test       # Run tests
-make install    # Copy to ~/bin
+make install    # Copy to ~/.local/bin
 ```
 
 ## Updating LinearFS
 
-To update to the latest version:
+Installed from a package? Update through the same channel:
+
+```bash
+yay -S linearfs-bin                                      # Arch (AUR)
+sudo apt install ./linearfs_<version>_linux_amd64.deb    # Debian/Ubuntu — download the new .deb first
+sudo dnf install ./linearfs_<version>_linux_amd64.rpm    # Fedora/RHEL (openSUSE: zypper install)
+```
+
+Then restart the service if you run one: `systemctl --user restart linearfs.service`.
+
+Built from source:
 
 ```bash
 cd linear-fuse

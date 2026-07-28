@@ -13,7 +13,7 @@ and **contributions are welcome** — see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Not for:** real-time collaboration (sync is eventually consistent) or production tooling
   that needs a stable API — use Linear's [official API](https://developers.linear.app) for that.
 - **Handling secrets?** Read [SECURITY.md](SECURITY.md) before mounting, especially on a shared machine.
-- **Known limitations** are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+- **Known limitations & bugs** are tracked as [GitHub issues](https://github.com/jra3/linear-fuse/issues).
 
 ## Features
 
@@ -29,13 +29,39 @@ and **contributions are welcome** — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 See [INSTALL.md](INSTALL.md) for detailed platform-specific installation instructions.
 
-### Quick Start
+### Prebuilt packages (recommended)
+
+**Arch Linux** — [`linearfs-bin`](https://aur.archlinux.org/packages/linearfs-bin) on the AUR:
+
+```bash
+yay -S linearfs-bin        # or: paru -S linearfs-bin
+```
+
+**Debian/Ubuntu (`.deb`) and Fedora/RHEL/openSUSE (`.rpm`)** — download the package
+for your architecture from the [latest release](https://github.com/jra3/linear-fuse/releases/latest):
+
+```bash
+# Debian/Ubuntu (swap _linux_arm64 for ARM)
+sudo apt install ./linearfs_<version>_linux_amd64.deb
+
+# Fedora/RHEL/openSUSE
+sudo dnf install ./linearfs_<version>_linux_amd64.rpm
+```
+
+Every release artifact carries [SLSA build provenance](docs/THREAT-MODEL.md) —
+verify it before installing:
+
+```bash
+gh attestation verify linearfs_<version>_linux_amd64.deb -R jra3/linear-fuse
+```
+
+### Build from source
 
 ```bash
 # Build from source
 make build
 
-# Install to ~/bin
+# Install to ~/.local/bin
 make install
 ```
 
@@ -45,7 +71,7 @@ make install
 - **FUSE filesystem:**
   - **macOS:** macFUSE (`brew install --cask macfuse`)
     - ⚠️ Apple Silicon requires enabling kernel extensions in Recovery Mode
-  - **Linux:** FUSE3 (`sudo pacman -S fuse3` on Arch, `sudo apt install fuse3` on Ubuntu/Debian)
+  - **Linux:** FUSE3 (`sudo pacman -S fuse3` on Arch, `sudo apt install fuse3` on Debian/Ubuntu, `sudo dnf install fuse3` on Fedora) — installed automatically by the prebuilt packages
 
 ## Usage
 
@@ -584,7 +610,7 @@ cp contrib/launchd/com.linearfs.mount.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.linearfs.mount.plist
 launchctl start com.linearfs.mount
 
-# Your Linear workspace will now be mounted at ~~/linear on every login
+# Your Linear workspace will now be mounted at ~/linear on every login
 ```
 
 See [INSTALL.md](INSTALL.md#running-as-a-launchd-service-automatic-startup) for details.
@@ -592,9 +618,11 @@ See [INSTALL.md](INSTALL.md#running-as-a-launchd-service-automatic-startup) for 
 ### Linux (systemd)
 
 ```bash
-# Install the service
+# Install the service — skip these two lines if you installed the AUR/.deb/.rpm
+# package, which already ships the unit pointed at /usr/bin/linearfs
 mkdir -p ~/.config/systemd/user
 cp contrib/systemd/linearfs.service ~/.config/systemd/user/
+
 systemctl --user enable linearfs.service
 systemctl --user start linearfs.service
 ```

@@ -44,7 +44,7 @@ checklist looks for.
 | **P1** | Malicious / compromised Linear **workspace member** | Issue titles, project & doc slugs, label names, markdown bodies, attachment titles & URLs, user display names | Filenames, directory names, symlink targets, disk-write paths, SQLite rows — reaching path traversal, arbitrary write, or serving the wrong file |
 | **P2** | Compromised **CDN / attachment host** | The bytes returned for an embedded-file fetch, and (via P1) the URL that fetch targets | The embedded-file download path: SSRF (URL pointed at localhost / metadata endpoints), arbitrary local write, unbounded download → disk/memory exhaustion |
 | **P3** | Another **local user** on the machine | Nothing in-process; reads whatever LinearFS leaves on disk | The API key (config file, logs) and the cached workspace (SQLite DB, embedded files, telemetry) if their modes are world-readable |
-| **P4** | **Supply chain** | The build/release path | The `linearfs-bin` AUR package (PKGBUILD integrity, checksums), CI workflow token scope & unpinned actions, Go module dependencies |
+| **P4** | **Supply chain** | The build/release path | The `linearfs-bin` AUR package and the `.deb`/`.rpm` release packages (package integrity, checksums), CI workflow token scope & unpinned actions, Go module dependencies |
 
 ## Trust boundaries
 
@@ -164,20 +164,42 @@ mountpoint itself stays `0755` — the FUSE mount is owner-only regardless
 
 ### TB4 — Build & release (P4)
 
-The path from source to running binary: the `linearfs-bin` AUR package (PKGBUILD
-integrity, checksum pinning, build reproducibility), the CI workflows (token
-scopes, handling of untrusted input in workflow runs, whether third-party
-actions are pinned by commit SHA), and the Go module dependency set.
+The path from source to running binary: the release artifacts goreleaser
+produces on a tag — the per-platform archives and the `.deb`/`.rpm` system
+packages (Debian/Ubuntu, Fedora/RHEL/openSUSE) — and the `linearfs-bin` AUR
+package that repins from them (package integrity, checksum pinning, build
+reproducibility), the CI workflows (token scopes, handling of untrusted input in
+workflow runs, whether third-party actions are pinned by commit SHA), and the Go
+module dependency set.
 
-**Provenance posture (enforced, #354).** Every release artifact (the archives
-and `checksums.txt`) carries SLSA build provenance: the release workflow's
-attest step signs, via GitHub's OIDC identity (keyless Sigstore), a statement
-binding the artifact's digest to this repo, the workflow, and the source
-commit. `checksums.txt` alone authenticates nothing — it is produced and
-uploadable by the same job that builds the binaries — so verification means
-`gh attestation verify <file> -R jra3/linear-fuse` (see SECURITY.md), which
-detects an artifact swapped after the build even by an actor holding release
-credentials.
+**Provenance posture (enforced, #354).** Every release artifact — the archives,
+the `.deb`/`.rpm` packages, and `checksums.txt` — carries SLSA build provenance:
+the release workflow's attest step signs, via GitHub's OIDC identity (keyless
+Sigstore), a statement binding the artifact's digest to this repo, the workflow,
+and the source commit. `checksums.txt` alone authenticates nothing — it is
+produced and uploadable by the same job that builds the binaries — so
+verification means `gh attestation verify <file> -R jra3/linear-fuse` (see
+SECURITY.md), which detects an artifact swapped after the build even by an actor
+holding release credentials. An apt/dnf user can verify the downloaded package
+the same way before installing it.
+
+**Maintainer scripts.** `apt`/`dnf`/`pacman` run a package's maintainer scripts
+as root, so they are part of what provenance verification is protecting. The
+invariant across every channel: **the maintainer scripts LinearFS ships only
+print setup guidance — none of them act.** They create no files, touch nothing
+under the installing user's `$HOME`, and run no network or package-manager
+commands. Two exist:
+
+- `contrib/nfpm/postinstall.sh` — the `.deb`/`.rpm`, wired in as nfpm's
+  `scripts.postinstall`.
+- `contrib/aur/linearfs-bin.install` — the AUR package's `post_install` and
+  `post_upgrade`. `post_upgrade` additionally *queries* whether the user unit is
+  running (`systemctl --user is-active`) so it can print a restart hint; that is
+  a read-only check, not a state change.
+
+Everything else the packages place on disk is static content (the binary, the
+systemd user unit, docs, LICENSE). Keep it that way; a maintainer script that
+acts is a root-privileged step no user reviews.
 
 ### TB5 — Mount content → a public GitHub issue, via the operator's agent (P1)
 
