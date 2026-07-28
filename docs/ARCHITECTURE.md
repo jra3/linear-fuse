@@ -623,8 +623,13 @@ gate above.
   instead.
 - **`.error` / `.last` sidecars** (read-only, backed by `writeFeedback`): every
   writable surface exposes the last failure's reason in `.error` (cleared on
-  success) and, where the surface mints an entity, the created identity/URL in
-  `.last` — so scripts and LLMs never have to parse an errno.
+  success) and, where the surface mints an entity, a per-create outcome log in
+  `.last` — the created identity/URL on success, an `outcome: failed` entry on a
+  clean create failure — so a scripted batch reads back how many of N creates
+  succeeded and scripts and LLMs never have to parse an errno. The one exception
+  is the persist-failure branch (#276): a create Linear accepted but that we
+  cannot cache locally is *not* logged to `.last` (as success or failure), since
+  the entity is live — it fails loud in `.error` instead.
 - **`.meta` sidecars:** editable files hold *only* editable fields; the
   server-managed fields (id, url, timestamps, …) render into a read-only
   `<name>.meta` twin. Editing a server field is impossible by construction.

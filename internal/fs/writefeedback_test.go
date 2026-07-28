@@ -36,6 +36,19 @@ func TestWriteFeedbackInvalidateSeam(t *testing.T) {
 	if len(dropped) != 3 || dropped[2] != successIno(key) {
 		t.Fatalf("append dropped = %v, want successIno(key)", dropped)
 	}
+
+	// Append failure drops the same .last inode, is excluded from GetWriteSuccess,
+	// but is present in the full GetWriteOutcomes log (#370).
+	wf.AppendWriteFailure(key, "boom")
+	if len(dropped) != 4 || dropped[3] != successIno(key) {
+		t.Fatalf("append-failure dropped = %v, want one more successIno(key)", dropped)
+	}
+	if got := wf.GetWriteSuccess(key); len(got) != 1 {
+		t.Fatalf("GetWriteSuccess = %+v, want still one (failure not counted as success)", got)
+	}
+	if got := wf.GetWriteOutcomes(key); len(got) != 2 {
+		t.Fatalf("GetWriteOutcomes len = %d, want 2 (success + failure)", len(got))
+	}
 }
 
 // TestWriteFeedbackNilInvalidate: a nil seam degrades to a no-op, so a bare

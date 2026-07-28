@@ -227,7 +227,9 @@ Mitigations, in order of load-bearing-ness:
    REDACTION block: the errno and the `.error` reason line with any echoed field
    *value* elided; paths with the team key and issue identifier replaced by
    placeholders (`teams/<TEAM>/issues/<ID>/issue.md`); from `.last`, only whether
-   the entity is present; never titles, bodies, assignee names or emails,
+   the entity is present and its outcome (created / failed) — a failed entry's
+   `error:` line is workspace-derived and its echoed field values are elided
+   exactly like the `.error` reason; never titles, bodies, assignee names or emails,
    project/initiative/milestone/label names, or URLs into the workspace; and
    never a verbatim quote of text the agent did not author — summarize it, or
    skip filing. `internal/fs/readme_test.go` pins the rule so it cannot silently

@@ -43,6 +43,7 @@ const createTimeout = 30 * time.Second
 type createSink interface {
 	errorSink
 	AppendWriteSuccess(key string, r WriteResult)
+	AppendWriteFailure(key, msg string)
 	InvalidateCreated(dirIno uint64, name string)
 }
 
@@ -117,6 +118,14 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 		msg, errno = classifyMutationErr(spec.op, err)
 		log.Printf("Failed to %s: %v", spec.op, err)
 		sink.SetWriteError(spec.key, msg)
+		// Also append a compact failure entry to .last so a scripted batch of
+		// failing _create writes leaves N countable outcomes instead of .error
+		// collapsing to only the last one (#370). Note this is the *clean*
+		// failure branch — the mutation never took effect. The persist-failure
+		// branch below deliberately does NOT append: that create SUCCEEDED on
+		// Linear and is only unconfirmed locally, so logging it as a .last
+		// failure would misreport a live entity as failed (#276).
+		sink.AppendWriteFailure(spec.key, msg)
 		return nil, errno
 	}
 

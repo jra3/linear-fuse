@@ -215,12 +215,24 @@ func TestWriteContractLastSidecarShape(t *testing.T) {
 	if !liveAPIMode && len(entries) == 0 {
 		t.Fatal("expected at least one .last entry after a create")
 	}
+	// .last is an outcome log: success entries carry the identity shape, failure
+	// entries carry `outcome: failed` + a reason (#370). Validate the success
+	// shape and require at least one — failure entries (seeded by other tests'
+	// invalid creates on the shared mount) are a legitimate distinct shape.
+	successes := 0
 	for _, e := range entries {
+		if e["outcome"] == "failed" {
+			continue
+		}
+		successes++
 		for _, k := range []string{"identifier", "url", "path", "title", "status"} {
 			if _, ok := e[k]; !ok {
-				t.Errorf(".last entry missing key %q: %v", k, e)
+				t.Errorf(".last success entry missing key %q: %v", k, e)
 			}
 		}
+	}
+	if !liveAPIMode && successes == 0 {
+		t.Fatal("expected at least one success entry in .last after a create")
 	}
 }
 
@@ -511,15 +523,46 @@ func TestWriteContractAgentLoop(t *testing.T) {
 		noopByteStable(t, filepath.Join(initDir, "initiative.md"), initDir)
 	}
 
-	// (d) A subsequent EINVAL create must not wipe the earlier successes from .last.
-	before := len(parseLastSidecar(t, issuesLastPath(testTeamKey)))
-	if err := writeCreateSpec(t, "---\ntitle: Doomed\npriority: critical\n---\nx\n"); err == nil {
-		t.Fatal("expected EINVAL for invalid priority")
+	// (d) A batch of failing creates must not wipe the earlier successes from
+	// .last, and each failure appends a countable `outcome: failed` entry so a
+	// scripted loop can read back how many of N failed instead of .error
+	// collapsing to only the last one (#370).
+	before := parseLastSidecar(t, issuesLastPath(testTeamKey))
+	failuresBefore := countFailedOutcomes(before)
+	const doomed = 2
+	for i := 0; i < doomed; i++ {
+		if err := writeCreateSpec(t, "---\ntitle: Doomed\npriority: critical\n---\nx\n"); err == nil {
+			t.Fatal("expected EINVAL for invalid priority")
+		}
 	}
 	after := parseLastSidecar(t, issuesLastPath(testTeamKey))
-	if len(after) < before {
-		t.Errorf(".last shrank after a failed create: %d -> %d (append log should survive)", before, len(after))
+	if len(after) < len(before) {
+		t.Errorf(".last shrank after failed creates: %d -> %d (append log should survive)", len(before), len(after))
 	}
+	if got := countFailedOutcomes(after) - failuresBefore; got != doomed {
+		t.Errorf(".last gained %d `outcome: failed` entries, want %d (batch failures must each be countable)", got, doomed)
+	}
+	// The prior successes are still there (failures are additive, not replacing).
+	stillFound := 0
+	for _, e := range after {
+		if strings.HasPrefix(e["title"], marker) {
+			stillFound++
+		}
+	}
+	if stillFound < found {
+		t.Errorf("successes lost after failed creates: %d -> %d", found, stillFound)
+	}
+}
+
+// countFailedOutcomes tallies the failure entries in a parsed .last log (#370).
+func countFailedOutcomes(entries []map[string]string) int {
+	n := 0
+	for _, e := range entries {
+		if e["outcome"] == "failed" {
+			n++
+		}
+	}
+	return n
 }
 
 // TestWriteContractEditVerifiesOffline proves the edit-commit tail runs against
