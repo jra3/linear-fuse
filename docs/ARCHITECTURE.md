@@ -664,14 +664,17 @@ degrades to summary-only — telemetry must never take the mount down.
 
 ### `internal/cmd` + `cmd/linearfs` + `internal/config` — wiring
 
-`cmd/linearfs/main.go` calls `cmd.Execute()` (Cobra). Commands: `mount`
-(with `--foreground`/`-f`, `--debug`/`-d`) and `version`. **Startup order**
-(`mount.go` → `linearfs.go`):
+`cmd/linearfs/main.go` calls `cmd.Execute()` (Cobra). Commands: `mount` (with
+`--foreground`/`-f`), `status` (read-only local health snapshot; never talks to
+the daemon) and `version`; `--config`/`-c` and `--debug`/`-d` are root
+persistent flags. **Startup order** (`mount.go` → `linearfs.go`):
 
 1. `config.Load()` — reads `LINEAR_API_KEY` and `USER_FEEDBACK` (env overrides
    file) and `~/.config/linearfs/config.yaml` (or `$XDG_CONFIG_HOME`); loading
-   itself succeeds without a key. One hard refusal: if the key's source is the
-   config file (not the env escape hatch) and the file is group/other-accessible
+   itself succeeds without a key. `--config` names an exact file instead
+   (`config.LoadFrom`) — unreadable is fatal for `mount`, while `status` falls
+   back to defaults. One hard refusal: if the key's source is the config file
+   (not the env escape hatch) and the file is group/other-accessible
    (`mode & 0o077 != 0`), load fails and names the fix (`chmod 600`) — see the
    threat model's TB3.
 2. `fs.PreflightMountpoint(...)` — detects and heals a wedged/stale FUSE mount
