@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/marshal"
+	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
 
 // These tests exercise the per-entity EDIT (Flush) persistence paths OFFLINE,
@@ -126,6 +128,82 @@ func TestOffline_AtomicRenameEditPersists(t *testing.T) {
 	}
 	if !strings.Contains(string(after), marker) {
 		t.Fatalf("atomic-rename edit did not persist marker %q\n--- got ---\n%s", marker, after)
+	}
+}
+
+// TestOffline_AtomicSaveServesTheWrittenBytes guards the write→verify contract
+// #379 broke: an editor's atomic save must read back byte-for-byte, even when
+// Linear reformatted the body it stored.
+//
+// Every editor and the Claude Code Write/Edit tools save via scratch-file +
+// rename, and renameSave deliberately drops the canonical file's inode so it
+// re-Looks-up from what PERSISTED. Serve-your-own-writes (#365) lives in the
+// editBuffer the bytes were written through, and on this path that buffer belongs
+// to a transient node the rename discards — so the client's own verify re-read
+// saw Linear's normalized render instead of its bytes, and any byte-count
+// difference was reported as "the filesystem may have silently truncated the
+// write" on a save that fully succeeded. The pin (authoredpin.go) carries the
+// written bytes across that re-Lookup.
+//
+// The fake reformats on store (collapsing a blank-line run, one of the transforms
+// real Linear applies), so persisted is a byte shorter than written — without the
+// pin the stat below reports that shorter size.
+func TestOffline_AtomicSaveServesTheWrittenBytes(t *testing.T) {
+	if liveAPIMode {
+		t.Skip("fixture-mode check; needs the mock mutator's reformat-on-store")
+	}
+	enableMockMutations(t, mockmutation.WithBodyReformat(func(body string) string {
+		return strings.ReplaceAll(body, "\n\n\n", "\n\n")
+	}))
+
+	// A throwaway issue: the atomic save consumes a scratch node, so reusing the
+	// shared fixture is unreliable across -count reruns (see the test above).
+	identifier := createRefreshTestIssue(t, "Atomic Save Byte Count Probe")
+	path := issueFilePath(testTeamKey, identifier)
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read issue.md: %v", err)
+	}
+
+	doc, err := marshal.Parse(orig)
+	if err != nil {
+		t.Fatalf("parse issue.md: %v", err)
+	}
+	// The blank-line run is what the fake will collapse on store.
+	doc.Body = strings.TrimRight(doc.Body, "\n") + "\n\nfirst para\n\n\nsecond para"
+	edited, err := marshal.Render(doc)
+	if err != nil {
+		t.Fatalf("render issue.md: %v", err)
+	}
+	if !strings.Contains(string(edited), "\n\n\n") {
+		t.Fatalf("test setup: the rendered file carries no blank-line run to reformat\n%s", edited)
+	}
+
+	tmp := path + ".tmp.43.f00dcafe"
+	if err := os.WriteFile(tmp, edited, 0o644); err != nil {
+		t.Fatalf("write scratch temp: %v", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		t.Fatalf("atomic rename over issue.md should persist with mock mutator: %v", err)
+	}
+
+	// The verification a client makes immediately after its save — no retry loop:
+	// the point is what the very next stat and read observe.
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat issue.md after atomic save: %v", err)
+	}
+	if fi.Size() != int64(len(edited)) {
+		t.Errorf("size after atomic save = %d, want %d (the bytes written) — a byte-count verify reads this as a truncated write",
+			fi.Size(), len(edited))
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("re-read issue.md after atomic save: %v", err)
+	}
+	if !bytes.Equal(after, edited) {
+		t.Errorf("read-back after atomic save is not what was written\n--- wrote ---\n%q\n--- got ---\n%q", edited, after)
 	}
 }
 

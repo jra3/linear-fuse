@@ -539,6 +539,17 @@ building blocks:
   refresh, while persistence (SQLite and the entity) already holds Linear's
   normalized render. It is not armed on a fatal read-your-writes divergence (a
   revert or truncation, EIO), so a real loss is never masked from a re-read.
+- `authoredPins` — the same guarantee across the **atomic-save** path, where the
+  buffer that was written cannot carry it (#379): `renameSave` flushes through a
+  transient node and then drops the canonical file's inode, so the re-Lookup
+  renders what persisted and the written bytes would be lost. It pins them under
+  the file's inode (clean commits only, same `errno == 0` rule) and the Lookup
+  seeds the new buffer — content *and* the size it publishes — from the pin
+  instead of the render. Bounded by time (`pinTTL`), not by one Lookup: a client's
+  verification is several syscalls, each able to drive its own Lookup, so all of
+  them must answer alike. Without it a server-side reformat that changed the byte
+  count reached the client as a size mismatch, which editors report as a possibly
+  truncated write on a save that fully succeeded.
 - `resolveByName` — collapses the five regular single-name→ID resolvers
   (state, project, milestone, cycle, initiative); user, issue-identifier,
   label, and project-slug resolution remain bespoke.
@@ -557,7 +568,8 @@ a layer above the commit-tail primitives) and no telemetry (matching
 1. `Write` buffers bytes in the `editBuffer`; `Flush` parses the markdown via
    `marshal`. Editor save-via-rename (temp file + `rename`) is caught by a
    scratch node and routed through the same path (`atomicwrite.go`,
-   `renamesave.go`).
+   `renamesave.go`), pinning the written bytes for the re-Lookup that path forces
+   (`authoredPins`).
 2. The fs layer **resolves names to IDs** (status→stateId, assignee
    email→userId, labels→labelIds, project/milestone/cycle/parent→IDs). A local
    catalog miss self-heals: a typed unknown-name error triggers exactly **one**

@@ -260,9 +260,10 @@ func (p *ProjectNode) manifest() *dirManifest {
 	// project.md is editable-only; identity/status/dates live in project.meta.
 	m.file("project.md", projectInfoIno(project.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project}
-		content := node.generateContent(ctx)
-		node.content = content
-		return node, content, 0
+		// An atomic save may have pinned the bytes the client just wrote; they
+		// win over the render for this one Lookup (authoredpin.go, #379).
+		served := lfs.seedAuthored(&node.editBuffer, projectInfoIno(project.ID), node.generateContent(ctx))
+		return node, served, 0
 	})
 
 	// project.meta: read-through from the freshest project so an edit to

@@ -28,14 +28,23 @@ import (
 // inode tree — and is unit-tested with a recording sink and stub closures: no
 // FUSE mount, SQLite, or API.
 
-// renameSink is the minimal surface the atomic-save tail needs: .error
-// reporting for the wrong-target guard and the kernel-cache coherence policy
-// for the consumed scratch entry. *LinearFS satisfies it directly (writeFeedback
-// and kernelNotify promotions), so production wiring needs no adapter while
-// tests inject a fake.
+// renameSink is the minimal surface a rename tail needs: .error reporting for
+// the guards and the kernel-cache coherence policy for the renamed entry.
+// *LinearFS satisfies it directly (writeFeedback and kernelNotify promotions),
+// so production wiring needs no adapter while tests inject a fake. Shared with
+// commitRename (renamecommit.go), the title-rename tail.
 type renameSink interface {
 	errorSink
 	InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64)
+}
+
+// renameSaveSink adds the one surface only the atomic-save tail needs: the
+// serve-your-own-writes pin that carries the written bytes across the re-Lookup
+// this tail forces (see authoredpin.go, #379). *LinearFS satisfies it through
+// its embedded authoredPins.
+type renameSaveSink interface {
+	renameSink
+	PinWritten(fileIno uint64, content []byte)
 }
 
 // renameSaveSpec describes the per-entity parts of an atomic save. Everything
@@ -79,7 +88,7 @@ type renameSaveSpec struct {
 // path a direct in-place edit uses. The canonical file is the only writable
 // file in the directory, so renames onto any other target — or of the canonical
 // files themselves — are rejected.
-func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSaveSpec) syscall.Errno {
+func renameSave(ctx context.Context, sink renameSaveSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSaveSpec) syscall.Errno {
 	// The atomic-save pattern keeps the temp file a sibling of the canonical file.
 	if newParent.EmbeddedInode().StableAttr().Ino != spec.dirIno {
 		return syscall.EXDEV
@@ -115,6 +124,20 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		// ESTALE drives the VFS to re-Lookup the real node.
 		spec.adopt()
 		consume()
+		// Serve-your-own-writes (#379). The re-Lookup the invalidation below
+		// forces builds a node from what PERSISTED, so without a pin the bytes
+		// the client just wrote are never served back and a server-side reformat
+		// that changed the byte count reads to the client as a truncated write.
+		// Pin them for that Lookup to seed (see authoredpin.go), before the
+		// invalidation that triggers it.
+		//
+		// ONLY on a clean commit, exactly as editFlush arms `authored` (#365): on
+		// EIO the write did NOT persist as written — a silent revert or a
+		// truncation — and serving the written bytes there would hide the loss
+		// from the re-read .error tells the agent to make.
+		if errno == 0 {
+			sink.PinWritten(spec.fileIno, content)
+		}
 		sink.InvalidateRenamed(spec.dirIno, name, newName, spec.fileIno)
 	}
 

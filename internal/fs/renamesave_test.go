@@ -17,6 +17,10 @@ type renameRecorder struct {
 	sets           int
 	clears         int
 	invalidates    []string
+	pins           []string
+	// events orders the coherence calls against each other: the pin has to be in
+	// place before the invalidation that triggers the re-Lookup which consumes it.
+	events []string
 }
 
 func (r *renameRecorder) SetWriteError(key, message string) {
@@ -27,6 +31,11 @@ func (r *renameRecorder) ClearWriteError(key string) { r.clears++ }
 func (r *renameRecorder) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
 	r.invalidates = append(r.invalidates,
 		fmt.Sprintf("renamed(%d,%q,%q,%d)", dirIno, oldName, newName, fileIno))
+	r.events = append(r.events, "invalidate")
+}
+func (r *renameRecorder) PinWritten(fileIno uint64, content []byte) {
+	r.pins = append(r.pins, fmt.Sprintf("pin(%d,%q)", fileIno, content))
+	r.events = append(r.events, "pin")
 }
 
 // renameParent is a bare InodeEmbedder whose zero-value inode has ino 0, so a
@@ -71,17 +80,21 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 		flushErrno      syscall.Errno
 		wantAdopts      int
 		wantInvalidates int
+		wantPins        int
 	}{
-		// A clean save adopts the fresh entity and drops the kernel caches.
-		{"flush success adopts and invalidates", 0, 1, 1},
+		// A clean save adopts the fresh entity, pins the written bytes for the
+		// re-Lookup to serve back (#379), and drops the kernel caches.
+		{"flush success adopts, pins and invalidates", 0, 1, 1, 1},
 		// The policy under test: Flush returns EIO only on a fatal
 		// read-your-writes divergence — the write still reached Linear, so the
 		// fresh entity is adopted (refusing would serve stale content while
-		// .error explains the divergence).
-		{"flush EIO still adopts and invalidates", syscall.EIO, 1, 1},
+		// .error explains the divergence). It must NOT pin: the write did not
+		// persist as written, and serving the written bytes back would hide that
+		// from the re-read .error asks for (#365's errno == 0 rule).
+		{"flush EIO adopts but never pins", syscall.EIO, 1, 1, 0},
 		// EINVAL means the write never reached Linear (parse/validation
-		// failure): nothing to adopt, nothing to invalidate.
-		{"flush EINVAL adopts nothing", syscall.EINVAL, 0, 0},
+		// failure): nothing to adopt, nothing to pin, nothing to invalidate.
+		{"flush EINVAL adopts nothing", syscall.EINVAL, 0, 0, 0},
 	}
 	// The scratch buffer is consumed exactly when the rename succeeds (the same
 	// {0, EIO} branch that adopts): go-fuse has moved the spent node over the
@@ -118,6 +131,22 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 				want := `renamed(0,"issue.md.tmp.1","issue.md",99)`
 				if sink.invalidates[0] != want {
 					t.Errorf("invalidate = %q, want %q", sink.invalidates[0], want)
+				}
+			}
+			if len(sink.pins) != tc.wantPins {
+				t.Fatalf("pins = %v, want %d call(s)", sink.pins, tc.wantPins)
+			}
+			if tc.wantPins == 1 {
+				// The pin carries the written bytes under the CANONICAL file's
+				// inode — that is the Lookup that will serve them back.
+				want := `pin(99,"scratch bytes")`
+				if sink.pins[0] != want {
+					t.Errorf("pin = %q, want %q", sink.pins[0], want)
+				}
+				// Ordering matters: the invalidation is what forces the
+				// re-Lookup, so the pin has to be waiting before it fires.
+				if len(sink.events) != 2 || sink.events[0] != "pin" {
+					t.Errorf("event order = %v, want the pin before the invalidation", sink.events)
 				}
 			}
 			if sink.sets != 0 {
