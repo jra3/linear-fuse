@@ -23,7 +23,9 @@ jobs:
     # runner at all.
     if: ${{ inputs.run_write_tests }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Above the test step's own -timeout, so go test is what expires first and
+    # prints a diagnosis rather than the runner killing the job mid-suite.
+    timeout-minutes: 35
 
     steps:
       - name: Checkout code
@@ -61,12 +63,15 @@ jobs:
       # only WRITE_TESTS, so all 55 write tests skipped on the first branch and the
       # job ran the offline fixture suite while advertising that it mutates Linear
       # (#386). LINEARFS_INTEGRATION was dropped in the same change: nothing reads it.
+      # -timeout matches `make integration-tests-rw`: the live suite's setup gate
+      # spends up to a third of it waiting for the cold-start full sync, and the
+      # job's own timeout-minutes must stay above the total.
       - name: Run integration tests (with writes)
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEARFS_LIVE_API: "1"
           LINEARFS_WRITE_TESTS: "1"
-        run: go test -v -timeout 20m ./internal/integration/...
+        run: go test -v -timeout 25m ./internal/integration/...
 
       - name: Cleanup on failure
         if: failure()

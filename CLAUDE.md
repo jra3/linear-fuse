@@ -64,6 +64,13 @@ make integration-tests-rw    # live API + writes: CREATES AND MODIFIES REAL LINE
 make integration-tests       # -ro then -rw (rw is a superset; the value is sequencing)
 ```
 
+Live mode gates setup on the sync worker's persisted full-cycle stamp
+(`sync.ScheduleKeyFullCycle`) before any test touches the mount: its SQLite cache
+is a per-run temp db, so a cold start would otherwise race the background sync
+and read empty listings. The gate spends up to a third of the binary's `-timeout`
+waiting, which is why the live targets budget 15m/25m rather than the offline
+suite's default.
+
 Two interlocks decide which tests run, and they are inverses:
 
 - `skipIfNoWriteTests` — needs `liveAPIMode` **and** `LINEARFS_WRITE_TESTS=1`. It

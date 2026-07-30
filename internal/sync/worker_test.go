@@ -1625,7 +1625,7 @@ func TestScheduledCyclesLeanUntilFullIntervalElapses(t *testing.T) {
 
 	// The full cycle persisted its timestamp — at the fake clock's now, via
 	// the clock seam, readable from the store.
-	stamped, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyFullCycle)
+	stamped, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle)
 	if err != nil {
 		t.Fatalf("GetSyncSchedule after full cycle: %v", err)
 	}
@@ -1764,7 +1764,7 @@ func TestBudgetSkippedCycleLeavesFullCycleDue(t *testing.T) {
 	if len(ops) != 0 {
 		t.Errorf("budget-skipped cycle issued ops %v, want none", ops)
 	}
-	if _, err := store.Queries().GetSyncSchedule(ctx, scheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
 		t.Errorf("GetSyncSchedule after skipped cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
 	}
 

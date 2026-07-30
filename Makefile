@@ -32,15 +32,18 @@ test-cover:
 # ran offline without it (#386). The fixture-mode write-contract guards that used to
 # ride along here (they wrote through the mount) skip under a live key, so "reads
 # only" is an enforced property, not a claim.
+# The -timeout is a budget the live suite splits with its setup: the store-
+# readiness gate (waitForInitialSync) spends up to a third of it waiting for the
+# cold-start full sync, so this must leave the tests themselves room.
 integration-tests-ro:
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 go test -v -timeout 10m ./internal/integration/...
+	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 go test -v -timeout 15m ./internal/integration/...
 
 # Run the integration suite including the write tests. This CREATES AND MODIFIES
 # REAL LINEAR DATA and may hit API limits on free workspaces.
 integration-tests-rw:
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 20m ./internal/integration/...
+	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
 
 # Both, in that order. -rw is a SUPERSET of -ro, not a disjoint half: WRITE_TESTS=1
 # only ADDS the 55 write tests, so the read suite runs twice. What this buys is

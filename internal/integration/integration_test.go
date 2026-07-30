@@ -2,6 +2,9 @@ package integration
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -18,6 +21,7 @@ import (
 	"github.com/jra3/linear-fuse/internal/config"
 	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/fs"
+	"github.com/jra3/linear-fuse/internal/sync"
 	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
 
@@ -41,6 +45,11 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// m.Run parses flags itself, but setup runs before that and the live
+	// store-readiness gate sizes its deadline from test.timeout, which reads as
+	// its zero default until this happens.
+	flag.Parse()
+
 	// Preflight stale mounts from a killed prior run: their dead FUSE
 	// connections make this run's kernel I/O fail with roaming EIO errors —
 	// the whole-suite flakiness this exists to prevent. The product's
@@ -155,10 +164,40 @@ func setupLiveAPI(apiKey string) error {
 // Store-readiness bounds. The cold-start cycle is a FULL workspace sync of a
 // real workspace, so minutes is normal, not pathological.
 const (
-	initialSyncTimeout  = 10 * time.Minute
-	initialSyncPoll     = 2 * time.Second
-	initialSyncLogEvery = 30 * time.Second
+	initialSyncTimeoutCap = 5 * time.Minute
+	initialSyncPoll       = 2 * time.Second
+	initialSyncLogEvery   = 30 * time.Second
+
+	// Share of the test binary's own -timeout the gate may spend, so a slow
+	// cold sync cannot eat the budget the tests themselves need.
+	initialSyncBudgetShare = 3
 )
+
+// initialSyncTimeout derives the gate's deadline from the test binary's actual
+// -timeout rather than a second constant that can drift away from the Makefile
+// recipes. The gate must expire comfortably INSIDE that budget: go test wins a
+// tie by panicking the process with a goroutine dump, which would bury the
+// legible diagnosis this gate exists to print. TestMain calls flag.Parse before
+// setup so test.timeout holds the real value here; `-timeout 0` (no limit) and
+// an absent flag both fall back to the cap.
+func initialSyncTimeout() time.Duration {
+	f := flag.Lookup("test.timeout")
+	if f == nil {
+		return initialSyncTimeoutCap
+	}
+	g, ok := f.Value.(flag.Getter)
+	if !ok {
+		return initialSyncTimeoutCap
+	}
+	budget, ok := g.Get().(time.Duration)
+	if !ok || budget <= 0 {
+		return initialSyncTimeoutCap
+	}
+	if share := budget / initialSyncBudgetShare; share < initialSyncTimeoutCap {
+		return share
+	}
+	return initialSyncTimeoutCap
+}
 
 // waitForInitialSync is the store half of the readiness pair server.WaitMount()
 // opens for the kernel. EnableSQLiteCache starts the sync worker, whose first
@@ -167,59 +206,65 @@ const (
 // temp cache db is always cold, so without this gate the first tests race that
 // sync and read empty listings. Fail loud here instead: one legible setup error
 // beats a cascade of unexplained per-test failures.
+//
+// The release condition is the worker's own persisted full-cycle stamp
+// (sync.ScheduleKeyFullCycle), not "some data showed up": a cold store has no
+// row, and syncCycle writes one only after a full cycle reaches its end, so the
+// stamp appearing means the cold-start cycle finished rather than that its first
+// page landed. Caveat worth knowing: a cycle whose workspace or per-team fetches
+// failed partway still stamps (those failures log-and-continue by design), so
+// the stamp means "the cycle completed", not "every fetch succeeded" — hence the
+// entity counts in the progress and failure messages.
 func waitForInitialSync() error {
-	// A page-of-1 probe distinguishes "the sync hasn't landed yet" from "this
-	// team genuinely has no issues" — the latter can never satisfy an
-	// issues-are-present condition, so don't wait on one.
-	probeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	remoteIssues, _, err := apiClient.GetTeamIssuesPage(probeCtx, testTeamID, "", 1)
-	cancel()
-	if err != nil {
-		return fmt.Errorf("probe team %s for issues: %w", testTeamKey, err)
-	}
-	wantIssues := len(remoteIssues) > 0
-	if !wantIssues {
-		log.Printf("Team %s has no issues in Linear; waiting only for the team itself to sync", testTeamKey)
+	store := lfs.GetStore()
+	if store == nil {
+		return fmt.Errorf("live setup: SQLite store missing after EnableSQLiteCache")
 	}
 
+	timeout := initialSyncTimeout()
 	start := time.Now()
-	deadline := start.Add(initialSyncTimeout)
+	deadline := start.Add(timeout)
 	lastLog := start
 
 	for {
-		teamListed, teamCount := teamVisibleInStore()
-		issueCount := 0
-		if teamListed {
-			issueCount = visibleIssueCount()
-		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stampedAt, err := store.Queries().GetSyncSchedule(ctx, sync.ScheduleKeyFullCycle)
+		cancel()
 
-		if teamListed && (!wantIssues || issueCount > 0) {
-			log.Printf("Initial sync populated the store for team %s after %v (%d teams, %d issues visible)",
-				testTeamKey, time.Since(start).Round(time.Second), teamCount, issueCount)
+		teamListed, teamCount := teamVisibleInStore()
+		issueCount := visibleIssueCount()
+
+		switch {
+		case err == nil && !stampedAt.IsZero():
+			log.Printf("Initial full sync completed after %v (stamped %s): %d teams, team %s present: %v, %d issues visible",
+				time.Since(start).Round(time.Second), stampedAt.Format(time.RFC3339), teamCount, testTeamKey, teamListed, issueCount)
 			return nil
+		case err != nil && !errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("read %q sync schedule while waiting for the initial sync: %w", sync.ScheduleKeyFullCycle, err)
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("initial sync did not populate the store for team %s within %v: "+
-				"%d teams listed (team present: %v), %d issues visible under teams/%s/issues, "+
-				"and the API reports the team %s issues",
-				testTeamKey, initialSyncTimeout, teamCount, teamListed, issueCount, testTeamKey,
-				map[bool]string{true: "HAS", false: "has NO"}[wantIssues])
+			return fmt.Errorf("initial full sync did not complete within %v (no %q stamp in the sync schedule): "+
+				"%d teams listed, team %s present: %v, %d issues visible under teams/%s/issues. "+
+				"A cycle that is skipped for rate budget or fails its teams fetch never stamps, so an API key "+
+				"without workspace read access, or a workspace with no teams, looks exactly like this",
+				timeout, sync.ScheduleKeyFullCycle, teamCount, testTeamKey, teamListed, issueCount, testTeamKey)
 		}
 
 		if time.Since(lastLog) >= initialSyncLogEvery {
-			log.Printf("Waiting for initial sync (%v elapsed, %v budget): %d teams listed (team %s present: %v), %d issues visible",
-				time.Since(start).Round(time.Second), initialSyncTimeout, teamCount, testTeamKey, teamListed, issueCount)
+			log.Printf("Waiting for the initial full sync to complete (%v elapsed of %v): %d teams listed, team %s present: %v, %d issues visible",
+				time.Since(start).Round(time.Second), timeout, teamCount, testTeamKey, teamListed, issueCount)
 			lastLog = time.Now()
 		}
 		time.Sleep(initialSyncPoll)
 	}
 }
 
-// teamVisibleInStore polls the same surface the tests read — the mount — rather
-// than reaching past it into the store: readdir is not kernel-cached (no
-// FOPEN_CACHE_DIR) and negative lookups are not cached either, so each poll is a
-// fresh trip through the repository.
+// teamVisibleInStore reports what the mount — the surface the tests actually
+// read — currently shows, so the readiness gate's progress and failure messages
+// describe the suite's own view rather than an internal one. Readdir is not
+// kernel-cached (no FOPEN_CACHE_DIR) and negative lookups are not cached either,
+// so each call is a fresh trip through the repository.
 func teamVisibleInStore() (present bool, total int) {
 	entries, err := os.ReadDir(teamsPath())
 	if err != nil {

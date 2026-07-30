@@ -308,11 +308,15 @@ const (
 	cycleFull cycleMode = "full"
 )
 
-// scheduleKeyFullCycle keys the persisted last-full-cycle timestamp in the
+// ScheduleKeyFullCycle keys the persisted last-full-cycle timestamp in the
 // sync_schedule table. The timestamp is persisted — not an in-memory counter
 // — so restarts and skipped cycles cannot silently stretch the metadata
 // staleness bound past FullSyncInterval.
-const scheduleKeyFullCycle = "full_cycle"
+//
+// Exported because a cold store's missing row is also the only durable
+// "the first full cycle has finished" signal, which the live integration
+// harness gates its setup on; worker and harness must key off one definition.
+const ScheduleKeyFullCycle = "full_cycle"
 
 // scheduleKeyInitiativesProbe keys the initiatives-probe watermark in the
 // sync_schedule table: the max initiative updatedAt the last successful
@@ -339,7 +343,7 @@ const issueReconcileInterval = time.Hour
 // fresh persisted timestamp and correctly starts lean. SyncNow bypasses this
 // entirely (always full).
 func (w *Worker) nextCycleMode(ctx context.Context) cycleMode {
-	lastRun, err := w.store.Queries().GetSyncSchedule(ctx, scheduleKeyFullCycle)
+	lastRun, err := w.store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle)
 	if err != nil || lastRun.IsZero() {
 		// Cold start (no row yet) — or an unreadable schedule, where
 		// over-syncing is the safe direction.
@@ -469,7 +473,7 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// the clock seam: the next cycle's nextCycleMode compares against w.now().
 	if mode == cycleFull {
 		if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
-			Key:     scheduleKeyFullCycle,
+			Key:     ScheduleKeyFullCycle,
 			LastRun: w.now(),
 		}); err != nil {
 			log.Printf("[sync] persist full-cycle timestamp failed: %v", err)
