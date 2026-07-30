@@ -534,11 +534,14 @@ building blocks:
   can't truncate kernel reads of longer dirty content. A **just-authored** buffer
   wins the same way (serve-your-own-writes, #365): after a write commits cleanly
   (`errno == 0`), `editFlush` marks the buffer authored, and `refresh` keeps the
-  exact written bytes until the next fresh `Open` — so a client that verifies a
+  exact written bytes while the flag stands — so a client that verifies a
   write by re-reading gets a byte-for-byte match instead of racing the async
   refresh, while persistence (SQLite and the entity) already holds Linear's
-  normalized render. It is not armed on a fatal read-your-writes divergence (a
-  revert or truncation, EIO), so a real loss is never masked from a re-read.
+  normalized render. A fresh `Open` clears the flag on that node but does not
+  end the window: a rebuild inside the pin's TTL (below) re-arms it from the
+  pin, which is the real outer bound (#388). It is not armed on a fatal
+  read-your-writes divergence (a revert or truncation, EIO), so a real loss is
+  never masked from a re-read.
 - `authoredPins` — the same guarantee for the written *bytes* rather than the
   buffer, so it survives the node the flag dies with (#379, #381). Two paths need
   that: the **atomic-save** path flushes through a transient node and then drops

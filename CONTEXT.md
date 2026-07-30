@@ -556,12 +556,11 @@ and never read jointly with it. The seven editBuffer file nodes go through
 edit is never clobbered by background sync), **and a just-authored buffer also
 wins** (serve-your-own-writes, #365: `editFlush` marks the buffer authored after a
 write persists, and while set `refresh` keeps the exact written bytes so a client's
-byte-for-byte read-back cannot race the async refresh; a fresh `Open` ends the
-window and the next refresh converges to the normalized render — see
-[[edit-buffer]]) — with Getattr snapshotting
-size+times under one lock; renderFile swaps its closure under `renderMu`
-(embedders with entity fields shadow `refreshFrom` and reuse that lock);
-`EmbeddedFileNode` swaps its file metadata under its own mu. The old
+byte-for-byte read-back cannot race the async refresh; what ends that window is
+the flag's own rule, not this seam's — see [[edit-buffer]]) — with Getattr
+snapshotting size+times under one lock; renderFile swaps its closure under
+`renderMu` (embedders with entity fields shadow `refreshFrom` and reuse that
+lock); `EmbeddedFileNode` swaps its file metadata under its own mu. The old
 exception paragraph is GONE: `TeamNode`/`UserNode`/cycle dirs used to ride
 auto-assigned inos (fresh node per Lookup) and dodge the bug — that
 inconsistency is erased; they are on stable inos with the seam like everyone
@@ -591,7 +590,10 @@ directory node cannot hand-write a divergent one. The `newDirInode`/`newFileInod
 `BaseNode` constructors stash the `nodeAttr` on the child, fill the Lookup
 `EntryOut` from that same value, take the entry timeout as an explicit param
 (the deliberate 30s/5s/0/1s classes are preserved verbatim, never rationalized
-here), and return `StableAttr{Mode, Ino}`.
+here), and return `StableAttr{Mode, Ino}`. `newFileInode` carries one further
+responsibility, because it is the one builder every editable file passes
+through: it seeds serve-your-own-writes for any child exposing `editable()
+*editBuffer` — see [[authored-pin]].
 
 This replaced 54 hand-fabricated attribute blocks whose per-site copies had
 already drifted: `DocsNode`/`AttachmentsNode.Getattr` reported `time.Now()`
