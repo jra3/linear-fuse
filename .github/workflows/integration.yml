@@ -27,10 +27,12 @@ jobs:
         with:
           go-version: '1.25'
 
-      - name: Install FUSE
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y fuse3
+      # Replaces an `apt-get install -y fuse3` that was a no-op: fuse3 is
+      # preinstalled on GitHub's ubuntu images (the preflight still installs it if
+      # a future image drops it). Installing was never the problem — WHICH
+      # fusermount3 PATH resolves to is (#384).
+      - name: FUSE preflight
+        run: ./scripts/ci-fuse-preflight.sh
 
       - name: Build
         run: make build

@@ -23,14 +23,12 @@ jobs:
         with:
           go-version: '1.25'
 
-      # TEMPORARY (#384): this job mounts FUSE (internal/integration's TestMain
-      # sets up mounted fixtures) and currently PASSES, while the integration job
-      # on the same commit fails at mount with "Operation not permitted". The only
-      # difference between them is that the other one apt-installs fuse3. Print
-      # the FUSE environment in both so the difference can be diffed. Remove once
-      # #384 is diagnosed.
-      - name: FUSE environment (#384 diagnostics)
-        run: ./scripts/fuse-diagnostics.sh
+      # This job mounts FUSE: `./...` includes internal/integration, whose
+      # TestMain sets up mounted fixtures. It used to rely on whatever the runner
+      # image happened to ship, which is how a stray non-setuid fusermount3 in the
+      # image made a job named "Unit Tests" fail at mount (#384).
+      - name: FUSE preflight
+        run: ./scripts/ci-fuse-preflight.sh
 
       - name: Run unit tests
         run: go test -v -race ./...
@@ -90,20 +88,12 @@ jobs:
         with:
           go-version: '1.25'
 
-      # TEMPORARY (#384): capture the FUSE environment BEFORE and AFTER the apt
-      # install. The Unit Tests job mounts fine without this install; this job
-      # fails at mount with EPERM, so the install itself is the prime suspect and
-      # the before/after pair is the experiment.
-      - name: FUSE environment before install (#384 diagnostics)
-        run: ./scripts/fuse-diagnostics.sh
-
-      - name: Install FUSE
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y fuse3
-
-      - name: FUSE environment after install (#384 diagnostics)
-        run: ./scripts/fuse-diagnostics.sh
+      # Replaces an `apt-get install -y fuse3` that was a no-op: fuse3 is
+      # preinstalled on GitHub's ubuntu images (the preflight still installs it if
+      # a future image drops it). Installing was never the problem — WHICH
+      # fusermount3 PATH resolves to is (#384).
+      - name: FUSE preflight
+        run: ./scripts/ci-fuse-preflight.sh
 
       - name: Build
         run: make build

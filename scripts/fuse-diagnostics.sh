@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Print everything that decides whether an unprivileged FUSE mount can succeed.
 #
-# TEMPORARY (#384). Since 2026-07-30 GitHub-hosted runners fail LinearFS mounts
-# with "/usr/local/bin/fusermount3: mount failed: Operation not permitted", but
-# not in every job: the Unit Tests job mounts fine while the integration job on
-# the SAME commit does not, and the one difference between them is that the
-# integration job apt-installs fuse3. This script runs in both so the two
-# environments can be diffed instead of guessed at.
+# The failure-path companion to ci-fuse-preflight.sh: the preflight calls this
+# when its assertions fail, so a CI job that cannot mount reports WHY in the same
+# step instead of dying later inside the test harness with a fixture-setup error
+# (#384). Also runnable by hand when debugging a mount problem on any machine.
 #
 # Why each check matters:
 #   - go-fuse picks the helper by PATH order (fusermountBinary →
