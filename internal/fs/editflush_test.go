@@ -158,8 +158,11 @@ func TestEditFlushZeroPinInoNeverPins(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
-	// pinIno zero is a comment/doc/label/milestone .md: its Lookup does not call
-	// seedAuthored, so a pin would be bytes nobody can ever read, held for the TTL.
+	// No shipped file is in this situation since #387 — all seven set pinIno, and
+	// TestEverySpecSetsPinIno requires it. The shell must still honour zero as "do
+	// not pin" for a future spec whose file is not built through newFileInode:
+	// nothing would ever seed from that pin, so it would be bytes nobody can read,
+	// held for the TTL.
 	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
@@ -182,7 +185,7 @@ func TestEditFlushZeroPinInoNeverPins(t *testing.T) {
 }
 
 // pinningFlushSink is the recording sink over a REAL authoredPins, so a test can
-// read a pin back the way a Lookup does (seedAuthored) instead of asserting on the
+// read a pin back the way a Lookup does (seedBuilt) instead of asserting on the
 // call log. Both embedded types define PinWritten, so the override is required.
 type pinningFlushSink struct {
 	recordingFlushSink

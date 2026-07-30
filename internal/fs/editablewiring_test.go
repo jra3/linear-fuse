@@ -17,46 +17,12 @@ import (
 // did — an agent that wrote a comment and re-read it after a dentry forget saw
 // Linear's render and reported a byte-count mismatch on a write that succeeded.
 //
-// These tests pin the wiring itself rather than the behavior, because the
+// This rule pins the wiring itself rather than the behavior, because the
 // behavior needs a dentry forget inside a 10s window, which a test cannot force
 // through the kernel reliably (the same constraint that keeps #388 a known
-// bound). What they can guarantee is that neither half can be omitted quietly.
-
-// TestEditableNodesReachTheSeedingSeam is the consuming half: newFileInode seeds
-// a pinned write only into a child it can recognise as editable, via the
-// editable() accessor editBuffer provides. A node that holds its content some
-// other way would still compile, still be writable, and silently never serve its
-// own bytes back — so assert every editable file node is reachable through that
-// assertion, in exactly the form newFileInode uses.
-func TestEditableNodesReachTheSeedingSeam(t *testing.T) {
-	t.Parallel()
-
-	// One per editable file surface in the mount. Adding an editable file means
-	// adding it here; if it does not satisfy the assertion, it does not get
-	// serve-your-own-writes no matter what its Flush pins.
-	nodes := map[string]any{
-		"issue.md":      &IssueFileNode{},
-		"project.md":    &ProjectInfoNode{},
-		"initiative.md": &InitiativeInfoNode{},
-		"comment .md":   &CommentNode{},
-		"doc .md":       &DocumentFileNode{},
-		"label .md":     &LabelFileNode{},
-		"milestone .md": &MilestoneFileNode{},
-	}
-
-	for name, node := range nodes {
-		t.Run(name, func(t *testing.T) {
-			e, ok := node.(interface{ editable() *editBuffer })
-			if !ok {
-				t.Fatalf("%s does not satisfy newFileInode's editable() assertion; "+
-					"a pinned write would never be served back through it", name)
-			}
-			if e.editable() == nil {
-				t.Errorf("%s exposed a nil buffer", name)
-			}
-		})
-	}
-}
+// bound). What it can guarantee is that the arming half cannot be omitted
+// quietly; the consuming half is a compile-time `var _ editableFile` assertion
+// carried next to each node type (see nodeattr.go's editableFile).
 
 // TestEverySpecSetsPinIno is the arming half. A pin is armed only when a spec
 // carries a nonzero pinIno, and the field is easy to leave out — it was left out

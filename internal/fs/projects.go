@@ -363,6 +363,7 @@ var _ fs.NodeWriter = (*ProjectInfoNode)(nil)
 var _ fs.NodeFlusher = (*ProjectInfoNode)(nil)
 var _ fs.NodeFsyncer = (*ProjectInfoNode)(nil)
 var _ fs.NodeSetattrer = (*ProjectInfoNode)(nil)
+var _ editableFile = (*ProjectInfoNode)(nil)
 
 // generateContent renders the editable-only project.md via
 // marshal.ProjectToMarkdown; a render failure serves an empty file rather

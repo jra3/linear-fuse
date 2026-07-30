@@ -31,7 +31,8 @@ type editBuffer struct {
 	// refresh refuses to replace the buffer with Linear's normalized render, so a
 	// client that verifies a write by re-reading sees its own bytes byte-for-byte
 	// across the write→verify window instead of racing an async refresh. A fresh
-	// Open clears it, so independent later readers converge to what persisted.
+	// Open clears it on THIS node; the window itself outlives that if the pin
+	// below is still standing (see Open).
 	//
 	// It protects the bytes only as long as this node lives — a dentry forget
 	// rebuilds the node with an empty buffer and no flag. editFlush therefore arms
@@ -59,8 +60,8 @@ func (b *editBuffer) size() int {
 // nodeRefresher implementation (see refresh.go) — UNLESS the buffer is already
 // serving the user's own bytes: a dirty buffer is an in-flight edit, and an
 // authored buffer holds a just-persisted write (#365). Both always win over a
-// background sync, so the served bytes stay the user's until a fresh Open ends
-// the window. entitySwap runs under the same lock iff the refresh proceeds, so
+// background sync, so the served bytes stay the user's for the life of the
+// window. entitySwap runs under the same lock iff the refresh proceeds, so
 // the node's entity fields and its content swap atomically.
 func (b *editBuffer) refresh(freshContent []byte, entitySwap func()) {
 	b.mu.Lock()
@@ -85,11 +86,16 @@ func (b *editBuffer) truncateBuffer() {
 	b.dirty = true
 }
 
-// Open ends any serve-your-own-writes window (#365): a fresh open means the
-// write→verify cycle that authored the buffer is over, so clear the flag and let
-// the next background refresh converge to what actually persisted. The write's
-// own Open ran before Flush set the flag, so a write can never clear its own
-// authored bytes — only a genuinely later open does.
+// Open clears this node's serve-your-own-writes flag (#365): a fresh open means
+// the write→verify cycle that authored the buffer is over, so let the next
+// background refresh converge to what actually persisted. The write's own Open
+// ran before Flush set the flag, so a write can never clear its own authored
+// bytes — only a genuinely later open does.
+//
+// It does NOT end the window outright: the flag is the node-local half, and a
+// Lookup that rebuilds (or re-seeds) the node while the authoredPins pin still
+// stands re-arms it from the pin. Until pinTTL expires, that is the bound — a
+// deliberate one, recorded in #388.
 func (b *editBuffer) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	b.mu.Lock()
 	b.authored = false

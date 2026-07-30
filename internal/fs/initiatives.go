@@ -220,6 +220,7 @@ var _ fs.NodeWriter = (*InitiativeInfoNode)(nil)
 var _ fs.NodeFlusher = (*InitiativeInfoNode)(nil)
 var _ fs.NodeFsyncer = (*InitiativeInfoNode)(nil)
 var _ fs.NodeSetattrer = (*InitiativeInfoNode)(nil)
+var _ editableFile = (*InitiativeInfoNode)(nil)
 
 // generateContent renders the editable-only initiative.md via
 // marshal.InitiativeToMarkdown; a render failure serves an empty file rather

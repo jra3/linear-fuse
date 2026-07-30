@@ -90,7 +90,7 @@ and the later of two writes to a file always owns the pin. **All seven editable
 files set `pinIno`** since #387; it was originally only the three whose Lookup
 seeded by hand (`issue.md`, `project.md`, `initiative.md`), which left a
 comment/doc/label/milestone `.md` with neither half of the guarantee. Seeding now
-lives in [[node-attr]]'s `newFileInode`, so a reader exists for every editable
+lives in [[attr-construction]]'s `newFileInode`, so a reader exists for every editable
 file; zero remains correct only for a file nothing builds through that path,
 where a pin would be bytes nobody can read.
 
@@ -695,7 +695,8 @@ verifying a write by re-reading gets a byte-for-byte match instead of racing the
 async refresh. It is deliberately NOT armed on a fatal read-your-writes divergence
 (a silent revert or truncation, where `commitWriteBack` returns EIO) — serving the
 written bytes there would mask the loss from the very re-read the `.error` asks for.
-A fresh `Open` clears it, so independent later readers converge to what persisted.
+A fresh `Open` clears it on that node, but does not end the window outright: a
+rebuild inside the [[authored-pin]]'s TTL re-arms it from the pin (#388).
 The flag protects the bytes only as long as **this node** lives — a dentry forget
 rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
 [[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
@@ -763,10 +764,10 @@ buffer is all a new editable surface needs to inherit the guarantee, instead of
 each build helper remembering — which is exactly what the four collection files
 did not do. Two wiring rules guard the halves, since the behavior itself needs a
 dentry forget inside the window that a test cannot force through the kernel (the
-[[serve-your-own-writes]] bound, #388): every editable node type must satisfy the
-`editable()` assertion, and every `editFlushSpec` literal in the package must set
-`pinIno` (an AST rule over the package source, in the spirit of
-`scripts/check-safename.sh`). Unit-tested directly (window, expiry, sweep,
+[[edit-buffer]] bound, #388): every editable node type asserts the `editableFile`
+interface at compile time next to its `fs.NodeWriter` assertion, and every
+`editFlushSpec` literal in the package must set `pinIno` (an AST rule over the
+package source, in the spirit of `scripts/check-safename.sh`). Unit-tested directly (window, expiry, sweep,
 unaliased copies, seed-beats-render) and at the flush seam (the supersede rule) plus
 deterministic mount-level tests over all three files, the reformat-note shape, and
 the EIO no-pin rule (`internal/integration/atomicsave_pin_test.go`) — the rename

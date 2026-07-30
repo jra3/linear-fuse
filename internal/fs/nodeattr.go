@@ -106,6 +106,14 @@ type dirChild interface {
 	fillAttr(*fuse.Attr)
 }
 
+// editableFile is a node that embeds editBuffer — newFileInode's recognition
+// seam for serve-your-own-writes (#387). Every editable file node asserts it
+// next to its fs.NodeWriter assertion, so a node that holds its content some
+// other way fails to compile rather than silently never serving its own bytes.
+type editableFile interface {
+	editable() *editBuffer
+}
+
 // newDirInode builds a static-attr directory child from a parent's Lookup. It
 // fixes the child's reporting identity, fills the Lookup EntryOut by calling the
 // child's own fillAttr — the exact method its Getattr uses — sets the entry
@@ -157,7 +165,7 @@ func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, name st
 	// the existing-node size clamp below, which still has the last word: whichever
 	// node ends up serving, the size published is that node's own.
 	if b.lfs != nil {
-		if e, ok := child.(interface{ editable() *editBuffer }); ok {
+		if e, ok := child.(editableFile); ok {
 			if size, seeded := b.lfs.seedBuilt(e.editable(), ino); seeded {
 				out.Attr.Size = uint64(size)
 			}

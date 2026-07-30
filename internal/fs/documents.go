@@ -194,6 +194,7 @@ var _ fs.NodeWriter = (*DocumentFileNode)(nil)
 var _ fs.NodeFlusher = (*DocumentFileNode)(nil)
 var _ fs.NodeFsyncer = (*DocumentFileNode)(nil)
 var _ fs.NodeSetattrer = (*DocumentFileNode)(nil)
+var _ editableFile = (*DocumentFileNode)(nil)
 
 func (n *DocumentFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// One lock for size + times: a concurrent refresh (refresh.go) swaps
