@@ -33,6 +33,16 @@ import (
 // window closes reads converge to what Linear stored. pinTTL is what keeps a pin
 // nobody ever looked up from becoming a stale read minutes later; it is a
 // tighter bound than the in-place path's "until the next Open" (#365).
+//
+// The TTL is also what bounds the one case where a pin outlives its truth: a
+// successful IN-PLACE edit of the same file inside the window does not drop the
+// pin (editFlush invalidates the inode, which usually leaves the node — and the
+// unread pin — alive), so if that inode is forgotten and re-Looked-up before the
+// window closes, the Lookup serves the older atomic-save bytes rather than the
+// newer in-place ones. It needs a dentry forget inside the window to happen at
+// all, and it converges on expiry; making an in-place write supersede a pin would
+// mean plumbing the file's inode through editFlush, which is deliberately out of
+// scope here.
 const pinTTL = 10 * time.Second
 
 // authoredPin is one pinned write: the exact bytes a client wrote through the
@@ -101,6 +111,11 @@ func (p *authoredPins) writtenBytes(fileIno uint64) []byte {
 // the same bytes — a Lookup that published the render's length while the buffer
 // served the pin would clamp the client's own read to the wrong size, which is
 // the very mismatch this module exists to remove.
+//
+// The buffer gets its own copy of the pin: the pin is not consumed, so every
+// Lookup in the window is handed the same bytes, and editBuffer.Write mutates a
+// buffer in place whenever the write fits — one node's edit would otherwise
+// rewrite what the next Lookup serves.
 func (p *authoredPins) seedAuthored(b *editBuffer, fileIno uint64, rendered []byte) []byte {
 	pinned := p.writtenBytes(fileIno)
 	b.mu.Lock()
@@ -109,7 +124,8 @@ func (p *authoredPins) seedAuthored(b *editBuffer, fileIno uint64, rendered []by
 		b.content = rendered
 		return rendered
 	}
-	b.content = pinned
+	owned := append([]byte(nil), pinned...)
+	b.content = owned
 	b.authored = true
-	return pinned
+	return owned
 }

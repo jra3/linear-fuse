@@ -75,8 +75,11 @@ type renameSaveSpec struct {
 	// construct a transient file node with a dirty editBuffer and Flush it
 	// (frontmatter validation, read-your-writes verification, .error handling,
 	// cache invalidation). The closure captures the transient node so adopt can
-	// read the flushed entity back.
-	flush func(ctx context.Context, content []byte) syscall.Errno
+	// read the flushed entity back — and so it can report committed, whether the
+	// flush actually wrote to Linear (editBuffer.committedWrite). Errno alone
+	// cannot say: a save that resolved to no changes at all also returns 0, and
+	// pinning there would echo a dropped edit back as a byte-for-byte success.
+	flush func(ctx context.Context, content []byte) (committed bool, errno syscall.Errno)
 	// adopt stores the flushed node's fresh entity on the directory node so the
 	// canonical file re-renders the persisted content. Called exactly when the
 	// write reached Linear — flush errno 0 or EIO (see renameSave).
@@ -108,7 +111,7 @@ func renameSave(ctx context.Context, sink renameSaveSink, name string, newParent
 		return syscall.ENOTSUP
 	}
 
-	errno := spec.flush(ctx, content)
+	committed, errno := spec.flush(ctx, content)
 
 	if errno == 0 || errno == syscall.EIO {
 		// Adopt on EIO too: Flush returns EIO only on a fatal read-your-writes
@@ -131,11 +134,15 @@ func renameSave(ctx context.Context, sink renameSaveSink, name string, newParent
 		// Pin them for that Lookup to seed (see authoredpin.go), before the
 		// invalidation that triggers it.
 		//
-		// ONLY on a clean commit, exactly as editFlush arms `authored` (#365): on
-		// EIO the write did NOT persist as written — a silent revert or a
-		// truncation — and serving the written bytes there would hide the loss
-		// from the re-read .error tells the agent to make.
-		if errno == 0 {
+		// ONLY on a committed clean save, exactly as editFlush arms `authored`
+		// (#365). On EIO the write did NOT persist as written — a silent revert
+		// or a truncation — and serving the written bytes there would hide the
+		// loss from the re-read .error tells the agent to make. A save that
+		// committed nothing (an edit that resolved to no changes, e.g. one that
+		// only touched frontmatter keys marshal ignores) returns 0 too, and
+		// pinning there would report a dropped edit back as a byte-for-byte
+		// success — the same false signal in the other direction.
+		if committed && errno == 0 {
 			sink.PinWritten(spec.fileIno, content)
 		}
 		sink.InvalidateRenamed(spec.dirIno, name, newName, spec.fileIno)

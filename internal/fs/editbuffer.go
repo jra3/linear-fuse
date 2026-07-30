@@ -35,6 +35,18 @@ type editBuffer struct {
 	authored bool
 }
 
+// committedWrite reports whether the Flush that just ran through this buffer
+// actually committed a write to Linear. editFlush marks a buffer authored on
+// exactly that outcome — a front half that proceeded plus a clean commit (#365) —
+// so the atomic-save tail reads the flag back off the transient node it flushed
+// through rather than inferring a commit from errno 0, which a flush that changed
+// nothing returns too (see renamesave.go, #379).
+func (b *editBuffer) committedWrite() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.authored
+}
+
 // size is the current buffer length, for a node's Getattr.
 func (b *editBuffer) size() int {
 	b.mu.Lock()

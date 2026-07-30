@@ -101,7 +101,8 @@ canonical files aren't renamable) → target-name guard (`.error` names the one
 writable target, `ENOTSUP`) → flush the bytes through the file's normal edit
 path (a transient file node with a dirty edit buffer, so frontmatter
 validation, read-your-writes verification, and `.error` handling all apply) →
-**adopt + consume + `InvalidateRenamed`, all on {0, EIO}**. The adopt-on-EIO
+**adopt + consume + `InvalidateRenamed`, all on {0, EIO}, plus the
+[[authored-pin]] of the written bytes on a committed clean save**. The adopt-on-EIO
 line is the policy, now written once: `Flush` returns `EIO` only on a fatal
 read-your-writes divergence, by which point the write has already reached
 Linear — refusing to adopt would keep serving stale content while `.error`
@@ -114,11 +115,14 @@ that can no longer persist. A consumed scratch node now returns `ESTALE` from
 `ESTALE` on `Open` drives the VFS to re-Lookup the real node (`LOOKUP_REVAL`).
 Lives in `internal/fs/renamesave.go`; each directory hands it a small spec
 (target name, error key, dir/file inos, scratch/flush/adopt closures — the
-scratch closure also returns the per-node consume). It depends only on the `renameSink` seam
-(ErrorSink + `InvalidateRenamed`, satisfied by `*LinearFS` through the
-writeFeedback and kernelNotify promotions), and the scratch lookup is a spec
-closure, so it is unit-tested with a recording sink — no FUSE mount, inode
-tree, SQLite, or API.
+scratch closure also returns the per-node consume, and the flush closure reports
+whether it actually **committed** alongside its errno, since a save that resolved
+to no changes returns 0 too and must not pin). It depends only on the
+`renameSaveSink` seam (the `renameSink` surface — ErrorSink +
+`InvalidateRenamed` — plus `PinWritten`, all satisfied by `*LinearFS` through the
+writeFeedback, kernelNotify, and authoredPins promotions; `commitRename` keeps
+the narrower `renameSink`), and the scratch lookup is a spec closure, so it is
+unit-tested with a recording sink — no FUSE mount, inode tree, SQLite, or API.
 
 ### Create tail (`commitCreate`)
 The **deep module** that owns the invariant tail of every create (`_create` writes and
@@ -676,7 +680,10 @@ async refresh. It is deliberately NOT armed on a fatal read-your-writes divergen
 (a silent revert or truncation, where `commitWriteBack` returns EIO) — serving the
 written bytes there would mask the loss from the very re-read the `.error` asks for.
 A fresh `Open` clears it, so independent later readers converge to what persisted.
-See [[node-refresh]]. Each of the seven editable file
+The flag is also the atomic-save path's **commit signal**: `editBuffer.committedWrite`
+reads it back off the transient node [[rename-save]] flushes through, so the
+[[authored-pin]] arms on exactly the outcome that arms `authored` here rather than
+on a bare errno 0. See [[node-refresh]]. Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`
@@ -697,6 +704,39 @@ regenerate on first Read — a live double-compute this fix removed by seeding.
 carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
 [[attr-construction]]). Unit-tested directly (write-expands, in-place,
 truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
+
+### Authored-write pin (`authoredPins`)
+The **deep module** that carries serve-your-own-writes across a node boundary the
+[[edit-buffer]] cannot cross (#379). `authored` pins the written bytes *in the
+buffer they were written through*, which covers in-place edits only — and editors
+never write in place: they rename a scratch temp file onto the canonical `.md`, so
+[[rename-save]] flushes through a **transient** node (its buffer, and its
+`authored` flag, are discarded a line later) and then deliberately drops the
+canonical file's inode so it re-Looks-up and re-renders what *persisted*. The
+written bytes were therefore never served back, and any server-side reformat that
+moved the byte count reached the client as a size mismatch on a fully successful
+write — which editors report as a possibly truncated write.
+`authoredPins` (`internal/fs/authoredpin.go`) is a mount-wide `ino → {bytes,
+deadline}` store embedded on `LinearFS` by value (zero value ready, no constructor
+wiring). Its invariant: **a Lookup that finds a pin serves the pinned bytes as the
+buffer's content *and* as the size it publishes** — `manifest.file` reports
+`len(content)` in the `EntryOut`, and publishing the render's length while serving
+the pin would clamp the client's own read to the wrong size, which is the mismatch
+the module exists to remove. The pin is armed **only on a committed clean save**
+(`committed && errno == 0`, the same rule that arms `authored`): not on `EIO`,
+where the write did not persist as written and hiding that would mask real loss;
+not on a save that committed nothing, where echoing the bytes back would report a
+dropped edit as a byte-for-byte success. It is bounded by **time** (`pinTTL`),
+**not consumed by the first Lookup** — a client's verification is several syscalls
+(stat, then open+read), each able to drive its own Lookup after the rename
+invalidation, so all of them must answer alike; the TTL is also a tighter staleness
+bound than the in-place path's "until the next `Open`", and it is what bounds the
+one gap left open (a later *in-place* edit inside the window does not supersede an
+existing pin). Wired at all three atomic-save sites (`issue.md`, `project.md`,
+`initiative.md`) via the `renameSaveSink` seam; unit-tested directly (window,
+expiry, sweep, unaliased copies, seed-beats-render) plus one deterministic
+mount-level test — the rename itself forces the re-Lookup, so no timeout wait is
+needed.
 
 ### Render file (`renderFile`)
 The **deep module** owning every read-only *generated* file — the render-through

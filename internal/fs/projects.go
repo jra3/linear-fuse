@@ -324,14 +324,15 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 		dirIno:     p.EmbeddedInode().StableAttr().Ino,
 		fileIno:    projectInfoIno(project.ID),
 		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(p, oldName) },
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
+		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
 			fileNode = &ProjectInfoNode{
 				BaseNode:   BaseNode{lfs: p.lfs},
 				team:       team,
 				project:    project,
 				editBuffer: editBuffer{content: content, dirty: true},
 			}
-			return fileNode.Flush(ctx, nil)
+			errno := fileNode.Flush(ctx, nil)
+			return fileNode.committedWrite(), errno
 		},
 		adopt: func() { p.setEntity(fileNode.project) },
 	})

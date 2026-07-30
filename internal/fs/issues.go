@@ -423,13 +423,14 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 		dirIno:     n.EmbeddedInode().StableAttr().Ino,
 		fileIno:    issueIno(issue.ID),
 		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(n, oldName) },
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
+		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
 			fileNode = &IssueFileNode{
 				BaseNode:   BaseNode{lfs: n.lfs},
 				issue:      issue,
 				editBuffer: editBuffer{content: content, dirty: true},
 			}
-			return fileNode.Flush(ctx, nil)
+			errno := fileNode.Flush(ctx, nil)
+			return fileNode.committedWrite(), errno
 		},
 		adopt: func() { n.setEntity(fileNode.issue) },
 	})

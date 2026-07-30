@@ -543,8 +543,10 @@ building blocks:
   buffer that was written cannot carry it (#379): `renameSave` flushes through a
   transient node and then drops the canonical file's inode, so the re-Lookup
   renders what persisted and the written bytes would be lost. It pins them under
-  the file's inode (clean commits only, same `errno == 0` rule) and the Lookup
-  seeds the new buffer — content *and* the size it publishes — from the pin
+  the file's inode (only when the flush actually committed a write and returned
+  `errno == 0` — the same rule that arms `authored`, so neither a fatal divergence
+  nor a save that changed nothing is echoed back as a byte-for-byte success) and
+  the Lookup seeds the new buffer — content *and* the size it publishes — from the pin
   instead of the render. Bounded by time (`pinTTL`), not by one Lookup: a client's
   verification is several syscalls, each able to drive its own Lookup, so all of
   them must answer alike. Without it a server-side reformat that changed the byte

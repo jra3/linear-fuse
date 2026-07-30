@@ -53,7 +53,7 @@ type recordingRenameSpec struct {
 	adoptCalls   int
 }
 
-func newRecordingRenameSpec(scratchOK bool, flushErrno syscall.Errno) *recordingRenameSpec {
+func newRecordingRenameSpec(scratchOK, flushCommitted bool, flushErrno syscall.Errno) *recordingRenameSpec {
 	r := &recordingRenameSpec{}
 	r.spec = renameSaveSpec{
 		targetName: "issue.md",
@@ -64,10 +64,10 @@ func newRecordingRenameSpec(scratchOK bool, flushErrno syscall.Errno) *recording
 			r.scratchCalls++
 			return []byte("scratch bytes"), func() { r.consumeCalls++ }, scratchOK
 		},
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
+		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
 			r.flushCalls++
 			r.flushContent = content
-			return flushErrno
+			return flushCommitted, flushErrno
 		},
 		adopt: func() { r.adoptCalls++ },
 	}
@@ -77,6 +77,7 @@ func newRecordingRenameSpec(scratchOK bool, flushErrno syscall.Errno) *recording
 func TestRenameSave_FlushOutcomes(t *testing.T) {
 	cases := []struct {
 		name            string
+		flushCommitted  bool
 		flushErrno      syscall.Errno
 		wantAdopts      int
 		wantInvalidates int
@@ -84,17 +85,22 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 	}{
 		// A clean save adopts the fresh entity, pins the written bytes for the
 		// re-Lookup to serve back (#379), and drops the kernel caches.
-		{"flush success adopts, pins and invalidates", 0, 1, 1, 1},
+		{"flush success adopts, pins and invalidates", true, 0, 1, 1, 1},
+		// A save that resolved to no changes also returns 0. The tail still
+		// adopts/consumes/invalidates, but it must NOT pin: echoing the written
+		// bytes back would report an edit Linear never took as a byte-for-byte
+		// success.
+		{"flush that committed nothing never pins", false, 0, 1, 1, 0},
 		// The policy under test: Flush returns EIO only on a fatal
 		// read-your-writes divergence — the write still reached Linear, so the
 		// fresh entity is adopted (refusing would serve stale content while
 		// .error explains the divergence). It must NOT pin: the write did not
 		// persist as written, and serving the written bytes back would hide that
 		// from the re-read .error asks for (#365's errno == 0 rule).
-		{"flush EIO adopts but never pins", syscall.EIO, 1, 1, 0},
+		{"flush EIO adopts but never pins", true, syscall.EIO, 1, 1, 0},
 		// EINVAL means the write never reached Linear (parse/validation
 		// failure): nothing to adopt, nothing to pin, nothing to invalidate.
-		{"flush EINVAL adopts nothing", syscall.EINVAL, 0, 0, 0},
+		{"flush EINVAL adopts nothing", false, syscall.EINVAL, 0, 0, 0},
 	}
 	// The scratch buffer is consumed exactly when the rename succeeds (the same
 	// {0, EIO} branch that adopts): go-fuse has moved the spent node over the
@@ -104,7 +110,7 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &renameRecorder{}
-			rec := newRecordingRenameSpec(true, tc.flushErrno)
+			rec := newRecordingRenameSpec(true, tc.flushCommitted, tc.flushErrno)
 
 			errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
 				&renameParent{}, "issue.md", rec.spec)
@@ -158,7 +164,7 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 
 func TestRenameSave_WrongTarget(t *testing.T) {
 	sink := &renameRecorder{}
-	rec := newRecordingRenameSpec(true, 0)
+	rec := newRecordingRenameSpec(true, true, 0)
 
 	errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
 		&renameParent{}, "notes.md", rec.spec)
@@ -188,7 +194,7 @@ func TestRenameSave_WrongTarget(t *testing.T) {
 
 func TestRenameSave_CrossDirectory(t *testing.T) {
 	sink := &renameRecorder{}
-	rec := newRecordingRenameSpec(true, 0)
+	rec := newRecordingRenameSpec(true, true, 0)
 	// The zero-value parent inode has ino 0; a nonzero dirIno makes the rename
 	// cross-directory.
 	rec.spec.dirIno = 7
@@ -213,7 +219,7 @@ func TestRenameSave_NotAScratchFile(t *testing.T) {
 	sink := &renameRecorder{}
 	// e.g. an attempt to rename issue.md itself: the canonical files aren't
 	// renamable, and no .error is recorded (there is nothing to persist).
-	rec := newRecordingRenameSpec(false, 0)
+	rec := newRecordingRenameSpec(false, true, 0)
 
 	errno := renameSave(context.Background(), sink, "issue.md",
 		&renameParent{}, "renamed.md", rec.spec)

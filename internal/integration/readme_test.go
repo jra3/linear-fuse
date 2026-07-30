@@ -146,10 +146,17 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	for _, want := range []string{
 		"saved, but Linear reformatted the markdown",
 		"Re-read the file before any follow-up edit",
+		"a later read shows",
 	} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not document the server-side reformat contract: missing %q", want)
 		}
+	}
+	// The written bytes are pinned across the atomic-save re-Lookup, so an
+	// immediate re-read shows the agent's own bytes, never Linear's formatting.
+	// The two places the README describes the reformat must agree on that timing.
+	if strings.Contains(readme, "Re-read the file to see what it stored") {
+		t.Error("README still tells an agent an immediate re-read shows Linear's stored formatting (#379 pins the written bytes)")
 	}
 
 	// Project labels (#130): the README must teach the catalog surface and the

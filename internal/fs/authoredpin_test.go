@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -135,6 +136,29 @@ func TestSeedAuthored_PinnedWriteWinsOverRender(t *testing.T) {
 	}
 	if !b.authored {
 		t.Error("a pin-seeded buffer must be authored, or a refresh can drop the client's bytes mid-verify")
+	}
+}
+
+// TestSeedAuthored_BufferWriteCannotCorruptThePin: the pin is not consumed, so a
+// node seeded from it must own its bytes — editBuffer.Write rewrites a buffer in
+// place whenever the write fits, and the next Lookup in the same window still has
+// to serve the bytes the client actually saved.
+func TestSeedAuthored_BufferWriteCannotCorruptThePin(t *testing.T) {
+	var p authoredPins
+	written := []byte("body the client wrote")
+	p.PinWritten(13, written)
+
+	var first editBuffer
+	p.seedAuthored(&first, 13, []byte("what Linear stored"))
+	if _, errno := first.Write(context.Background(), nil, []byte("MANGLED"), 0); errno != 0 {
+		t.Fatalf("write through the seeded buffer = %v, want 0", errno)
+	}
+
+	var second editBuffer
+	served := p.seedAuthored(&second, 13, []byte("what Linear stored"))
+	if string(served) != string(written) || string(second.content) != string(written) {
+		t.Errorf("second lookup served %q / buffer %q, want the pinned write %q",
+			served, second.content, written)
 	}
 }
 
