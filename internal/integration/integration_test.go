@@ -211,10 +211,11 @@ func initialSyncTimeout() time.Duration {
 // (sync.ScheduleKeyFullCycle), not "some data showed up": a cold store has no
 // row, and syncCycle writes one only after a full cycle reaches its end, so the
 // stamp appearing means the cold-start cycle finished rather than that its first
-// page landed. Caveat worth knowing: a cycle whose workspace or per-team fetches
-// failed partway still stamps (those failures log-and-continue by design), so
-// the stamp means "the cycle completed", not "every fetch succeeded" — hence the
-// entity counts in the progress and failure messages.
+// page landed. The stamp alone is not sufficient, though: a cycle whose
+// workspace or per-team fetches failed partway still stamps (those failures
+// log-and-continue by design), so it means "the cycle completed", not "every
+// fetch succeeded". The counts are therefore a post-condition the gate asserts
+// before releasing, not just decoration on a log line.
 func waitForInitialSync() error {
 	store := lfs.GetStore()
 	if store == nil {
@@ -236,6 +237,17 @@ func waitForInitialSync() error {
 
 		switch {
 		case err == nil && !stampedAt.IsZero():
+			if !teamListed || issueCount == 0 {
+				return fmt.Errorf("the initial full sync stamped %q at %s but left the store unusable: "+
+					"%d teams listed, team %s present: %v, %d issues visible under teams/%s/issues. "+
+					"The stamp means the cycle reached its end, not that every fetch succeeded: syncCycle "+
+					"log-and-continues past a failed workspace, team-metadata or team-issues fetch, so a "+
+					"persistent rate-limit deferral and a transient 5xx both land here looking identical to "+
+					"a test team that genuinely holds no issues. The [sync] log lines above this one report "+
+					"which of those it was",
+					sync.ScheduleKeyFullCycle, stampedAt.Format(time.RFC3339),
+					teamCount, testTeamKey, teamListed, issueCount, testTeamKey)
+			}
 			log.Printf("Initial full sync completed after %v (stamped %s): %d teams, team %s present: %v, %d issues visible",
 				time.Since(start).Round(time.Second), stampedAt.Format(time.RFC3339), teamCount, testTeamKey, teamListed, issueCount)
 			return nil
@@ -261,10 +273,10 @@ func waitForInitialSync() error {
 }
 
 // teamVisibleInStore reports what the mount — the surface the tests actually
-// read — currently shows, so the readiness gate's progress and failure messages
-// describe the suite's own view rather than an internal one. Readdir is not
-// kernel-cached (no FOPEN_CACHE_DIR) and negative lookups are not cached either,
-// so each call is a fresh trip through the repository.
+// read — currently shows, so the readiness gate asserts and reports the suite's
+// own view rather than an internal one. Readdir is not kernel-cached (no
+// FOPEN_CACHE_DIR) and negative lookups are not cached either, so each call is a
+// fresh trip through the repository.
 func teamVisibleInStore() (present bool, total int) {
 	entries, err := os.ReadDir(teamsPath())
 	if err != nil {

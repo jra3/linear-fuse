@@ -69,7 +69,11 @@ Live mode gates setup on the sync worker's persisted full-cycle stamp
 is a per-run temp db, so a cold start would otherwise race the background sync
 and read empty listings. The gate spends up to a third of the binary's `-timeout`
 waiting, which is why the live targets budget 15m/25m rather than the offline
-suite's default.
+suite's default. The stamp only means the cycle reached its end — `syncCycle`
+log-and-continues past a failed fetch — so once it lands the gate also asserts
+the test team is visible with a non-zero issue count, and fails setup rather than
+letting an empty store become 300 unexplained test failures. A test team that
+genuinely has no issues fails here by design.
 
 Two interlocks decide which tests run, and they are inverses:
 
