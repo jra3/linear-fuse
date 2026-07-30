@@ -259,11 +259,13 @@ func (p *ProjectNode) manifest() *dirManifest {
 
 	// project.md is editable-only; identity/status/dates live in project.meta.
 	m.file("project.md", projectInfoIno(project.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
+		// Built with the fresh render; newFileInode swaps in the bytes an earlier
+		// save pinned under this inode when one is still standing, for every
+		// editable file in one place (authoredpin.go, #379/#387).
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project}
-		// An atomic save may have pinned the bytes the client just wrote; they
-		// win over the render for this one Lookup (authoredpin.go, #379).
-		served := lfs.seedAuthored(&node.editBuffer, projectInfoIno(project.ID), node.generateContent(ctx))
-		return node, served, 0
+		content := node.generateContent(ctx)
+		node.content = content
+		return node, content, 0
 	})
 
 	// project.meta: read-through from the freshest project so an edit to
@@ -361,6 +363,7 @@ var _ fs.NodeWriter = (*ProjectInfoNode)(nil)
 var _ fs.NodeFlusher = (*ProjectInfoNode)(nil)
 var _ fs.NodeFsyncer = (*ProjectInfoNode)(nil)
 var _ fs.NodeSetattrer = (*ProjectInfoNode)(nil)
+var _ editableFile = (*ProjectInfoNode)(nil)
 
 // generateContent renders the editable-only project.md via
 // marshal.ProjectToMarkdown; a render failure serves an empty file rather

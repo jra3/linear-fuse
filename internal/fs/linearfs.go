@@ -76,7 +76,7 @@ type LinearFS struct {
 	writeFeedback
 
 	// Serve-your-own-writes pins for atomic saves (see authoredpin.go, #379).
-	// Embedded, so lfs.PinWritten / lfs.seedAuthored promote. Zero value ready.
+	// Embedded, so lfs.PinWritten / lfs.seedBuilt promote. Zero value ready.
 	authoredPins
 }
 

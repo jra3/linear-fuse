@@ -26,6 +26,15 @@ import (
 // editBuffer with them — marked authored, so a background refresh leaves them
 // alone — instead of the fresh render.
 //
+// Both halves are single-sited, which is what keeps them from drifting apart:
+// editFlush is the only place a pin is armed, and newFileInode — the one builder
+// every editable file node passes through — is the only place one is consumed
+// (#387). Before that, the consuming half was hand-written per file, so the four
+// collection files (a comment/doc/label/milestone .md) simply never got it: an
+// agent that wrote a comment and re-read it after a forget saw Linear's render
+// instead of its own bytes, and reported a byte-count mismatch on a write that
+// fully succeeded.
+//
 // Arming it in editFlush rather than in renameSave is what keeps the two write
 // paths from disagreeing. A pin is superseded by the next PinWritten for the same
 // inode, so whichever path wrote LAST owns the pin; arming it only on the rename
@@ -110,27 +119,30 @@ func (p *authoredPins) writtenBytes(fileIno uint64) []byte {
 	return pin.content
 }
 
-// seedAuthored fills a freshly-built editable node's buffer and reports the bytes
-// its Lookup must publish as the file's size: the rendered content normally, or
-// a pinned write when one is waiting for this inode. The two must be
-// the same bytes — a Lookup that published the render's length while the buffer
-// served the pin would clamp the client's own read to the wrong size, which is
-// the very mismatch this module exists to remove.
+// seedBuilt overrides a freshly-built editable node's buffer with the bytes a
+// client last wrote to this inode, when a pin is still standing, and reports the
+// size the Lookup must publish for them. Callers build the node with the fresh
+// render already in its buffer; this replaces it only when there is a pin, so
+// "no pin" costs one map lookup and leaves the render untouched.
+//
+// The published size must move with the bytes: a Lookup that reported the
+// render's length while the buffer served the pin would clamp the client's own
+// read to the wrong size, which is the very mismatch this module exists to
+// remove. That is why the size comes back from here rather than being computed
+// by the caller from what it rendered.
 //
 // The buffer gets its own copy of the pin: the pin is not consumed, so every
 // Lookup in the window is handed the same bytes, and editBuffer.Write mutates a
 // buffer in place whenever the write fits — one node's edit would otherwise
 // rewrite what the next Lookup serves.
-func (p *authoredPins) seedAuthored(b *editBuffer, fileIno uint64, rendered []byte) []byte {
+func (p *authoredPins) seedBuilt(b *editBuffer, fileIno uint64) (int, bool) {
 	pinned := p.writtenBytes(fileIno)
+	if pinned == nil {
+		return 0, false
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if pinned == nil {
-		b.content = rendered
-		return rendered
-	}
-	owned := append([]byte(nil), pinned...)
-	b.content = owned
+	b.content = append([]byte(nil), pinned...)
 	b.authored = true
-	return owned
+	return len(b.content), true
 }

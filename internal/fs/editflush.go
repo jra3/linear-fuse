@@ -75,17 +75,20 @@ type editFlushSpec[T any] struct {
 	// buried in a handler. Invalidated only after the commit tail persists.
 	coherence []uint64
 	// pinIno is the inode of the canonical file whose Lookup seeds from
-	// authoredPins: issue.md, project.md, and initiative.md, the three that both
-	// accept an atomic save and call seedAuthored when they build a node. A
-	// committed clean write pins its bytes there, which is what makes
-	// serve-your-own-writes survive the node — a dentry forget and re-Lookup
-	// inside the window, and the transient node the atomic-save path flushes
-	// through.
+	// authoredPins. A committed clean write pins its bytes there, which is what
+	// makes serve-your-own-writes survive the node — a dentry forget and
+	// re-Lookup inside the window, and the transient node the atomic-save path
+	// flushes through.
 	//
-	// Zero for the entities whose Lookup does not consult pins (a
-	// comment/doc/label/milestone .md): there is no reader, so a pin would be
-	// bytes held for the TTL and swept unread. Wiring one of those files to
-	// seedAuthored is what would give it a nonzero pinIno.
+	// Set by all seven editable files since #387. It was originally the three
+	// that also accept an atomic save (issue.md, project.md, initiative.md),
+	// because only those consulted pins when building a node; a
+	// comment/doc/label/milestone .md left it zero, so its written bytes survived
+	// only as long as the node did. Seeding now happens in newFileInode, the one
+	// builder they all pass through, so the reader exists for every editable file
+	// and the pin has somewhere to land. Zero remains the correct value for any
+	// future spec whose file is not built through that path — an unread pin is
+	// just bytes held for the TTL and swept.
 	pinIno uint64
 }
 

@@ -141,6 +141,7 @@ var _ fs.NodeWriter = (*LabelFileNode)(nil)
 var _ fs.NodeFlusher = (*LabelFileNode)(nil)
 var _ fs.NodeFsyncer = (*LabelFileNode)(nil)
 var _ fs.NodeSetattrer = (*LabelFileNode)(nil)
+var _ editableFile = (*LabelFileNode)(nil)
 
 func (n *LabelFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// api.Label carries no timestamps, so there is nothing to report but now().
@@ -211,6 +212,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		adopt: func(fresh *api.Label) { n.label = *fresh },
 		// The .meta sidecar renders from the label.
 		coherence: []uint64{labelIno(n.label.ID), labelMetaIno(n.label.ID)},
+		pinIno:    labelIno(n.label.ID),
 	})
 }
 

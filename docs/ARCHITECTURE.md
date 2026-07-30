@@ -534,11 +534,14 @@ building blocks:
   can't truncate kernel reads of longer dirty content. A **just-authored** buffer
   wins the same way (serve-your-own-writes, #365): after a write commits cleanly
   (`errno == 0`), `editFlush` marks the buffer authored, and `refresh` keeps the
-  exact written bytes until the next fresh `Open` — so a client that verifies a
+  exact written bytes while the flag stands — so a client that verifies a
   write by re-reading gets a byte-for-byte match instead of racing the async
   refresh, while persistence (SQLite and the entity) already holds Linear's
-  normalized render. It is not armed on a fatal read-your-writes divergence (a
-  revert or truncation, EIO), so a real loss is never masked from a re-read.
+  normalized render. A fresh `Open` clears the flag on that node but does not
+  end the window: a rebuild inside the pin's TTL (below) re-arms it from the
+  pin, which is the real outer bound (#388). It is not armed on a fatal
+  read-your-writes divergence (a revert or truncation, EIO), so a real loss is
+  never masked from a re-read.
 - `authoredPins` — the same guarantee for the written *bytes* rather than the
   buffer, so it survives the node the flag dies with (#379, #381). Two paths need
   that: the **atomic-save** path flushes through a transient node and then drops
@@ -552,9 +555,16 @@ building blocks:
   **One pin site is load-bearing**: a pin is superseded by the next write to the
   same inode, so arming it in `editFlush` rather than in `renameSave` is what
   keeps a later in-place edit from leaving older atomic-save bytes pinned (#381).
-  `pinIno` is set only for the three files whose Lookup calls `seedAuthored`
-  (`issue.md`, `project.md`, `initiative.md`); zero elsewhere means no pin,
-  because nothing would read it. Bounded by time (`pinTTL`), not by one Lookup: a
+  **Both halves are single-sited**, which is what keeps them wired together:
+  `editFlush` is the only place a pin is armed, and `newFileInode` — the one
+  builder every editable file node passes through — is the only place one is
+  consumed, recognising an editable child by the `editable()` accessor
+  `editBuffer` provides (#387). Before that the consuming half was hand-written
+  per file, so `pinIno` was set only for `issue.md`, `project.md`, and
+  `initiative.md`, and a comment/doc/label/milestone `.md` had neither half: its
+  written bytes survived only as long as the node did. All seven set it now;
+  zero still means no pin, correct only for a file nothing builds through that
+  path. Bounded by time (`pinTTL`), not by one Lookup: a
   client's verification is several syscalls, each able to drive its own Lookup, so
   all of them must answer alike. Without it a server-side reformat that changed the
   byte count reached the client as a size mismatch, which editors report as a

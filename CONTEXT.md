@@ -86,9 +86,13 @@ A committed clean write both marks the buffer authored (the node-local half) and
 pins the written bytes under the spec's **`pinIno`** (the half that survives the
 node — see [[authored-pin]]); both key off one condition in one place, so the
 in-place and atomic-save paths cannot disagree about whether a write is servable,
-and the later of two writes to a file always owns the pin. `pinIno` is set only for
-the three files whose Lookup calls `seedAuthored` (`issue.md`, `project.md`,
-`initiative.md`); zero for the rest, where a pin would be bytes nobody can read.
+and the later of two writes to a file always owns the pin. **All seven editable
+files set `pinIno`** since #387; it was originally only the three whose Lookup
+seeded by hand (`issue.md`, `project.md`, `initiative.md`), which left a
+comment/doc/label/milestone `.md` with neither half of the guarantee. Seeding now
+lives in [[attr-construction]]'s `newFileInode`, so a reader exists for every editable
+file; zero remains correct only for a file nothing builds through that path,
+where a pin would be bytes nobody can read.
 
 It depends only on the `editFlushSink` seam (`errorSink` + `InvalidateUpdated` +
 `PinWritten`, satisfied by `*LinearFS`), so the shell's outcome dispatch,
@@ -552,12 +556,11 @@ and never read jointly with it. The seven editBuffer file nodes go through
 edit is never clobbered by background sync), **and a just-authored buffer also
 wins** (serve-your-own-writes, #365: `editFlush` marks the buffer authored after a
 write persists, and while set `refresh` keeps the exact written bytes so a client's
-byte-for-byte read-back cannot race the async refresh; a fresh `Open` ends the
-window and the next refresh converges to the normalized render — see
-[[edit-buffer]]) — with Getattr snapshotting
-size+times under one lock; renderFile swaps its closure under `renderMu`
-(embedders with entity fields shadow `refreshFrom` and reuse that lock);
-`EmbeddedFileNode` swaps its file metadata under its own mu. The old
+byte-for-byte read-back cannot race the async refresh; what ends that window is
+the flag's own rule, not this seam's — see [[edit-buffer]]) — with Getattr
+snapshotting size+times under one lock; renderFile swaps its closure under
+`renderMu` (embedders with entity fields shadow `refreshFrom` and reuse that
+lock); `EmbeddedFileNode` swaps its file metadata under its own mu. The old
 exception paragraph is GONE: `TeamNode`/`UserNode`/cycle dirs used to ride
 auto-assigned inos (fresh node per Lookup) and dodge the bug — that
 inconsistency is erased; they are on stable inos with the seam like everyone
@@ -587,7 +590,10 @@ directory node cannot hand-write a divergent one. The `newDirInode`/`newFileInod
 `BaseNode` constructors stash the `nodeAttr` on the child, fill the Lookup
 `EntryOut` from that same value, take the entry timeout as an explicit param
 (the deliberate 30s/5s/0/1s classes are preserved verbatim, never rationalized
-here), and return `StableAttr{Mode, Ino}`.
+here), and return `StableAttr{Mode, Ino}`. `newFileInode` carries one further
+responsibility, because it is the one builder every editable file passes
+through: it seeds serve-your-own-writes for any child exposing `editable()
+*editBuffer` — see [[authored-pin]].
 
 This replaced 54 hand-fabricated attribute blocks whose per-site copies had
 already drifted: `DocsNode`/`AttachmentsNode.Getattr` reported `time.Now()`
@@ -691,7 +697,8 @@ verifying a write by re-reading gets a byte-for-byte match instead of racing the
 async refresh. It is deliberately NOT armed on a fatal read-your-writes divergence
 (a silent revert or truncation, where `commitWriteBack` returns EIO) — serving the
 written bytes there would mask the loss from the very re-read the `.error` asks for.
-A fresh `Open` clears it, so independent later readers converge to what persisted.
+A fresh `Open` clears it on that node, but does not end the window outright: a
+rebuild inside the [[authored-pin]]'s TTL re-arms it from the pin (#388).
 The flag protects the bytes only as long as **this node** lives — a dentry forget
 rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
 [[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
@@ -733,10 +740,11 @@ with an empty buffer, so the flag alone would lose the bytes there too.
 `authoredPins` (`internal/fs/authoredpin.go`) is a mount-wide `ino → {bytes,
 deadline}` store embedded on `LinearFS` by value (zero value ready, no constructor
 wiring). Its invariant: **a Lookup that finds a pin serves the pinned bytes as the
-buffer's content *and* as the size it publishes** — `manifest.file` reports
-`len(content)` in the `EntryOut`, and publishing the render's length while serving
-the pin would clamp the client's own read to the wrong size, which is the mismatch
-the module exists to remove. The pin is armed **only on a committed clean write**,
+buffer's content *and* as the size it publishes** — the builder fills
+`EntryOut`'s size from the render, and publishing that length while serving the
+pin would clamp the client's own read to the wrong size, which is the mismatch
+the module exists to remove. `seedBuilt` therefore returns the size alongside the
+seeded bytes rather than letting its caller compute one from what it rendered. The pin is armed **only on a committed clean write**,
 by [[edit-flush]], on the same condition that arms `authored`: not on `EIO`, where
 the write did not persist as written and hiding that would mask real loss; not on a
 write that committed nothing, where echoing the bytes back would report a dropped
@@ -751,10 +759,18 @@ client's verification is several syscalls (stat, then open+read), each able to d
 its own Lookup after the rename invalidation, so all of them must answer alike; the
 TTL is now the outer bound on a pin outliving its truth for a *remote* reason
 (someone else changed the entity), since a newer local write supersedes it outright.
-Reaches the three files whose Lookup calls `seedAuthored` (`issue.md`,
-`project.md`, `initiative.md`) through their specs' `pinIno`, via the
-`editFlushSink` seam; unit-tested directly (window, expiry, sweep, unaliased
-copies, seed-beats-render) and at the flush seam (the supersede rule) plus
+Reaches **every** editable file through its spec's `pinIno`, via the
+`editFlushSink` seam. The consuming half is single-sited in `newFileInode`
+(#387): it seeds any child exposing `editable() *editBuffer`, so embedding the
+buffer is all a new editable surface needs to inherit the guarantee, instead of
+each build helper remembering — which is exactly what the four collection files
+did not do. Two wiring rules guard the halves, since the behavior itself needs a
+dentry forget inside the window that a test cannot force through the kernel (the
+[[edit-buffer]] bound, #388): every editable node type asserts the `editableFile`
+interface at compile time next to its `fs.NodeWriter` assertion, and every
+`editFlushSpec` literal in the package must set `pinIno` (an AST rule over the
+package source, in the spirit of `scripts/check-safename.sh`). Unit-tested directly (window, expiry, sweep,
+unaliased copies, seed-beats-render) and at the flush seam (the supersede rule) plus
 deterministic mount-level tests over all three files, the reformat-note shape, and
 the EIO no-pin rule (`internal/integration/atomicsave_pin_test.go`) — the rename
 itself forces the re-Lookup, so no timeout wait is needed.

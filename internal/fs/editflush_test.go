@@ -158,8 +158,11 @@ func TestEditFlushZeroPinInoNeverPins(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
-	// pinIno zero is a comment/doc/label/milestone .md: its Lookup does not call
-	// seedAuthored, so a pin would be bytes nobody can ever read, held for the TTL.
+	// No shipped file is in this situation since #387 — all seven set pinIno, and
+	// TestEverySpecSetsPinIno requires it. The shell must still honour zero as "do
+	// not pin" for a future spec whose file is not built through newFileInode:
+	// nothing would ever seed from that pin, so it would be bytes nobody can read,
+	// held for the TTL.
 	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
@@ -182,7 +185,7 @@ func TestEditFlushZeroPinInoNeverPins(t *testing.T) {
 }
 
 // pinningFlushSink is the recording sink over a REAL authoredPins, so a test can
-// read a pin back the way a Lookup does (seedAuthored) instead of asserting on the
+// read a pin back the way a Lookup does (seedBuilt) instead of asserting on the
 // call log. Both embedded types define PinWritten, so the override is required.
 type pinningFlushSink struct {
 	recordingFlushSink
@@ -223,10 +226,11 @@ func TestEditFlushInPlaceWriteSupersedesAtomicSavePin(t *testing.T) {
 	// The node is then forgotten and re-Looked-up while the window is still open
 	// (dentry eviction, or a fresh open through another path). Before #381 this
 	// served the older atomic-save bytes — read-your-writes running BACKWARDS.
-	fresh := &editBuffer{}
-	served := sink.seedAuthored(fresh, fileIno, []byte("Linear's normalized render"))
-	if string(served) != "newer in-place bytes" {
-		t.Errorf("re-Lookup served %q, want the newest committed write %q", served, "newer in-place bytes")
+	fresh := &editBuffer{content: []byte("Linear's normalized render")}
+	size, seeded := sink.seedBuilt(fresh, fileIno)
+	if !seeded || size != len("newer in-place bytes") {
+		t.Errorf("re-Lookup published size %d (seeded=%v), want the newest committed write's %d",
+			size, seeded, len("newer in-place bytes"))
 	}
 	if string(fresh.content) != "newer in-place bytes" || !fresh.authored {
 		t.Errorf("re-seeded buffer = %q (authored=%v), want the newest write, marked authored", fresh.content, fresh.authored)

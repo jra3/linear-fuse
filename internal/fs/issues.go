@@ -336,11 +336,11 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 		if err != nil {
 			return nil, nil, syscall.EIO
 		}
-		node := &IssueFileNode{BaseNode: BaseNode{lfs: n.lfs}, issue: issue}
-		// An atomic save may have pinned the bytes the client just wrote; they
-		// win over the render for this one Lookup (authoredpin.go, #379).
-		served := n.lfs.seedAuthored(&node.editBuffer, issueIno(issue.ID), content)
-		return node, served, 0
+		// Built with the fresh render; newFileInode swaps in the bytes an earlier
+		// save pinned under this inode when one is still standing, for every
+		// editable file in one place (authoredpin.go, #379/#387).
+		node := &IssueFileNode{BaseNode: BaseNode{lfs: n.lfs}, issue: issue, editBuffer: editBuffer{content: content}}
+		return node, content, 0
 	})
 
 	// issue.meta: read-only server-managed fields, rendered read-through from the
@@ -461,6 +461,7 @@ var _ fs.NodeWriter = (*IssueFileNode)(nil)
 var _ fs.NodeFlusher = (*IssueFileNode)(nil)
 var _ fs.NodeFsyncer = (*IssueFileNode)(nil)
 var _ fs.NodeSetattrer = (*IssueFileNode)(nil)
+var _ editableFile = (*IssueFileNode)(nil)
 
 func (i *IssueFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// One lock for size + times: a concurrent refresh (refresh.go) swaps

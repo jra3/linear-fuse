@@ -106,6 +106,14 @@ type dirChild interface {
 	fillAttr(*fuse.Attr)
 }
 
+// editableFile is a node that embeds editBuffer — newFileInode's recognition
+// seam for serve-your-own-writes (#387). Every editable file node asserts it
+// next to its fs.NodeWriter assertion, so a node that holds its content some
+// other way fails to compile rather than silently never serving its own bytes.
+type editableFile interface {
+	editable() *editBuffer
+}
+
 // newDirInode builds a static-attr directory child from a parent's Lookup. It
 // fixes the child's reporting identity, fills the Lookup EntryOut by calling the
 // child's own fillAttr — the exact method its Getattr uses — sets the entry
@@ -140,6 +148,29 @@ func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, name st
 	na.fill(&out.Attr, b)
 	out.SetAttrTimeout(timeout)
 	out.SetEntryTimeout(timeout)
+	// Serve-your-own-writes, seeded for every editable file in ONE place (#387).
+	// A committed write pins its bytes under the file's inode (editFlush), and the
+	// next Lookup that BUILDS that file must serve them rather than Linear's
+	// render — the node-local `authored` flag dies with the node, so a dentry
+	// forget inside the window would otherwise fall back to the render.
+	//
+	// Hooked here, not in each collection's build helper, because this is the one
+	// function all seven editable files pass through, and `ino` is already the pin
+	// key their editFlushSpec arms. Embedding editBuffer is therefore all a new
+	// editable surface has to do to inherit the guarantee — the four collection
+	// files (#387) went without it precisely because each remembered separately.
+	//
+	// Runs BEFORE refreshExisting so a kept node adopts the pinned bytes too
+	// (refresh refuses only for a dirty or already-authored buffer), and before
+	// the existing-node size clamp below, which still has the last word: whichever
+	// node ends up serving, the size published is that node's own.
+	if b.lfs != nil {
+		if e, ok := child.(editableFile); ok {
+			if size, seeded := b.lfs.seedBuilt(e.editable(), ino); seeded {
+				out.Attr.Size = uint64(size)
+			}
+		}
+	}
 	// The bridge dedups AFTER this handler returns: push fresh content/entity
 	// into the node it will keep (a dirty edit buffer wins — see refresh.go).
 	refreshExisting(b, name, child)

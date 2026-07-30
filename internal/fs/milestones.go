@@ -117,6 +117,7 @@ var _ fs.NodeWriter = (*MilestoneFileNode)(nil)
 var _ fs.NodeFlusher = (*MilestoneFileNode)(nil)
 var _ fs.NodeFsyncer = (*MilestoneFileNode)(nil)
 var _ fs.NodeSetattrer = (*MilestoneFileNode)(nil)
+var _ editableFile = (*MilestoneFileNode)(nil)
 
 func (n *MilestoneFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// api.ProjectMilestone carries no timestamps, so there is nothing but now().
@@ -202,6 +203,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 			}
 		},
 		coherence: []uint64{milestoneIno(n.milestone.ID), milestoneMetaIno(n.milestone.ID)},
+		pinIno:    milestoneIno(n.milestone.ID),
 	})
 }
 

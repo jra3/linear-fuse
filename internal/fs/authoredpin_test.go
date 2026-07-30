@@ -125,11 +125,15 @@ func TestSeedAuthored_PinnedWriteWinsOverRender(t *testing.T) {
 	rendered := []byte("body the client wrote")  // what persisted, 2 bytes shorter
 	p.PinWritten(11, written)
 
-	var b editBuffer
-	served := p.seedAuthored(&b, 11, rendered)
+	// Nodes are built with the render already in the buffer; seedBuilt overrides.
+	b := editBuffer{content: rendered}
+	size, seeded := p.seedBuilt(&b, 11)
 
-	if string(served) != string(written) {
-		t.Errorf("published size bytes = %q, want the pinned write %q", served, written)
+	if !seeded {
+		t.Fatal("seedBuilt reported no pin, so the Lookup would publish the render's size")
+	}
+	if size != len(written) {
+		t.Errorf("published size = %d, want the pinned write's %d", size, len(written))
 	}
 	if string(b.content) != string(written) {
 		t.Errorf("buffer = %q, want the pinned write %q", b.content, written)
@@ -148,17 +152,17 @@ func TestSeedAuthored_BufferWriteCannotCorruptThePin(t *testing.T) {
 	written := []byte("body the client wrote")
 	p.PinWritten(13, written)
 
-	var first editBuffer
-	p.seedAuthored(&first, 13, []byte("what Linear stored"))
+	first := editBuffer{content: []byte("what Linear stored")}
+	p.seedBuilt(&first, 13)
 	if _, errno := first.Write(context.Background(), nil, []byte("MANGLED"), 0); errno != 0 {
 		t.Fatalf("write through the seeded buffer = %v, want 0", errno)
 	}
 
-	var second editBuffer
-	served := p.seedAuthored(&second, 13, []byte("what Linear stored"))
-	if string(served) != string(written) || string(second.content) != string(written) {
-		t.Errorf("second lookup served %q / buffer %q, want the pinned write %q",
-			served, second.content, written)
+	second := editBuffer{content: []byte("what Linear stored")}
+	size, seeded := p.seedBuilt(&second, 13)
+	if !seeded || string(second.content) != string(written) || size != len(written) {
+		t.Errorf("second lookup: buffer %q size %d (seeded=%v), want the pinned write %q",
+			second.content, size, seeded, written)
 	}
 }
 
@@ -166,11 +170,14 @@ func TestSeedAuthored_NoPinServesTheRender(t *testing.T) {
 	var p authoredPins
 	rendered := []byte("what Linear stored")
 
-	var b editBuffer
-	served := p.seedAuthored(&b, 12, rendered)
+	b := editBuffer{content: rendered}
+	size, seeded := p.seedBuilt(&b, 12)
 
-	if string(served) != string(rendered) || string(b.content) != string(rendered) {
-		t.Errorf("served %q / buffer %q, want the render %q", served, b.content, rendered)
+	if seeded || size != 0 {
+		t.Errorf("seedBuilt reported a pin (size %d) with none standing", size)
+	}
+	if string(b.content) != string(rendered) {
+		t.Errorf("buffer = %q, want the render %q left untouched", b.content, rendered)
 	}
 	if b.authored {
 		t.Error("an ordinary Lookup must not be authored — later reads have to converge to what persisted")

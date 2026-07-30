@@ -194,6 +194,7 @@ var _ fs.NodeWriter = (*DocumentFileNode)(nil)
 var _ fs.NodeFlusher = (*DocumentFileNode)(nil)
 var _ fs.NodeFsyncer = (*DocumentFileNode)(nil)
 var _ fs.NodeSetattrer = (*DocumentFileNode)(nil)
+var _ editableFile = (*DocumentFileNode)(nil)
 
 func (n *DocumentFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	// One lock for size + times: a concurrent refresh (refresh.go) swaps
@@ -269,6 +270,7 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 		},
 		adopt:     func(fresh *api.Document) { n.document = *fresh },
 		coherence: []uint64{documentIno(n.document.ID), documentMetaIno(n.document.ID)},
+		pinIno:    documentIno(n.document.ID),
 	})
 }
 
