@@ -612,7 +612,12 @@ a layer above the commit-tail primitives) and no telemetry (matching
 4. **Read-your-writes** (`editcommit.go`): re-derives what persisted — an
    independent refetch where a single-entity getter exists (issues, projects,
    initiatives), otherwise the mutation's echoed response — normalizes benign
-   markdown reformatting, and flags a silent revert/truncation as `EIO`.
+   markdown reformatting, and flags a silent revert/truncation as `EIO`. A
+   `writeBackResult` may override that errno where retrying is known to be
+   futile; the one case is a project/initiative body-clear Linear declines to
+   apply, which is `EINVAL` (#398). The verdict is derived from what actually
+   persisted, not from a hardcoded belief about the backend, so a backend that
+   does apply it simply succeeds.
 5. **Upserts the fresh result into SQLite** via the tail's per-spec persist
    closure (direct single-entity upserts; the `reconcile` tails belong to the
    worker and SWR, not this flow). This upsert **gates success** across every
@@ -782,10 +787,20 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   `EMSGSIZE`, missing reference → `ENOENT`, rate-limited/timeout/interrupted →
   `EAGAIN`, backend failure → `EIO`; the reason always lands in `.error`,
   cleared on success. A stale local catalog self-heals with one refresh-and-retry
-  before any of that surfaces. One refinement the errno alone cannot carry, so
+  before any of that surfaces. Two refinements the errno alone cannot carry, so
   the `.error` text is load-bearing: an `EAGAIN` says whether the request was
   refused before it was sent (safe to retry blindly) or interrupted in flight
-  (outcome unknown — check first, or duplicate) (#399).
+  (outcome unknown — check first, or duplicate), and an `EIO` from the
+  read-your-writes check means retry, so the one divergence that retrying can
+  never fix — a declined body-clear — is `EINVAL` instead (#398/#399).
+- **Empty writes are refused at the shell:** `editFlush` rejects a flush whose
+  buffer is empty or whitespace-only with `EINVAL` before any handler's front
+  half runs. An empty document has no fields, so applying it diffs as "remove
+  every removable field" — a measured five-field wipe on `issue.md` — and it is
+  exactly what a crashed editor or a botched tool call produces. The guard sits
+  on the shared shell rather than per-handler so the in-place (`O_TRUNC`, empty
+  buffer) and atomic-save (renamed zero-byte scratch, nil buffer) paths cannot
+  give `> issue.md` opposite answers (#397).
 - **Time handling** is the most common footgun — both directions: parse reads
   via `ParseSQLiteTime*`, stamp writes via `db.Now()` (UTC). Inside the worker,
   scheduling goes through the injected clock seam.

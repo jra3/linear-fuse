@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 // Read-your-writes verification.
@@ -63,6 +64,12 @@ func normalizeMarkdown(s string) string {
 type writeBackResult struct {
 	message string
 	fatal   bool
+	// errno overrides the errno a fatal result surfaces. Zero means EIO, the
+	// right answer for the general case: the write didn't stick, so retry. It is
+	// set only where retrying is known to be futile — a body-clear Linear
+	// declines to apply (#398) is EINVAL, because the same bytes will always be
+	// declined and "try again" would be a lie. Ignored when fatal is false.
+	errno syscall.Errno
 }
 
 // writeBackDivergence classifies how a single free-text field persisted. want is
@@ -107,11 +114,13 @@ func writeBackDivergence(field, want, got, prev string) writeBackResult {
 }
 
 // writeBackError combines per-field results into the .error payload and reports
-// whether the overall outcome is fatal. Returns ("", false) when every field
-// persisted faithfully.
-func writeBackError(results ...writeBackResult) (string, bool) {
+// whether the overall outcome is fatal, plus the errno a fatal outcome should
+// surface (EIO unless a result asked for something else). Returns ("", false, 0)
+// when every field persisted faithfully.
+func writeBackError(results ...writeBackResult) (string, bool, syscall.Errno) {
 	var msgs []string
 	fatal := false
+	errno := syscall.Errno(0)
 	for _, r := range results {
 		if r.message == "" {
 			continue
@@ -119,16 +128,21 @@ func writeBackError(results ...writeBackResult) (string, bool) {
 		msgs = append(msgs, r.message)
 		if r.fatal {
 			fatal = true
+			// First explicit errno wins; a plain fatal result leaves it zero and
+			// the caller falls back to EIO.
+			if errno == 0 {
+				errno = r.errno
+			}
 		}
 	}
 	if len(msgs) == 0 {
-		return "", false
+		return "", false, 0
 	}
 	header := "Read-your-writes note: your write was accepted; Linear reformatted the markdown server-side (no content lost).\n"
 	if fatal {
 		header = "Read-your-writes violation: your write was accepted by Linear but did not persist as written.\n"
 	}
-	return header + strings.Join(msgs, "\n"), fatal
+	return header + strings.Join(msgs, "\n"), fatal, errno
 }
 
 // writeBackKind returns a word for log lines describing a divergence outcome.

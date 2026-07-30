@@ -108,7 +108,7 @@ func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackS
 		}
 	}
 
-	divergence, fatal := writeBackError(spec.compare(fresh)...)
+	divergence, fatal, fatalErrno := writeBackError(spec.compare(fresh)...)
 	if divergence == "" {
 		sink.ClearWriteError(spec.errKey)
 		return fresh, 0
@@ -117,6 +117,13 @@ func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackS
 	log.Printf("Read-your-writes %s on %s:\n%s", writeBackKind(fatal), spec.errKey, divergence)
 	sink.SetWriteError(spec.errKey, divergence)
 	if fatal {
+		// EIO unless the result named something else. The one exception so far is
+		// a body-clear Linear declines to apply (#398): the write cannot ever
+		// stick, so EINVAL — "this input is not acceptable" — is the truthful
+		// verdict, where EIO would tell the caller to retry forever.
+		if fatalErrno != 0 {
+			return fresh, fatalErrno
+		}
 		return fresh, syscall.EIO
 	}
 	return fresh, 0

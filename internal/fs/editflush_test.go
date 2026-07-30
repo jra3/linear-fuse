@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -336,6 +337,97 @@ func TestEditFlushInvalidatesAfterPersist(t *testing.T) {
 	// The stale-repopulation window closes only if persist precedes invalidate.
 	if len(sink.order) < 2 || sink.order[0] != "persist" || sink.order[1] != "invalidate" {
 		t.Errorf("order = %v, want [persist invalidate] (invalidate must follow persist)", sink.order)
+	}
+}
+
+// TestEditFlushEmptiedFileIsRejected pins #397: a file truncated to zero bytes
+// must not reach the front half. Before this, an empty issue.md parsed as "a
+// document with no fields", which diffs against a populated issue as "remove all
+// of them" — one measured write emitted assigneeId=nil, dueDate=nil,
+// estimate=nil, labelIds=[] and description="" together. The write that caused it
+// is the one a crashed editor or a botched Write tool call makes, so it has to
+// fail loudly rather than apply.
+func TestEditFlushEmptiedFileIsRejected(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		content []byte
+	}{
+		{"zero bytes", []byte{}},
+		{"newline only", []byte("\n")},
+		{"whitespace only", []byte("  \n\t\n")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eb := &editBuffer{content: tc.content, dirty: true}
+			sink := &recordingFlushSink{}
+			called := false
+			errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+				mutate:    func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
+				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
+				adopt:     func(*fakeEntity) {},
+				coherence: []uint64{1},
+				pinIno:    1,
+			})
+			if errno != syscall.EINVAL {
+				t.Errorf("errno = %v, want EINVAL", errno)
+			}
+			if called {
+				t.Error("front half ran on an emptied file; the mutation would clear every removable field")
+			}
+			if sink.sets != 1 {
+				t.Errorf("SetWriteError called %d times, want 1 — the rejection must be legible in .error", sink.sets)
+			}
+			if !eb.dirty {
+				t.Error("dirty cleared on a rejected empty write; a corrected re-save cannot retry")
+			}
+			if eb.authored || len(sink.pins) != 0 {
+				t.Errorf("rejected write armed serve-your-own-writes (authored=%v pins=%v); nothing persisted",
+					eb.authored, sink.pins)
+			}
+			if len(sink.invalidated) != 0 {
+				t.Errorf("invalidated %v on a rejected write, want none", sink.invalidated)
+			}
+		})
+	}
+}
+
+// TestEmptyWriteMessageIsActionable: the .error an emptied file leaves must name
+// the operation and tell the agent how to recover, since the file it is looking
+// at is now the empty one it just wrote — the contents it needs are on the server.
+func TestEmptyWriteMessageIsActionable(t *testing.T) {
+	t.Parallel()
+	msg := emptyWriteMessage("save issue ENG-1")
+	for _, want := range []string{"save issue ENG-1", "Nothing was written", "re-read the file", "clear a single field"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("empty-write .error does not mention %q:\n%s", want, msg)
+		}
+	}
+}
+
+// TestEditFlushNonEmptyContentStillFlushes guards the obvious over-reach: only a
+// content-free file is rejected. A one-byte file, or frontmatter with an empty
+// body, is a real edit and must go through.
+func TestEditFlushNonEmptyContentStillFlushes(t *testing.T) {
+	t.Parallel()
+	for _, content := range []string{"x", "---\ntitle: Keep\n---\n", "---\ntitle: Keep\n---\n\n"} {
+		eb := &editBuffer{content: []byte(content), dirty: true}
+		sink := &recordingFlushSink{}
+		called := false
+		errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+			mutate: func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
+			writeBack: writeBackSpec[fakeEntity]{
+				errKey:  "k",
+				op:      "save issue ENG-1",
+				fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{}, nil },
+				compare: func(*fakeEntity) []writeBackResult { return nil },
+			},
+			adopt:     func(*fakeEntity) {},
+			coherence: []uint64{1},
+		})
+		if errno != 0 || !called {
+			t.Errorf("content %q: errno=%v mutateCalled=%v, want 0/true — this is a real edit", content, errno, called)
+		}
 	}
 }
 

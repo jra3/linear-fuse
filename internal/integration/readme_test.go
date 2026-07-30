@@ -1,11 +1,13 @@
 package integration
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -131,6 +133,15 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		t.Error("README carves attachments/relations out of .last, but every create surface reports to .last now")
 	}
 
+	// #397/#398: the two empty-write verdicts. Both are things an agent discovers
+	// only by doing the destructive thing, so the README has to say them up front —
+	// and they must not drift back into the old behavior (an emptied issue.md
+	// clearing five fields; an empty project body returning a retryable EIO).
+	for _, want := range []string{"EMPTIED editable file", "Linear cannot apply"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README failure model does not document the empty-write contract: missing %q", want)
+		}
+	}
 	// #399: EAGAIN covers two situations with different safe follow-ups, and the
 	// README must not collapse them back into one "the write did not take effect"
 	// promise — that promise is false for a request interrupted after it was sent,
@@ -140,6 +151,28 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 			t.Errorf("README does not distinguish the two EAGAIN outcomes: missing %q", want)
 		}
 	}
+	// And the documented behavior is real. The probe targets a doc .md rather
+	// than issue.md for two reasons: the guard lives on the shared edit-flush
+	// shell, so any editable file proves it; and a rejected write leaves .error
+	// populated, which on issue.md would be shared-mount residue another test
+	// reads. A collection's .error is explicitly not assumed empty by this suite
+	// (see TestErrorFileExposedOnWritableSurfaces).
+	//
+	// Emptying goes through O_TRUNC rather than the atomic-rename helper: docs/
+	// does not accept a scratch temp file (#389), and O_TRUNC is deterministic
+	// here anyway — the truncate is a real setattr the kernel cannot serve from
+	// cache, so the close-time Flush always runs and hands back its errno.
+	if docTarget, err := firstWritableFile(docsPath(testTeamKey, readmeIssueID)); err == nil {
+		f, err := os.OpenFile(docTarget, os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			t.Fatalf("open %s to empty it: %v", docTarget, err)
+		}
+		if cerr := f.Close(); !errors.Is(cerr, syscall.EINVAL) {
+			t.Errorf("README says an emptied editable file is EINVAL, but emptying %s returned %v",
+				docTarget, cerr)
+		}
+	}
+
 	// #5: project/initiative bodies map to the long content field, not the ≤255
 	// description; the README must not tell writers the body is the description
 	// (which silently rejected any real write-up), and must place description in

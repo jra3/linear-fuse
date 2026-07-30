@@ -444,6 +444,10 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				return false, syscall.EINVAL
 			}
 
+			// Scalar diff, computed before the initiative reconcile below so the
+			// commit-tail compare has it regardless of which branch runs.
+			edit = newScalarEdit(parsed.Name, parsed.Body, p.project.Name, p.project.Content)
+
 			// Desired initiatives, already coerced by the parse (absent ⇒ empty ⇒ unlink all)
 			newInitiatives := parsed.Initiatives
 
@@ -481,8 +485,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 
 			// Persist editable scalar fields plus the label set in ONE
 			// UpdateProject call. The body maps to Linear's uncapped `content`,
-			// not the ≤255 `description` (see #5).
-			edit = newScalarEdit(parsed.Name, parsed.Body, p.project.Name, p.project.Content)
+			// not the ≤255 `description` (see #5); edit was diffed above.
 			projectInput := api.ProjectUpdateInput{Name: edit.name, Content: edit.desc}
 			labels.applyTo(&projectInput)
 			if edit.changed() || labels.changed() {
@@ -510,7 +513,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				return p.lfs.UpsertProject(ctx, p.team.ID, *fresh)
 			},
 			compare: func(fresh *api.Project) []writeBackResult {
-				return append(edit.divergences(fresh.Name, fresh.Content), labels.divergences(fresh.LabelIds)...)
+				return append(edit.divergences("project", fresh.Name, fresh.Content), labels.divergences(fresh.LabelIds)...)
 			},
 		},
 		adopt:     func(fresh *api.Project) { p.project = *fresh },

@@ -106,13 +106,13 @@ func TestWriteBackDivergence_BenignReformat(t *testing.T) {
 func TestWriteBackError_Aggregation(t *testing.T) {
 	t.Parallel()
 	// All faithful → empty, non-fatal.
-	if msg, fatal := writeBackError(writeBackResult{}, writeBackResult{}); msg != "" || fatal {
+	if msg, fatal, _ := writeBackError(writeBackResult{}, writeBackResult{}); msg != "" || fatal {
 		t.Errorf("all-faithful should be empty/non-fatal, got msg=%q fatal=%v", msg, fatal)
 	}
 
 	// A note alone → non-fatal, "note" header.
 	note := writeBackResult{message: "Field: x\nNote: reformatted", fatal: false}
-	msg, fatal := writeBackError(note)
+	msg, fatal, _ := writeBackError(note)
 	if fatal {
 		t.Error("a note alone must not be fatal")
 	}
@@ -122,7 +122,7 @@ func TestWriteBackError_Aggregation(t *testing.T) {
 
 	// Any fatal field makes the whole outcome fatal with the violation header.
 	bad := writeBackResult{message: "Field: y\nError: reverted", fatal: true}
-	msg, fatal = writeBackError(note, bad)
+	msg, fatal, _ = writeBackError(note, bad)
 	if !fatal {
 		t.Error("any fatal field must make the outcome fatal")
 	}

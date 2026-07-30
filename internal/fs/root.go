@@ -323,6 +323,11 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
 
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
+- An EMPTIED editable file (0 bytes, or only whitespace) -> EINVAL, and NOTHING is
+  written. An empty document has no fields, so applying it would clear every
+  removable field at once instead of the one you meant. Re-read the file, change
+  what you mean to change, and write the whole document back. To clear one field,
+  omit that field's key and keep the rest.
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - Rate-limited, deferred, or interrupted -> EAGAIN, retry shortly. Read .error to
@@ -350,6 +355,11 @@ Failure model (every writable surface follows this contract):
   later read shows what Linear stored (see EDITING FILES). A write that truly did
   not persist says so — "reverted to its previous content" or "substantially
   shorter" — and returns EIO.
+- One write Linear cannot apply: EMPTYING the body of project.md or initiative.md.
+  Linear accepts an empty content value and keeps the previous text, so this
+  returns EINVAL (not EIO — retrying cannot help) and .error says the previous
+  body was kept. Replace the body with the text you want instead of emptying it.
+  Frontmatter fields still clear the normal way, by deleting the key.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
 Stale-catalog self-healing: a name that resolves nowhere locally (a status,

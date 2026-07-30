@@ -1,10 +1,24 @@
 package fs
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"syscall"
 	"time"
 )
+
+// emptyWriteMessage is the .error an emptied editable file gets. It follows the
+// Field/Value/Error shape the rest of the write feedback uses, and it says what
+// the writer must do next — the file's current contents are still on the server,
+// so a re-read recovers them.
+func emptyWriteMessage(op string) string {
+	return fmt.Sprintf("Empty write rejected\nOperation: %s\n"+
+		"Error: the file was written with no content. An empty file carries no fields, so applying it "+
+		"would clear every removable field at once rather than change the one you meant. Nothing was written.\n"+
+		"Fix: re-read the file to get its current contents, change the field you mean to change, and write "+
+		"the whole document back. To clear a single field, omit that field's key (or empty the body) and keep the rest.", op)
+}
 
 // The edit-flush shell.
 //
@@ -105,8 +119,37 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
 
-	if !eb.dirty || eb.content == nil {
+	if !eb.dirty {
 		return 0
+	}
+
+	// An emptied file is a truncation accident, not an edit (#397). A crashed
+	// editor, a `> file`, or a botched Write tool call leaves zero bytes, and
+	// nothing downstream reads that as "no change": the parse yields a document
+	// with no fields at all, and a diff against an entity that HAS fields
+	// therefore reads as "the writer removed every one of them". On issue.md that
+	// is measured, not hypothetical — a zero-byte write emits
+	// assigneeId=nil, dueDate=nil, estimate=nil, labelIds=[], description=""
+	// in one mutation, wiping five fields the writer never named. (The title
+	// survives; it is not a removable field. The live run that filed #397 read a
+	// cleared title because the emptied buffer was being served back, not because
+	// Linear had lost it.)
+	//
+	// So the shell refuses it here, before any handler's front half: EINVAL plus a
+	// legible .error, buffer left dirty for a corrected re-save, exactly like a
+	// parse failure. Clearing ONE field stays expressible — drop its key, or empty
+	// the body while keeping the frontmatter. What is no longer expressible is
+	// "clear everything by accident".
+	//
+	// This subsumes the old `eb.content == nil` half of the guard above, and that
+	// is the point: a nil buffer is not a third state, it is how the ATOMIC-SAVE
+	// path spells an emptied file (a zero-byte scratch file renamed over the
+	// target hands the flush nil bytes). Treating nil as "nothing to do" while an
+	// O_TRUNC of the same file was a real edit gave the two save paths opposite
+	// answers to `> issue.md` — silent success on one, a mutation on the other.
+	if len(bytes.TrimSpace(eb.content)) == 0 {
+		sink.SetWriteError(spec.writeBack.errKey, emptyWriteMessage(spec.writeBack.op))
+		return syscall.EINVAL
 	}
 
 	// Bound the API work — the front half and the commit tail both call Linear.
