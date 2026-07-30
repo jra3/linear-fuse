@@ -48,11 +48,14 @@ make fmt            # gofmt
 
 Unit tests run fully offline — no Linear API key, no FUSE mount. **Integration tests**
 default to SQLite fixtures (also offline); a live-API mode exists but is optional and
-budget-hungry:
+budget-hungry. Run live mode through the make targets rather than by hand — they carry
+the `-timeout` the live suite's cold-start sync gate needs (see the integration-test notes
+in [`CLAUDE.md`](CLAUDE.md)):
 
 ```bash
-go test ./internal/integration/...                              # fixtures (default)
-LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx go test ./internal/integration/...   # live, read-only
+go test ./internal/integration/...             # fixtures (default, no key)
+make integration-tests-ro LINEAR_API_KEY=xxx   # live API, READS ONLY
+make integration-tests-rw LINEAR_API_KEY=xxx   # live API + writes: CREATES AND MODIFIES REAL LINEAR DATA
 ```
 
 ## The testing philosophy (important)
@@ -77,8 +80,10 @@ to extract the decision first.
 5. Open a PR against `main` with a `type(scope): summary` title and a body explaining
    **what** and **why**. Link issues with `Closes #NN` / `Part of #NN`.
 
-CI runs unit tests under `-race`, staticcheck, `govulncheck`, and read-only integration
-tests. Write-integration tests run only on manual dispatch (they mutate real Linear data).
+CI runs unit tests under `-race`, staticcheck, `govulncheck`, and the integration suite in
+offline fixture mode. The write-integration job runs only on manual dispatch with its
+"Run write tests" box checked — it authenticates with a real key and mutates real Linear
+data, so it never runs on a push or a PR.
 
 ## Reporting bugs & proposing features
 
