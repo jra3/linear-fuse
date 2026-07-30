@@ -83,10 +83,12 @@ func WithStore(store *db.Store) Option {
 
 // WithBodyReformat models the one server behaviour the fake otherwise cannot:
 // Linear normalizes markdown when it STORES a body, so what persists is not
-// byte-identical to what was written (#146). fn is applied to an issue
-// description on update, so the verify getter reads back a body of a different
-// length than the one sent — the condition under which a byte-count re-read of a
-// fully successful save used to look like a truncated write (#379).
+// byte-identical to what was written (#146). fn is applied to the stored body of
+// every entity whose canonical .md is atomically saved — an issue description, a
+// project's content, an initiative's content — so the verify getter reads back a
+// body of a different length than the one sent, the condition under which a
+// byte-count re-read of a fully successful save used to look like a truncated
+// write (#379).
 //
 // Off by default: without it the fake echoes bodies verbatim, which is the
 // conservative choice for every other test.
@@ -412,7 +414,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 		proj.Name = *input.Name
 	}
 	if input.Content != nil { // the editable body maps here (#5)
-		proj.Content = *input.Content
+		proj.Content = c.reformat(*input.Content)
 	}
 	if input.Description != nil {
 		proj.Description = *input.Description
@@ -496,7 +498,7 @@ func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, inpu
 		init.Name = *input.Name
 	}
 	if input.Content != nil { // the editable body maps here (#5)
-		init.Content = *input.Content
+		init.Content = c.reformat(*input.Content)
 	}
 	if input.Description != nil {
 		init.Description = *input.Description

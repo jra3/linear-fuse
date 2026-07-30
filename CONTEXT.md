@@ -734,9 +734,10 @@ bound than the in-place path's "until the next `Open`", and it is what bounds th
 one gap left open (a later *in-place* edit inside the window does not supersede an
 existing pin). Wired at all three atomic-save sites (`issue.md`, `project.md`,
 `initiative.md`) via the `renameSaveSink` seam; unit-tested directly (window,
-expiry, sweep, unaliased copies, seed-beats-render) plus one deterministic
-mount-level test — the rename itself forces the re-Lookup, so no timeout wait is
-needed.
+expiry, sweep, unaliased copies, seed-beats-render) plus deterministic
+mount-level tests over all three files, the reformat-note shape, and the EIO
+no-pin rule (`internal/integration/atomicsave_pin_test.go`) — the rename itself
+forces the re-Lookup, so no timeout wait is needed.
 
 ### Render file (`renderFile`)
 The **deep module** owning every read-only *generated* file — the render-through

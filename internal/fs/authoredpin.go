@@ -54,7 +54,7 @@ type authoredPin struct {
 
 // authoredPins is the mount-wide store of pinned writes, keyed by the canonical
 // file's inode. Embedded in LinearFS (zero value ready to use), so PinWritten
-// promotes onto it for the renameSink seam.
+// promotes onto it for the renameSaveSink seam.
 type authoredPins struct {
 	mu   sync.Mutex
 	pins map[uint64]authoredPin

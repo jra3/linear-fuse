@@ -335,9 +335,10 @@ Failure model (every writable surface follows this contract):
   lingering listing entry. Either way, restart the daemon or wait for the next
   sync to reflect it. (A succeeded mutation is never a silent no-op -- it appears
   locally or says why in .error.)
-- Whatever the errno, the reason lands in .error; success clears it. Always read
-  .error after any failed write (including an atomic-save rename that returns
-  EINVAL/EMSGSIZE) — the errno alone cannot carry the reason.
+- Whatever the errno, the reason lands in .error; success clears it, except for
+  the one informational note below. Always read .error after any failed write
+  (including an atomic-save rename that returns EINVAL/EMSGSIZE) — the errno
+  alone cannot carry the reason.
 - NOT a failure: a .error that says "saved, but Linear reformatted the markdown
   server-side". The write succeeded and no text was lost (the errno was 0);
   Linear stored its own formatting of your markdown. Reading the file right after

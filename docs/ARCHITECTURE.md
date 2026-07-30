@@ -465,7 +465,7 @@ than silently treated as body text.
 
 **Consumed by** `internal/fs` only. Depends on `yaml.v3` and `api` types.
 
-### `internal/fs` — the FUSE filesystem (the core, ~54 non-test files)
+### `internal/fs` — the FUSE filesystem (the core, ~64 non-test files)
 
 The serving end and the largest package, built on `go-fuse/v2`. The root struct
 `LinearFS` (`linearfs.go`) is sectioned:
