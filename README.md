@@ -289,7 +289,10 @@ Error: invalid priority "critical": must be none, low, medium, high, or urgent
 
 **Reference files:** Check `states.md` for valid workflow states, `labels.md` for valid labels.
 
-The `.error` file is cleared on successful writes.
+The `.error` file is cleared on successful writes, with one exception: a save whose
+body Linear reformatted server-side leaves an informational note there ("saved, but
+Linear reformatted the markdown server-side") — the write succeeded and no text was
+lost.
 
 ## File Operations
 
