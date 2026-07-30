@@ -42,9 +42,7 @@ func TestT4_CreateSurfaceIsWriteOnly(t *testing.T) {
 // TestT4_InvalidFrontmatterIsLegible: bad priority and unresolvable status both
 // fail with EINVAL and a Field/Error-shaped issues/.error — the same shape.
 func TestT4_InvalidFrontmatterIsLegible(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode legibility check")
-	}
+	skipIfLiveAPI(t, "fixture-mode legibility check")
 	cases := []struct {
 		name      string
 		spec      string
@@ -70,9 +68,7 @@ func TestT4_InvalidFrontmatterIsLegible(t *testing.T) {
 // TestT4_ValidSpecFailsAtAPILoudly: without the mock mutator, a valid spec fails
 // loudly at the API (mirrors TestMkdirIssueFailureIsLegible) rather than silently.
 func TestT4_ValidSpecFailsAtAPILoudly(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode only (no fake => real client + dummy key fails)")
-	}
+	skipIfLiveAPI(t, "fixture-mode only (no fake => real client + dummy key fails)")
 	err := writeCreateSpec(t, "---\ntitle: Loud API Failure Probe\n---\nbody\n")
 	if err == nil {
 		t.Fatal("expected the create to fail loudly without the mock mutator")
@@ -86,9 +82,7 @@ func TestT4_ValidSpecFailsAtAPILoudly(t *testing.T) {
 // TestT4_ValidSpecSucceedsWithAssociations: with the mock mutator, a full spec
 // creates one issue with its fields set and reports identity to issues/.last.
 func TestT4_ValidSpecSucceedsWithAssociations(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode behavioral check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode behavioral check; uses the mock mutator")
 	enableMockMutations(t)
 
 	spec := "---\n" +

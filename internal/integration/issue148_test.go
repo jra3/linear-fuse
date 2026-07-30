@@ -42,13 +42,14 @@ func hasEntry(t *testing.T, dir, name string) bool {
 // appends the new entity's identity to `.last`, so the agent recovers it in one
 // deterministic read instead of scavenging.
 func TestIssue148_CreateHandsBackNoIdentifier(t *testing.T) {
+	issueID := someIssueID(t)
 	surfaces := []struct {
 		name string
 		dir  string
 	}{
 		{"issues", issuesPath(testTeamKey)},
-		{"comments", commentsPath(testTeamKey, "TST-1")},
-		{"docs", docsPath(testTeamKey, "TST-1")},
+		{"comments", commentsPath(testTeamKey, issueID)},
+		{"docs", docsPath(testTeamKey, issueID)},
 		{"labels", labelsPath(testTeamKey)},
 	}
 
@@ -71,9 +72,7 @@ func TestIssue148_CreateHandsBackNoIdentifier(t *testing.T) {
 // with the mock mutator, creating an issue appends its identifier/url/path to
 // issues/.last as a YAML list, so a batch create is recoverable in one read.
 func TestIssue148_LastReportsCreatedIssueIdentity(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode behavioral check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode behavioral check; uses the mock mutator")
 	enableMockMutations(t)
 
 	title := "Last Sidecar Identity Probe"
@@ -121,13 +120,14 @@ func TestIssue148_LastReportsCreatedIssueIdentity(t *testing.T) {
 // cache. Those live in a sibling read-only issue.meta. So a successful write no
 // longer rewrites the bytes the writer wrote.
 func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
-	dir := issueDirPath(testTeamKey, "TST-1")
+	issueID := someIssueID(t)
+	dir := issueDirPath(testTeamKey, issueID)
 
 	if !hasEntry(t, dir, "issue.meta") {
 		t.Fatal("expected issue.meta sidecar (T2/#150 meta split)")
 	}
 
-	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-1"))
+	content, err := os.ReadFile(issueFilePath(testTeamKey, issueID))
 	if err != nil {
 		t.Fatalf("read issue.md: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 	}
 
 	// issue.meta carries the server-managed fields, read-only.
-	metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, "TST-1"))
+	metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, issueID))
 	if err != nil {
 		t.Fatalf("read issue.meta: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 		}
 	}
 	// issue.meta must be read-only.
-	if err := os.WriteFile(issueMetaPath(testTeamKey, "TST-1"), []byte("x"), 0644); err == nil {
+	if err := os.WriteFile(issueMetaPath(testTeamKey, issueID), []byte("x"), 0644); err == nil {
 		t.Error("issue.meta should be read-only, but a write succeeded")
 	}
 }
@@ -174,8 +174,8 @@ func TestIssue148_EditableFileColocatesVolatileServerFields(t *testing.T) {
 // editable-only, with server fields in read-only project.meta/initiative.meta.
 func TestIssue148_ProjectInitiativeMetaSplit(t *testing.T) {
 	// --- project ---
-	projMD := filepath.Join(projectsPath(testTeamKey), "test-project", "project.md")
-	content, err := os.ReadFile(projMD)
+	slug := someProjectSlug(t)
+	content, err := os.ReadFile(projectFilePath(testTeamKey, slug))
 	if err != nil {
 		t.Fatalf("read project.md: %v", err)
 	}
@@ -191,8 +191,8 @@ func TestIssue148_ProjectInitiativeMetaSplit(t *testing.T) {
 			t.Errorf("project.md still contains server field %q — should live in project.meta", f)
 		}
 	}
-	assertMetaHasFields(t, projectMetaPath(testTeamKey, "test-project"), "id", "slug", "url", "status", "updated")
-	if err := os.WriteFile(projectMetaPath(testTeamKey, "test-project"), []byte("x"), 0644); err == nil {
+	assertMetaHasFields(t, projectMetaPath(testTeamKey, slug), "id", "slug", "url", "status", "updated")
+	if err := os.WriteFile(projectMetaPath(testTeamKey, slug), []byte("x"), 0644); err == nil {
 		t.Error("project.meta should be read-only, but a write succeeded")
 	}
 
@@ -201,8 +201,8 @@ func TestIssue148_ProjectInitiativeMetaSplit(t *testing.T) {
 	if err != nil || firstRealEntry(inits) == "" {
 		return
 	}
-	slug := firstRealEntry(inits)
-	initContent, err := os.ReadFile(filepath.Join(initiativesPath(), slug, "initiative.md"))
+	initSlug := firstRealEntry(inits)
+	initContent, err := os.ReadFile(filepath.Join(initiativesPath(), initSlug, "initiative.md"))
 	if err != nil {
 		t.Fatalf("read initiative.md: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestIssue148_ProjectInitiativeMetaSplit(t *testing.T) {
 			t.Errorf("initiative.md still contains server field %q — should live in initiative.meta", f)
 		}
 	}
-	assertMetaHasFields(t, initiativeMetaPath(slug), "id", "slug", "url", "status", "updated")
+	assertMetaHasFields(t, initiativeMetaPath(initSlug), "id", "slug", "url", "status", "updated")
 }
 
 // TestIssue148_TypedNameNeqResultingPath is a lightweight corroboration of the

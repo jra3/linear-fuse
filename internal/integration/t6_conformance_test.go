@@ -51,18 +51,21 @@ func assertEditableOnly(t *testing.T, path string, forbidden ...string) {
 
 // TestWriteContractMetaSplitGeneralizes: the editable-in/server-out rule holds
 // for issue.md, project.md, AND initiative.md — each editable file is free of
-// volatile server fields and has a sibling .meta carrying them.
+// volatile server fields and has a sibling .meta carrying them. Pure reads, and
+// the rule is about the render rather than the entity, so it takes its issue and
+// project from the workspace and runs live too (#395).
 func TestWriteContractMetaSplitGeneralizes(t *testing.T) {
 	forbidden := []string{"id", "slug", "url", "updated"}
 
 	// issue
-	assertEditableOnly(t, issueFilePath(testTeamKey, "TST-1"), append(forbidden, "identifier")...)
-	assertMetaHasFields(t, issueMetaPath(testTeamKey, "TST-1"), "id", "identifier", "url", "updated")
+	issueID := someIssueID(t)
+	assertEditableOnly(t, issueFilePath(testTeamKey, issueID), append(forbidden, "identifier")...)
+	assertMetaHasFields(t, issueMetaPath(testTeamKey, issueID), "id", "identifier", "url", "updated")
 
 	// project
-	projMD := filepath.Join(projectsPath(testTeamKey), "test-project", "project.md")
-	assertEditableOnly(t, projMD, forbidden...)
-	assertMetaHasFields(t, projectMetaPath(testTeamKey, "test-project"), "id", "slug", "url", "updated")
+	slug := someProjectSlug(t)
+	assertEditableOnly(t, projectFilePath(testTeamKey, slug), forbidden...)
+	assertMetaHasFields(t, projectMetaPath(testTeamKey, slug), "id", "slug", "url", "updated")
 
 	// initiative (skip if none)
 	inits, err := os.ReadDir(initiativesPath())
@@ -95,28 +98,32 @@ func firstItemFile(t *testing.T, dir string) string {
 // (its edits used to be silently discarded — a no-op with no .error), every
 // item has an openable read-only "{base}.meta" carrying them, and the sidecar
 // can be neither written nor rm'd on its own.
+//
+// Each surface resolves its directory lazily, from the workspace: a live run has
+// no test-project and no TST-1, and a hardcoded path there is a failure that
+// says nothing about the meta split (#395).
 func TestWriteContractMetaSplitCollections(t *testing.T) {
 	surfaces := []struct {
 		name      string
-		dir       string
+		dir       func(t *testing.T) string
 		forbidden []string
 		metaHas   []string
 	}{
 		{
 			name:      "docs",
-			dir:       docsPath(testTeamKey, "TST-1"),
+			dir:       func(t *testing.T) string { return docsPath(testTeamKey, someIssueID(t)) },
 			forbidden: []string{"id", "url", "created", "updated", "creator", "slug"},
 			metaHas:   []string{"id", "url", "created", "updated"},
 		},
 		{
 			name:      "labels",
-			dir:       labelsPath(testTeamKey),
+			dir:       func(t *testing.T) string { return labelsPath(testTeamKey) },
 			forbidden: []string{"id"},
 			metaHas:   []string{"id"},
 		},
 		{
 			name:      "milestones",
-			dir:       filepath.Join(projectsPath(testTeamKey), "test-project", "milestones"),
+			dir:       func(t *testing.T) string { return filepath.Join(someProjectDir(t), "milestones") },
 			forbidden: []string{"id"},
 			metaHas:   []string{"id"},
 		},
@@ -124,29 +131,30 @@ func TestWriteContractMetaSplitCollections(t *testing.T) {
 
 	for _, tc := range surfaces {
 		t.Run(tc.name, func(t *testing.T) {
-			mdName := firstItemFile(t, tc.dir)
+			dir := tc.dir(t)
+			mdName := firstItemFile(t, dir)
 			if mdName == "" && tc.name == "milestones" && !liveAPIMode {
 				// The fixture ships no milestone: seed one via the mock so the
 				// sidecar contract isn't vacuously green here.
 				enableMockMutations(t)
-				if err := os.WriteFile(filepath.Join(tc.dir, "_create"), []byte("MetaSplit Probe\nprobe milestone"), 0200); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "_create"), []byte("MetaSplit Probe\nprobe milestone"), 0200); err != nil {
 					t.Fatalf("seed milestone: %v", err)
 				}
-				mdName = firstItemFile(t, tc.dir)
+				mdName = firstItemFile(t, dir)
 			}
 			if mdName == "" {
-				t.Skipf("no %s item in fixture", tc.name)
+				t.Skipf("workspace has no %s item to check", tc.name)
 			}
-			assertEditableOnly(t, filepath.Join(tc.dir, mdName), tc.forbidden...)
+			assertEditableOnly(t, filepath.Join(dir, mdName), tc.forbidden...)
 
 			metaName := strings.TrimSuffix(mdName, ".md") + ".meta"
-			metaPath := filepath.Join(tc.dir, metaName)
+			metaPath := filepath.Join(dir, metaName)
 			assertMetaHasFields(t, metaPath, tc.metaHas...)
 
 			// The sidecar is listed alongside its .md (listed⇔openable).
-			entries, err := os.ReadDir(tc.dir)
+			entries, err := os.ReadDir(dir)
 			if err != nil {
-				t.Fatalf("read %s: %v", tc.dir, err)
+				t.Fatalf("read %s: %v", dir, err)
 			}
 			listed := false
 			for _, e := range entries {
@@ -175,10 +183,10 @@ func TestWriteContractMetaSplitCollections(t *testing.T) {
 	// Comments: the .md is the PURE body (no frontmatter at all); id/author/
 	// timestamps live in the sidecar.
 	t.Run("comments", func(t *testing.T) {
-		dir := commentsPath(testTeamKey, "TST-1")
+		dir := commentsPath(testTeamKey, someIssueID(t))
 		mdName := firstItemFile(t, dir)
 		if mdName == "" {
-			t.Skip("no comment in fixture")
+			t.Skip("the picked issue has no comment to check")
 		}
 		content, err := os.ReadFile(filepath.Join(dir, mdName))
 		if err != nil {
@@ -241,9 +249,7 @@ func TestWriteContractLastSidecarShape(t *testing.T) {
 // directory listing, and the two surfaces the #148 design deferred (attachments,
 // relations) now report their creates to .last like every other surface.
 func TestWriteContractCreateTrioUniform(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode; uses the mock mutator")
 	enableMockMutations(t)
 
 	issueDir := issueDirPath(testTeamKey, "TST-1")
@@ -400,9 +406,7 @@ func TestWriteContractCreateTrioUniform(t *testing.T) {
 // sync worker reconciled. Also asserts a successful delete clears .error and
 // an unknown name fails with ENOENT.
 func TestWriteContractDeleteTail(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode; uses the mock mutator")
 	enableMockMutations(t)
 
 	// Create a label to delete.
@@ -457,9 +461,7 @@ func TestWriteContractDeleteTail(t *testing.T) {
 // batch create via _create (recover ids from .last), no-op rewrites that stay
 // byte-stable, and a failure that leaves the success log intact.
 func TestWriteContractAgentLoop(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode agent-loop; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode agent-loop; uses the mock mutator")
 	enableMockMutations(t)
 
 	// (a) Batch create via N sequential _create writes; recover every id from .last.
@@ -572,9 +574,7 @@ func countFailedOutcomes(entries []map[string]string) int {
 // commitWriteBack took its "unverified" early return, persist was skipped, and
 // the edit was lost offline — so the marker's survival is a genuine discriminator.
 func TestWriteContractEditVerifiesOffline(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode; exercises the mock verify seam")
-	}
+	skipIfLiveAPI(t, "fixture-mode; exercises the mock verify seam")
 	enableMockMutations(t)
 
 	projDir := filepath.Join(projectsPath(testTeamKey), "test-project")

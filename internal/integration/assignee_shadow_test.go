@@ -23,9 +23,7 @@ import (
 // (DisplayName "unassigned"), TST-90 assigned to it, TST-91 genuinely
 // unassigned.
 func TestAssigneeUnassignedNotShadowed(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded hostile 'unassigned' member")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded hostile 'unassigned' member")
 
 	const (
 		escapedBucket   = "unassigned-user-shadow" // safeName("unassigned", "user-shadow")

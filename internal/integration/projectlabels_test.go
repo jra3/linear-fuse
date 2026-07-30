@@ -45,9 +45,7 @@ func projectErrorPath() string {
 // mid-test is visible on the very next read, with NO kernel invalidation
 // surface needed (tested, not asserted).
 func TestProjectLabelsCatalogFile(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic catalog")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic catalog")
 	path := filepath.Join(mountPoint, "project-labels.md")
 
 	info, err := os.Stat(path)
@@ -120,9 +118,7 @@ func TestProjectLabelsTeamSymlink(t *testing.T) {
 // UpdateProject through the mock, and survives a re-read. The retired label
 // already on the project carries through (full-set write re-sends it).
 func TestProjectLabelsRenderAndAssign(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: drives the mock mutation client")
-	}
+	skipIfLiveAPI(t, "fixture-mode: drives the mock mutation client")
 	enableMockMutations(t)
 
 	orig, err := os.ReadFile(projectMDPath())
@@ -161,9 +157,7 @@ func TestProjectLabelsRenderAndAssign(t *testing.T) {
 // any mutation fires (no mock injected: a mutation attempt would fail loudly
 // with a different message).
 func TestProjectLabelsValidationErrors(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode legibility check")
-	}
+	skipIfLiveAPI(t, "fixture-mode legibility check")
 	orig, err := os.ReadFile(projectMDPath())
 	if err != nil {
 		t.Fatalf("read project.md: %v", err)
@@ -212,9 +206,7 @@ func TestProjectLabelsValidationErrors(t *testing.T) {
 // (policy-rejected — deliberately stricter than the API, which live-verified
 // accepts it).
 func TestProjectLabelsRetiredNewlyApplied(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: drives the mock mutation client")
-	}
+	skipIfLiveAPI(t, "fixture-mode: drives the mock mutation client")
 	enableMockMutations(t)
 
 	orig, err := os.ReadFile(projectMDPath())
@@ -289,9 +281,7 @@ func TestProjectLabelsRetiredNewlyApplied(t *testing.T) {
 // renders VERBATIM, and re-saving the untouched file is a no-op success — the
 // round-trip invariant that keeps a cold/stale catalog from stripping labels.
 func TestProjectLabelsStaleIDRoundTrip(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: seeds a ghost labelId straight into the store")
-	}
+	skipIfLiveAPI(t, "fixture-mode: seeds a ghost labelId straight into the store")
 	enableMockMutations(t)
 	ctx := context.Background()
 

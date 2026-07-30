@@ -44,10 +44,12 @@ func TestHistoryFileReadable(t *testing.T) {
 }
 
 // TestProjectUpdateFileReadable exercises the renderFile read path for a project
-// update file. If the fixture carries any update .md, it must read without error
-// and carry the shared update frontmatter (health:).
+// update file. If the workspace carries any update .md, it must read without
+// error and carry the shared update frontmatter (health:). The project comes
+// from someProjectSlug: hardcoding test-project made the "no updates dir" skip
+// unconditional under a live key, so the test passed by doing nothing (#395).
 func TestProjectUpdateFileReadable(t *testing.T) {
-	updatesDir := filepath.Join(projectsPath(testTeamKey), "test-project", "updates")
+	updatesDir := filepath.Join(someProjectDir(t), "updates")
 	entries, err := os.ReadDir(updatesDir)
 	if err != nil {
 		t.Skipf("no project updates dir: %v", err)
@@ -60,7 +62,7 @@ func TestProjectUpdateFileReadable(t *testing.T) {
 		}
 	}
 	if updateFile == "" {
-		t.Skip("no fixture project update files")
+		t.Skip("no project update files in workspace")
 	}
 
 	content, err := os.ReadFile(filepath.Join(updatesDir, updateFile))

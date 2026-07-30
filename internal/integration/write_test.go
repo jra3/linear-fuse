@@ -498,9 +498,17 @@ func TestCreatedIssueReadable(t *testing.T) {
 		t.Fatalf("Failed to parse: %v", err)
 	}
 
-	if _, ok := doc.Frontmatter["id"]; !ok {
-		t.Error("Created issue missing id field")
+	// #148 split the created issue's identity out of the editable file: issue.md
+	// carries only editable fields, and the server-managed ones live in the
+	// read-only issue.meta sidecar. Assert BOTH halves — that the id is absent
+	// here is the invariant #148 established, and asserting only "issue.meta has
+	// an id" would still pass if it leaked back into issue.md.
+	for _, f := range []string{"id", "identifier", "url", "updated"} {
+		if _, ok := doc.Frontmatter[f]; ok {
+			t.Errorf("issue.md carries server field %q; #148 moved it to issue.meta", f)
+		}
 	}
+	assertMetaHasFields(t, issueMetaPath(testTeamKey, issue.Identifier), "id", "identifier", "url", "created", "updated")
 }
 
 // =============================================================================

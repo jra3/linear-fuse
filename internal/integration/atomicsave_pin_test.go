@@ -56,9 +56,7 @@ func atomicSave(t *testing.T, path string, content []byte) {
 // markdown was reformatted — reported the successful write as possible silent
 // truncation.
 func TestOffline_AtomicSaveVerifyAfterReformatNote(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode check; needs the mock mutator's reformat-on-store")
-	}
+	skipIfLiveAPI(t, "fixture-mode check; needs the mock mutator's reformat-on-store")
 	enableMockMutations(t, mockmutation.WithBodyReformat(codeSpanReformat))
 
 	// Throwaway issue: the atomic save consumes a scratch node, so the shared
@@ -132,9 +130,7 @@ func TestOffline_AtomicSaveVerifyAfterReformatNote(t *testing.T) {
 // show the SHORT stored body, not the bytes the client wrote. A pin taken on EIO
 // would echo the full text back and hide the loss behind a byte-for-byte match.
 func TestOffline_AtomicSaveDoesNotPinOverRealDataLoss(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode check; needs the mock mutator's reformat-on-store")
-	}
+	skipIfLiveAPI(t, "fixture-mode check; needs the mock mutator's reformat-on-store")
 	const kept = "refresh-retry probe body"
 	// Keep a prefix rather than reverting to the previous body, so the write-back
 	// check classifies this as truncation and not as the (also fatal) silent
@@ -198,9 +194,7 @@ func TestOffline_AtomicSaveDoesNotPinOverRealDataLoss(t *testing.T) {
 // issue path would leave these two reading back Linear's render — the same
 // false-truncation signal, on project.md and initiative.md.
 func TestOffline_AtomicSaveServesWrittenBytesForProjectAndInitiative(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode check; needs the mock mutator's reformat-on-store")
-	}
+	skipIfLiveAPI(t, "fixture-mode check; needs the mock mutator's reformat-on-store")
 	enableMockMutations(t, mockmutation.WithBodyReformat(codeSpanReformat))
 
 	initiativeDir, err := firstInitiativeDir()

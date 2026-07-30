@@ -203,7 +203,16 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 		return ferr.Detail(), syscall.EINVAL
 	}
 	if retryableCreateErr(err) {
-		return "Operation: " + op + "\nError: the request was rate-limited or timed out before it completed, so the operation did not take effect. Wait a few seconds and retry.", syscall.EAGAIN
+		// Both are EAGAIN — retry is the right move either way — but they cannot
+		// make the same promise. A request that never left (budget deferral,
+		// cancelled pre-send wait, tripped breaker) provably had no effect. One
+		// that died mid-flight may have been processed with the response lost, so
+		// claiming "did not take effect" there is a guess the caller acts on: a
+		// retry of an in-flight create can duplicate the entity (#399).
+		if api.IsOutcomeUnknown(err) {
+			return "Operation: " + op + "\nError: the request was interrupted after it was sent, so whether it took effect is UNKNOWN — it may have been applied and the response lost. Wait a few seconds, then CHECK whether the entity exists (read the directory listing, or .last) before retrying: a blind retry can create a duplicate.", syscall.EAGAIN
+		}
+		return "Operation: " + op + "\nError: the request was rate-limited or deferred before it was sent, so the operation did not take effect. Wait a few seconds and retry.", syscall.EAGAIN
 	}
 	// A structured Linear input rejection (userError: true) is the caller's
 	// bad input, not a backend failure: EINVAL, preferring the server's

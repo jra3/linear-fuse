@@ -76,16 +76,31 @@ the test team is visible with a non-zero issue count, and fails setup rather tha
 letting an empty store become 300 unexplained test failures. A test team that
 genuinely has no issues fails here by design.
 
-Two interlocks decide which tests run, and they are inverses:
+Which mode a test runs in is declared in exactly one place —
+`internal/integration/modes_test.go` — and there are exactly three spellings:
 
-- `skipIfNoWriteTests` — needs `liveAPIMode` **and** `LINEARFS_WRITE_TESTS=1`. It
-  guards the tests that mutate a real workspace.
-- `skipIfLiveAPI` — skips when `liveAPIMode` is true. It guards the write-contract
-  tests that write *through the mount* to assert a structural invariant (#131,
-  #137, #140, #142). Those writes are inert offline but would hit a real workspace
-  live, and one of them (`TestMkdirIssueFailureIsLegible`) leaks an issue it cannot
-  clean up. Never convert one to the other: `skipIfNoWriteTests` on a fixture-mode
-  guard deletes it from the default offline suite, which is the only place it runs.
+- `skipIfNoWriteTests(t)` — needs `liveAPIMode` **and** `LINEARFS_WRITE_TESTS=1`.
+  It guards the tests that mutate a real workspace.
+- `skipIfLiveAPI(t, why)` — skips when `liveAPIMode` is true, printing `why` in
+  place of the test. It is the inverse interlock, and covers both kinds of
+  fixture dependence: the write-contract tests that write *through the mount* to
+  assert a structural invariant (#131, #137, #140, #142) — inert offline, but a
+  real mutation live, and `TestMkdirIssueFailureIsLegible` leaks an issue it
+  cannot clean up (`fixtureWriteContract`) — and the read tests that assert
+  against seeded rows like `TST-1` or `test-project` (`fixtureSeededData`).
+  Never convert one guard to the other: `skipIfNoWriteTests` on a fixture-mode
+  guard deletes it from the default offline suite, the only place it runs.
+- **no guard** — the test runs in every mode, and therefore may not name a
+  seeded row. Take the identifier from the workspace with `someIssueID(t)` /
+  `someProjectSlug(t)` (or their `…Dir` forms), which return the fixture's
+  `TST-1`/`test-project` offline and the first listed issue/project live.
+
+So `grep skipIf` over a test file answers "does this run live?" per test. #395
+is what the alternative costs: four files asserted seeded fixture data with no
+guard at all, and the first live dispatch of the write suite failed ~48 tests on
+`no such file or directory` — every one of them a hardcoded path, none a bug.
+A hardcode inside an `if err == nil` is the quieter form of the same defect: it
+does not fail live, it passes while asserting nothing.
 
 ## Claude Code Integration
 

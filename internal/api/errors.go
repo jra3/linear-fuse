@@ -22,6 +22,24 @@ func IsDeferred(err error) bool {
 	return errors.Is(err, ErrDeferred) || errors.Is(err, ErrBudget)
 }
 
+// ErrInFlight marks a request whose HTTP POST had already been sent when its
+// context died — a cancelled or timed-out request, where the SERVER's view is
+// unknown: it may have processed the mutation and lost the response, or never
+// received it. Live example (#399): a mkdir interrupted mid-create logged
+// `Post "https://api.linear.app/graphql": context canceled`.
+//
+// It exists so a caller can tell that apart from the failures that provably
+// never reached Linear — a budget deferral, a cancelled pre-send rate-limit
+// wait, a tripped circuit breaker. All of them are retryable, but only the
+// pre-send ones can honestly say "the operation did not take effect", and a
+// retry of an in-flight create can duplicate the entity.
+var ErrInFlight = errors.New("request was in flight when its context ended; outcome unknown")
+
+// IsOutcomeUnknown reports whether err left the request's outcome genuinely
+// undetermined (see ErrInFlight). Callers phrasing a retry hint must not claim
+// the operation had no effect when this is true.
+func IsOutcomeUnknown(err error) bool { return errors.Is(err, ErrInFlight) }
+
 // Error predicates: the package-level classification of Linear API failures.
 //
 // Every layer above the client (fs mutation handlers, the repo's orphan

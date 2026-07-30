@@ -13,9 +13,7 @@ import (
 // with the real dummy-key client. It is the seam that makes the *success* half of
 // the write contract provable in `make test`.
 func TestT0_MockMutationClientEnablesOfflineCreate(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("T0 fake is for fixture mode; live mode creates real issues")
-	}
+	skipIfLiveAPI(t, "T0 fake is for fixture mode; live mode creates real issues")
 	enableMockMutations(t)
 
 	title := "T0 Mock Create Probe"
@@ -58,9 +56,7 @@ func TestT0_MockMutationClientEnablesOfflineCreate(t *testing.T) {
 // fake, mutations still fail loudly (the real client + dummy key), so the
 // #131/#140 loud-failure contract is unaffected by T0.
 func TestT0_LoudFailureStillWorksWithoutFake(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("only meaningful in fixture mode")
-	}
+	skipIfLiveAPI(t, "only meaningful in fixture mode")
 	err := os.Mkdir(issueDirPath(testTeamKey, "T0 No-Fake Failure Probe"), 0755)
 	if err == nil {
 		_ = os.Remove(issueDirPath(testTeamKey, "T0 No-Fake Failure Probe"))

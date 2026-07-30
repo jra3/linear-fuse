@@ -28,8 +28,9 @@ import (
 // stale content is the latent bug, confirmed end-to-end.
 func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	ctx := context.Background()
+	skipIfLiveAPI(t, "fixture-mode: seeds rows straight into the fixture store to stand in for the sync worker")
 	if testStore == nil {
-		t.Skip("store-backed staleness simulation requires fixture mode")
+		t.Fatal("fixture mode left no test store; the sync-side write has nothing to seed into")
 	}
 
 	// Drive the remote-update dance on a THROWAWAY issue (unique per run), never
@@ -150,8 +151,9 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 // on project.md) — a latent mismatch the view-dir normalization surfaced once
 // the whole directory chain became stably reusable.
 func TestRejectedSaveKeepsDirtyContentReadable(t *testing.T) {
+	skipIfLiveAPI(t, "fixture-mode: seeds rows straight into the fixture store to stand in for the sync worker")
 	if testStore == nil {
-		t.Skip("store-backed simulation requires fixture mode")
+		t.Fatal("fixture mode left no test store; the sync-side write has nothing to seed into")
 	}
 	enableMockMutations(t)
 	ctx := context.Background()
@@ -228,8 +230,9 @@ func TestRejectedSaveKeepsDirtyContentReadable(t *testing.T) {
 // took on when it moved these nodes off auto-assigned inos.
 func TestRemoteTeamUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	ctx := context.Background()
+	skipIfLiveAPI(t, "fixture-mode: seeds rows straight into the fixture store to stand in for the sync worker")
 	if testStore == nil {
-		t.Skip("store-backed staleness simulation requires fixture mode")
+		t.Fatal("fixture mode left no test store; the sync-side write has nothing to seed into")
 	}
 
 	// Drive the remote-update dance on a THROWAWAY team (unique key per run),

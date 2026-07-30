@@ -12,9 +12,12 @@ import (
 // DocsNode/AttachmentsNode.Getattr returned time.Now(), so these stats drifted
 // off the issue and reshuffled on every call. The check is fixture-agnostic: it
 // only asserts each subdir agrees with the issue's own mtime (issue.md, whose
-// mtime is updatedAt), so it holds whatever the fixture's timestamps are.
+// mtime is updatedAt), so it holds whatever the issue's timestamps are — which
+// is why it takes its issue from someIssueID and runs live too. It used to
+// hardcode TST-1 and so failed every live run on a path that did not exist
+// (#395), asserting nothing about attrs on the way.
 func TestIssueSubdirsReportIssueTimes(t *testing.T) {
-	const issueID = "TST-1"
+	issueID := someIssueID(t)
 
 	issueInfo, err := os.Stat(issueFilePath(testTeamKey, issueID))
 	if err != nil {
@@ -53,7 +56,7 @@ func TestIssueSubdirsReportIssueTimes(t *testing.T) {
 // reshuffled `ls -lt`. This is the observable form of "a Lookup answer and a
 // later stat can never disagree".
 func TestIssueSubdirStatIsDeterministic(t *testing.T) {
-	base := issueDirPath(testTeamKey, "TST-1")
+	base := someIssueDir(t)
 	for _, name := range []string{"docs", "attachments", "comments", "relations"} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(base, name)

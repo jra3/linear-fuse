@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -264,6 +265,16 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 			log.Printf("[circuit-breaker] opened after %d consecutive errors, cooling down %s", n, circuitBreakerCooldown)
 		}
 		queryErr = fmt.Errorf("failed to execute request: %w", err)
+		// The POST was already on the wire when its context ended, so whether
+		// Linear processed it is unknown — mark it so a caller's retry hint does
+		// not claim the operation had no effect (#399). Only a context death
+		// qualifies: every other Do() failure (DNS, refused connection) failed
+		// before the server could act. Note go-fuse's per-request context reports
+		// context.Canceled for a kernel FUSE INTERRUPT and never sets a deadline,
+		// so an interrupted syscall arrives here as Canceled, not DeadlineExceeded.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			queryErr = fmt.Errorf("%w (%w)", queryErr, ErrInFlight)
+		}
 		return queryErr
 	}
 	defer resp.Body.Close()

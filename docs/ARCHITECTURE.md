@@ -601,8 +601,14 @@ a layer above the commit-tail primitives) and no telemetry (matching
 3. On valid input, calls the `MutationClient`. `classifyMutationErr`
    (`createcommit.go`) is the single owner of the failure model: bad input →
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,
-   rate-limit/timeout → `EAGAIN`, backend failure → `EIO` — reason always
-   written to `.error`.
+   rate-limit/timeout/interruption → `EAGAIN`, backend failure → `EIO` — reason
+   always written to `.error`. The `EAGAIN` branch splits its *message* on
+   `api.IsOutcomeUnknown`: a request refused before it was sent (budget
+   deferral, cancelled pre-send wait, tripped breaker) provably had no effect,
+   while one whose POST was already on the wire (`api.ErrInFlight`, set in the
+   client's transport-error path) may have been applied with the response lost,
+   so its `.error` tells the caller to CHECK before retrying rather than
+   promising a no-op (#399).
 4. **Read-your-writes** (`editcommit.go`): re-derives what persisted — an
    independent refetch where a single-entity getter exists (issues, projects,
    initiatives), otherwise the mutation's echoed response — normalizes benign
@@ -773,10 +779,13 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   link-changes are full-cycle-bounded.
 - **Error surfacing contract:** every writable surface has a `.error` sibling
   (and `.last` where entities are minted). Bad input → `EINVAL`, over-length →
-  `EMSGSIZE`, missing reference → `ENOENT`, rate-limited/timeout → `EAGAIN`,
-  backend failure → `EIO`; the reason always lands in `.error`, cleared on
-  success. A stale local catalog self-heals with one refresh-and-retry before
-  any of that surfaces.
+  `EMSGSIZE`, missing reference → `ENOENT`, rate-limited/timeout/interrupted →
+  `EAGAIN`, backend failure → `EIO`; the reason always lands in `.error`,
+  cleared on success. A stale local catalog self-heals with one refresh-and-retry
+  before any of that surfaces. One refinement the errno alone cannot carry, so
+  the `.error` text is load-bearing: an `EAGAIN` says whether the request was
+  refused before it was sent (safe to retry blindly) or interrupted in flight
+  (outcome unknown — check first, or duplicate) (#399).
 - **Time handling** is the most common footgun — both directions: parse reads
   via `ParseSQLiteTime*`, stamp writes via `db.Now()` (UTC). Inside the worker,
   scheduling goes through the injected clock seam.

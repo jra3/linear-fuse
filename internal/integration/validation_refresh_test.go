@@ -90,9 +90,7 @@ func readIssueError(t *testing.T, identifier string) string {
 // + retry — the refresh stub plays "Linear has it", upserting the label the
 // way the real refresh's team-metadata drain would.
 func TestStaleCatalogWriteSelfHeals(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-only: exercises the injected catalog-refresh seam")
-	}
+	skipIfLiveAPI(t, "fixture-only: exercises the injected catalog-refresh seam")
 	enableMockMutations(t)
 	identifier := createRefreshTestIssue(t, "Stale Catalog Self-Heal Probe")
 
@@ -150,9 +148,7 @@ func TestStaleCatalogWriteSelfHeals(t *testing.T) {
 // fails with the same .error message as before — after exactly one refresh
 // attempt, never more.
 func TestNonexistentNameFailsAfterOneRefresh(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-only: exercises the injected catalog-refresh seam")
-	}
+	skipIfLiveAPI(t, "fixture-only: exercises the injected catalog-refresh seam")
 	enableMockMutations(t)
 	identifier := createRefreshTestIssue(t, "Nonexistent Name Probe")
 
@@ -198,9 +194,7 @@ func (r rejectingMutator) UpdateIssue(ctx context.Context, issueID string, input
 // classifier path untouched — resolution succeeded locally, so the catalog
 // refresh never fires.
 func TestAPIRejectionDoesNotRefresh(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-only: exercises the injected catalog-refresh seam")
-	}
+	skipIfLiveAPI(t, "fixture-only: exercises the injected catalog-refresh seam")
 	enableMockMutations(t)
 	identifier := createRefreshTestIssue(t, "API Rejection Probe")
 
