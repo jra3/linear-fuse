@@ -115,11 +115,13 @@ func (i *InitiativeNode) manifest() *dirManifest {
 
 	// initiative.md is editable-only; identity/status/owner live in initiative.meta.
 	m.file("initiative.md", initiativeInfoIno(initiative.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
+		// Built with the fresh render; newFileInode swaps in the bytes an earlier
+		// save pinned under this inode when one is still standing, for every
+		// editable file in one place (authoredpin.go, #379/#387).
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID}
-		// An atomic save may have pinned the bytes the client just wrote; they
-		// win over the render for this one Lookup (authoredpin.go, #379).
-		served := lfs.seedAuthored(&node.editBuffer, initiativeInfoIno(initiative.ID), node.generateContent())
-		return node, served, 0
+		content := node.generateContent()
+		node.content = content
+		return node, content, 0
 	})
 
 	// initiative.meta: read-through from the freshest initiative so an edit to

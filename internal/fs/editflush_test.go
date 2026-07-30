@@ -223,10 +223,11 @@ func TestEditFlushInPlaceWriteSupersedesAtomicSavePin(t *testing.T) {
 	// The node is then forgotten and re-Looked-up while the window is still open
 	// (dentry eviction, or a fresh open through another path). Before #381 this
 	// served the older atomic-save bytes — read-your-writes running BACKWARDS.
-	fresh := &editBuffer{}
-	served := sink.seedAuthored(fresh, fileIno, []byte("Linear's normalized render"))
-	if string(served) != "newer in-place bytes" {
-		t.Errorf("re-Lookup served %q, want the newest committed write %q", served, "newer in-place bytes")
+	fresh := &editBuffer{content: []byte("Linear's normalized render")}
+	size, seeded := sink.seedBuilt(fresh, fileIno)
+	if !seeded || size != len("newer in-place bytes") {
+		t.Errorf("re-Lookup published size %d (seeded=%v), want the newest committed write's %d",
+			size, seeded, len("newer in-place bytes"))
 	}
 	if string(fresh.content) != "newer in-place bytes" || !fresh.authored {
 		t.Errorf("re-seeded buffer = %q (authored=%v), want the newest write, marked authored", fresh.content, fresh.authored)

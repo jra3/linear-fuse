@@ -211,6 +211,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		adopt: func(fresh *api.Label) { n.label = *fresh },
 		// The .meta sidecar renders from the label.
 		coherence: []uint64{labelIno(n.label.ID), labelMetaIno(n.label.ID)},
+		pinIno:    labelIno(n.label.ID),
 	})
 }
 

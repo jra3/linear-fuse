@@ -552,9 +552,16 @@ building blocks:
   **One pin site is load-bearing**: a pin is superseded by the next write to the
   same inode, so arming it in `editFlush` rather than in `renameSave` is what
   keeps a later in-place edit from leaving older atomic-save bytes pinned (#381).
-  `pinIno` is set only for the three files whose Lookup calls `seedAuthored`
-  (`issue.md`, `project.md`, `initiative.md`); zero elsewhere means no pin,
-  because nothing would read it. Bounded by time (`pinTTL`), not by one Lookup: a
+  **Both halves are single-sited**, which is what keeps them wired together:
+  `editFlush` is the only place a pin is armed, and `newFileInode` — the one
+  builder every editable file node passes through — is the only place one is
+  consumed, recognising an editable child by the `editable()` accessor
+  `editBuffer` provides (#387). Before that the consuming half was hand-written
+  per file, so `pinIno` was set only for `issue.md`, `project.md`, and
+  `initiative.md`, and a comment/doc/label/milestone `.md` had neither half: its
+  written bytes survived only as long as the node did. All seven set it now;
+  zero still means no pin, correct only for a file nothing builds through that
+  path. Bounded by time (`pinTTL`), not by one Lookup: a
   client's verification is several syscalls, each able to drive its own Lookup, so
   all of them must answer alike. Without it a server-side reformat that changed the
   byte count reached the client as a size mismatch, which editors report as a

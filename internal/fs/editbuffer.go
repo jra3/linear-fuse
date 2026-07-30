@@ -40,6 +40,14 @@ type editBuffer struct {
 	authored bool
 }
 
+// editable exposes the embedded buffer to newFileInode, the one builder every
+// editable file node passes through. Having the buffer reachable from the
+// generic builder is what lets serve-your-own-writes seed in a single place
+// (#387): embedding editBuffer is what makes a node editable, so a new editable
+// surface inherits the guarantee by construction instead of by remembering to
+// call it. Nothing else should reach a node's buffer this way.
+func (b *editBuffer) editable() *editBuffer { return b }
+
 // size is the current buffer length, for a node's Getattr.
 func (b *editBuffer) size() int {
 	b.mu.Lock()

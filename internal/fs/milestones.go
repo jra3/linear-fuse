@@ -202,6 +202,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 			}
 		},
 		coherence: []uint64{milestoneIno(n.milestone.ID), milestoneMetaIno(n.milestone.ID)},
+		pinIno:    milestoneIno(n.milestone.ID),
 	})
 }
 

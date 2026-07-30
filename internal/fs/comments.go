@@ -178,6 +178,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		},
 		adopt:     func(fresh *api.Comment) { n.comment = *fresh },
 		coherence: []uint64{commentIno(n.comment.ID), commentMetaIno(n.comment.ID)},
+		pinIno:    commentIno(n.comment.ID),
 	})
 }
 
