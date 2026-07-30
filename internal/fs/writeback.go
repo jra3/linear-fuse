@@ -117,26 +117,45 @@ func writeBackDivergence(field, want, got, prev string) writeBackResult {
 // whether the overall outcome is fatal, plus the errno a fatal outcome should
 // surface (EIO unless a result asked for something else). Returns ("", false, 0)
 // when every field persisted faithfully.
+//
+// A RETRYABLE fatal result outranks an override. One save can carry both kinds:
+// project.md's compare concatenates the scalar divergences with the label ones,
+// so a save that empties the body (declined, EINVAL) and also loses a label
+// (a plain fatal, EIO) produces both. EIO wins there, because the two wrong
+// answers are not symmetric — an EIO the caller retries pointlessly costs one
+// request, while an EINVAL tells them not to retry a write a retry would fix,
+// and the label loss stays lost. Both messages are in the .error either way, so
+// only the errno is at stake.
 func writeBackError(results ...writeBackResult) (string, bool, syscall.Errno) {
 	var msgs []string
 	fatal := false
+	retryable := false
 	errno := syscall.Errno(0)
 	for _, r := range results {
 		if r.message == "" {
 			continue
 		}
 		msgs = append(msgs, r.message)
-		if r.fatal {
-			fatal = true
-			// First explicit errno wins; a plain fatal result leaves it zero and
-			// the caller falls back to EIO.
-			if errno == 0 {
-				errno = r.errno
-			}
+		if !r.fatal {
+			continue
+		}
+		fatal = true
+		if r.errno == 0 {
+			// A plain fatal result is the retryable kind: the caller falls back
+			// to EIO, and that fallback outranks any override.
+			retryable = true
+			continue
+		}
+		// First explicit errno wins among the overrides.
+		if errno == 0 {
+			errno = r.errno
 		}
 	}
 	if len(msgs) == 0 {
 		return "", false, 0
+	}
+	if retryable {
+		errno = 0
 	}
 	header := "Read-your-writes note: your write was accepted; Linear reformatted the markdown server-side (no content lost).\n"
 	if fatal {

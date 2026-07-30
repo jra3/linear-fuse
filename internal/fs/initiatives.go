@@ -351,7 +351,8 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				return edit.divergences("initiative", fresh.Name, fresh.Content)
 			},
 		},
-		adopt: func(fresh *api.Initiative) { i.initiative = *fresh },
+		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh },
+		restore: func() []byte { return i.generateContent() },
 		// initiative.md, its meta, and the projects/ listing.
 		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},
 		pinIno:    initiativeInfoIno(i.initiativeID), // initiative.md's Lookup seeds from the pin

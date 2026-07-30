@@ -617,7 +617,10 @@ a layer above the commit-tail primitives) and no telemetry (matching
    futile; the one case is a project/initiative body-clear Linear declines to
    apply, which is `EINVAL` (#398). The verdict is derived from what actually
    persisted, not from a hardcoded belief about the backend, so a backend that
-   does apply it simply succeeds.
+   does apply it simply succeeds. A retryable divergence in the same save
+   outranks the override — telling a caller not to retry a write a retry would
+   fix is the worse error — so mixed outcomes still surface `EIO`, with both
+   messages in `.error`.
 5. **Upserts the fresh result into SQLite** via the tail's per-spec persist
    closure (direct single-entity upserts; the `reconcile` tails belong to the
    worker and SWR, not this flow). This upsert **gates success** across every
@@ -800,7 +803,13 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   exactly what a crashed editor or a botched tool call produces. The guard sits
   on the shared shell rather than per-handler so the in-place (`O_TRUNC`, empty
   buffer) and atomic-save (renamed zero-byte scratch, nil buffer) paths cannot
-  give `> issue.md` opposite answers (#397).
+  give `> issue.md` opposite answers (#397). The rejection also RESTORES the
+  buffer from the spec's `restore` closure (the entity's current render) and
+  clears `dirty`, which is what separates it from a parse failure: a parse
+  failure holds text the writer meant and keeps the buffer dirty for a corrected
+  re-save, while an emptied buffer on the in-place path belongs to the canonical
+  node and would otherwise serve zero bytes for the node's whole lifetime —
+  `refresh` refuses a dirty buffer, and only a successful flush clears the flag.
 - **Time handling** is the most common footgun — both directions: parse reads
   via `ParseSQLiteTime*`, stamp writes via `db.Now()` (UTC). Inside the worker,
   scheduling goes through the injected clock seam.

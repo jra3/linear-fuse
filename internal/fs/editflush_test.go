@@ -39,9 +39,10 @@ func dirtyBuffer() *editBuffer { return &editBuffer{content: []byte("x"), dirty:
 
 func TestEditFlushFailKeepsDirtyNoCommit(t *testing.T) {
 	t.Parallel()
-	eb := dirtyBuffer()
+	eb := &editBuffer{content: []byte("the text the writer meant"), dirty: true}
 	sink := &recordingFlushSink{}
 	fetched := false
+	restored := false
 	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return false, syscall.EINVAL },
 		writeBack: writeBackSpec[fakeEntity]{
@@ -49,6 +50,7 @@ func TestEditFlushFailKeepsDirtyNoCommit(t *testing.T) {
 			fetch:  func(context.Context) (*fakeEntity, error) { fetched = true; return &fakeEntity{}, nil },
 		},
 		adopt:     func(*fakeEntity) {},
+		restore:   func() []byte { restored = true; return []byte("the entity's current render") },
 		coherence: []uint64{1, 2},
 	})
 	if errno != syscall.EINVAL {
@@ -56,6 +58,13 @@ func TestEditFlushFailKeepsDirtyNoCommit(t *testing.T) {
 	}
 	if !eb.dirty {
 		t.Error("dirty cleared on a front-half failure; a corrected re-save cannot retry")
+	}
+	// The restore is for the EMPTY-write rejection only. A parse/resolve/mutation
+	// failure holds text the writer meant, and overwriting it with the server's
+	// render would destroy the very document a corrected re-save edits.
+	if restored || string(eb.content) != "the text the writer meant" {
+		t.Errorf("front-half failure restored the buffer (called=%v, content=%q); the writer's text must survive",
+			restored, eb.content)
 	}
 	if fetched {
 		t.Error("commit tail ran despite the front half failing")
@@ -366,6 +375,7 @@ func TestEditFlushEmptiedFileIsRejected(t *testing.T) {
 				mutate:    func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
 				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
 				adopt:     func(*fakeEntity) {},
+				restore:   func() []byte { return []byte("the entity's current render") },
 				coherence: []uint64{1},
 				pinIno:    1,
 			})
@@ -378,8 +388,17 @@ func TestEditFlushEmptiedFileIsRejected(t *testing.T) {
 			if sink.sets != 1 {
 				t.Errorf("SetWriteError called %d times, want 1 — the rejection must be legible in .error", sink.sets)
 			}
-			if !eb.dirty {
-				t.Error("dirty cleared on a rejected empty write; a corrected re-save cannot retry")
+			// The recovery the .error prescribes is "re-read the file to get its
+			// current contents", and on the in-place path this buffer IS the file:
+			// leaving it empty and dirty would strand the canonical node serving
+			// zero bytes, since refresh refuses a dirty buffer and only a
+			// successful flush clears the flag.
+			if string(eb.content) != "the entity's current render" {
+				t.Errorf("buffer = %q after a rejected empty write, want the entity's current render — "+
+					"the .error tells the writer to re-read the file", eb.content)
+			}
+			if eb.dirty {
+				t.Error("dirty left set after restoring the buffer; a background refresh would stay blocked forever")
 			}
 			if eb.authored || len(sink.pins) != 0 {
 				t.Errorf("rejected write armed serve-your-own-writes (authored=%v pins=%v); nothing persisted",
@@ -387,6 +406,43 @@ func TestEditFlushEmptiedFileIsRejected(t *testing.T) {
 			}
 			if len(sink.invalidated) != 0 {
 				t.Errorf("invalidated %v on a rejected write, want none", sink.invalidated)
+			}
+		})
+	}
+}
+
+// TestEditFlushEmptyWriteWithoutRestoreLeavesBufferAlone pins the zero value.
+// All seven shipped specs set restore, but the field is optional, and a spec
+// that declines it (or a render that fails, which returns nil) must not end up
+// with a buffer the shell half-rewrote: the rejection still stands, and the
+// buffer is left exactly as the writer left it.
+func TestEditFlushEmptyWriteWithoutRestoreLeavesBufferAlone(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		restore func() []byte
+	}{
+		{"no restore closure", nil},
+		{"render failed", func() []byte { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eb := &editBuffer{content: []byte{}, dirty: true}
+			sink := &recordingFlushSink{}
+			errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+				mutate:    func(context.Context) (bool, syscall.Errno) { return true, 0 },
+				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
+				adopt:     func(*fakeEntity) {},
+				restore:   tc.restore,
+				coherence: []uint64{1},
+				pinIno:    1,
+			})
+			if errno != syscall.EINVAL {
+				t.Errorf("errno = %v, want EINVAL — the rejection does not depend on the restore", errno)
+			}
+			if len(eb.content) != 0 || !eb.dirty {
+				t.Errorf("buffer = %q (dirty=%v), want it untouched when there is nothing to restore from",
+					eb.content, eb.dirty)
 			}
 		})
 	}

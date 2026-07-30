@@ -2,6 +2,7 @@ package fs
 
 import (
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -131,5 +132,37 @@ func TestWriteBackError_Aggregation(t *testing.T) {
 	}
 	if !strings.Contains(msg, "reformatted") || !strings.Contains(msg, "reverted") {
 		t.Errorf("expected both field messages joined, got: %q", msg)
+	}
+}
+
+// TestWriteBackError_ErrnoPrecedence pins which errno a save carrying more than
+// one fatal divergence surfaces. project.md's compare concatenates the scalar
+// divergences with the label ones, so "empty the body AND lose a label" is a
+// single reachable save, and the two verdicts disagree: the declined body-clear
+// says EINVAL (retrying is futile), the lost label says EIO (retry). EIO must
+// win — an EINVAL there tells the caller not to retry a write a retry would fix,
+// and the label stays lost. Both messages ride along regardless.
+func TestWriteBackError_ErrnoPrecedence(t *testing.T) {
+	t.Parallel()
+	declined := writeBackResult{message: "Field: content (body)\nError: kept the previous body", fatal: true, errno: syscall.EINVAL}
+	retryable := writeBackResult{message: "Field: labels\nError: reverted", fatal: true}
+
+	// An override alone is honoured.
+	if _, fatal, errno := writeBackError(declined); !fatal || errno != syscall.EINVAL {
+		t.Errorf("declined clear alone: fatal=%v errno=%v, want true/EINVAL", fatal, errno)
+	}
+	// A plain fatal alone leaves the errno zero so the caller falls back to EIO.
+	if _, fatal, errno := writeBackError(retryable); !fatal || errno != 0 {
+		t.Errorf("retryable alone: fatal=%v errno=%v, want true/0 (caller falls back to EIO)", fatal, errno)
+	}
+	// Mixed, in either order: the retryable one wins, and both messages survive.
+	for _, order := range [][]writeBackResult{{declined, retryable}, {retryable, declined}} {
+		msg, fatal, errno := writeBackError(order...)
+		if !fatal || errno != 0 {
+			t.Errorf("mixed: fatal=%v errno=%v, want true/0 — a retryable divergence outranks the override", fatal, errno)
+		}
+		if !strings.Contains(msg, "kept the previous body") || !strings.Contains(msg, "Field: labels") {
+			t.Errorf("mixed: .error lost a message, got: %q", msg)
+		}
 	}
 }

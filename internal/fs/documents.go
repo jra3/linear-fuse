@@ -268,7 +268,14 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 				return results
 			},
 		},
-		adopt:     func(fresh *api.Document) { n.document = *fresh },
+		adopt: func(fresh *api.Document) { n.document = *fresh },
+		restore: func() []byte {
+			content, err := marshal.DocumentToMarkdown(&n.document)
+			if err != nil {
+				return nil
+			}
+			return content
+		},
 		coherence: []uint64{documentIno(n.document.ID), documentMetaIno(n.document.ID)},
 		pinIno:    documentIno(n.document.ID),
 	})

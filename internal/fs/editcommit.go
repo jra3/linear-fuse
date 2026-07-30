@@ -62,8 +62,13 @@ type writeBackSpec[T any] struct {
 // commitWriteBack runs the invariant tail of an edit after the API has accepted
 // the write. It returns the fresh value (nil if it could not be fetched) and the
 // errno the Flush should return: syscall.EIO on a fatal read-your-writes
-// divergence, 0 otherwise (including benign reformats, which leave a note in
-// .error but let the close succeed).
+// divergence — unless a divergence overrode that errno (see below) — and 0
+// otherwise (including benign reformats, which leave a note in .error but let the
+// close succeed).
+//
+// Callers that BRANCH on this errno (renamesave.go does) must therefore not read
+// "not EIO" as "nothing reached Linear": every value below except the front
+// half's own comes from a mutation that already landed.
 //
 // Contract:
 //   - fetch fails        → the write succeeded but its verification re-read did
@@ -75,7 +80,10 @@ type writeBackSpec[T any] struct {
 //     into the live fd — the EIO is a wedge signal, not data loss (#278).
 //   - no divergence      → clear .error, return (fresh, 0).
 //   - benign reformat    → set .error note, return (fresh, 0).
-//   - fatal divergence   → set .error, return (fresh, syscall.EIO).
+//   - fatal divergence   → set .error, return (fresh, syscall.EIO), or the errno
+//     a writeBackResult overrode it with when retrying is known to be futile.
+//     The one such case today is a declined body-clear → EINVAL (#398). A
+//     retryable divergence in the same save outranks the override and keeps EIO.
 func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackSpec[T]) (fresh *T, errno syscall.Errno) {
 	start := time.Now()
 	defer func() { recordFuseOp(ctx, "flush", start, errno) }()

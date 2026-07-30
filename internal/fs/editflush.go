@@ -10,14 +10,20 @@ import (
 
 // emptyWriteMessage is the .error an emptied editable file gets. It follows the
 // Field/Value/Error shape the rest of the write feedback uses, and it says what
-// the writer must do next — the file's current contents are still on the server,
-// so a re-read recovers them.
+// the writer must do next — the shell puts the file's current contents back into
+// the buffer on this rejection, so a re-read recovers them.
+//
+// It deliberately does NOT offer "or empty the body" as a way to clear one
+// field: it is shared by all seven editable surfaces, and on project.md /
+// initiative.md emptying the body is the one write Linear declines to apply
+// (#398). Removing a frontmatter key is the advice that holds everywhere, and it
+// is the wording the generated README already uses.
 func emptyWriteMessage(op string) string {
 	return fmt.Sprintf("Empty write rejected\nOperation: %s\n"+
 		"Error: the file was written with no content. An empty file carries no fields, so applying it "+
 		"would clear every removable field at once rather than change the one you meant. Nothing was written.\n"+
 		"Fix: re-read the file to get its current contents, change the field you mean to change, and write "+
-		"the whole document back. To clear a single field, omit that field's key (or empty the body) and keep the rest.", op)
+		"the whole document back. To clear a single field, omit that field's key and keep the rest.", op)
 }
 
 // The edit-flush shell.
@@ -88,6 +94,20 @@ type editFlushSpec[T any] struct {
 	// forgotten sidecar is a visible one-line omission, not a missing call
 	// buried in a handler. Invalidated only after the commit tail persists.
 	coherence []uint64
+	// restore re-renders the entity's CURRENT content, exactly as the node's
+	// construction seam rendered it. The shell calls it on one path only: the
+	// empty-write rejection below, where it puts those bytes back into the buffer
+	// and clears dirty. Return nil (or an empty render) to decline, and the buffer
+	// is left as-is.
+	//
+	// This is the difference between the two rejections. A parse failure holds a
+	// document the writer meant, so the buffer stays dirty for a corrected
+	// re-save; an emptied file holds nothing worth preserving, and leaving it
+	// would strand the canonical node serving zero bytes for its whole lifetime —
+	// refresh refuses a dirty buffer, and only a successful editFlush clears the
+	// flag — which is exactly the state emptyWriteMessage tells the writer to
+	// recover from by re-reading.
+	restore func() []byte
 	// pinIno is the inode of the canonical file whose Lookup seeds from
 	// authoredPins. A committed clean write pins its bytes there, which is what
 	// makes serve-your-own-writes survive the node — a dentry forget and
@@ -136,10 +156,18 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 	// Linear had lost it.)
 	//
 	// So the shell refuses it here, before any handler's front half: EINVAL plus a
-	// legible .error, buffer left dirty for a corrected re-save, exactly like a
-	// parse failure. Clearing ONE field stays expressible — drop its key, or empty
+	// legible .error. Clearing ONE field stays expressible — drop its key, or empty
 	// the body while keeping the frontmatter. What is no longer expressible is
 	// "clear everything by accident".
+	//
+	// Unlike a parse failure, the buffer is then RESTORED rather than left dirty.
+	// A parse failure holds text the writer meant and a corrected re-save needs
+	// it; an emptied file holds nothing, and on the in-place path (`> issue.md`,
+	// or collectiondir.go's O_TRUNC Create) that buffer belongs to the CANONICAL
+	// node, which would then serve zero bytes for the rest of its life — nothing
+	// clears dirty but a successful flush, and refresh refuses a dirty buffer. The
+	// .error tells the writer to re-read the file to recover its contents, so the
+	// re-read has to actually return them.
 	//
 	// This subsumes the old `eb.content == nil` half of the guard above, and that
 	// is the point: a nil buffer is not a third state, it is how the ATOMIC-SAVE
@@ -149,6 +177,12 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 	// answers to `> issue.md` — silent success on one, a mutation on the other.
 	if len(bytes.TrimSpace(eb.content)) == 0 {
 		sink.SetWriteError(spec.writeBack.errKey, emptyWriteMessage(spec.writeBack.op))
+		if spec.restore != nil {
+			if current := spec.restore(); len(current) > 0 {
+				eb.content = current
+				eb.dirty = false
+			}
+		}
 		return syscall.EINVAL
 	}
 

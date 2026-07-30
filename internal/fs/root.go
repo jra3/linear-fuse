@@ -325,9 +325,9 @@ Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
 - An EMPTIED editable file (0 bytes, or only whitespace) -> EINVAL, and NOTHING is
   written. An empty document has no fields, so applying it would clear every
-  removable field at once instead of the one you meant. Re-read the file, change
-  what you mean to change, and write the whole document back. To clear one field,
-  omit that field's key and keep the rest.
+  removable field at once instead of the one you meant. The file KEEPS ITS CURRENT
+  CONTENTS -- re-read it, change what you mean to change, and write the whole
+  document back. To clear one field, omit that field's key and keep the rest.
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - Rate-limited, deferred, or interrupted -> EAGAIN, retry shortly. Read .error to

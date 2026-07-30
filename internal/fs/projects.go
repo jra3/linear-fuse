@@ -517,6 +517,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			},
 		},
 		adopt:     func(fresh *api.Project) { p.project = *fresh },
+		restore:   func() []byte { return p.generateContent(ctx) },
 		coherence: []uint64{projectInfoIno(p.project.ID), metaIno(p.project.ID)}, // project.meta reflects the edit
 		pinIno:    projectInfoIno(p.project.ID),                                  // project.md's Lookup seeds from the pin
 	})
