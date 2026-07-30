@@ -6,7 +6,7 @@ on:
       run_write_tests:
         description: 'Run write tests (creates/modifies Linear data)'
         required: true
-        default: 'false'
+        default: false
         type: boolean
 
 permissions:
@@ -43,6 +43,17 @@ jobs:
 
       - name: Build
         run: make build
+
+      # liveAPIMode is `LINEARFS_LIVE_API=1 && apiKey != ""`, so a missing, empty or
+      # renamed secret silently drops this job back to the offline fixture suite,
+      # skips all 55 write tests, and exits green under a name that promises it
+      # mutated Linear — the same lie #386 fixes, just relocated from the env block
+      # to the secret. Fail loud instead.
+      - name: Require a live API key
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          [ -n "$LINEAR_API_KEY" ] || { echo "LINEAR_API_KEY secret is empty; the write suite cannot run live"; exit 1; }
 
       # Both vars are load-bearing and neither is sufficient alone:
       # skipIfNoWriteTests (internal/integration/testdata_test.go) skips on

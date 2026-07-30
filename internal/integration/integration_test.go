@@ -23,7 +23,7 @@ import (
 
 var (
 	mountPoint string
-	stateDir   string // fixture mode: holds the SQLite db, OUTSIDE the mount (see setupSQLiteFixtures)
+	stateDir   string // holds the SQLite db, in its own temp dir OUTSIDE the mount (see setupSQLiteFixtures)
 	server     *fuse.Server
 	lfs        *fs.LinearFS
 	testStore  *db.Store // fixture mode: the store behind the mount, for tests simulating sync-side writes
@@ -118,10 +118,22 @@ func setupLiveAPI(apiKey string) error {
 		return fmt.Errorf("wait mount: %w", err)
 	}
 
-	// Enable SQLite cache for repository access
-	if err := lfs.EnableSQLiteCache(""); err != nil {
+	// Enable SQLite cache for repository access. The db lives in its OWN temp dir
+	// for the same reason fixture mode's does — never inside the mountpoint, where
+	// a post-mount open (WAL checkpoint, journal) would route back through our own
+	// FUSE layer — and explicitly NOT at db.DefaultDBPath(), which is the
+	// developer's real ~/.config/linearfs/cache.db and is normally held open by a
+	// running linearfs service.
+	stateDir, err = os.MkdirTemp("", "linearfs-test-state-*")
+	if err != nil {
 		_ = server.Unmount()
 		os.RemoveAll(mountPoint)
+		return fmt.Errorf("create state dir: %w", err)
+	}
+	if err := lfs.EnableSQLiteCache(filepath.Join(stateDir, "cache.db")); err != nil {
+		_ = server.Unmount()
+		os.RemoveAll(mountPoint)
+		os.RemoveAll(stateDir)
 		return fmt.Errorf("enable sqlite cache: %w", err)
 	}
 

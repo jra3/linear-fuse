@@ -1,4 +1,4 @@
-.PHONY: build install clean test test-cover integration-test integration-test-full run bench-dirs coverage coverage-html \
+.PHONY: build install clean test test-cover integration-tests integration-tests-ro integration-tests-rw run bench-dirs coverage coverage-html \
         install-service uninstall-service enable-service disable-service start stop restart status
 
 BINARY=linearfs
@@ -26,19 +26,29 @@ test:
 test-cover:
 	go test ./... -cover
 
-# Run the integration suite against the LIVE Linear API, reads only. Consumes real
+# Run the integration suite against the LIVE Linear API, READS ONLY. Consumes real
 # API quota — the offline fixture suite is plain `make test`, which needs no key.
 # LINEARFS_LIVE_API is what liveAPIMode reads; both targets demanded a key and then
-# ran offline without it (#386).
-integration-test:
+# ran offline without it (#386). The fixture-mode write-contract guards that used to
+# ride along here (they wrote through the mount) skip under a live key, so "reads
+# only" is an enforced property, not a claim.
+integration-tests-ro:
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
 	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 go test -v -timeout 10m ./internal/integration/...
 
-# Run all integration tests including writes. This CREATES AND MODIFIES REAL LINEAR
-# DATA and may hit API limits on free workspaces.
-integration-test-full:
+# Run the integration suite including the write tests. This CREATES AND MODIFIES
+# REAL LINEAR DATA and may hit API limits on free workspaces.
+integration-tests-rw:
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
 	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 20m ./internal/integration/...
+
+# Both, in that order. -rw is a SUPERSET of -ro, not a disjoint half: WRITE_TESTS=1
+# only ADDS the 55 write tests, so the read suite runs twice. What this buys is
+# sequencing — a full zero-mutation pass has to go green before anything touches the
+# workspace. Sub-makes (not prerequisites) so -j can't reorder them.
+integration-tests:
+	$(MAKE) integration-tests-ro
+	$(MAKE) integration-tests-rw
 
 run: build
 	./bin/$(BINARY) mount /tmp/linear

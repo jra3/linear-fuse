@@ -176,20 +176,36 @@ module dependency set.
 to Linear with a real key and mutates a real workspace: the `workflow_dispatch`-only
 "Integration Tests (Write)" job, which sets `LINEARFS_LIVE_API=1` +
 `LINEARFS_WRITE_TESTS=1` and runs the 55 write tests gated behind
-`skipIfNoWriteTests`. Before #386 it set neither of those, so the injected
-`LINEAR_API_KEY` secret went unused and the job silently ran the offline fixture
-suite — the label promised mutation and the run delivered none. Now that it does
-what it says, the exposure is real and worth stating: whoever can dispatch that
+`skipIfNoWriteTests`. Before #386 it set `LINEARFS_WRITE_TESTS` but never
+`LINEARFS_LIVE_API` — and `skipIfNoWriteTests` skips on `!liveAPIMode` first — so
+the injected `LINEAR_API_KEY` secret went unused and the job silently ran the
+offline fixture suite; the label promised mutation and the run delivered none.
+Now that it does what it says, the exposure is real and worth stating: whoever can dispatch that
 workflow can write to the Linear workspace the secret belongs to, so the secret
 should scope to a throwaway/test workspace rather than a production one, and the
 job stays manual-dispatch (never `push`/`pull_request`, never `pull_request_target`,
 where a fork could reach it) behind its `run_write_tests` confirmation input — which
 was itself declared-but-unread until #386 wired it to a job-level `if`, so the
 "creates/modifies Linear data" box is now load-bearing and an unchecked run never
-puts the secret on a runner. The `test.yml` read-only job injects the same secret
-but leaves `LINEARFS_LIVE_API` unset, so it cannot use it — an unused secret in a
-job's env is exposure without benefit, and whether that job goes live-read or is
-deleted along with the secret is open in #386.
+puts the secret on a runner. The job also refuses to start the suite when the
+secret resolves empty, rather than degrading back to the fixture suite and
+reporting green: `liveAPIMode` is `LINEARFS_LIVE_API=1 && apiKey != ""`, so a
+rotated-away or renamed secret would otherwise reinstate exactly the #386 lie one
+layer down. The `test.yml` read-only job injects the same secret but leaves
+`LINEARFS_LIVE_API` unset, so it cannot use it — an unused secret in a job's env
+is exposure without benefit, and whether that job goes live-read or is deleted
+along with the secret is open in #386.
+
+Locally the same credential reaches the same suite through `make
+integration-tests-ro` (live, reads only), `make integration-tests-rw` (live,
+CREATES AND MODIFIES REAL LINEAR DATA), and `make integration-tests` (both, in
+that order); the default `make test` needs no key and touches no network. The
+read-only target is read-only by enforcement, not convention: the write-contract
+guards that write through the mount now skip under a live key (`skipIfLiveAPI`),
+so a `-ro` run cannot leak a probe issue into the workspace. Live mode also opens
+its SQLite cache in a per-run temp dir instead of `db.DefaultDBPath()`, so a
+developer's real `~/.config/linearfs/cache.db` — normally held open by a running
+linearfs service — is never written by a test run.
 
 **Provenance posture (enforced, #354).** Every release artifact — the archives,
 the `.deb`/`.rpm` packages, and `checksums.txt` — carries SLSA build provenance:

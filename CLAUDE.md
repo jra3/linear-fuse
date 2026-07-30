@@ -55,6 +55,26 @@ LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx go test -v ./internal/integration/...
 LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx LINEARFS_WRITE_TESTS=1 go test -v ./internal/integration/...
 ```
 
+The make targets wrap the two live modes (all three require `LINEAR_API_KEY`; the
+default offline suite is plain `make test` and needs no key):
+
+```bash
+make integration-tests-ro    # live API, READS ONLY
+make integration-tests-rw    # live API + writes: CREATES AND MODIFIES REAL LINEAR DATA
+make integration-tests       # -ro then -rw (rw is a superset; the value is sequencing)
+```
+
+Two interlocks decide which tests run, and they are inverses:
+
+- `skipIfNoWriteTests` — needs `liveAPIMode` **and** `LINEARFS_WRITE_TESTS=1`. It
+  guards the tests that mutate a real workspace.
+- `skipIfLiveAPI` — skips when `liveAPIMode` is true. It guards the write-contract
+  tests that write *through the mount* to assert a structural invariant (#131,
+  #137, #140, #142). Those writes are inert offline but would hit a real workspace
+  live, and one of them (`TestMkdirIssueFailureIsLegible`) leaks an issue it cannot
+  clean up. Never convert one to the other: `skipIfNoWriteTests` on a fixture-mode
+  guard deletes it from the default offline suite, which is the only place it runs.
+
 ## Claude Code Integration
 
 To allow Claude Code to read from the mounted filesystem, add these permissions to `~/.claude/settings.json`:

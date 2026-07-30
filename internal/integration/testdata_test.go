@@ -29,6 +29,18 @@ func skipIfNoWriteTests(t interface{ Skip(...any) }) {
 	}
 }
 
+// skipIfLiveAPI is the inverse interlock to skipIfNoWriteTests, for the
+// write-contract guards that exercise a structural invariant by writing through
+// the mount. Those writes are inert offline (no API, no auth) but hit a real
+// workspace under a live key, so they are fixture-mode-only by design: gating
+// them with skipIfNoWriteTests would instead delete them from the DEFAULT
+// offline suite, which is the only place they ever run.
+func skipIfLiveAPI(t interface{ Skip(...any) }) {
+	if liveAPIMode {
+		t.Skip("Skipped: fixture-mode write-contract guard; the same write would mutate a real workspace under a live key")
+	}
+}
+
 // rateLimitWait ensures we don't make API calls too quickly
 func rateLimitWait() {
 	rateLimitMu.Lock()
