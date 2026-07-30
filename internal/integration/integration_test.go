@@ -144,7 +144,114 @@ func setupLiveAPI(apiKey string) error {
 		return fmt.Errorf("discover test team: %w", err)
 	}
 
+	if err := waitForInitialSync(); err != nil {
+		cleanup()
+		return err
+	}
+
 	return nil
+}
+
+// Store-readiness bounds. The cold-start cycle is a FULL workspace sync of a
+// real workspace, so minutes is normal, not pathological.
+const (
+	initialSyncTimeout  = 10 * time.Minute
+	initialSyncPoll     = 2 * time.Second
+	initialSyncLogEvery = 30 * time.Second
+)
+
+// waitForInitialSync is the store half of the readiness pair server.WaitMount()
+// opens for the kernel. EnableSQLiteCache starts the sync worker, whose first
+// cycle is a full workspace sync running in the BACKGROUND, and repository reads
+// have no fetch-on-miss — they serve whatever SQLite currently holds. A per-run
+// temp cache db is always cold, so without this gate the first tests race that
+// sync and read empty listings. Fail loud here instead: one legible setup error
+// beats a cascade of unexplained per-test failures.
+func waitForInitialSync() error {
+	// A page-of-1 probe distinguishes "the sync hasn't landed yet" from "this
+	// team genuinely has no issues" — the latter can never satisfy an
+	// issues-are-present condition, so don't wait on one.
+	probeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	remoteIssues, _, err := apiClient.GetTeamIssuesPage(probeCtx, testTeamID, "", 1)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("probe team %s for issues: %w", testTeamKey, err)
+	}
+	wantIssues := len(remoteIssues) > 0
+	if !wantIssues {
+		log.Printf("Team %s has no issues in Linear; waiting only for the team itself to sync", testTeamKey)
+	}
+
+	start := time.Now()
+	deadline := start.Add(initialSyncTimeout)
+	lastLog := start
+
+	for {
+		teamListed, teamCount := teamVisibleInStore()
+		issueCount := 0
+		if teamListed {
+			issueCount = visibleIssueCount()
+		}
+
+		if teamListed && (!wantIssues || issueCount > 0) {
+			log.Printf("Initial sync populated the store for team %s after %v (%d teams, %d issues visible)",
+				testTeamKey, time.Since(start).Round(time.Second), teamCount, issueCount)
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("initial sync did not populate the store for team %s within %v: "+
+				"%d teams listed (team present: %v), %d issues visible under teams/%s/issues, "+
+				"and the API reports the team %s issues",
+				testTeamKey, initialSyncTimeout, teamCount, teamListed, issueCount, testTeamKey,
+				map[bool]string{true: "HAS", false: "has NO"}[wantIssues])
+		}
+
+		if time.Since(lastLog) >= initialSyncLogEvery {
+			log.Printf("Waiting for initial sync (%v elapsed, %v budget): %d teams listed (team %s present: %v), %d issues visible",
+				time.Since(start).Round(time.Second), initialSyncTimeout, teamCount, testTeamKey, teamListed, issueCount)
+			lastLog = time.Now()
+		}
+		time.Sleep(initialSyncPoll)
+	}
+}
+
+// teamVisibleInStore polls the same surface the tests read — the mount — rather
+// than reaching past it into the store: readdir is not kernel-cached (no
+// FOPEN_CACHE_DIR) and negative lookups are not cached either, so each poll is a
+// fresh trip through the repository.
+func teamVisibleInStore() (present bool, total int) {
+	entries, err := os.ReadDir(teamsPath())
+	if err != nil {
+		return false, 0
+	}
+	for _, e := range entries {
+		if isControlFile(e.Name()) {
+			continue
+		}
+		total++
+		if e.Name() == testTeamKey {
+			present = true
+		}
+	}
+	return present, total
+}
+
+// visibleIssueCount counts real issue entries under the test team's issues/,
+// excluding the control files (_create/.error/.last) that are present even when
+// the directory holds no issues at all.
+func visibleIssueCount() int {
+	entries, err := os.ReadDir(issuesPath(testTeamKey))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if !isControlFile(e.Name()) {
+			n++
+		}
+	}
+	return n
 }
 
 // setupSQLiteFixtures configures tests to run with pre-populated SQLite data
