@@ -32,19 +32,12 @@ type editBuffer struct {
 	// client that verifies a write by re-reading sees its own bytes byte-for-byte
 	// across the write→verify window instead of racing an async refresh. A fresh
 	// Open clears it, so independent later readers converge to what persisted.
+	//
+	// It protects the bytes only as long as this node lives — a dentry forget
+	// rebuilds the node with an empty buffer and no flag. editFlush therefore arms
+	// the authoredPins pin on the same condition, and a Lookup re-seeds both from
+	// it (#379, #381); that pin, not this flag, is what survives the node.
 	authored bool
-}
-
-// committedWrite reports whether the Flush that just ran through this buffer
-// actually committed a write to Linear. editFlush marks a buffer authored on
-// exactly that outcome — a front half that proceeded plus a clean commit (#365) —
-// so the atomic-save tail reads the flag back off the transient node it flushed
-// through rather than inferring a commit from errno 0, which a flush that changed
-// nothing returns too (see renamesave.go, #379).
-func (b *editBuffer) committedWrite() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.authored
 }
 
 // size is the current buffer length, for a node's Getattr.

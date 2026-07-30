@@ -21,9 +21,19 @@ import (
 // report that as "the filesystem may have silently truncated the write" (#379).
 //
 // authoredPins carries the pin across the node boundary the rename path crosses.
-// renameSave records the written bytes under the canonical file's inode, and a
-// Lookup that builds that file seeds its editBuffer with them — marked authored,
-// so a background refresh leaves them alone — instead of the fresh render.
+// editFlush records the written bytes under the canonical file's inode on every
+// committed clean write (#381), and a Lookup that builds that file seeds its
+// editBuffer with them — marked authored, so a background refresh leaves them
+// alone — instead of the fresh render.
+//
+// Arming it in editFlush rather than in renameSave is what keeps the two write
+// paths from disagreeing. A pin is superseded by the next PinWritten for the same
+// inode, so whichever path wrote LAST owns the pin; arming it only on the rename
+// tail meant a later in-place edit left the older atomic-save bytes pinned, and a
+// forget-and-re-Lookup inside the window served them — read-your-writes going
+// backwards. It also generalises the guarantee: the in-place path's `authored`
+// flag lives on the node (#365), so a forget loses it there too, and the pin is
+// what both paths now survive one through.
 //
 // The pin is bounded by TIME, not by one Lookup: a client's verification is
 // several syscalls (stat, then open+read), each of which can drive its own
@@ -34,19 +44,13 @@ import (
 // nobody ever looked up from becoming a stale read minutes later; it is a
 // tighter bound than the in-place path's "until the next Open" (#365).
 //
-// The TTL is also what bounds the one case where a pin outlives its truth: a
-// successful IN-PLACE edit of the same file inside the window does not drop the
-// pin (editFlush invalidates the inode, which usually leaves the node — and the
-// unread pin — alive), so if that inode is forgotten and re-Looked-up before the
-// window closes, the Lookup serves the older atomic-save bytes rather than the
-// newer in-place ones. It needs a dentry forget inside the window to happen at
-// all, and it converges on expiry; making an in-place write supersede a pin would
-// mean plumbing the file's inode through editFlush, which is deliberately out of
-// scope here.
+// The TTL remains the outer bound on how long a pin can outlive its truth — a
+// write that lands in Linear and is then changed by someone else, say — but it is
+// no longer what covers a newer local write: that supersedes the pin outright.
 const pinTTL = 10 * time.Second
 
-// authoredPin is one pinned write: the exact bytes a client wrote through the
-// atomic-save path, and the deadline past which they must not be served.
+// authoredPin is one pinned write: the exact bytes a client last wrote to the
+// file, and the deadline past which they must not be served.
 type authoredPin struct {
 	content  []byte
 	deadline time.Time
@@ -54,15 +58,16 @@ type authoredPin struct {
 
 // authoredPins is the mount-wide store of pinned writes, keyed by the canonical
 // file's inode. Embedded in LinearFS (zero value ready to use), so PinWritten
-// promotes onto it for the renameSaveSink seam.
+// promotes onto it for the editFlushSink seam.
 type authoredPins struct {
 	mu   sync.Mutex
 	pins map[uint64]authoredPin
 }
 
 // PinWritten records content as the bytes a client just wrote to the file at
-// fileIno through an atomic save, for the next Lookup of that file to serve.
-// Called only on a clean commit — see renameSave.
+// fileIno, for the next Lookup of that file to serve. It replaces any pin already
+// standing for that inode, so the newest write wins. Called only on a committed
+// clean write — see editFlush.
 func (p *authoredPins) PinWritten(fileIno uint64, content []byte) {
 	if len(content) == 0 {
 		return
@@ -107,7 +112,7 @@ func (p *authoredPins) writtenBytes(fileIno uint64) []byte {
 
 // seedAuthored fills a freshly-built editable node's buffer and reports the bytes
 // its Lookup must publish as the file's size: the rendered content normally, or
-// a pinned atomic-save write when one is waiting for this inode. The two must be
+// a pinned write when one is waiting for this inode. The two must be
 // the same bytes — a Lookup that published the render's length while the buffer
 // served the pin would clamp the client's own read to the wrong size, which is
 // the very mismatch this module exists to remove.

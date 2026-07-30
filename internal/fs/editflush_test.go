@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"syscall"
 	"testing"
 )
@@ -19,6 +20,7 @@ type recordingFlushSink struct {
 	sets        int
 	clears      int
 	invalidated []uint64
+	pins        []string
 	order       []string
 }
 
@@ -27,6 +29,9 @@ func (r *recordingFlushSink) ClearWriteError(key string)        { r.clears++ }
 func (r *recordingFlushSink) InvalidateUpdated(ino uint64) {
 	r.invalidated = append(r.invalidated, ino)
 	r.order = append(r.order, "invalidate")
+}
+func (r *recordingFlushSink) PinWritten(fileIno uint64, content []byte) {
+	r.pins = append(r.pins, fmt.Sprintf("pin(%d,%q)", fileIno, content))
 }
 
 func dirtyBuffer() *editBuffer { return &editBuffer{content: []byte("x"), dirty: true} }
@@ -130,6 +135,7 @@ func TestEditFlushProceedMarksAuthored(t *testing.T) {
 		},
 		adopt:     func(*fakeEntity) {},
 		coherence: []uint64{10},
+		pinIno:    10,
 	})
 	if errno != 0 {
 		t.Fatalf("errno = %v, want 0", errno)
@@ -139,6 +145,91 @@ func TestEditFlushProceedMarksAuthored(t *testing.T) {
 	// until the next fresh Open.
 	if !eb.authored {
 		t.Error("a completed write did not mark the buffer authored; the read-back window is unprotected")
+	}
+	// The same window, for the bytes rather than the buffer (#379, #381): the flag
+	// dies with the node, so the written bytes are also pinned under pinIno for the
+	// next Lookup of the file to seed from.
+	if len(sink.pins) != 1 || sink.pins[0] != `pin(10,"x")` {
+		t.Errorf("pins = %v, want [pin(10,\"x\")] — the written bytes under pinIno", sink.pins)
+	}
+}
+
+func TestEditFlushZeroPinInoNeverPins(t *testing.T) {
+	t.Parallel()
+	eb := dirtyBuffer()
+	sink := &recordingFlushSink{}
+	// pinIno zero is a comment/doc/label/milestone .md: its Lookup does not call
+	// seedAuthored, so a pin would be bytes nobody can ever read, held for the TTL.
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+		writeBack: writeBackSpec[fakeEntity]{
+			errKey:  "k",
+			fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 7}, nil },
+			compare: func(*fakeEntity) []writeBackResult { return nil },
+		},
+		adopt:     func(*fakeEntity) {},
+		coherence: []uint64{10},
+	})
+	if errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	if !eb.authored {
+		t.Error("a completed write did not mark the buffer authored; pinIno is about the pin, not the flag")
+	}
+	if len(sink.pins) != 0 {
+		t.Errorf("pins = %v, want none for an entity with no pin-seeded Lookup", sink.pins)
+	}
+}
+
+// pinningFlushSink is the recording sink over a REAL authoredPins, so a test can
+// read a pin back the way a Lookup does (seedAuthored) instead of asserting on the
+// call log. Both embedded types define PinWritten, so the override is required.
+type pinningFlushSink struct {
+	recordingFlushSink
+	authoredPins
+}
+
+func (s *pinningFlushSink) PinWritten(fileIno uint64, content []byte) {
+	s.recordingFlushSink.PinWritten(fileIno, content)
+	s.authoredPins.PinWritten(fileIno, content)
+}
+
+func TestEditFlushInPlaceWriteSupersedesAtomicSavePin(t *testing.T) {
+	t.Parallel()
+	const fileIno = 77
+	sink := &pinningFlushSink{}
+	// An atomic save committed a moment ago and pinned its bytes for the re-Lookup
+	// it forces (#379).
+	sink.authoredPins.PinWritten(fileIno, []byte("atomic save bytes"))
+
+	// Now the client edits the same file IN PLACE, inside the pin's window, and
+	// that write commits cleanly.
+	eb := &editBuffer{content: []byte("newer in-place bytes"), dirty: true}
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+		writeBack: writeBackSpec[fakeEntity]{
+			errKey:  "k",
+			fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 7}, nil },
+			compare: func(*fakeEntity) []writeBackResult { return nil },
+		},
+		adopt:     func(*fakeEntity) {},
+		coherence: []uint64{fileIno},
+		pinIno:    fileIno,
+	})
+	if errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+
+	// The node is then forgotten and re-Looked-up while the window is still open
+	// (dentry eviction, or a fresh open through another path). Before #381 this
+	// served the older atomic-save bytes — read-your-writes running BACKWARDS.
+	fresh := &editBuffer{}
+	served := sink.seedAuthored(fresh, fileIno, []byte("Linear's normalized render"))
+	if string(served) != "newer in-place bytes" {
+		t.Errorf("re-Lookup served %q, want the newest committed write %q", served, "newer in-place bytes")
+	}
+	if string(fresh.content) != "newer in-place bytes" || !fresh.authored {
+		t.Errorf("re-seeded buffer = %q (authored=%v), want the newest write, marked authored", fresh.content, fresh.authored)
 	}
 }
 
@@ -151,12 +242,18 @@ func TestEditFlushNoChangeDoesNotMarkAuthored(t *testing.T) {
 		writeBack: writeBackSpec[fakeEntity]{errKey: "k"},
 		adopt:     func(*fakeEntity) {},
 		coherence: []uint64{1},
+		pinIno:    1,
 	})
 	if errno != 0 {
 		t.Fatalf("errno = %v, want 0", errno)
 	}
 	if eb.authored {
 		t.Error("a no-op flush marked the buffer authored; only a persisted write should")
+	}
+	// Nor pinned: echoing bytes back for an edit Linear never took would report a
+	// dropped write as a byte-for-byte success.
+	if len(sink.pins) != 0 {
+		t.Errorf("pins = %v on a no-op flush, want none", sink.pins)
 	}
 }
 
@@ -169,12 +266,16 @@ func TestEditFlushFailDoesNotMarkAuthored(t *testing.T) {
 		writeBack: writeBackSpec[fakeEntity]{errKey: "k"},
 		adopt:     func(*fakeEntity) {},
 		coherence: []uint64{1},
+		pinIno:    1,
 	})
 	if errno != syscall.EINVAL {
 		t.Fatalf("errno = %v, want EINVAL", errno)
 	}
 	if eb.authored {
 		t.Error("a failed flush marked the buffer authored; nothing persisted")
+	}
+	if len(sink.pins) != 0 {
+		t.Errorf("pins = %v on a failed flush, want none", sink.pins)
 	}
 }
 
@@ -197,12 +298,16 @@ func TestEditFlushFatalDivergenceDoesNotMarkAuthored(t *testing.T) {
 		},
 		adopt:     func(*fakeEntity) {},
 		coherence: []uint64{1},
+		pinIno:    1,
 	})
 	if errno != syscall.EIO {
 		t.Fatalf("errno = %v, want EIO (fatal divergence)", errno)
 	}
 	if eb.authored {
 		t.Error("a fatal read-your-writes divergence armed authored — SYOW would mask the loss from a byte-count re-read")
+	}
+	if len(sink.pins) != 0 {
+		t.Errorf("pins = %v on a fatal divergence, want none — the pin would hide the loss from the re-read", sink.pins)
 	}
 }
 
