@@ -17,10 +17,6 @@ type renameRecorder struct {
 	sets           int
 	clears         int
 	invalidates    []string
-	pins           []string
-	// events orders the coherence calls against each other: the pin has to be in
-	// place before the invalidation that triggers the re-Lookup which consumes it.
-	events []string
 }
 
 func (r *renameRecorder) SetWriteError(key, message string) {
@@ -31,11 +27,6 @@ func (r *renameRecorder) ClearWriteError(key string) { r.clears++ }
 func (r *renameRecorder) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
 	r.invalidates = append(r.invalidates,
 		fmt.Sprintf("renamed(%d,%q,%q,%d)", dirIno, oldName, newName, fileIno))
-	r.events = append(r.events, "invalidate")
-}
-func (r *renameRecorder) PinWritten(fileIno uint64, content []byte) {
-	r.pins = append(r.pins, fmt.Sprintf("pin(%d,%q)", fileIno, content))
-	r.events = append(r.events, "pin")
 }
 
 // renameParent is a bare InodeEmbedder whose zero-value inode has ino 0, so a
@@ -53,7 +44,7 @@ type recordingRenameSpec struct {
 	adoptCalls   int
 }
 
-func newRecordingRenameSpec(scratchOK, flushCommitted bool, flushErrno syscall.Errno) *recordingRenameSpec {
+func newRecordingRenameSpec(scratchOK bool, flushErrno syscall.Errno) *recordingRenameSpec {
 	r := &recordingRenameSpec{}
 	r.spec = renameSaveSpec{
 		targetName: "issue.md",
@@ -64,10 +55,10 @@ func newRecordingRenameSpec(scratchOK, flushCommitted bool, flushErrno syscall.E
 			r.scratchCalls++
 			return []byte("scratch bytes"), func() { r.consumeCalls++ }, scratchOK
 		},
-		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
 			r.flushCalls++
 			r.flushContent = content
-			return flushCommitted, flushErrno
+			return flushErrno
 		},
 		adopt: func() { r.adoptCalls++ },
 	}
@@ -75,32 +66,25 @@ func newRecordingRenameSpec(scratchOK, flushCommitted bool, flushErrno syscall.E
 }
 
 func TestRenameSave_FlushOutcomes(t *testing.T) {
+	// The serve-your-own-writes pin is not this tail's business — editFlush arms it
+	// inside spec.flush, on the one outcome that knows a write committed (#381), and
+	// editflush_test.go pins that policy.
 	cases := []struct {
 		name            string
-		flushCommitted  bool
 		flushErrno      syscall.Errno
 		wantAdopts      int
 		wantInvalidates int
-		wantPins        int
 	}{
-		// A clean save adopts the fresh entity, pins the written bytes for the
-		// re-Lookup to serve back (#379), and drops the kernel caches.
-		{"flush success adopts, pins and invalidates", true, 0, 1, 1, 1},
-		// A save that resolved to no changes also returns 0. The tail still
-		// adopts/consumes/invalidates, but it must NOT pin: echoing the written
-		// bytes back would report an edit Linear never took as a byte-for-byte
-		// success.
-		{"flush that committed nothing never pins", false, 0, 1, 1, 0},
+		// A clean save adopts the fresh entity and drops the kernel caches.
+		{"flush success adopts and invalidates", 0, 1, 1},
 		// The policy under test: Flush returns EIO only on a fatal
 		// read-your-writes divergence — the write still reached Linear, so the
 		// fresh entity is adopted (refusing would serve stale content while
-		// .error explains the divergence). It must NOT pin: the write did not
-		// persist as written, and serving the written bytes back would hide that
-		// from the re-read .error asks for (#365's errno == 0 rule).
-		{"flush EIO adopts but never pins", true, syscall.EIO, 1, 1, 0},
+		// .error explains the divergence).
+		{"flush EIO still adopts", syscall.EIO, 1, 1},
 		// EINVAL means the write never reached Linear (parse/validation
-		// failure): nothing to adopt, nothing to pin, nothing to invalidate.
-		{"flush EINVAL adopts nothing", false, syscall.EINVAL, 0, 0, 0},
+		// failure): nothing to adopt, nothing to invalidate.
+		{"flush EINVAL adopts nothing", syscall.EINVAL, 0, 0},
 	}
 	// The scratch buffer is consumed exactly when the rename succeeds (the same
 	// {0, EIO} branch that adopts): go-fuse has moved the spent node over the
@@ -110,7 +94,7 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &renameRecorder{}
-			rec := newRecordingRenameSpec(true, tc.flushCommitted, tc.flushErrno)
+			rec := newRecordingRenameSpec(true, tc.flushErrno)
 
 			errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
 				&renameParent{}, "issue.md", rec.spec)
@@ -139,22 +123,6 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 					t.Errorf("invalidate = %q, want %q", sink.invalidates[0], want)
 				}
 			}
-			if len(sink.pins) != tc.wantPins {
-				t.Fatalf("pins = %v, want %d call(s)", sink.pins, tc.wantPins)
-			}
-			if tc.wantPins == 1 {
-				// The pin carries the written bytes under the CANONICAL file's
-				// inode — that is the Lookup that will serve them back.
-				want := `pin(99,"scratch bytes")`
-				if sink.pins[0] != want {
-					t.Errorf("pin = %q, want %q", sink.pins[0], want)
-				}
-				// Ordering matters: the invalidation is what forces the
-				// re-Lookup, so the pin has to be waiting before it fires.
-				if len(sink.events) != 2 || sink.events[0] != "pin" {
-					t.Errorf("event order = %v, want the pin before the invalidation", sink.events)
-				}
-			}
 			if sink.sets != 0 {
 				t.Errorf("SetWriteError calls = %d, want 0", sink.sets)
 			}
@@ -164,7 +132,7 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 
 func TestRenameSave_WrongTarget(t *testing.T) {
 	sink := &renameRecorder{}
-	rec := newRecordingRenameSpec(true, true, 0)
+	rec := newRecordingRenameSpec(true, 0)
 
 	errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
 		&renameParent{}, "notes.md", rec.spec)
@@ -194,7 +162,7 @@ func TestRenameSave_WrongTarget(t *testing.T) {
 
 func TestRenameSave_CrossDirectory(t *testing.T) {
 	sink := &renameRecorder{}
-	rec := newRecordingRenameSpec(true, true, 0)
+	rec := newRecordingRenameSpec(true, 0)
 	// The zero-value parent inode has ino 0; a nonzero dirIno makes the rename
 	// cross-directory.
 	rec.spec.dirIno = 7
@@ -219,7 +187,7 @@ func TestRenameSave_NotAScratchFile(t *testing.T) {
 	sink := &renameRecorder{}
 	// e.g. an attempt to rename issue.md itself: the canonical files aren't
 	// renamable, and no .error is recorded (there is nothing to persist).
-	rec := newRecordingRenameSpec(false, true, 0)
+	rec := newRecordingRenameSpec(false, 0)
 
 	errno := renameSave(context.Background(), sink, "issue.md",
 		&renameParent{}, "renamed.md", rec.spec)

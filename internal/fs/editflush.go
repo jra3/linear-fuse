@@ -30,15 +30,24 @@ import (
 // Invalidate-after-persist is uniform here by construction: the shell
 // invalidates only after commitWriteBack has upserted the fresh value, so a
 // racing read can never repopulate the kernel cache from a not-yet-written row.
+//
+// The shell is also the single place serve-your-own-writes arms (#365, #379,
+// #381). A committed clean write both marks the buffer authored — the node-local
+// half — and pins the written bytes under the file's inode, the half that
+// survives the node. Both halves therefore key off one condition in one place, so
+// the in-place and atomic-save paths cannot disagree about whether a write is
+// servable, and the later of two writes to a file always wins the pin.
 
 // editFlushSink is the minimal surface the shell needs: the errorSink the commit
-// tail already requires, plus the kernel-cache invalidation the shell owns.
-// *LinearFS satisfies it directly (SetWriteError/ClearWriteError via
-// writeFeedback, InvalidateUpdated via kernelNotify), so production wiring needs
-// no adapter while tests inject a recording fake.
+// tail already requires, the kernel-cache invalidation the shell owns, and the
+// serve-your-own-writes pin it arms. *LinearFS satisfies it directly
+// (SetWriteError/ClearWriteError via writeFeedback, InvalidateUpdated via
+// kernelNotify, PinWritten via authoredPins), so production wiring needs no
+// adapter while tests inject a recording fake.
 type editFlushSink interface {
 	errorSink
 	InvalidateUpdated(fileIno uint64)
+	PinWritten(fileIno uint64, content []byte)
 }
 
 // editFlushSpec describes the per-entity parts of an edit's flush. T is the
@@ -65,6 +74,19 @@ type editFlushSpec[T any] struct {
 	// forgotten sidecar is a visible one-line omission, not a missing call
 	// buried in a handler. Invalidated only after the commit tail persists.
 	coherence []uint64
+	// pinIno is the inode of the canonical file whose Lookup seeds from
+	// authoredPins: issue.md, project.md, and initiative.md, the three that both
+	// accept an atomic save and call seedAuthored when they build a node. A
+	// committed clean write pins its bytes there, which is what makes
+	// serve-your-own-writes survive the node — a dentry forget and re-Lookup
+	// inside the window, and the transient node the atomic-save path flushes
+	// through.
+	//
+	// Zero for the entities whose Lookup does not consult pins (a
+	// comment/doc/label/milestone .md): there is no reader, so a pin would be
+	// bytes held for the TTL and swept unread. Wiring one of those files to
+	// seedAuthored is what would give it a nonzero pinIno.
+	pinIno uint64
 }
 
 // editFlush runs the invariant shell of a file node's Flush. eb is the node's
@@ -122,8 +144,21 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 	// would hide the loss from the very byte-count re-read the .error tells the
 	// agent to make ("re-read to see the stored value"). The benign reformat this
 	// flag exists to smooth over is errno == 0, so the fix still lands.
+	//
+	// The pin (#379) is that same guarantee for the bytes rather than for the
+	// buffer, armed on the same condition, and it is what carries a write across a
+	// node boundary the flag cannot: the atomic-save path flushes through a
+	// transient node and then drops the canonical inode on purpose, and on either
+	// path a dentry forget inside the window rebuilds the node with an empty
+	// buffer. Pinning HERE rather than in renameSave is also what makes a later
+	// in-place edit supersede an earlier atomic save (#381) — one pin site, so the
+	// pinned bytes are always the newest committed ones instead of whichever path
+	// recorded last.
 	if errno == 0 {
 		eb.authored = true
+		if spec.pinIno != 0 {
+			sink.PinWritten(spec.pinIno, eb.content)
+		}
 	}
 	return errno
 }

@@ -179,15 +179,14 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 		dirIno:     i.EmbeddedInode().StableAttr().Ino,
 		fileIno:    initiativeInfoIno(initiative.ID),
 		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
-		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
 			fileNode = &InitiativeInfoNode{
 				BaseNode:     BaseNode{lfs: i.lfs},
 				initiative:   initiative,
 				initiativeID: initiative.ID,
 				editBuffer:   editBuffer{content: content, dirty: true},
 			}
-			errno := fileNode.Flush(ctx, nil)
-			return fileNode.committedWrite(), errno
+			return fileNode.Flush(ctx, nil)
 		},
 		adopt: func() { i.setEntity(fileNode.initiative) },
 	})
@@ -349,6 +348,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		adopt: func(fresh *api.Initiative) { i.initiative = *fresh },
 		// initiative.md, its meta, and the projects/ listing.
 		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},
+		pinIno:    initiativeInfoIno(i.initiativeID), // initiative.md's Lookup seeds from the pin
 	})
 }
 

@@ -539,19 +539,26 @@ building blocks:
   refresh, while persistence (SQLite and the entity) already holds Linear's
   normalized render. It is not armed on a fatal read-your-writes divergence (a
   revert or truncation, EIO), so a real loss is never masked from a re-read.
-- `authoredPins` — the same guarantee across the **atomic-save** path, where the
-  buffer that was written cannot carry it (#379): `renameSave` flushes through a
-  transient node and then drops the canonical file's inode, so the re-Lookup
-  renders what persisted and the written bytes would be lost. It pins them under
-  the file's inode (only when the flush actually committed a write and returned
-  `errno == 0` — the same rule that arms `authored`, so neither a fatal divergence
-  nor a save that changed nothing is echoed back as a byte-for-byte success) and
-  the Lookup seeds the new buffer — content *and* the size it publishes — from the pin
-  instead of the render. Bounded by time (`pinTTL`), not by one Lookup: a client's
-  verification is several syscalls, each able to drive its own Lookup, so all of
-  them must answer alike. Without it a server-side reformat that changed the byte
-  count reached the client as a size mismatch, which editors report as a possibly
-  truncated write on a save that fully succeeded.
+- `authoredPins` — the same guarantee for the written *bytes* rather than the
+  buffer, so it survives the node the flag dies with (#379, #381). Two paths need
+  that: the **atomic-save** path flushes through a transient node and then drops
+  the canonical file's inode on purpose, so the re-Lookup would render what
+  persisted; and on either path a dentry forget rebuilds the node with an empty
+  buffer and no flag. `editFlush` pins the bytes under the file's `pinIno` on
+  exactly the condition that arms `authored` — a committed write with
+  `errno == 0`, so neither a fatal divergence nor a save that changed nothing is
+  echoed back as a byte-for-byte success — and a Lookup seeds the new buffer,
+  content *and* the size it publishes, from the pin instead of the render.
+  **One pin site is load-bearing**: a pin is superseded by the next write to the
+  same inode, so arming it in `editFlush` rather than in `renameSave` is what
+  keeps a later in-place edit from leaving older atomic-save bytes pinned (#381).
+  `pinIno` is set only for the three files whose Lookup calls `seedAuthored`
+  (`issue.md`, `project.md`, `initiative.md`); zero elsewhere means no pin,
+  because nothing would read it. Bounded by time (`pinTTL`), not by one Lookup: a
+  client's verification is several syscalls, each able to drive its own Lookup, so
+  all of them must answer alike. Without it a server-side reformat that changed the
+  byte count reached the client as a size mismatch, which editors report as a
+  possibly truncated write on a save that fully succeeded.
 - `resolveByName` — collapses the five regular single-name→ID resolvers
   (state, project, milestone, cycle, initiative); user, issue-identifier,
   label, and project-slug resolution remain bespoke.
@@ -570,8 +577,8 @@ a layer above the commit-tail primitives) and no telemetry (matching
 1. `Write` buffers bytes in the `editBuffer`; `Flush` parses the markdown via
    `marshal`. Editor save-via-rename (temp file + `rename`) is caught by a
    scratch node and routed through the same path (`atomicwrite.go`,
-   `renamesave.go`), pinning the written bytes for the re-Lookup that path forces
-   (`authoredPins`).
+   `renamesave.go`); the flush itself pins the written bytes for the re-Lookup
+   that path forces (`authoredPins`, armed in `editFlush`).
 2. The fs layer **resolves names to IDs** (status→stateId, assignee
    email→userId, labels→labelIds, project/milestone/cycle/parent→IDs). A local
    catalog miss self-heals: a typed unknown-name error triggers exactly **one**

@@ -79,11 +79,22 @@ put their whole multi-mutation front half (labels + links-reconcile + scalar) in
 the front-half result reaches the commit-tail `compare` through a method-local
 var the two closures share (mutate runs first). **Invalidate-after-persist is
 uniform by construction** — the shell invalidates only after the tail upserts,
-closing the window issues had (a recorded behavior change). It depends only on
-the `editFlushSink` seam (`errorSink` + `InvalidateUpdated`, satisfied by
-`*LinearFS`), so the shell's outcome dispatch, coherence-set exactness, and
-persist-before-invalidate ordering are unit-tested with a recording sink
-(`editflush_test.go`) — no FUSE mount, SQLite, or API.
+closing the window issues had (a recorded behavior change).
+
+The shell is also **the one place serve-your-own-writes arms** (#365, #379, #381).
+A committed clean write both marks the buffer authored (the node-local half) and
+pins the written bytes under the spec's **`pinIno`** (the half that survives the
+node — see [[authored-pin]]); both key off one condition in one place, so the
+in-place and atomic-save paths cannot disagree about whether a write is servable,
+and the later of two writes to a file always owns the pin. `pinIno` is set only for
+the three files whose Lookup calls `seedAuthored` (`issue.md`, `project.md`,
+`initiative.md`); zero for the rest, where a pin would be bytes nobody can read.
+
+It depends only on the `editFlushSink` seam (`errorSink` + `InvalidateUpdated` +
+`PinWritten`, satisfied by `*LinearFS`), so the shell's outcome dispatch,
+coherence-set exactness, persist-before-invalidate ordering, and the pin/authored
+arming rules are unit-tested with a recording sink (`editflush_test.go`) — no FUSE
+mount, SQLite, or API.
 
 ### Rename save (`renameSave`)
 The **deep module** owning the atomic-save Rename tail — the rename-shaped
@@ -101,8 +112,7 @@ canonical files aren't renamable) → target-name guard (`.error` names the one
 writable target, `ENOTSUP`) → flush the bytes through the file's normal edit
 path (a transient file node with a dirty edit buffer, so frontmatter
 validation, read-your-writes verification, and `.error` handling all apply) →
-**adopt + consume + `InvalidateRenamed`, all on {0, EIO}, plus the
-[[authored-pin]] of the written bytes on a committed clean save**. The adopt-on-EIO
+**adopt + consume + `InvalidateRenamed`, all on {0, EIO}**. The adopt-on-EIO
 line is the policy, now written once: `Flush` returns `EIO` only on a fatal
 read-your-writes divergence, by which point the write has already reached
 Linear — refusing to adopt would keep serving stale content while `.error`
@@ -113,15 +123,17 @@ that dead buffer — whose ops used to `return 0`, silently swallowing a write
 that can no longer persist. A consumed scratch node now returns `ESTALE` from
 `Open`/`Write`/`Flush`/`Fsync`/`Setattr`, so the write fails loud and the
 `ESTALE` on `Open` drives the VFS to re-Lookup the real node (`LOOKUP_REVAL`).
+The [[authored-pin]] this path needs is **not** armed here: it rides the flush,
+because `editFlush` is the one place that knows a write committed (#381). The tail
+used to arm it off a `committed` flag the flush closure reported back, since errno
+alone cannot tell a real write from a save that resolved to no changes — inside
+`editFlush` that distinction is just the `proceed` it already has.
 Lives in `internal/fs/renamesave.go`; each directory hands it a small spec
 (target name, error key, dir/file inos, scratch/flush/adopt closures — the
-scratch closure also returns the per-node consume, and the flush closure reports
-whether it actually **committed** alongside its errno, since a save that resolved
-to no changes returns 0 too and must not pin). It depends only on the
-`renameSaveSink` seam (the `renameSink` surface — ErrorSink +
-`InvalidateRenamed` — plus `PinWritten`, all satisfied by `*LinearFS` through the
-writeFeedback, kernelNotify, and authoredPins promotions; `commitRename` keeps
-the narrower `renameSink`), and the scratch lookup is a spec closure, so it is
+scratch closure also returns the per-node consume). It depends only on the
+`renameSink` seam (ErrorSink + `InvalidateRenamed`, satisfied by `*LinearFS`
+through the writeFeedback and kernelNotify promotions, and shared with
+`commitRename`), and the scratch lookup is a spec closure, so it is
 unit-tested with a recording sink — no FUSE mount, inode tree, SQLite, or API.
 
 ### Create tail (`commitCreate`)
@@ -680,10 +692,10 @@ async refresh. It is deliberately NOT armed on a fatal read-your-writes divergen
 (a silent revert or truncation, where `commitWriteBack` returns EIO) — serving the
 written bytes there would mask the loss from the very re-read the `.error` asks for.
 A fresh `Open` clears it, so independent later readers converge to what persisted.
-The flag is also the atomic-save path's **commit signal**: `editBuffer.committedWrite`
-reads it back off the transient node [[rename-save]] flushes through, so the
-[[authored-pin]] arms on exactly the outcome that arms `authored` here rather than
-on a bare errno 0. See [[node-refresh]]. Each of the seven editable file
+The flag protects the bytes only as long as **this node** lives — a dentry forget
+rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
+[[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
+pin, not this flag, is what survives the node. See [[node-refresh]]. Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`
@@ -707,37 +719,45 @@ truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
 
 ### Authored-write pin (`authoredPins`)
 The **deep module** that carries serve-your-own-writes across a node boundary the
-[[edit-buffer]] cannot cross (#379). `authored` pins the written bytes *in the
-buffer they were written through*, which covers in-place edits only — and editors
-never write in place: they rename a scratch temp file onto the canonical `.md`, so
+[[edit-buffer]] cannot cross (#379, #381). `authored` pins the written bytes *in the
+buffer they were written through*, which dies with the node — and editors never
+write in place anyway: they rename a scratch temp file onto the canonical `.md`, so
 [[rename-save]] flushes through a **transient** node (its buffer, and its
 `authored` flag, are discarded a line later) and then deliberately drops the
 canonical file's inode so it re-Looks-up and re-renders what *persisted*. The
 written bytes were therefore never served back, and any server-side reformat that
 moved the byte count reached the client as a size mismatch on a fully successful
-write — which editors report as a possibly truncated write.
+write — which editors report as a possibly truncated write. The same boundary
+exists on the in-place path: a dentry forget inside the window rebuilds the node
+with an empty buffer, so the flag alone would lose the bytes there too.
 `authoredPins` (`internal/fs/authoredpin.go`) is a mount-wide `ino → {bytes,
 deadline}` store embedded on `LinearFS` by value (zero value ready, no constructor
 wiring). Its invariant: **a Lookup that finds a pin serves the pinned bytes as the
 buffer's content *and* as the size it publishes** — `manifest.file` reports
 `len(content)` in the `EntryOut`, and publishing the render's length while serving
 the pin would clamp the client's own read to the wrong size, which is the mismatch
-the module exists to remove. The pin is armed **only on a committed clean save**
-(`committed && errno == 0`, the same rule that arms `authored`): not on `EIO`,
-where the write did not persist as written and hiding that would mask real loss;
-not on a save that committed nothing, where echoing the bytes back would report a
-dropped edit as a byte-for-byte success. It is bounded by **time** (`pinTTL`),
-**not consumed by the first Lookup** — a client's verification is several syscalls
-(stat, then open+read), each able to drive its own Lookup after the rename
-invalidation, so all of them must answer alike; the TTL is also a tighter staleness
-bound than the in-place path's "until the next `Open`", and it is what bounds the
-one gap left open (a later *in-place* edit inside the window does not supersede an
-existing pin). Wired at all three atomic-save sites (`issue.md`, `project.md`,
-`initiative.md`) via the `renameSaveSink` seam; unit-tested directly (window,
-expiry, sweep, unaliased copies, seed-beats-render) plus deterministic
-mount-level tests over all three files, the reformat-note shape, and the EIO
-no-pin rule (`internal/integration/atomicsave_pin_test.go`) — the rename itself
-forces the re-Lookup, so no timeout wait is needed.
+the module exists to remove. The pin is armed **only on a committed clean write**,
+by [[edit-flush]], on the same condition that arms `authored`: not on `EIO`, where
+the write did not persist as written and hiding that would mask real loss; not on a
+write that committed nothing, where echoing the bytes back would report a dropped
+edit as a byte-for-byte success. **Arming it in the flush rather than in
+[[rename-save]] is load-bearing**, not tidiness: a pin is superseded by the next
+`PinWritten` for the same inode, so whichever path wrote LAST owns it. Arming only
+on the rename tail meant a later in-place edit left the older atomic-save bytes
+pinned, and a forget-and-re-Lookup inside the window served them — read-your-writes
+running *backwards* (#381).
+It is bounded by **time** (`pinTTL`), **not consumed by the first Lookup** — a
+client's verification is several syscalls (stat, then open+read), each able to drive
+its own Lookup after the rename invalidation, so all of them must answer alike; the
+TTL is now the outer bound on a pin outliving its truth for a *remote* reason
+(someone else changed the entity), since a newer local write supersedes it outright.
+Reaches the three files whose Lookup calls `seedAuthored` (`issue.md`,
+`project.md`, `initiative.md`) through their specs' `pinIno`, via the
+`editFlushSink` seam; unit-tested directly (window, expiry, sweep, unaliased
+copies, seed-beats-render) and at the flush seam (the supersede rule) plus
+deterministic mount-level tests over all three files, the reformat-note shape, and
+the EIO no-pin rule (`internal/integration/atomicsave_pin_test.go`) — the rename
+itself forces the re-Lookup, so no timeout wait is needed.
 
 ### Render file (`renderFile`)
 The **deep module** owning every read-only *generated* file — the render-through

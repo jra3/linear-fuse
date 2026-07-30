@@ -324,15 +324,14 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 		dirIno:     p.EmbeddedInode().StableAttr().Ino,
 		fileIno:    projectInfoIno(project.ID),
 		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(p, oldName) },
-		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
 			fileNode = &ProjectInfoNode{
 				BaseNode:   BaseNode{lfs: p.lfs},
 				team:       team,
 				project:    project,
 				editBuffer: editBuffer{content: content, dirty: true},
 			}
-			errno := fileNode.Flush(ctx, nil)
-			return fileNode.committedWrite(), errno
+			return fileNode.Flush(ctx, nil)
 		},
 		adopt: func() { p.setEntity(fileNode.project) },
 	})
@@ -513,6 +512,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		},
 		adopt:     func(fresh *api.Project) { p.project = *fresh },
 		coherence: []uint64{projectInfoIno(p.project.ID), metaIno(p.project.ID)}, // project.meta reflects the edit
+		pinIno:    projectInfoIno(p.project.ID),                                  // project.md's Lookup seeds from the pin
 	})
 }
 
