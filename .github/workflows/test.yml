@@ -98,11 +98,15 @@ jobs:
       - name: Build
         run: make build
 
+      # This runs the OFFLINE fixture suite: liveAPIMode needs LINEARFS_LIVE_API=1
+      # (unset here) as well as the key, so the injected secret goes unused and this
+      # duplicates what `unit-tests` already covers under -race. Whether the job
+      # should go live-read or be deleted along with the secret is the open decision
+      # in #386 — left as-is deliberately rather than guessed at.
+      # LINEARFS_WRITE_TESTS is NOT set: no test may mutate Linear from this job.
       - name: Run read-only integration tests
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          LINEARFS_INTEGRATION: "1"
-          # Note: LINEARFS_WRITE_TESTS is NOT set - only read tests run
         run: go test -v -timeout 10m ./internal/integration/...
 
       - name: Cleanup on failure

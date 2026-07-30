@@ -260,6 +260,8 @@ func TestWriteContractFsyncOnCreateFiles(t *testing.T) {
 // failure mode. In fixture mode the rename itself may not succeed (no API), but
 // the target document node must remain readable either way.
 func TestWriteContractAtomicRenameNoCorruption(t *testing.T) {
+	skipIfLiveAPI(t)
+
 	target, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Skipf("no document fixture: %v", err)
@@ -304,6 +306,8 @@ func TestWriteContractAtomicRenameNoCorruption(t *testing.T) {
 // itself may fail in fixture mode (no live API), but it must never leave the
 // target unreadable/corrupted.
 func TestWriteContractAtomicRenameCreateNoEROFS(t *testing.T) {
+	skipIfLiveAPI(t)
+
 	cases := []struct {
 		name    string
 		dirFile func(t *testing.T) (dir, file string) // directory + editable filename
@@ -470,6 +474,8 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 // silent success. The unknown-initiative check resolves against local SQLite,
 // so this runs in fixture mode with no network.
 func TestWriteInvalidInputIsLoud(t *testing.T) {
+	skipIfLiveAPI(t)
+
 	dir := filepath.Join(projectsPath(testTeamKey), "test-project")
 	path := filepath.Join(dir, "project.md")
 	errPath := filepath.Join(dir, ".error")
@@ -509,13 +515,19 @@ func TestWriteInvalidInputIsLoud(t *testing.T) {
 // which is non-retryable, so mkdir returns an error and issues/.error explains
 // it. (A rate-limited/timed-out create instead returns EAGAIN; same .error.)
 func TestMkdirIssueFailureIsLegible(t *testing.T) {
+	// Before the mkdir, not after: under a live key this creates a real issue, and
+	// the cleanup below cannot remove it — IssuesNode.Rmdir resolves by
+	// issue.Identifier, never by the typed directory name, so the probe leaks.
+	skipIfLiveAPI(t)
+
 	newIssueDir := filepath.Join(issuesPath(testTeamKey), "Mkdir Legibility Probe")
 
 	err := os.Mkdir(newIssueDir, 0755)
 	if err == nil {
-		// Should not happen in fixture mode (no API); clean up if it somehow did.
+		// Should not happen in fixture mode (no API, and no mock mutator injected
+		// here); clean up if it somehow did.
 		_ = os.Remove(newIssueDir)
-		t.Skip("issue creation unexpectedly succeeded (live API?); skipping legibility check")
+		t.Skip("issue creation unexpectedly succeeded; skipping legibility check")
 	}
 
 	errPath := filepath.Join(issuesPath(testTeamKey), ".error")
@@ -531,6 +543,8 @@ func TestMkdirIssueFailureIsLegible(t *testing.T) {
 // that returns EACCES on every subsequent read. Runs in fixture mode: the write
 // itself won't persist (no API), but the node must stay a real document node.
 func TestOverwriteDocKeepsNodeReadable(t *testing.T) {
+	skipIfLiveAPI(t)
+
 	docPath, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Skipf("no document fixture: %v", err)
