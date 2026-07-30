@@ -116,9 +116,10 @@ func (i *InitiativeNode) manifest() *dirManifest {
 	// initiative.md is editable-only; identity/status/owner live in initiative.meta.
 	m.file("initiative.md", initiativeInfoIno(initiative.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID}
-		content := node.generateContent()
-		node.content = content
-		return node, content, 0
+		// An atomic save may have pinned the bytes the client just wrote; they
+		// win over the render for this one Lookup (authoredpin.go, #379).
+		served := lfs.seedAuthored(&node.editBuffer, initiativeInfoIno(initiative.ID), node.generateContent())
+		return node, served, 0
 	})
 
 	// initiative.meta: read-through from the freshest initiative so an edit to
@@ -178,14 +179,15 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 		dirIno:     i.EmbeddedInode().StableAttr().Ino,
 		fileIno:    initiativeInfoIno(initiative.ID),
 		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
+		flush: func(ctx context.Context, content []byte) (bool, syscall.Errno) {
 			fileNode = &InitiativeInfoNode{
 				BaseNode:     BaseNode{lfs: i.lfs},
 				initiative:   initiative,
 				initiativeID: initiative.ID,
 				editBuffer:   editBuffer{content: content, dirty: true},
 			}
-			return fileNode.Flush(ctx, nil)
+			errno := fileNode.Flush(ctx, nil)
+			return fileNode.committedWrite(), errno
 		},
 		adopt: func() { i.setEntity(fileNode.initiative) },
 	})

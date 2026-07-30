@@ -335,9 +335,17 @@ Failure model (every writable surface follows this contract):
   lingering listing entry. Either way, restart the daemon or wait for the next
   sync to reflect it. (A succeeded mutation is never a silent no-op -- it appears
   locally or says why in .error.)
-- Whatever the errno, the reason lands in .error; success clears it. Always read
-  .error after any failed write (including an atomic-save rename that returns
-  EINVAL/EMSGSIZE) — the errno alone cannot carry the reason.
+- Whatever the errno, the reason lands in .error; success clears it, except for
+  the one informational note below. Always read .error after any failed write
+  (including an atomic-save rename that returns EINVAL/EMSGSIZE) — the errno
+  alone cannot carry the reason.
+- NOT a failure: a .error that says "saved, but Linear reformatted the markdown
+  server-side". The write succeeded and no text was lost (the errno was 0);
+  Linear stored its own formatting of your markdown. Reading the file right after
+  the save gives you your own bytes back, so the reformat is not visible yet — a
+  later read shows what Linear stored (see EDITING FILES). A write that truly did
+  not persist says so — "reverted to its previous content" or "substantially
+  shorter" — and returns EIO.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
 Stale-catalog self-healing: a name that resolves nowhere locally (a status,
@@ -384,6 +392,14 @@ EDITING FILES:
 - Use the Edit tool to modify issue.md, project.md, initiative.md frontmatter
 - The Edit tool works correctly because it reads then writes (unlike raw editors on _create)
 - After editing, changes sync to Linear immediately
+- A save reads back byte-for-byte right away, but Linear normalizes markdown when
+  it STORES a body — it collapses blank runs, flips bullet markers, and can move
+  emphasis around inline code spans — so a later read shows the stored formatting,
+  not your bytes. The immediate read-back therefore verifies that the write landed,
+  not how Linear stored it. Re-read the file before any follow-up edit that
+  find-and-replaces text from the earlier version; an in-context copy goes stale in
+  reformatted regions, and the failure looks like a bad match rather than a
+  rewritten file.
 
 CREATING ITEMS:
 - Use Bash(echo "text" > path/_create) — never use the Write tool on _create files

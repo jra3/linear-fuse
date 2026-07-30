@@ -17,16 +17,17 @@ import (
 // failing at the network with the fixture-mode dummy key. The real client is
 // restored on cleanup so loud-failure tests that intend mutations to fail are
 // unaffected. Tests using this must not t.Parallel() (the fake is process-global
-// on the shared mount).
-func enableMockMutations(t *testing.T) {
+// on the shared mount). Extra options (e.g. WithBodyReformat) tailor the fake to
+// one test's scenario; the defaults are what every other test gets.
+func enableMockMutations(t *testing.T, opts ...mockmutation.Option) {
 	t.Helper()
 	if liveAPIMode {
 		return // live mode uses the real API; the fake would mask it
 	}
-	lfs.InjectTestMutationClient(mockmutation.New(
+	lfs.InjectTestMutationClient(mockmutation.New(append([]mockmutation.Option{
 		mockmutation.WithTeamKey(testTeamKey),
 		mockmutation.WithStore(lfs.GetStore()),
-	))
+	}, opts...)...))
 	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
 }
 

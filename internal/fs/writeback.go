@@ -101,7 +101,7 @@ func writeBackDivergence(field, want, got, prev string) writeBackResult {
 	// normalize (e.g. bold spanning a newline). The write succeeded; report a
 	// non-fatal note rather than failing the close.
 	return writeBackResult{
-		message: fmt.Sprintf("Field: %s\nNote: saved, but Linear reformatted the markdown server-side (you wrote %d chars, %d persisted). The text is intact; re-read the file to see the stored formatting.", field, wantLen, gotLen),
+		message: fmt.Sprintf("Field: %s\nNote: saved, but Linear reformatted the markdown server-side (you wrote %d chars, %d persisted). The text is intact; an immediate re-read still shows your own bytes, a later read shows the stored formatting.", field, wantLen, gotLen),
 		fatal:   false,
 	}
 }

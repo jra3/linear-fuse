@@ -138,6 +138,27 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		t.Error("README still claims a project/initiative body maps to the ≤255 description field (#5)")
 	}
 
+	// #379: a successful write whose body Linear reformatted leaves an
+	// informational .error note, and a later read shows the stored formatting
+	// rather than the written bytes. Both are contract an agent gets wrong by
+	// default — it reads the note as a failed write, and it find-and-replaces
+	// against a now-stale in-context copy — so the README must state them.
+	for _, want := range []string{
+		"saved, but Linear reformatted the markdown",
+		"Re-read the file before any follow-up edit",
+		"a later read shows",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not document the server-side reformat contract: missing %q", want)
+		}
+	}
+	// The written bytes are pinned across the atomic-save re-Lookup, so an
+	// immediate re-read shows the agent's own bytes, never Linear's formatting.
+	// The two places the README describes the reformat must agree on that timing.
+	if strings.Contains(readme, "Re-read the file to see what it stored") {
+		t.Error("README still tells an agent an immediate re-read shows Linear's stored formatting (#379 pins the written bytes)")
+	}
+
 	// Project labels (#130): the README must teach the catalog surface and the
 	// assignment rules ("one child" pins group exclusivity; "retired" pins the
 	// lifecycle; the reference-files line must point at the catalog).

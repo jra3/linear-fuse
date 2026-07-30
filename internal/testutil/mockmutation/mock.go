@@ -53,6 +53,10 @@ type Client struct {
 	// via DocumentFields (issue/project/team/initiative); without it the upsert
 	// would clear issue_id and drop the doc from its parent listing.
 	docState map[string]api.Document
+	// bodyReformat, when set, is applied to a stored issue description to model
+	// Linear's server-side markdown normalization (see WithBodyReformat). nil
+	// means the fake stores what it was sent, verbatim.
+	bodyReformat func(string) string
 	// liveLinkOverride, when set for a parent ID (project or initiative), replaces
 	// the store-backed authoritative live link list served by the liveReader seam.
 	// It lets a test present a phantom — a link the store still has but Linear no
@@ -75,6 +79,21 @@ func WithTeamKey(key string) Option {
 // project — matching what the live API returns. Without it those render blank.
 func WithStore(store *db.Store) Option {
 	return func(c *Client) { c.store = store }
+}
+
+// WithBodyReformat models the one server behaviour the fake otherwise cannot:
+// Linear normalizes markdown when it STORES a body, so what persists is not
+// byte-identical to what was written (#146). fn is applied to the stored body of
+// every entity whose canonical .md is atomically saved — an issue description, a
+// project's content, an initiative's content — so the verify getter reads back a
+// body of a different length than the one sent, the condition under which a
+// byte-count re-read of a fully successful save used to look like a truncated
+// write (#379).
+//
+// Off by default: without it the fake echoes bodies verbatim, which is the
+// conservative choice for every other test.
+func WithBodyReformat(fn func(string) string) Option {
+	return func(c *Client) { c.bodyReformat = fn }
 }
 
 // New returns a fake mutation client. Created issues get identifiers like
@@ -225,6 +244,14 @@ func (c *Client) projectName(ctx context.Context, id string) string {
 	return ""
 }
 
+// reformat applies the configured server-side body normalization, if any.
+func (c *Client) reformat(body string) string {
+	if c.bodyReformat == nil {
+		return body
+	}
+	return c.bodyReformat(body)
+}
+
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[string]any) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -233,7 +260,7 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 		iss.Title = v
 	}
 	if v, ok := input["description"].(string); ok {
-		iss.Description = v
+		iss.Description = c.reformat(v)
 	}
 	// Overlay the editable scalar frontmatter fields the issue Flush can send, so
 	// the verify getter reads them back — mirroring CreateIssue's field handling.
@@ -387,7 +414,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 		proj.Name = *input.Name
 	}
 	if input.Content != nil { // the editable body maps here (#5)
-		proj.Content = *input.Content
+		proj.Content = c.reformat(*input.Content)
 	}
 	if input.Description != nil {
 		proj.Description = *input.Description
@@ -471,7 +498,7 @@ func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, inpu
 		init.Name = *input.Name
 	}
 	if input.Content != nil { // the editable body maps here (#5)
-		init.Content = *input.Content
+		init.Content = c.reformat(*input.Content)
 	}
 	if input.Description != nil {
 		init.Description = *input.Description

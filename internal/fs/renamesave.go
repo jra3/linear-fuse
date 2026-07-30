@@ -28,14 +28,23 @@ import (
 // inode tree — and is unit-tested with a recording sink and stub closures: no
 // FUSE mount, SQLite, or API.
 
-// renameSink is the minimal surface the atomic-save tail needs: .error
-// reporting for the wrong-target guard and the kernel-cache coherence policy
-// for the consumed scratch entry. *LinearFS satisfies it directly (writeFeedback
-// and kernelNotify promotions), so production wiring needs no adapter while
-// tests inject a fake.
+// renameSink is the minimal surface a rename tail needs: .error reporting for
+// the guards and the kernel-cache coherence policy for the renamed entry.
+// *LinearFS satisfies it directly (writeFeedback and kernelNotify promotions),
+// so production wiring needs no adapter while tests inject a fake. Shared with
+// commitRename (renamecommit.go), the title-rename tail.
 type renameSink interface {
 	errorSink
 	InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64)
+}
+
+// renameSaveSink adds the one surface only the atomic-save tail needs: the
+// serve-your-own-writes pin that carries the written bytes across the re-Lookup
+// this tail forces (see authoredpin.go, #379). *LinearFS satisfies it through
+// its embedded authoredPins.
+type renameSaveSink interface {
+	renameSink
+	PinWritten(fileIno uint64, content []byte)
 }
 
 // renameSaveSpec describes the per-entity parts of an atomic save. Everything
@@ -66,8 +75,11 @@ type renameSaveSpec struct {
 	// construct a transient file node with a dirty editBuffer and Flush it
 	// (frontmatter validation, read-your-writes verification, .error handling,
 	// cache invalidation). The closure captures the transient node so adopt can
-	// read the flushed entity back.
-	flush func(ctx context.Context, content []byte) syscall.Errno
+	// read the flushed entity back — and so it can report committed, whether the
+	// flush actually wrote to Linear (editBuffer.committedWrite). Errno alone
+	// cannot say: a save that resolved to no changes at all also returns 0, and
+	// pinning there would echo a dropped edit back as a byte-for-byte success.
+	flush func(ctx context.Context, content []byte) (committed bool, errno syscall.Errno)
 	// adopt stores the flushed node's fresh entity on the directory node so the
 	// canonical file re-renders the persisted content. Called exactly when the
 	// write reached Linear — flush errno 0 or EIO (see renameSave).
@@ -79,7 +91,7 @@ type renameSaveSpec struct {
 // path a direct in-place edit uses. The canonical file is the only writable
 // file in the directory, so renames onto any other target — or of the canonical
 // files themselves — are rejected.
-func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSaveSpec) syscall.Errno {
+func renameSave(ctx context.Context, sink renameSaveSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSaveSpec) syscall.Errno {
 	// The atomic-save pattern keeps the temp file a sibling of the canonical file.
 	if newParent.EmbeddedInode().StableAttr().Ino != spec.dirIno {
 		return syscall.EXDEV
@@ -99,7 +111,7 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		return syscall.ENOTSUP
 	}
 
-	errno := spec.flush(ctx, content)
+	committed, errno := spec.flush(ctx, content)
 
 	if errno == 0 || errno == syscall.EIO {
 		// Adopt on EIO too: Flush returns EIO only on a fatal read-your-writes
@@ -115,6 +127,24 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		// ESTALE drives the VFS to re-Lookup the real node.
 		spec.adopt()
 		consume()
+		// Serve-your-own-writes (#379). The re-Lookup the invalidation below
+		// forces builds a node from what PERSISTED, so without a pin the bytes
+		// the client just wrote are never served back and a server-side reformat
+		// that changed the byte count reads to the client as a truncated write.
+		// Pin them for that Lookup to seed (see authoredpin.go), before the
+		// invalidation that triggers it.
+		//
+		// ONLY on a committed clean save, exactly as editFlush arms `authored`
+		// (#365). On EIO the write did NOT persist as written — a silent revert
+		// or a truncation — and serving the written bytes there would hide the
+		// loss from the re-read .error tells the agent to make. A save that
+		// committed nothing (an edit that resolved to no changes, e.g. one that
+		// only touched frontmatter keys marshal ignores) returns 0 too, and
+		// pinning there would report a dropped edit back as a byte-for-byte
+		// success — the same false signal in the other direction.
+		if committed && errno == 0 {
+			sink.PinWritten(spec.fileIno, content)
+		}
 		sink.InvalidateRenamed(spec.dirIno, name, newName, spec.fileIno)
 	}
 
