@@ -110,6 +110,65 @@ jobs:
         run: |
           fusermount3 -u /tmp/linearfs-test-* 2>/dev/null || true
 
+  # Whether a runner image carries the non-setuid /usr/local/bin/fusermount3 that
+  # breaks mounts is outside our control, so the preflight's REPAIR path would
+  # otherwise sit untested until the next image that has it — exactly the gap that
+  # let #384 reach main. Plant the shadow deliberately and assert the repair.
+  fuse-preflight-selftest:
+    name: FUSE Preflight Self-Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25'
+
+      - name: Plant a non-setuid fusermount3 ahead of the working one
+        run: |
+          set -euo pipefail
+          sudo cp /usr/bin/fusermount3 /usr/local/bin/fusermount3
+          sudo chown "$(id -un):$(id -gn)" /usr/local/bin/fusermount3
+          sudo chmod 0777 /usr/local/bin/fusermount3
+          ls -l /usr/local/bin/fusermount3
+          # The bug only exists if the planted copy is what PATH resolves to.
+          resolved="$(command -v fusermount3)"
+          echo "resolves to: $resolved"
+          [ "$resolved" = /usr/local/bin/fusermount3 ] || {
+            echo "setup failed: expected the planted shadow to win PATH resolution"; exit 1; }
+
+      - name: Confirm the shadow actually breaks mounting
+        run: |
+          set -uo pipefail
+          # Reproduce #384: with the shadow in place, the mounted-fixture TestMain
+          # must fail. A pass here means the self-test is no longer testing anything.
+          if go test -count=1 -run TestNothingMatchesThisName ./internal/integration/ >out.txt 2>&1; then
+            echo "::error::the planted shadow did NOT break mounting — this self-test has stopped reproducing #384"
+            cat out.txt; exit 1
+          fi
+          grep -q "Operation not permitted" out.txt || {
+            echo "::error::failed for a different reason than #384:"; cat out.txt; exit 1; }
+          echo "reproduced: mount denied while the shadow wins PATH"
+
+      - name: FUSE preflight repairs it
+        run: ./scripts/ci-fuse-preflight.sh
+
+      - name: Assert the repair
+        run: |
+          set -euo pipefail
+          [ ! -e /usr/local/bin/fusermount3 ] || {
+            echo "shadow survived the preflight"; ls -l /usr/local/bin/fusermount3; exit 1; }
+          resolved="$(command -v fusermount3)"
+          echo "resolves to: $resolved"
+          [ -u "$resolved" ] && [ "$(stat -c %u "$resolved")" = 0 ] || {
+            echo "resolved helper is not setuid root"; ls -l "$resolved"; exit 1; }
+
+      - name: Mounting works after the repair
+        run: go test -count=1 -run TestGeneratedReadmeMatchesBehavior ./internal/integration/
+
   build:
     name: Build
     runs-on: ubuntu-latest
