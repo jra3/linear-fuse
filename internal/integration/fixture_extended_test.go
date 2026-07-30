@@ -1,5 +1,10 @@
 package integration
 
+// The second half of the fixture read surface — cycles, initiatives, labels, the
+// by/ filters, users, children, attachments. Same contract as
+// fixture_read_test.go: every test asserts against seeded rows, so every test
+// carries skipIfLiveAPI(t, fixtureSeededData) (#395).
+
 import (
 	"os"
 	"path/filepath"
@@ -12,6 +17,7 @@ import (
 // =============================================================================
 
 func TestFixtureCyclesDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	cyclesPath := filepath.Join(teamPath(testTeamKey), "cycles")
 	info, err := os.Stat(cyclesPath)
 	if err != nil {
@@ -23,6 +29,7 @@ func TestFixtureCyclesDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureCyclesDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	cyclesPath := filepath.Join(teamPath(testTeamKey), "cycles")
 	entries, err := os.ReadDir(cyclesPath)
 	if err != nil {
@@ -36,6 +43,7 @@ func TestFixtureCyclesDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureCycleDirectoryContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	cyclesPath := filepath.Join(teamPath(testTeamKey), "cycles")
 	entries, err := os.ReadDir(cyclesPath)
 	if err != nil {
@@ -71,6 +79,7 @@ func TestFixtureCycleDirectoryContents(t *testing.T) {
 // =============================================================================
 
 func TestFixtureInitiativesDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to stat initiatives directory: %v", err)
@@ -81,6 +90,7 @@ func TestFixtureInitiativesDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureInitiativesDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
@@ -93,6 +103,7 @@ func TestFixtureInitiativesDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureInitiativeDirectoryContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
@@ -129,6 +140,7 @@ func TestFixtureInitiativeDirectoryContents(t *testing.T) {
 }
 
 func TestFixtureInitiativeInfoFile(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
@@ -162,6 +174,7 @@ func TestFixtureInitiativeInfoFile(t *testing.T) {
 // =============================================================================
 
 func TestFixtureLabelsDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(labelsPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat labels directory: %v", err)
@@ -172,6 +185,7 @@ func TestFixtureLabelsDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureLabelsDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(labelsPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read labels directory: %v", err)
@@ -184,6 +198,7 @@ func TestFixtureLabelsDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureLabelFileContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(labelsPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read labels directory: %v", err)
@@ -235,6 +250,7 @@ func TestFixtureLabelFileContents(t *testing.T) {
 // =============================================================================
 
 func TestFixtureByAssigneeDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(byAssigneePath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat by/assignee directory: %v", err)
@@ -245,6 +261,7 @@ func TestFixtureByAssigneeDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureByAssigneeListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(byAssigneePath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read by/assignee directory: %v", err)
@@ -257,6 +274,7 @@ func TestFixtureByAssigneeListing(t *testing.T) {
 }
 
 func TestFixtureByLabelDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(byLabelPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to stat by/label directory: %v", err)
@@ -267,6 +285,7 @@ func TestFixtureByLabelDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureByLabelListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(byLabelPath(testTeamKey))
 	if err != nil {
 		t.Fatalf("Failed to read by/label directory: %v", err)
@@ -279,6 +298,7 @@ func TestFixtureByLabelListing(t *testing.T) {
 }
 
 func TestFixtureByLabelContainsIssues(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-4 has Bug label
 	bugPath := filepath.Join(byLabelPath(testTeamKey), "Bug")
 	entries, err := os.ReadDir(bugPath)
@@ -299,6 +319,7 @@ func TestFixtureByLabelContainsIssues(t *testing.T) {
 }
 
 func TestFixtureUnassignedDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	unassignedPath := filepath.Join(byAssigneePath(testTeamKey), "unassigned")
 	info, err := os.Stat(unassignedPath)
 	if err != nil {
@@ -310,6 +331,7 @@ func TestFixtureUnassignedDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureUnassignedContainsIssues(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-7 is unassigned
 	unassignedPath := filepath.Join(byAssigneePath(testTeamKey), "unassigned")
 	entries, err := os.ReadDir(unassignedPath)
@@ -334,6 +356,7 @@ func TestFixtureUnassignedContainsIssues(t *testing.T) {
 // =============================================================================
 
 func TestFixtureIssueChildrenDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-1 is parent of TST-2
 	childrenPath := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "children")
 	info, err := os.Stat(childrenPath)
@@ -346,6 +369,7 @@ func TestFixtureIssueChildrenDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureIssueChildrenContainsChild(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-1 is parent of TST-2
 	childrenPath := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "children")
 	entries, err := os.ReadDir(childrenPath)
@@ -370,6 +394,7 @@ func TestFixtureIssueChildrenContainsChild(t *testing.T) {
 }
 
 func TestFixtureChildSymlinkTarget(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-1 is parent of TST-2
 	childLink := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "children", "TST-2")
 
@@ -400,6 +425,7 @@ func TestFixtureChildSymlinkTarget(t *testing.T) {
 // =============================================================================
 
 func TestFixtureByStatusBacklogContainsIssues(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	backlogPath := byStatusPath(testTeamKey, "Backlog")
 	entries, err := os.ReadDir(backlogPath)
 	if err != nil {
@@ -420,6 +446,7 @@ func TestFixtureByStatusBacklogContainsIssues(t *testing.T) {
 }
 
 func TestFixtureFilterSymlinksResolve(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// Pick a symlink from by/status and verify it resolves
 	inProgressPath := byStatusPath(testTeamKey, "In Progress")
 	entries, err := os.ReadDir(inProgressPath)
@@ -463,6 +490,7 @@ func TestFixtureFilterSymlinksResolve(t *testing.T) {
 // =============================================================================
 
 func TestFixtureMyDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(myPath())
 	if err != nil {
 		t.Fatalf("Failed to stat my directory: %v", err)
@@ -473,6 +501,7 @@ func TestFixtureMyDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureMyDirectoryContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(myPath())
 	if err != nil {
 		t.Fatalf("Failed to read my directory: %v", err)
@@ -498,6 +527,7 @@ func TestFixtureMyDirectoryContents(t *testing.T) {
 }
 
 func TestFixtureMyCreatedDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(myCreatedPath())
 	if err != nil {
 		t.Fatalf("Failed to stat my/created directory: %v", err)
@@ -508,6 +538,7 @@ func TestFixtureMyCreatedDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureMyActiveDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(myActivePath())
 	if err != nil {
 		t.Fatalf("Failed to stat my/active directory: %v", err)
@@ -522,6 +553,7 @@ func TestFixtureMyActiveDirectoryExists(t *testing.T) {
 // =============================================================================
 
 func TestFixtureUsersDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	info, err := os.Stat(usersPath())
 	if err != nil {
 		t.Fatalf("Failed to stat users directory: %v", err)
@@ -532,6 +564,7 @@ func TestFixtureUsersDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureUsersDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(usersPath())
 	if err != nil {
 		t.Fatalf("Failed to read users directory: %v", err)
@@ -544,6 +577,7 @@ func TestFixtureUsersDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureUserDirectoryContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(usersPath())
 	if err != nil {
 		t.Fatalf("Failed to read users directory: %v", err)
@@ -574,6 +608,7 @@ func TestFixtureUserDirectoryContents(t *testing.T) {
 }
 
 func TestFixtureUserInfoFile(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(usersPath())
 	if err != nil {
 		t.Fatalf("Failed to read users directory: %v", err)
@@ -609,6 +644,7 @@ func TestFixtureUserInfoFile(t *testing.T) {
 // =============================================================================
 
 func TestFixtureCycleInfoFile(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	cyclesPath := filepath.Join(teamPath(testTeamKey), "cycles")
 	entries, err := os.ReadDir(cyclesPath)
 	if err != nil {
@@ -659,6 +695,7 @@ func TestFixtureCycleInfoFile(t *testing.T) {
 // =============================================================================
 
 func TestFixtureProjectUpdatesDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	projectPath := filepath.Join(projectsPath(testTeamKey), "test-project")
 	updatesPath := filepath.Join(projectPath, "updates")
 	info, err := os.Stat(updatesPath)
@@ -671,6 +708,7 @@ func TestFixtureProjectUpdatesDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureProjectUpdatesHasNewMd(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	projectPath := filepath.Join(projectsPath(testTeamKey), "test-project")
 	newMdPath := filepath.Join(projectPath, "updates", "_create")
 	_, err := os.Stat(newMdPath)
@@ -684,6 +722,7 @@ func TestFixtureProjectUpdatesHasNewMd(t *testing.T) {
 // =============================================================================
 
 func TestFixtureInitiativeUpdatesDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
@@ -704,6 +743,7 @@ func TestFixtureInitiativeUpdatesDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureInitiativeUpdatesHasNewMd(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(initiativesPath())
 	if err != nil {
 		t.Fatalf("Failed to read initiatives directory: %v", err)
@@ -725,6 +765,7 @@ func TestFixtureInitiativeUpdatesHasNewMd(t *testing.T) {
 // =============================================================================
 
 func TestFixtureAttachmentsDirectoryExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-1 has embedded files in the fixtures
 	attachPath := attachmentsPath(testTeamKey, "TST-1")
 	info, err := os.Stat(attachPath)
@@ -737,6 +778,7 @@ func TestFixtureAttachmentsDirectoryExists(t *testing.T) {
 }
 
 func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-1 has 2 embedded files (screenshot.png, design.pdf) and 1 external
 	// URL attachment (Design Spec.link), plus the _create/.error/.last
 	// control files
@@ -789,6 +831,7 @@ func TestFixtureAttachmentsDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureAttachmentsAreFiles(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	attachPath := attachmentsPath(testTeamKey, "TST-1")
 	entries, err := os.ReadDir(attachPath)
 	if err != nil {
@@ -803,6 +846,7 @@ func TestFixtureAttachmentsAreFiles(t *testing.T) {
 }
 
 func TestFixtureAttachmentFileInfo(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// Check file info for screenshot.png
 	filePath := attachmentFilePath(testTeamKey, "TST-1", "screenshot.png")
 	info, err := os.Stat(filePath)
@@ -821,6 +865,7 @@ func TestFixtureAttachmentFileInfo(t *testing.T) {
 }
 
 func TestFixtureIssueDirectoryContainsAttachments(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// Verify attachments shows up in issue directory listing
 	issuePath := issueDirPath(testTeamKey, "TST-1")
 	entries, err := os.ReadDir(issuePath)
@@ -845,6 +890,7 @@ func TestFixtureIssueDirectoryContainsAttachments(t *testing.T) {
 }
 
 func TestFixtureEmptyAttachmentsDirectory(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-2 has no embedded files, only the _create and .error control files
 	attachPath := attachmentsPath(testTeamKey, "TST-2")
 	entries, err := os.ReadDir(attachPath)

@@ -202,7 +202,14 @@ CREATES AND MODIFIES REAL LINEAR DATA), and `make integration-tests` (both, in
 that order); the default `make test` needs no key and touches no network. The
 read-only target is read-only by enforcement, not convention: the write-contract
 guards that write through the mount now skip under a live key (`skipIfLiveAPI`),
-so a `-ro` run cannot leak a probe issue into the workspace. Live mode also opens
+so a `-ro` run cannot leak a probe issue into the workspace. #395 widened the set
+of tests that a `-ro` run reaches — the fixture-only read tests gained the guard,
+and the mount-level contract tests that had no guard now derive their issue and
+project from the workspace instead of hardcoding `TST-1` — without widening what
+it can do: those tests stat, read, and fsync clean handles (an fsync with no bytes
+written flushes an empty buffer, which every create surface no-ops on), and the
+only writes they attempt are the ones asserted to be *rejected* by a read-only
+`.meta` sidecar, which has no writer to reach the API with. Live mode also opens
 its SQLite cache in a per-run temp dir instead of `db.DefaultDBPath()`, so a
 developer's real `~/.config/linearfs/cache.db` — normally held open by a running
 linearfs service — is never written by a test run.

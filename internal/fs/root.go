@@ -325,7 +325,11 @@ Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
-- Rate-limited or timed out (the write did not take effect; retry shortly) -> EAGAIN
+- Rate-limited, deferred, or interrupted -> EAGAIN, retry shortly. Read .error to
+  see WHICH: a request refused before it was sent "did not take effect" and is
+  safe to retry blindly; one "interrupted after it was sent" has an UNKNOWN
+  outcome — check whether the entity exists (listing, or .last) before retrying,
+  or you may create a duplicate.
 - Backend/API failure -> EIO
 - A mutation Linear accepted but whose local reflection fails after retries ->
   EIO, and the .error names the SAFE RECOVERY. For a create it NAMES the entity

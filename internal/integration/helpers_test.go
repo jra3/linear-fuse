@@ -141,6 +141,14 @@ func projectsPath(teamKey string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "projects")
 }
 
+func projectDirPath(teamKey, slug string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", slug)
+}
+
+func projectFilePath(teamKey, slug string) string {
+	return filepath.Join(mountPoint, "teams", teamKey, "projects", slug, "project.md")
+}
+
 func projectMetaPath(teamKey, slug string) string {
 	return filepath.Join(mountPoint, "teams", teamKey, "projects", slug, "project.meta")
 }

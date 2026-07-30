@@ -95,9 +95,7 @@ func assertRecordedNamesRoundTrip(t *testing.T, dir string, urls []string) {
 // OTHER entity — visible in readdir, unopenable by identity. Both surfaces that
 // deduplicate (issue attachments, project/initiative links) are covered.
 func TestIssue333_CreateTailRecordsNameLookupServes(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	t.Run("attachments", func(t *testing.T) {

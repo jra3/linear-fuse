@@ -2,10 +2,14 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -18,28 +22,8 @@ var (
 	apiCallDelay = 1 * time.Second // Minimum delay between API write operations
 )
 
-// skipIfNoWriteTests skips the test if write tests are not enabled
-// Write tests require live API mode with LINEARFS_WRITE_TESTS=1
-func skipIfNoWriteTests(t interface{ Skip(...any) }) {
-	if !liveAPIMode {
-		t.Skip("Skipped: requires live API (set LINEARFS_LIVE_API=1 and LINEAR_API_KEY)")
-	}
-	if os.Getenv("LINEARFS_WRITE_TESTS") != "1" {
-		t.Skip("Skipped: write tests disabled (set LINEARFS_WRITE_TESTS=1 to enable)")
-	}
-}
-
-// skipIfLiveAPI is the inverse interlock to skipIfNoWriteTests, for the
-// write-contract guards that exercise a structural invariant by writing through
-// the mount. Those writes are inert offline (no API, no auth) but hit a real
-// workspace under a live key, so they are fixture-mode-only by design: gating
-// them with skipIfNoWriteTests would instead delete them from the DEFAULT
-// offline suite, which is the only place they ever run.
-func skipIfLiveAPI(t interface{ Skip(...any) }) {
-	if liveAPIMode {
-		t.Skip("Skipped: fixture-mode write-contract guard; the same write would mutate a real workspace under a live key")
-	}
-}
+// The mode interlocks (skipIfNoWriteTests / skipIfLiveAPI) live in
+// modes_test.go, alongside the workspace-derived identifier pickers.
 
 // rateLimitWait ensures we don't make API calls too quickly
 func rateLimitWait() {
@@ -97,6 +81,51 @@ func WithStateID(stateID string) IssueOption {
 	}
 }
 
+// mkdirIssueRetries bounds the EAGAIN retry loop in createTestIssue, and
+// mkdirIssueBackoff is the wait before the first retry (doubled each time).
+// Sized against what the create path actually asks for: a rate-limited create
+// returns EAGAIN with "wait a few seconds and retry", and the live write suite
+// creates ~35 issues in four minutes, so it generates that backpressure itself.
+const (
+	mkdirIssueRetries = 4
+	mkdirIssueBackoff = 2 * time.Second
+)
+
+// mkdirIssueWithRetry creates the issue directory, honoring the retry contract
+// the mount documents: EAGAIN means "the create did not take effect, wait and
+// retry" (#131/#257), so treating it as fatal — which is what this helper used
+// to do — makes every live run flaky in proportion to the rate-limit pressure
+// the run itself generates (#399). Every other errno is a real failure and is
+// returned immediately.
+//
+// Caveat worth knowing when a retry does fire: EAGAIN is also what a create
+// whose POST was cancelled in flight returns, and in that case whether Linear
+// processed it is genuinely unknown — a retry can leave a duplicate behind. The
+// suite accepts that over a guaranteed flake; the underlying ambiguity is the
+// open question in #399, and it lives in the create path, not here.
+func mkdirIssueWithRetry(issuePath string) error {
+	backoff := mkdirIssueBackoff
+	var err error
+	for attempt := 0; attempt <= mkdirIssueRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			backoff *= 2
+			rateLimitWait()
+		}
+		err = os.Mkdir(issuePath, 0755)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EAGAIN) {
+			return err
+		}
+		log.Printf("createTestIssue: mkdir %q returned EAGAIN (attempt %d/%d), retrying — "+
+			"this is the mount's documented transient-create signal, not a failure",
+			filepath.Base(issuePath), attempt+1, mkdirIssueRetries+1)
+	}
+	return fmt.Errorf("still EAGAIN after %d attempts: %w", mkdirIssueRetries+1, err)
+}
+
 // createTestIssue creates an issue via filesystem mkdir for testing.
 // The title is prefixed with [TEST] and a timestamp.
 // Returns the issue and a cleanup function (currently no-op since Linear doesn't have delete).
@@ -107,7 +136,7 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 	issuePath := fmt.Sprintf("%s/teams/%s/issues/%s", mountPoint, testTeamKey, fullTitle)
 
 	// Create issue via filesystem mkdir - this goes through FUSE and syncs to SQLite
-	if err := os.Mkdir(issuePath, 0755); err != nil {
+	if err := mkdirIssueWithRetry(issuePath); err != nil {
 		return nil, nil, fmt.Errorf("failed to create test issue via mkdir: %w", err)
 	}
 
@@ -125,14 +154,28 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 			continue
 		}
 		if strings.Contains(string(content), fullTitle) {
-			// Parse frontmatter to get the ID
-			doc, err := parseFrontmatter(content)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to parse issue.md frontmatter: %w", err)
-			}
-
 			identifier := entry.Name()
-			id, _ := doc.Frontmatter["id"].(string)
+
+			// The id lives in issue.meta, not issue.md: #148 moved the volatile
+			// server fields out of the editable file. Reading it from issue.md
+			// and swallowing the miss with `_` is what handed every live test an
+			// api.Issue{ID: ""}, which then failed 14 tests as "not found in
+			// SQLite" and "Argument Validation Error" (#396). Hence: read the
+			// sidecar, and fail loudly on a miss.
+			metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, identifier))
+			if err != nil {
+				return nil, nil, fmt.Errorf("read issue.meta for %s: %w", identifier, err)
+			}
+			meta, err := parseFrontmatter(metaContent)
+			if err != nil {
+				return nil, nil, fmt.Errorf("parse issue.meta frontmatter for %s: %w", identifier, err)
+			}
+			id, ok := meta.Frontmatter["id"].(string)
+			if !ok || id == "" {
+				return nil, nil, fmt.Errorf("issue.meta for %s carries no id; every id-keyed "+
+					"assertion downstream would fail as 'not found'. Frontmatter: %v",
+					identifier, meta.Frontmatter)
+			}
 
 			issue := &api.Issue{
 				ID:         id,

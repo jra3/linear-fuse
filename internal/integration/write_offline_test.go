@@ -62,9 +62,7 @@ func lastEntryByTitle(t *testing.T, lastPath, title string) map[string]string {
 // forget-from-SQLite that stops an archived project resurrecting on the next
 // readdir (#149) is what this asserts.
 func TestOffline_ProjectCreateAndArchive(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	const title = "Offline Mock Project Probe"
@@ -104,9 +102,7 @@ func TestOffline_ProjectCreateAndArchive(t *testing.T) {
 // and Unlink. Labels are a collectionDir, so this also exercises its create and
 // unlink heads.
 func TestOffline_LabelCreateRenameDelete(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	// Create. The label filename is the name with spaces→dashes (labelFilename).
@@ -147,9 +143,7 @@ func TestOffline_LabelCreateRenameDelete(t *testing.T) {
 // IssuesNode.Rmdir (archive). This reaches the sub-issue create handler and the
 // issue-archive forget that no offline test touched before.
 func TestOffline_IssueLifecycle(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	// Top-level issue via mkdir (title-only quick create).
@@ -206,9 +200,7 @@ func TestOffline_IssueLifecycle(t *testing.T) {
 // This reaches LabelsNode.Create and CommentsNode.Create, which the _create
 // path bypasses.
 func TestOffline_NamedFileCreate(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	// Label via a named file. Use a name whose labelFilename is the file we
@@ -261,9 +253,7 @@ func TestOffline_NamedFileCreate(t *testing.T) {
 // nothing (the row/file resurrected on the next readdir). Each probe targets a
 // distinct previously-unguarded node.
 func TestOffline_DeadHandlerUnlinkRejected(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check")
 	enableMockMutations(t)
 
 	initDir, err := firstInitiativeDir()
@@ -300,9 +290,7 @@ func TestOffline_DeadHandlerUnlinkRejected(t *testing.T) {
 // (EPERM) rather than silently succeed (go-fuse's no-NodeRmdirer hole). Each probe
 // targets a distinct previously-unguarded node.
 func TestOffline_DeadHandlerRmdirRejected(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check")
 	enableMockMutations(t)
 
 	initDir, err := firstInitiativeDir()
@@ -337,9 +325,7 @@ func TestOffline_DeadHandlerRmdirRejected(t *testing.T) {
 // the listing without resurrecting. Milestone deletion had zero coverage of any
 // kind before this (create/edit were covered, delete was not).
 func TestOffline_MilestoneDelete(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	msDir := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")
@@ -364,9 +350,7 @@ func TestOffline_MilestoneDelete(t *testing.T) {
 // must appear and read its body back. Before this only a stat of _create and a
 // pre-seeded read existed — the create-through-the-mount path was uncovered.
 func TestOffline_InitiativeUpdateCreatePersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir, err := firstInitiativeDir()
@@ -394,9 +378,7 @@ func TestOffline_InitiativeUpdateCreatePersists(t *testing.T) {
 // filename must appear in the issue's docs listing (proof the create upserted it
 // with its issue association, not just echoed a .last line).
 func TestOffline_DocumentCreate(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir := docsPath(testTeamKey, "TST-1")
@@ -415,9 +397,7 @@ func TestOffline_DocumentCreate(t *testing.T) {
 // TestOffline_DocumentDelete drives DocsNode.Unlink: a created doc rm'd must reach
 // DeleteDocument and leave the listing without resurrecting.
 func TestOffline_DocumentDelete(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir := docsPath(testTeamKey, "TST-1")
@@ -439,9 +419,7 @@ func TestOffline_DocumentDelete(t *testing.T) {
 // TestOffline_MilestoneCreatePersists drives MilestonesNode create: a milestone
 // created via _create must appear with its name and description readable back.
 func TestOffline_MilestoneCreatePersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	msDir := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")
@@ -469,9 +447,7 @@ func TestOffline_MilestoneCreatePersists(t *testing.T) {
 // update written to updates/_create must appear as {seq}-{date}-{health}.md and
 // read its body back.
 func TestOffline_ProjectUpdateCreatePersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	updatesDir := filepath.Join(projectsPath(testTeamKey), "test-project", "updates")
@@ -489,9 +465,7 @@ func TestOffline_ProjectUpdateCreatePersists(t *testing.T) {
 // sub-issue must persist a real child that resolves to its own issue directory
 // (a symlink pointing nowhere would mean the create never reflected).
 func TestOffline_ChildIssuePersistsParent(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	childrenDir := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "children")
@@ -509,9 +483,7 @@ func TestOffline_ChildIssuePersistsParent(t *testing.T) {
 }
 
 func TestOffline_RelationCreateAndDelete(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	mkIssue := func(title string) string {
@@ -570,9 +542,7 @@ func TestOffline_RelationCreateAndDelete(t *testing.T) {
 // (LinksNode.Unlink): create a project external link via _create, then rm the
 // .link file — it must leave the listing and not resurrect.
 func TestOffline_ProjectLinkCreateAndDelete(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	linksDir := filepath.Join(projectsPath(testTeamKey), "test-project", "links")
@@ -601,9 +571,7 @@ func TestOffline_ProjectLinkCreateAndDelete(t *testing.T) {
 // that diverges from the store, is the phantom fall-through covered by
 // TestCreateLinkPhantomProceedsToRealCreate in the fs package.)
 func TestOffline_ProjectLinkCreateIdempotent(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	linksDir := filepath.Join(projectsPath(testTeamKey), "test-project", "links")
@@ -631,9 +599,7 @@ func TestOffline_ProjectLinkCreateIdempotent(t *testing.T) {
 // path (AttachmentsNode.Unlink): link an external attachment via _create, then
 // rm the .link file — it must leave the listing and not resurrect.
 func TestOffline_AttachmentCreateAndDelete(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline write-path check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline write-path check; uses the mock mutator")
 	enableMockMutations(t)
 
 	attDir := attachmentsPath(testTeamKey, "TST-1")

@@ -79,14 +79,18 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 			t.Errorf("README does not mention %q (collection meta split)", want)
 		}
 	}
-	// And the documented surfaces must really behave that way: a fixture doc's
-	// .meta exists, reads, and rejects writes; the comment .md has no frontmatter.
-	if entries, err := os.ReadDir(docsPath(testTeamKey, "TST-1")); err == nil {
+	// And the documented surfaces must really behave that way: a doc's .meta
+	// exists, reads, and rejects writes; the comment .md has no frontmatter. The
+	// issue comes from the workspace (someIssueID), not a hardcoded TST-1 — under
+	// a live key that path does not exist, and these ReadDir-guarded checks then
+	// pass by doing nothing (#395).
+	readmeIssueID := someIssueID(t)
+	if entries, err := os.ReadDir(docsPath(testTeamKey, readmeIssueID)); err == nil {
 		for _, e := range entries {
 			if isControlFile(e.Name()) || !strings.HasSuffix(e.Name(), ".md") {
 				continue
 			}
-			metaPath := docFilePath(testTeamKey, "TST-1", strings.TrimSuffix(e.Name(), ".md")+".meta")
+			metaPath := docFilePath(testTeamKey, readmeIssueID, strings.TrimSuffix(e.Name(), ".md")+".meta")
 			if _, err := os.ReadFile(metaPath); err != nil {
 				t.Errorf("README documents doc .meta sidecars but %s is unreadable: %v", metaPath, err)
 			}
@@ -96,12 +100,12 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 			break
 		}
 	}
-	if entries, err := os.ReadDir(commentsPath(testTeamKey, "TST-1")); err == nil {
+	if entries, err := os.ReadDir(commentsPath(testTeamKey, readmeIssueID)); err == nil {
 		for _, e := range entries {
 			if isControlFile(e.Name()) || !strings.HasSuffix(e.Name(), ".md") {
 				continue
 			}
-			content, err := os.ReadFile(commentFilePath(testTeamKey, "TST-1", e.Name()))
+			content, err := os.ReadFile(commentFilePath(testTeamKey, readmeIssueID, e.Name()))
 			if err == nil && strings.HasPrefix(string(content), "---") {
 				t.Errorf("README documents comment .md as frontmatter-free, but %s carries frontmatter", e.Name())
 			}
@@ -127,6 +131,15 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		t.Error("README carves attachments/relations out of .last, but every create surface reports to .last now")
 	}
 
+	// #399: EAGAIN covers two situations with different safe follow-ups, and the
+	// README must not collapse them back into one "the write did not take effect"
+	// promise — that promise is false for a request interrupted after it was sent,
+	// and acting on it duplicates the entity.
+	for _, want := range []string{"interrupted", "UNKNOWN"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not distinguish the two EAGAIN outcomes: missing %q", want)
+		}
+	}
 	// #5: project/initiative bodies map to the long content field, not the ≤255
 	// description; the README must not tell writers the body is the description
 	// (which silently rejected any real write-up), and must place description in

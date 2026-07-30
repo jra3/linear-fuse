@@ -46,11 +46,16 @@ func (r *skipRecorder) verdict() string {
 // it skips, and it skips for "requires live API", not for the write flag. That
 // ordering is the whole defect, so assert the reason and not just the boolean.
 //
-// The same table covers skipIfLiveAPI, the inverse guard the fixture-mode
-// write-contract tests use: the two must never agree to run the same test, and
-// the fixture guards must survive in the default offline suite (live=false,
-// no flag) — the column that would vanish if they were ever converted to
-// skipIfNoWriteTests.
+// The same table covers skipIfLiveAPI, the inverse guard every fixture-only
+// test uses: the two must never agree to run the same test, and the fixture
+// guards must survive in the default offline suite (live=false, no flag) — the
+// column that would vanish if they were ever converted to skipIfNoWriteTests.
+//
+// What the table cannot see is a test that carries NO guard while depending on
+// the fixture seed; that is #395, and the defense against it is that
+// skipIfLiveAPI is the only spelling of "fixture-only" in the suite (see
+// modes_test.go), so a missing guard is a missing line rather than a bespoke
+// `if liveAPIMode` that looks like every other one.
 func TestWriteInterlocksAreLiveAPIGated(t *testing.T) {
 	origLive := liveAPIMode
 	origFlag, hadFlag := os.LookupEnv("LINEARFS_WRITE_TESTS")
@@ -122,7 +127,7 @@ func TestWriteInterlocksAreLiveAPIGated(t *testing.T) {
 			write := &skipRecorder{}
 			skipIfNoWriteTests(write)
 			fixture := &skipRecorder{}
-			skipIfLiveAPI(fixture)
+			skipIfLiveAPI(fixture, fixtureSeededData)
 
 			t.Logf("%-46s %-12v %-14q %-12s %s", tc.name, tc.live, tc.writeFlag, write.verdict(), fixture.verdict())
 
@@ -134,6 +139,12 @@ func TestWriteInterlocksAreLiveAPIGated(t *testing.T) {
 			}
 			if fixture.skipped != tc.wantFixtureSkip {
 				t.Errorf("skipIfLiveAPI: skipped = %v (%s), want %v", fixture.skipped, fixture.reason, tc.wantFixtureSkip)
+			}
+			// The reason is the caller's, not a fixed sentence: a live run prints
+			// it in place of the test, and "which kind of fixture dependence"
+			// is what makes the skip triageable (#395).
+			if fixture.skipped && !strings.Contains(fixture.reason, fixtureSeededData) {
+				t.Errorf("skipIfLiveAPI reason = %q, want it to carry the caller's %q", fixture.reason, fixtureSeededData)
 			}
 			if !write.skipped && !fixture.skipped {
 				t.Errorf("both interlocks let the test run under %s; they are inverses and must never overlap", tc.name)
@@ -205,7 +216,7 @@ func TestInitialSyncTimeoutStaysInsideTestBudget(t *testing.T) {
 // testTeamKey at a team the store does not hold reproduces the cycle that
 // stamped after log-and-continuing past a failed fetch.
 func TestLiveSetupGateReleaseCondition(t *testing.T) {
-	skipIfLiveAPI(t)
+	skipIfLiveAPI(t, "fixture-mode: drives the live setup gate against the seeded store")
 
 	store := lfs.GetStore()
 	if store == nil {

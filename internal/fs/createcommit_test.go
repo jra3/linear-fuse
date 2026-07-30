@@ -3,9 +3,12 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/jra3/linear-fuse/internal/api"
 )
 
 // fakeCreateSink records every interaction the create tail can have so a test
@@ -124,6 +127,23 @@ func TestCommitCreate_Classification(t *testing.T) {
 			err:       errors.New("rate limit exceeded"),
 			wantErrno: syscall.EAGAIN,
 			wantIn:    "rate-limited",
+		},
+		{
+			// #399: a request cancelled AFTER the POST went out is still EAGAIN,
+			// but its outcome is genuinely unknown — Linear may have applied it
+			// and lost the response. The .error must say so, because the caller's
+			// next move differs: check before retrying, or risk a duplicate.
+			name:      "in-flight cancellation is EAGAIN but does not claim no-effect",
+			err:       fmt.Errorf("failed to execute request: %w (%w)", context.Canceled, api.ErrInFlight),
+			wantErrno: syscall.EAGAIN,
+			wantIn:    "UNKNOWN",
+		},
+		{
+			// The pre-send twin, for contrast: this one CAN promise no effect.
+			name:      "pre-send deferral says the operation did not take effect",
+			err:       fmt.Errorf("deferred: %w", api.ErrDeferred),
+			wantErrno: syscall.EAGAIN,
+			wantIn:    "did not take effect",
 		},
 		{
 			name:      "anything else is EIO carrying the cause",

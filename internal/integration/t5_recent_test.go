@@ -19,9 +19,7 @@ import (
 // to `ls -t`). It seeds three issues with distinct, non-insertion-order
 // timestamps so a missing fs-layer sort would fail the ordering assertion.
 func TestT5_RecentViewOrdered(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode ordering check; seeds issues directly into the store")
-	}
+	skipIfLiveAPI(t, "fixture-mode ordering check; seeds issues directly into the store")
 	ctx := context.Background()
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
@@ -94,9 +92,7 @@ func TestT5_RecentViewOrdered(t *testing.T) {
 // immediately — the create tail re-cohers the view rather than leaving it stale
 // until the dir cache TTL (the #148 design's known staleness bound, now closed).
 func TestT5_FreshCreateAppearsInRecent(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode behavioral check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode behavioral check; uses the mock mutator")
 	enableMockMutations(t)
 
 	// Prime the kernel's view of recent/ so a stale cached listing would be caught.
@@ -141,9 +137,7 @@ func TestT5_FreshCreateAppearsInRecent(t *testing.T) {
 
 // TestT5_RecentIsReadOnly: the recent/ view rejects mutation.
 func TestT5_RecentIsReadOnly(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode only")
-	}
+	skipIfLiveAPI(t, "fixture-mode only")
 	if err := os.Mkdir(filepath.Join(recentPath(testTeamKey), "Nope"), 0755); err == nil {
 		t.Error("recent/ should be read-only, but mkdir succeeded")
 	}

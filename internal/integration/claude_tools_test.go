@@ -149,11 +149,14 @@ func firstInitiativeDir() (string, error) {
 	return "", fmt.Errorf("no initiative directory found")
 }
 
-// TestClaudeToolFsyncSupportedOnWritableFiles is the core #139 regression guard.
-// It runs in the default fixture mode (no API key, no network): for each kind of
-// writable file Claude's Edit tool touches, it verifies fsync does not return
-// ENOTSUP. Opening without writing keeps the node clean (dirty=false), so close
-// is a no-op and no API call is made.
+// TestClaudeToolFsyncSupportedOnWritableFiles is the core #139 regression guard:
+// for each kind of writable file Claude's Edit tool touches, it verifies fsync
+// does not return ENOTSUP. Opening without writing keeps the node clean
+// (dirty=false), so close is a no-op and no API call is made — which is what
+// makes it safe to run under a live key as well as in fixture mode. It takes its
+// issue and project from someIssueID/someProjectSlug for exactly that reason;
+// the old hardcoded TST-1 made a mount-level contract fixture-only by accident
+// (#395). A surface the workspace has no instance of skips, and says so.
 func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 	cases := []struct {
 		name string
@@ -161,12 +164,12 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 	}{
 		{
 			name: "issue.md",
-			path: func(t *testing.T) string { return issueFilePath(testTeamKey, "TST-1") },
+			path: func(t *testing.T) string { return issueFilePath(testTeamKey, someIssueID(t)) },
 		},
 		{
 			name: "project.md",
 			path: func(t *testing.T) string {
-				return filepath.Join(projectsPath(testTeamKey), "test-project", "project.md")
+				return projectFilePath(testTeamKey, someProjectSlug(t))
 			},
 		},
 		{
@@ -174,7 +177,7 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 			path: func(t *testing.T) string {
 				dir, err := firstInitiativeDir()
 				if err != nil {
-					t.Skipf("no initiative fixture: %v", err)
+					t.Skipf("no initiative in workspace: %v", err)
 				}
 				return filepath.Join(dir, "initiative.md")
 			},
@@ -182,9 +185,9 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 		{
 			name: "comment",
 			path: func(t *testing.T) string {
-				p, err := firstWritableFile(commentsPath(testTeamKey, "TST-1"))
+				p, err := firstWritableFile(commentsPath(testTeamKey, someIssueID(t)))
 				if err != nil {
-					t.Skipf("no comment fixture: %v", err)
+					t.Skipf("no comment on the picked issue: %v", err)
 				}
 				return p
 			},
@@ -194,7 +197,7 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 			path: func(t *testing.T) string {
 				p, err := firstWritableFile(labelsPath(testTeamKey))
 				if err != nil {
-					t.Skipf("no label fixture: %v", err)
+					t.Skipf("no label in workspace: %v", err)
 				}
 				return p
 			},
@@ -202,9 +205,9 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 		{
 			name: "document",
 			path: func(t *testing.T) string {
-				p, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
+				p, err := firstWritableFile(docsPath(testTeamKey, someIssueID(t)))
 				if err != nil {
-					t.Skipf("no document fixture: %v", err)
+					t.Skipf("no document on the picked issue: %v", err)
 				}
 				return p
 			},
@@ -228,13 +231,17 @@ func TestClaudeToolFsyncSupportedOnWritableFiles(t *testing.T) {
 // write-only _create trigger files (#142 contract item 1). Editors that
 // write-then-fsync must be able to save through a _create file; fsync must
 // never return ENOTSUP. _create is mode 0200, so it is opened write-only.
+//
+// Live-safe, and run live: the handle is closed without a byte written, and
+// createFileNode.Flush no-ops on an empty buffer, so nothing is created.
 func TestWriteContractFsyncOnCreateFiles(t *testing.T) {
+	issueID := someIssueID(t)
 	cases := []struct {
 		name string
 		path string
 	}{
-		{"comments/_create", newCommentPath(testTeamKey, "TST-1")},
-		{"docs/_create", newDocPath(testTeamKey, "TST-1")},
+		{"comments/_create", newCommentPath(testTeamKey, issueID)},
+		{"docs/_create", newDocPath(testTeamKey, issueID)},
 		{"labels/_create", filepath.Join(labelsPath(testTeamKey), "_create")},
 	}
 	for _, tc := range cases {
@@ -260,7 +267,7 @@ func TestWriteContractFsyncOnCreateFiles(t *testing.T) {
 // failure mode. In fixture mode the rename itself may not succeed (no API), but
 // the target document node must remain readable either way.
 func TestWriteContractAtomicRenameNoCorruption(t *testing.T) {
-	skipIfLiveAPI(t)
+	skipIfLiveAPI(t, fixtureWriteContract)
 
 	target, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
@@ -306,7 +313,7 @@ func TestWriteContractAtomicRenameNoCorruption(t *testing.T) {
 // itself may fail in fixture mode (no live API), but it must never leave the
 // target unreadable/corrupted.
 func TestWriteContractAtomicRenameCreateNoEROFS(t *testing.T) {
-	skipIfLiveAPI(t)
+	skipIfLiveAPI(t, fixtureWriteContract)
 
 	cases := []struct {
 		name    string
@@ -395,6 +402,10 @@ func TestWriteContractAtomicRenameCreateNoEROFS(t *testing.T) {
 // *populates* it is covered by TestWriteInvalidInputIsLoud and
 // TestMkdirIssueFailureIsLegible. (Emptiness is not asserted: in the shared-mount
 // suite another test may have left a collection .error populated.)
+//
+// Pure reads, so it runs live too, off someIssueID/someProjectSlug — the .error
+// surface is a mount-level contract and has nothing to do with which issue it is
+// read from. Hardcoding TST-1 kept it out of every live run (#395).
 func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 	cases := []struct {
 		name string
@@ -402,31 +413,29 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 	}{
 		{
 			name: "issue",
-			dir:  func(t *testing.T) string { return issueDirPath(testTeamKey, "TST-1") },
+			dir:  func(t *testing.T) string { return someIssueDir(t) },
 		},
 		{
 			name: "project",
-			dir: func(t *testing.T) string {
-				return filepath.Join(projectsPath(testTeamKey), "test-project")
-			},
+			dir:  func(t *testing.T) string { return someProjectDir(t) },
 		},
 		{
 			name: "initiative",
 			dir: func(t *testing.T) string {
 				dir, err := firstInitiativeDir()
 				if err != nil {
-					t.Skipf("no initiative fixture: %v", err)
+					t.Skipf("no initiative in workspace: %v", err)
 				}
 				return dir
 			},
 		},
 		{
 			name: "comments",
-			dir:  func(t *testing.T) string { return commentsPath(testTeamKey, "TST-1") },
+			dir:  func(t *testing.T) string { return commentsPath(testTeamKey, someIssueID(t)) },
 		},
 		{
 			name: "docs",
-			dir:  func(t *testing.T) string { return docsPath(testTeamKey, "TST-1") },
+			dir:  func(t *testing.T) string { return docsPath(testTeamKey, someIssueID(t)) },
 		},
 		{
 			name: "labels",
@@ -435,21 +444,21 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 		{
 			name: "milestones",
 			dir: func(t *testing.T) string {
-				dir := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones")
+				dir := filepath.Join(someProjectDir(t), "milestones")
 				if _, err := os.Stat(dir); err != nil {
-					t.Skipf("no milestones fixture: %v", err)
+					t.Skipf("no milestones dir on the picked project: %v", err)
 				}
 				return dir
 			},
 		},
 		{
 			name: "attachments",
-			dir:  func(t *testing.T) string { return attachmentsPath(testTeamKey, "TST-1") },
+			dir:  func(t *testing.T) string { return attachmentsPath(testTeamKey, someIssueID(t)) },
 		},
 		{
 			name: "relations",
 			dir: func(t *testing.T) string {
-				dir := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "relations")
+				dir := filepath.Join(someIssueDir(t), "relations")
 				if _, err := os.Stat(dir); err != nil {
 					t.Skipf("no relations dir: %v", err)
 				}
@@ -474,7 +483,7 @@ func TestErrorFileExposedOnWritableSurfaces(t *testing.T) {
 // silent success. The unknown-initiative check resolves against local SQLite,
 // so this runs in fixture mode with no network.
 func TestWriteInvalidInputIsLoud(t *testing.T) {
-	skipIfLiveAPI(t)
+	skipIfLiveAPI(t, fixtureWriteContract)
 
 	dir := filepath.Join(projectsPath(testTeamKey), "test-project")
 	path := filepath.Join(dir, "project.md")
@@ -518,7 +527,7 @@ func TestMkdirIssueFailureIsLegible(t *testing.T) {
 	// Before the mkdir, not after: under a live key this creates a real issue, and
 	// the cleanup below cannot remove it — IssuesNode.Rmdir resolves by
 	// issue.Identifier, never by the typed directory name, so the probe leaks.
-	skipIfLiveAPI(t)
+	skipIfLiveAPI(t, fixtureWriteContract)
 
 	newIssueDir := filepath.Join(issuesPath(testTeamKey), "Mkdir Legibility Probe")
 
@@ -543,7 +552,7 @@ func TestMkdirIssueFailureIsLegible(t *testing.T) {
 // that returns EACCES on every subsequent read. Runs in fixture mode: the write
 // itself won't persist (no API), but the node must stay a real document node.
 func TestOverwriteDocKeepsNodeReadable(t *testing.T) {
-	skipIfLiveAPI(t)
+	skipIfLiveAPI(t, fixtureWriteContract)
 
 	docPath, err := firstWritableFile(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
@@ -655,36 +664,47 @@ func TestReadYourWritesLargeBody(t *testing.T) {
 	}
 }
 
+// createTestProject creates a throwaway project via mkdir and returns its slug
+// plus an archiving cleanup. Tests that mutate a project body use this instead of
+// editing whatever project the workspace happens to have: the edit-then-restore
+// idiom cannot restore an originally-EMPTY body, because Linear ignores an empty
+// `content` (#398). Editing a borrowed project therefore left a `linearfs-smoke-`
+// marker in a real project's description permanently. A project the test owns is
+// archived at the end, so nothing needs restoring.
+func createTestProject(t *testing.T, name string) (slug string, cleanup func()) {
+	t.Helper()
+	rateLimitWait()
+
+	title := fmt.Sprintf("[TEST] %s %d", name, time.Now().UnixMilli())
+	if err := os.Mkdir(filepath.Join(projectsPath(testTeamKey), title), 0o755); err != nil {
+		t.Fatalf("create test project %q: %v", title, err)
+	}
+	last := lastEntryByTitle(t, filepath.Join(projectsPath(testTeamKey), ".last"), title)
+	if last == nil || last["path"] == "" {
+		t.Fatalf("projects/.last has no addressable entry for %q; cannot address the new project", title)
+	}
+	slug = last["path"]
+	return slug, func() {
+		if err := os.Remove(filepath.Join(projectsPath(testTeamKey), slug)); err != nil {
+			t.Logf("archive test project %s: %v (it will linger in the workspace)", slug, err)
+		}
+	}
+}
+
 // TestClaudeToolEditPersistsProjectDescription covers the second half of #139:
 // a write+fsync to project.md must actually persist the description to Linear.
-// It edits a real project and restores it, so it requires live-API write mode.
+// It writes to a project it creates and archives, so it requires live-API write
+// mode — and so it never has to restore a body Linear cannot clear (#398).
 func TestClaudeToolEditPersistsProjectDescription(t *testing.T) {
 	skipIfNoWriteTests(t)
 
-	projectsDir := projectsPath(testTeamKey)
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		t.Fatalf("read projects dir: %v", err)
-	}
+	slug, cleanup := createTestProject(t, "Edit Persistence")
+	defer cleanup()
 
-	var path string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(projectsDir, e.Name(), "project.md")
-		if _, err := os.Stat(candidate); err == nil {
-			path = candidate
-			break
-		}
-	}
-	if path == "" {
-		t.Skip("no project with project.md in test team; skipping persistence test")
-	}
-
-	orig, err := os.ReadFile(path)
+	path := projectFilePath(testTeamKey, slug)
+	orig, err := readFileWithRetry(path, defaultWaitTime)
 	if err != nil {
-		t.Fatalf("read original project.md: %v", err)
+		t.Fatalf("read new project.md: %v", err)
 	}
 
 	// Emulate Claude's Edit tool: append a unique marker to the description body
@@ -692,9 +712,6 @@ func TestClaudeToolEditPersistsProjectDescription(t *testing.T) {
 	marker := fmt.Sprintf("linearfs-smoke-%d", time.Now().UnixNano())
 	edited := append([]byte(strings.TrimRight(string(orig), "\n")), []byte("\n\n"+marker+"\n")...)
 	claudeToolWrite(t, path, edited)
-
-	// Restore the original description regardless of the assertion outcome.
-	defer claudeToolWrite(t, path, orig)
 
 	waitForCacheExpiry()
 

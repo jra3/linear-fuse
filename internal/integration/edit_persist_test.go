@@ -30,9 +30,7 @@ import (
 // — and it guards the whole-entity round trip through the edit-commit tail, not
 // just the single edited field.
 func TestOffline_MilestoneEditPreservesOtherFields(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	path := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones", "Alpha Release.md")
@@ -82,9 +80,7 @@ func TestOffline_MilestoneEditPreservesOtherFields(t *testing.T) {
 // inline Flush persists and the consumed scratch re-Looks-up to the fresh
 // store-backed node, so the mount serves the edit back.
 func TestOffline_AtomicRenameEditPersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	// Operate on a throwaway issue (unique per run), never the shared TST-1
@@ -149,9 +145,7 @@ func TestOffline_AtomicRenameEditPersists(t *testing.T) {
 // real Linear applies), so persisted is a byte shorter than written — without the
 // pin the stat below reports that shorter size.
 func TestOffline_AtomicSaveServesTheWrittenBytes(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode check; needs the mock mutator's reformat-on-store")
-	}
+	skipIfLiveAPI(t, "fixture-mode check; needs the mock mutator's reformat-on-store")
 	enableMockMutations(t, mockmutation.WithBodyReformat(func(body string) string {
 		return strings.ReplaceAll(body, "\n\n\n", "\n\n")
 	}))
@@ -213,9 +207,7 @@ func TestOffline_AtomicSaveServesTheWrittenBytes(t *testing.T) {
 // write+fsync to project.md must persist the edited body, so the mount serves it
 // back — and the untouched name survives the round trip.
 func TestOffline_ProjectEditPersistsDescription(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	path := projectMDPath()
@@ -287,9 +279,7 @@ func mdFileContaining(t *testing.T, dir, marker string) string {
 // comment Update had zero persistence coverage (only marshal round-trips and
 // live-API create/delete lifecycle tests existed).
 func TestOffline_CommentBodyEditPersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir := commentsPath(testTeamKey, "TST-1")
@@ -348,9 +338,7 @@ func contains(ss []string, want string) bool {
 // list back. The junction bumps no updatedAt (b642867), so this through-the-mount
 // round trip is the only offline guard that link/unlink actually persist.
 func TestOffline_InitiativeProjectLinkPersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir, err := firstInitiativeDir()
@@ -402,9 +390,7 @@ func TestOffline_InitiativeProjectLinkPersists(t *testing.T) {
 // initiative<->project junction that TestOffline_InitiativeProjectLinkPersists
 // drives from the initiative side.
 func TestOffline_ProjectInitiativesLinkPersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	path := projectMDPath()
@@ -467,9 +453,7 @@ func TestOffline_ProjectInitiativesLinkPersists(t *testing.T) {
 // name field (TestOffline_ProjectEditPersistsDescription covers the body). The
 // edited name must land and read back.
 func TestOffline_ProjectNameEditPersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	path := projectMDPath()
@@ -508,9 +492,7 @@ func TestOffline_ProjectNameEditPersists(t *testing.T) {
 // editable name field (the body is covered by
 // TestOffline_InitiativeEditPersistsDescription).
 func TestOffline_InitiativeNameEditPersists(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir, err := firstInitiativeDir()
@@ -556,9 +538,7 @@ func TestOffline_InitiativeNameEditPersists(t *testing.T) {
 // page-cache echo, not that the edit reached the store — this is the fixture-mode
 // persistence twin (mutate → upsert → read-your-writes adopt).
 func TestOffline_DocumentBodyAndTitleEditPersist(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir := docsPath(testTeamKey, "TST-1")
@@ -612,9 +592,7 @@ func TestOffline_DocumentBodyAndTitleEditPersist(t *testing.T) {
 // mount and asserts both land while the untouched title survives — the whole-entity
 // round trip through the edit-commit tail (mutate → verify GetIssue → upsert → adopt).
 func TestOffline_IssueFieldEditsPersist(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	path := issueFilePath(testTeamKey, "TST-1")
@@ -673,9 +651,7 @@ func TestOffline_IssueFieldEditsPersist(t *testing.T) {
 // initiative.md persists the edited body through the mock mutator, and the
 // untouched name survives the round trip.
 func TestOffline_InitiativeEditPersistsDescription(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode offline edit-persistence check; uses the mock mutator")
-	}
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
 	enableMockMutations(t)
 
 	dir, err := firstInitiativeDir()

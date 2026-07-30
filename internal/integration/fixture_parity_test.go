@@ -33,9 +33,7 @@ var fixtureExcludedTables = map[string]string{
 // list: every table in the live fixture store (sqlite_master, i.e. schema.sql
 // as applied) is either populated with at least one row or explicitly excluded.
 func TestSchemaFixtureCoverage(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode conformance: audits the seeded fixture store")
-	}
+	skipIfLiveAPI(t, "fixture-mode conformance: audits the seeded fixture store")
 
 	ctx := context.Background()
 	rows, err := testStore.DB().QueryContext(ctx,
@@ -96,9 +94,7 @@ func TestSchemaFixtureCoverage(t *testing.T) {
 // TestFixtureRelationFiles: the seeded relation (TST-1 blocks TST-3) surfaces
 // as a .rel file on both endpoints, and its content names the other end.
 func TestFixtureRelationFiles(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic relation")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic relation")
 
 	// Outgoing side: TST-1 blocks TST-3
 	outPath := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "relations", "blocks-TST-3.rel")
@@ -130,9 +126,7 @@ func TestFixtureRelationFiles(t *testing.T) {
 // TestFixtureIssueMetaRelations: issue.meta renders the relations block for
 // both directions (outgoing "blocks", inverse rendered as "blocked-by").
 func TestFixtureIssueMetaRelations(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic relation")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic relation")
 
 	data, err := os.ReadFile(issueMetaPath(testTeamKey, "TST-1"))
 	if err != nil {
@@ -156,9 +150,7 @@ func TestFixtureIssueMetaRelations(t *testing.T) {
 // TestFixtureMilestoneFile: the seeded milestone lists and reads under
 // projects/<slug>/milestones/.
 func TestFixtureMilestoneFile(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic milestone")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic milestone")
 
 	path := filepath.Join(projectsPath(testTeamKey), "test-project", "milestones", "Alpha Release.md")
 	data, err := os.ReadFile(path)
@@ -176,17 +168,13 @@ func TestFixtureMilestoneFile(t *testing.T) {
 // TestFixtureProjectUpdateFile: the seeded project status update lists under
 // projects/<slug>/updates/ and renders the health frontmatter.
 func TestFixtureProjectUpdateFile(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic update")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic update")
 	assertUpdateDirHasHealthyUpdate(t, filepath.Join(projectsPath(testTeamKey), "test-project", "updates"))
 }
 
 // TestFixtureInitiativeUpdateFile: same for initiatives/<slug>/updates/.
 func TestFixtureInitiativeUpdateFile(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic update")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic update")
 	assertUpdateDirHasHealthyUpdate(t, filepath.Join(initiativesPath(), "test-initiative", "updates"))
 }
 
@@ -218,9 +206,7 @@ func assertUpdateDirHasHealthyUpdate(t *testing.T, updatesDir string) {
 // TestFixtureAttachmentLinkFile: the seeded external URL attachment surfaces
 // as a .link file alongside the embedded files.
 func TestFixtureAttachmentLinkFile(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic attachment")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic attachment")
 
 	path := filepath.Join(attachmentsPath(testTeamKey, "TST-1"), "Design Spec.link")
 	data, err := os.ReadFile(path)
@@ -238,9 +224,7 @@ func TestFixtureAttachmentLinkFile(t *testing.T) {
 // TestFixtureProjectLinkFile: the seeded project/initiative external links (#249)
 // surface as *.link files under links/, carrying label + url.
 func TestFixtureProjectLinkFile(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic external link")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic external link")
 
 	for _, dir := range []string{
 		filepath.Join(projectsPath(testTeamKey), "test-project", "links"),
@@ -264,9 +248,7 @@ func TestFixtureProjectLinkFile(t *testing.T) {
 // TestFixtureIssueHistoryRendered: the seeded history cache renders a real
 // change in history.md (not the empty-history placeholder).
 func TestFixtureIssueHistoryRendered(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic history")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic history")
 
 	path := filepath.Join(issueDirPath(testTeamKey, "TST-1"), "history.md")
 	data, err := os.ReadFile(path)
@@ -284,9 +266,7 @@ func TestFixtureIssueHistoryRendered(t *testing.T) {
 // TestFixtureByAssigneeMembers: with team_members populated, by/assignee lists
 // the members' handles alongside "unassigned".
 func TestFixtureByAssigneeMembers(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic membership")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic membership")
 
 	names := dirNames(t, byAssigneePath(testTeamKey))
 	// assigneeHandle prefers DisplayName; see FixtureAPIUsers.
@@ -301,9 +281,7 @@ func TestFixtureByAssigneeMembers(t *testing.T) {
 // the default fixture assignee), the my/ views resolve offline and are
 // non-empty.
 func TestFixtureMyViewsPopulated(t *testing.T) {
-	if liveAPIMode {
-		t.Skip("fixture-mode: asserts the seeded synthetic viewer")
-	}
+	skipIfLiveAPI(t, "fixture-mode: asserts the seeded synthetic viewer")
 
 	entries, err := os.ReadDir(myAssignedPath())
 	if err != nil {

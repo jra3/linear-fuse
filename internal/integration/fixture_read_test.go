@@ -1,7 +1,12 @@
 package integration
 
-// Fixture-based read tests that run without live API
-// These tests use pre-populated SQLite fixtures
+// Fixture-based read tests: they run against the pre-populated SQLite fixture
+// store, with no live API. Every test here names a seeded row — TST-1 and its
+// comments/docs/attachments, TST-7's missing assignee, the test-project slug —
+// so every test here carries skipIfLiveAPI(t, fixtureSeededData). A live
+// workspace has no such rows, and running these against one produced ~48
+// "no such file or directory" failures that looked like product bugs (#395).
+// The live twin of this coverage is read_test.go, which creates what it reads.
 
 import (
 	"os"
@@ -15,6 +20,7 @@ import (
 // =============================================================================
 
 func TestFixtureIssueDirectoryContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	issuePath := issueDirPath(testTeamKey, "TST-1")
 	entries, err := os.ReadDir(issuePath)
 	if err != nil {
@@ -48,6 +54,7 @@ func TestFixtureIssueDirectoryContents(t *testing.T) {
 }
 
 func TestFixtureIssueFileReadable(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read issue file: %v", err)
@@ -64,6 +71,7 @@ func TestFixtureIssueFileReadable(t *testing.T) {
 }
 
 func TestFixtureIssueFileContainsRequiredFields(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// Editable fields live in issue.md; server-managed fields moved to issue.meta (#150).
 	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-1"))
 	if err != nil {
@@ -95,6 +103,7 @@ func TestFixtureIssueFileContainsRequiredFields(t *testing.T) {
 }
 
 func TestFixtureIssueFileDescription(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read issue file: %v", err)
@@ -112,6 +121,7 @@ func TestFixtureIssueFileDescription(t *testing.T) {
 }
 
 func TestFixtureIssueWithNoAssignee(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-7 is the unassigned issue
 	content, err := os.ReadFile(issueFilePath(testTeamKey, "TST-7"))
 	if err != nil {
@@ -134,6 +144,7 @@ func TestFixtureIssueWithNoAssignee(t *testing.T) {
 // =============================================================================
 
 func TestFixtureCommentsDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(commentsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read comments directory: %v", err)
@@ -159,6 +170,7 @@ func TestFixtureCommentsDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureCommentFilenameFormat(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(commentsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read comments directory: %v", err)
@@ -180,6 +192,7 @@ func TestFixtureCommentFilenameFormat(t *testing.T) {
 }
 
 func TestFixtureCommentFileContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(commentsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read comments directory: %v", err)
@@ -220,6 +233,7 @@ func TestFixtureCommentFileContents(t *testing.T) {
 }
 
 func TestFixtureNewMdAlwaysExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// _create should always be present in comments directory
 	_, err := os.Stat(newCommentPath(testTeamKey, "TST-1"))
 	if err != nil {
@@ -228,6 +242,7 @@ func TestFixtureNewMdAlwaysExists(t *testing.T) {
 }
 
 func TestFixtureNewMdWriteOnly(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// _create should be write-only (0200), so reading should fail
 	_, err := os.ReadFile(newCommentPath(testTeamKey, "TST-1"))
 	if err == nil {
@@ -240,6 +255,7 @@ func TestFixtureNewMdWriteOnly(t *testing.T) {
 // =============================================================================
 
 func TestFixtureDocsDirectoryListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read docs directory: %v", err)
@@ -265,6 +281,7 @@ func TestFixtureDocsDirectoryListing(t *testing.T) {
 }
 
 func TestFixtureDocumentFilenameFormat(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read docs directory: %v", err)
@@ -282,6 +299,7 @@ func TestFixtureDocumentFilenameFormat(t *testing.T) {
 }
 
 func TestFixtureDocumentFileContents(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(docsPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Fatalf("Failed to read docs directory: %v", err)
@@ -331,6 +349,7 @@ func TestFixtureDocumentFileContents(t *testing.T) {
 }
 
 func TestFixtureDocsNewMdAlwaysExists(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	_, err := os.Stat(newDocPath(testTeamKey, "TST-1"))
 	if err != nil {
 		t.Errorf("docs/_create should always exist: %v", err)
@@ -338,6 +357,7 @@ func TestFixtureDocsNewMdAlwaysExists(t *testing.T) {
 }
 
 func TestFixtureDocsNewMdWriteOnly(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	_, err := os.ReadFile(newDocPath(testTeamKey, "TST-1"))
 	if err == nil {
 		t.Error("docs/_create should be write-only and not readable")
@@ -348,6 +368,7 @@ func TestFixtureDocsNewMdWriteOnly(t *testing.T) {
 // served from the Repository (SQLite) like every other read, not via a blocking
 // live API call (#261). The fixture seeds one team-level document.
 func TestFixtureTeamDocsServedFromSQLite(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	teamDocsDir := filepath.Join(teamPath(testTeamKey), "docs")
 	entries, err := os.ReadDir(teamDocsDir)
 	if err != nil {
@@ -387,6 +408,7 @@ func TestFixtureTeamDocsServedFromSQLite(t *testing.T) {
 // =============================================================================
 
 func TestFixtureProjectDirectoryContainsInfoFile(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	projectPath := filepath.Join(projectsPath(testTeamKey), "test-project")
 	entries, err := os.ReadDir(projectPath)
 	if err != nil {
@@ -407,6 +429,7 @@ func TestFixtureProjectDirectoryContainsInfoFile(t *testing.T) {
 }
 
 func TestFixtureProjectInfoFile(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	projectInfoPath := filepath.Join(projectsPath(testTeamKey), "test-project", "project.md")
 	content, err := os.ReadFile(projectInfoPath)
 	if err != nil {
@@ -426,6 +449,7 @@ func TestFixtureProjectInfoFile(t *testing.T) {
 }
 
 func TestFixtureProjectIssueSymlinks(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// TST-6 is assigned to test-project
 	projectPath := filepath.Join(projectsPath(testTeamKey), "test-project")
 	entries, err := os.ReadDir(projectPath)
@@ -455,6 +479,7 @@ func TestFixtureProjectIssueSymlinks(t *testing.T) {
 // =============================================================================
 
 func TestFixtureMyAssignedSymlinkTarget(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(myAssignedPath())
 	if err != nil {
 		t.Fatalf("Failed to read my/assigned: %v", err)
@@ -491,6 +516,7 @@ func TestFixtureMyAssignedSymlinkTarget(t *testing.T) {
 }
 
 func TestFixtureMyAssignedSymlinkResolvable(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	entries, err := os.ReadDir(myAssignedPath())
 	if err != nil {
 		t.Fatalf("Failed to read my/assigned: %v", err)
@@ -527,6 +553,7 @@ func TestFixtureMyAssignedSymlinkResolvable(t *testing.T) {
 }
 
 func TestFixtureUserIssueSymlinkResolvable(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// Get first user
 	userEntries, err := os.ReadDir(usersPath())
 	if err != nil {
@@ -577,6 +604,7 @@ func TestFixtureUserIssueSymlinkResolvable(t *testing.T) {
 // =============================================================================
 
 func TestFixtureByStatusListing(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	byStatusBasePath := filepath.Join(byPath(testTeamKey), "status")
 	entries, err := os.ReadDir(byStatusBasePath)
 	if err != nil {
@@ -606,6 +634,7 @@ func TestFixtureByStatusListing(t *testing.T) {
 }
 
 func TestFixtureByStatusContainsIssues(t *testing.T) {
+	skipIfLiveAPI(t, fixtureSeededData)
 	// "In Progress" should contain TST-1, TST-4, TST-6
 	found := dirNames(t, byStatusPath(testTeamKey, "In Progress"))
 
