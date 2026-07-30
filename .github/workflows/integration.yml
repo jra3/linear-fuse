@@ -15,6 +15,13 @@ permissions:
 jobs:
   integration-write:
     name: Integration Tests (Write Operations)
+    # The run_write_tests input was declared and read by nothing: the dispatch form
+    # asked you to confirm "creates/modifies Linear data" and defaulted to false,
+    # then ran the same thing either way. Harmless while the job was accidentally
+    # offline (#386) — an unchecked box that writes to a real workspace is not.
+    # Gating the job, not the step, so an unchecked run never puts the secret on a
+    # runner at all.
+    if: ${{ inputs.run_write_tests }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -37,10 +44,16 @@ jobs:
       - name: Build
         run: make build
 
+      # Both vars are load-bearing and neither is sufficient alone:
+      # skipIfNoWriteTests (internal/integration/testdata_test.go) skips on
+      # !liveAPIMode BEFORE it consults LINEARFS_WRITE_TESTS. This job used to set
+      # only WRITE_TESTS, so all 55 write tests skipped on the first branch and the
+      # job ran the offline fixture suite while advertising that it mutates Linear
+      # (#386). LINEARFS_INTEGRATION was dropped in the same change: nothing reads it.
       - name: Run integration tests (with writes)
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          LINEARFS_INTEGRATION: "1"
+          LINEARFS_LIVE_API: "1"
           LINEARFS_WRITE_TESTS: "1"
         run: go test -v -timeout 20m ./internal/integration/...
 

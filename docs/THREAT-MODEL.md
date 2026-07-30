@@ -172,6 +172,25 @@ reproducibility), the CI workflows (token scopes, handling of untrusted input in
 workflow runs, whether third-party actions are pinned by commit SHA), and the Go
 module dependency set.
 
+**CI's use of the live workspace credential (#386).** One workflow authenticates
+to Linear with a real key and mutates a real workspace: the `workflow_dispatch`-only
+"Integration Tests (Write)" job, which sets `LINEARFS_LIVE_API=1` +
+`LINEARFS_WRITE_TESTS=1` and runs the 55 write tests gated behind
+`skipIfNoWriteTests`. Before #386 it set neither of those, so the injected
+`LINEAR_API_KEY` secret went unused and the job silently ran the offline fixture
+suite — the label promised mutation and the run delivered none. Now that it does
+what it says, the exposure is real and worth stating: whoever can dispatch that
+workflow can write to the Linear workspace the secret belongs to, so the secret
+should scope to a throwaway/test workspace rather than a production one, and the
+job stays manual-dispatch (never `push`/`pull_request`, never `pull_request_target`,
+where a fork could reach it) behind its `run_write_tests` confirmation input — which
+was itself declared-but-unread until #386 wired it to a job-level `if`, so the
+"creates/modifies Linear data" box is now load-bearing and an unchecked run never
+puts the secret on a runner. The `test.yml` read-only job injects the same secret
+but leaves `LINEARFS_LIVE_API` unset, so it cannot use it — an unused secret in a
+job's env is exposure without benefit, and whether that job goes live-read or is
+deleted along with the secret is open in #386.
+
 **Provenance posture (enforced, #354).** Every release artifact — the archives,
 the `.deb`/`.rpm` packages, and `checksums.txt` — carries SLSA build provenance:
 the release workflow's attest step signs, via GitHub's OIDC identity (keyless

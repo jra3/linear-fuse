@@ -26,15 +26,19 @@ test:
 test-cover:
 	go test ./... -cover
 
-# Run read-only integration tests (safe for CI, won't hit API limits)
+# Run the integration suite against the LIVE Linear API, reads only. Consumes real
+# API quota — the offline fixture suite is plain `make test`, which needs no key.
+# LINEARFS_LIVE_API is what liveAPIMode reads; both targets demanded a key and then
+# ran offline without it (#386).
 integration-test:
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEARFS_INTEGRATION=1 go test -v -timeout 10m ./internal/integration/...
+	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 go test -v -timeout 10m ./internal/integration/...
 
-# Run all integration tests including writes (may hit API limits on free workspaces)
+# Run all integration tests including writes. This CREATES AND MODIFIES REAL LINEAR
+# DATA and may hit API limits on free workspaces.
 integration-test-full:
 	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEARFS_INTEGRATION=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 20m ./internal/integration/...
+	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 20m ./internal/integration/...
 
 run: build
 	./bin/$(BINARY) mount /tmp/linear
