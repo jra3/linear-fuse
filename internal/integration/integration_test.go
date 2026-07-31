@@ -25,6 +25,11 @@ import (
 	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
 
+// defaultTestTeamKey is the team the suite uses when LINEARFS_TEST_TEAM does
+// not name one: the key the offline fixtures are seeded under, and the
+// conventional scratch team in a live workspace.
+const defaultTestTeamKey = "TST"
+
 var (
 	mountPoint string
 	stateDir   string // holds the SQLite db, in its own temp dir OUTSIDE the mount (see setupSQLiteFixtures)
@@ -396,9 +401,11 @@ func setupSQLiteFixtures() error {
 		return fmt.Errorf("wait mount: %w", err)
 	}
 
-	// Use fixture team
+	// Use fixture team. The fixtures are seeded as TST/TST-1 and the offline
+	// tests assert those identifiers, so this is fixed regardless of
+	// LINEARFS_TEST_TEAM — that variable only steers live team discovery.
 	testTeamID = "team-1"
-	testTeamKey = "TST"
+	testTeamKey = defaultTestTeamKey
 
 	return nil
 }
@@ -672,18 +679,41 @@ func discoverTestTeam() error {
 		return fmt.Errorf("no teams found in workspace")
 	}
 
-	// Prefer TST team for tests, fall back to first team
+	// Which team the live suite runs against. LINEARFS_TEST_TEAM names it;
+	// unset means the historical default, TST.
+	want, pinned := os.LookupEnv("LINEARFS_TEST_TEAM")
+	if !pinned {
+		want = defaultTestTeamKey
+	}
+
+	keys := make([]string, 0, len(teams))
 	for _, team := range teams {
-		if team.Key == "TST" {
+		keys = append(keys, team.Key)
+		if team.Key == want {
 			testTeamID = team.ID
 			testTeamKey = team.Key
 			return nil
 		}
 	}
 
-	// Fallback to first team if TST not found
+	// An explicitly named team that isn't there is a setup error, never a
+	// silent substitution: -rw CREATES AND MODIFIES REAL DATA in whatever
+	// team it lands on, and "wrong workspace for this key" looks exactly
+	// like "typo'd key" from here. Fail instead of mutating a stranger.
+	if pinned {
+		return fmt.Errorf("LINEARFS_TEST_TEAM=%q names no team in this workspace (found: %s); "+
+			"the key and the team have to belong to the same workspace",
+			want, strings.Join(keys, ", "))
+	}
+
+	// No pin and no TST: fall back to the first team, but say so. The write
+	// suite mutates this team, so an unnoticed fallback onto a real one is
+	// the failure mode worth being loud about.
 	testTeamID = teams[0].ID
 	testTeamKey = teams[0].Key
+	log.Printf("WARNING: no %s team in this workspace (found: %s); falling back to %s. "+
+		"Set LINEARFS_TEST_TEAM to choose deliberately — the write suite mutates this team.",
+		defaultTestTeamKey, strings.Join(keys, ", "), testTeamKey)
 	return nil
 }
 

@@ -49,12 +49,19 @@ Integration tests:
 go test -v ./internal/integration/...
 
 # Live API mode: Runs against real Linear API (the -timeout is a budget the
-# setup gate shares — see below; go test's 10m default is too tight)
-LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx go test -v -timeout 15m ./internal/integration/...
+# setup gate shares — see below; go test's 10m default is too tight).
+# LINEARFS_TEST_TEAM picks the team; omit it to get TST.
+LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx LINEARFS_TEST_TEAM=FUS go test -v -timeout 15m ./internal/integration/...
 
 # Include write tests (creates/modifies issues in Linear)
-LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
+LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx LINEARFS_TEST_TEAM=FUS LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
 ```
+
+The setup gate waits on the **workspace-wide** full-cycle stamp, not on the test
+team, so live mode wants a workspace whose whole cold start fits the budget. A
+workspace with a multi-thousand-issue team will time the gate out even though the
+test team synced in seconds — that is the real cost behind #394's "use a
+throwaway workspace". #407 proposes gating on the test team instead.
 
 The make targets wrap the two live modes (all three require `LINEAR_API_KEY`; the
 default offline suite is plain `make test` and needs no key):
@@ -472,5 +479,9 @@ After schema changes:
 ## Development Notes
 
 - Breaking changes are acceptable - this is a prototype
-- Integration tests use TST team by preference (falls back to first team)
+- Integration tests run against the team named by `LINEARFS_TEST_TEAM`, defaulting
+  to `TST`. A pinned team that the workspace does not have is a hard setup error —
+  never a silent substitution, because `-rw` mutates whatever team it lands on.
+  With no pin and no `TST`, discovery falls back to the first team and logs a
+  warning. Fixture mode is always `TST`; the variable steers live discovery only.
 - Test cache TTL is 100ms for fast tests; waits removed after filesystem writes
