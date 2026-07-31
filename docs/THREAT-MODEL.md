@@ -199,7 +199,18 @@ along with the secret is open in #386.
 Locally the same credential reaches the same suite through `make
 integration-tests-ro` (live, reads only), `make integration-tests-rw` (live,
 CREATES AND MODIFIES REAL LINEAR DATA), and `make integration-tests` (both, in
-that order); the default `make test` needs no key and touches no network. The
+that order); the default `make test` needs no key and touches no network. Those
+targets take the key from the **environment** and never name it in a recipe
+line, which closes two P3 reads that the earlier
+`LINEAR_API_KEY=$(LINEAR_API_KEY) go test …` prefix left open: make echoes recipe
+lines with variables already expanded, so the raw key was printed into every
+terminal scrollback and CI log, and it sat in the test process's `argv` for the
+length of a run — up to 25 minutes of `ps` for any other local user. The
+emptiness guards read `$$LINEAR_API_KEY` (the shell's own environment) rather
+than expanding the make variable, so the value never enters a command string at
+all. Passing the key as a make-level argument (`make integration-tests-rw
+LINEAR_API_KEY=…`) re-opens both reads against `make`'s own process and your
+shell history; `CONTRIBUTING.md` documents the `export` form instead. The
 read-only target is read-only by enforcement, not convention: the write-contract
 guards that write through the mount now skip under a live key (`skipIfLiveAPI`),
 so a `-ro` run cannot leak a probe issue into the workspace. #395 widened the set

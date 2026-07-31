@@ -9,6 +9,16 @@ DATE=$(shell git show -s --format=%cI HEAD 2>/dev/null || echo "unknown")
 PKG=github.com/jra3/linear-fuse/internal/cmd
 LDFLAGS=-ldflags "-X $(PKG).Version=$(VERSION) -X $(PKG).GitCommit=$(COMMIT) -X $(PKG).BuildDate=$(DATE)"
 
+# The live targets take the API key from the environment and MUST NOT name it in
+# a recipe line. A `LINEAR_API_KEY=$(LINEAR_API_KEY) go test ...` prefix leaks the
+# secret twice over: make echoes recipe lines with variables already expanded, so
+# the key lands in every terminal scrollback and CI log, and it sits in the child's
+# argv, readable via `ps` by any local user for the whole 25-minute run. Exporting
+# it keeps it in the environment, which neither of those exposes.
+# (`make integration-tests-rw LINEAR_API_KEY=...` still puts the key in your shell
+# history and this process's own argv — prefer the env or ~/.config/linearfs/env.)
+export LINEAR_API_KEY
+
 build:
 	go build -trimpath $(LDFLAGS) -o bin/$(BINARY) ./cmd/linearfs
 
@@ -36,14 +46,14 @@ test-cover:
 # readiness gate (waitForInitialSync) spends up to a third of it waiting for the
 # cold-start full sync, so this must leave the tests themselves room.
 integration-tests-ro:
-	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 go test -v -timeout 15m ./internal/integration/...
+	@if [ -z "$$LINEAR_API_KEY" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
+	LINEARFS_LIVE_API=1 go test -v -timeout 15m ./internal/integration/...
 
 # Run the integration suite including the write tests. This CREATES AND MODIFIES
 # REAL LINEAR DATA and may hit API limits on free workspaces.
 integration-tests-rw:
-	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
+	@if [ -z "$$LINEAR_API_KEY" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
+	LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
 
 # Both, in that order. -rw is a SUPERSET of -ro, not a disjoint half: WRITE_TESTS=1
 # only ADDS the 55 write tests, so the read suite runs twice. What this buys is
@@ -91,7 +101,7 @@ coverage-html: coverage
 	go tool cover -html=coverage.out
 
 bench-dirs: build
-	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
+	@if [ -z "$$LINEAR_API_KEY" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
 	./scripts/bench-dirs.sh
 
 # Default mount point (~ expands in shell context)
