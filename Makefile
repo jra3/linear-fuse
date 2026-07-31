@@ -16,8 +16,18 @@ LDFLAGS=-ldflags "-X $(PKG).Version=$(VERSION) -X $(PKG).GitCommit=$(COMMIT) -X 
 # argv, readable via `ps` by any local user for the whole 25-minute run. Exporting
 # it keeps it in the environment, which neither of those exposes.
 # (`make integration-tests-rw LINEAR_API_KEY=...` still puts the key in your shell
-# history and this process's own argv — prefer the env or ~/.config/linearfs/env.)
-export LINEAR_API_KEY
+# history and this process's own argv — prefer the env or a .env file.)
+#
+# .env is the developer-local home for live-test credentials: gitignored, and
+# deliberately NOT ~/.config/linearfs/env, which is the systemd unit's
+# EnvironmentFile — a test key there repoints the running mount at the throwaway
+# workspace. Leading `-` so a checkout without one is fine. Plain KEY=value only;
+# make parses this as makefile syntax, so a `#` in a value truncates it and a `$`
+# needs doubling. Note these override same-named variables already in your
+# environment (a makefile assignment beats the environment unless you run -e).
+-include .env
+
+export LINEAR_API_KEY LINEARFS_TEST_TEAM
 
 build:
 	go build -trimpath $(LDFLAGS) -o bin/$(BINARY) ./cmd/linearfs

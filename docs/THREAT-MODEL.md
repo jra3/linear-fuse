@@ -162,6 +162,22 @@ the `LINEAR_API_KEY` env path is the escape hatch and is unaffected. The
 mountpoint itself stays `0755` — the FUSE mount is owner-only regardless
 (AllowOther is never set), so tightening it is cosmetic.
 
+**A developer checkout holds a second copy of the secret.** `.env` in the repo
+root is the local home for live-test credentials (`LINEAR_API_KEY`,
+`LINEARFS_TEST_TEAM`); the `Makefile` `-include`s it so the live targets pick it
+up. Three properties keep it from becoming a leak. It is gitignored, so it cannot
+be committed — the one control that actually matters, since a key in git history
+outlives any chmod. It is deliberately *not* `~/.config/linearfs/env`, which is
+the systemd unit's `EnvironmentFile`: a throwaway-workspace test key placed there
+would silently repoint the running mount, so the split is a correctness boundary
+as much as a security one. And **nothing chmods it** — `internal/atrest` covers
+artifacts LinearFS *writes*, and this file is created by hand, so a default
+`umask` leaves it `0644` and world-readable to P3 (observed in practice). Unlike
+`config.yaml` there is no load-time mode refusal, because the reader is `make`,
+not `internal/config`. Treat `chmod 600 .env` as the developer's job; the same
+caveat applies to any shell that `export`s the key, whose value is visible in
+`/proc/<pid>/environ` to its owner alone but lands in shell history if typed.
+
 ### TB4 — Build & release (P4)
 
 The path from source to running binary: the release artifacts goreleaser

@@ -66,11 +66,18 @@ jobs:
       # -timeout matches `make integration-tests-rw`: the live suite's setup gate
       # spends up to a third of it waiting for the cold-start full sync, and the
       # job's own timeout-minutes must stay above the total.
+      # LINEARFS_TEST_TEAM names the team the suite mutates. It is a team key, not
+      # a credential, so it is a plain value — but it must agree with whatever
+      # workspace the LINEAR_API_KEY secret belongs to. A team the key's workspace
+      # does not have is a hard setup error listing the teams that were found, not
+      # a silent fallback onto teams[0]; repointing the secret at a different
+      # workspace without updating this line fails the job loudly, by design.
       - name: Run integration tests (with writes)
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEARFS_LIVE_API: "1"
           LINEARFS_WRITE_TESTS: "1"
+          LINEARFS_TEST_TEAM: "FUS"
         run: go test -v -timeout 25m ./internal/integration/...
 
       - name: Cleanup on failure
