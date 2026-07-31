@@ -544,7 +544,14 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				return results
 			},
 		},
-		adopt:     func(fresh *api.Issue) { i.issue = *fresh },
+		adopt: func(fresh *api.Issue) { i.issue = *fresh },
+		restore: func() []byte {
+			content, err := marshal.IssueToMarkdown(&i.issue)
+			if err != nil {
+				return nil
+			}
+			return content
+		},
 		coherence: []uint64{issueIno(i.issue.ID), metaIno(i.issue.ID)}, // issue.meta reflects the edit
 		pinIno:    issueIno(i.issue.ID),                                // issue.md's Lookup seeds from the pin
 	})

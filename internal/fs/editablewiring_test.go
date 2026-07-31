@@ -36,6 +36,34 @@ import (
 // visible, which is all this rule asks for.
 func TestEverySpecSetsPinIno(t *testing.T) {
 	t.Parallel()
+	if missing := specsMissingField(t, "pinIno"); len(missing) > 0 {
+		t.Errorf("editFlushSpec literals with no pinIno (their writes would not survive the node — see #387):\n  %s",
+			strings.Join(missing, "\n  "))
+	}
+}
+
+// TestEverySpecSetsRestore is the same rule for the other field a handler can
+// quietly forget. Without restore, the empty-write rejection (#397) leaves the
+// buffer empty AND dirty, and on the in-place path that buffer belongs to the
+// canonical node: refresh refuses a dirty buffer and only a successful flush
+// clears the flag, so the file serves zero bytes for the rest of the node's life
+// — the exact state the .error tells the writer to recover from by re-reading.
+//
+// Like pinIno, a future spec that genuinely cannot render its entity should say
+// `restore: nil` explicitly with a comment saying why.
+func TestEverySpecSetsRestore(t *testing.T) {
+	t.Parallel()
+	if missing := specsMissingField(t, "restore"); len(missing) > 0 {
+		t.Errorf("editFlushSpec literals with no restore (a rejected empty write would strand the buffer — see #397):\n  %s",
+			strings.Join(missing, "\n  "))
+	}
+}
+
+// specsMissingField reads the package's own source and returns the position of
+// every editFlushSpec literal that does not set field. It fails the test if it
+// finds no literals at all, which would mean the rule has stopped checking.
+func specsMissingField(t *testing.T, field string) []string {
+	t.Helper()
 
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -75,7 +103,7 @@ func TestEverySpecSetsPinIno(t *testing.T) {
 				if !ok {
 					continue
 				}
-				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "pinIno" {
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == field {
 					return true
 				}
 			}
@@ -87,9 +115,6 @@ func TestEverySpecSetsPinIno(t *testing.T) {
 	if found == 0 {
 		t.Fatal("no editFlushSpec literals found; this rule has stopped checking anything")
 	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		t.Errorf("editFlushSpec literals with no pinIno (their writes would not survive the node — see #387):\n  %s",
-			strings.Join(missing, "\n  "))
-	}
+	sort.Strings(missing)
+	return missing
 }

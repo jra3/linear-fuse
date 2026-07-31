@@ -280,6 +280,10 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				return false, syscall.EINVAL
 			}
 
+			// Scalar diff, computed before the project reconcile below so the
+			// commit-tail compare has it regardless of which branch runs.
+			edit = newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Content)
+
 			// Desired projects, already coerced by the parse (absent ⇒ empty ⇒ unlink all)
 			newProjectSlugs := parsed.Projects
 
@@ -315,8 +319,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 
 			// Persist editable scalar fields. The body maps to Linear's uncapped
 			// `content`, not the ≤255 `description` (see #5), matching
-			// generateContent().
-			edit = newScalarEdit(parsed.Name, parsed.Body, i.initiative.Name, i.initiative.Content)
+			// generateContent(); edit was diffed above.
 			initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Content: edit.desc}
 			if edit.changed() {
 				if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
@@ -345,10 +348,11 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				return i.lfs.UpsertInitiative(ctx, *fresh)
 			},
 			compare: func(fresh *api.Initiative) []writeBackResult {
-				return edit.divergences(fresh.Name, fresh.Content)
+				return edit.divergences("initiative", fresh.Name, fresh.Content)
 			},
 		},
-		adopt: func(fresh *api.Initiative) { i.initiative = *fresh },
+		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh },
+		restore: func() []byte { return i.generateContent() },
 		// initiative.md, its meta, and the projects/ listing.
 		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},
 		pinIno:    initiativeInfoIno(i.initiativeID), // initiative.md's Lookup seeds from the pin

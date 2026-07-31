@@ -202,6 +202,13 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 				n.content = newContent
 			}
 		},
+		restore: func() []byte {
+			content, err := marshal.MilestoneToMarkdown(&n.milestone)
+			if err != nil {
+				return nil
+			}
+			return content
+		},
 		coherence: []uint64{milestoneIno(n.milestone.ID), milestoneMetaIno(n.milestone.ID)},
 		pinIno:    milestoneIno(n.milestone.ID),
 	})

@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // =============================================================================
@@ -721,6 +723,62 @@ func TestClaudeToolEditPersistsProjectDescription(t *testing.T) {
 	}
 	if !strings.Contains(string(after), marker) {
 		t.Fatalf("project description did not persist marker %q\n--- got ---\n%s", marker, after)
+	}
+}
+
+// TestClearProjectBodyIsRejectedLegibly is the live half of #398. Linear accepts
+// an empty `content` and then ignores it, so emptying a project body does not
+// take effect. The read-your-writes check catches that correctly; what was wrong
+// was the verdict — EIO, which reads as "retry", for a write that can never
+// succeed no matter how many times it is retried. It must be EINVAL, with a
+// .error saying the previous body was kept and what to write instead.
+//
+// Live-only by necessity: the verdict is derived from what the SERVER did with
+// the empty content, and the offline mock applies it (correctly reporting
+// success), so there is nothing to assert in fixture mode.
+func TestClearProjectBodyIsRejectedLegibly(t *testing.T) {
+	skipIfNoWriteTests(t)
+
+	slug, cleanup := createTestProject(t, "Clear Body")
+	defer cleanup()
+
+	path := projectFilePath(testTeamKey, slug)
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read new project.md: %v", err)
+	}
+
+	// Give it a body first — clearing an already-empty body is a no-op, not the
+	// case under test.
+	doc, err := parseFrontmatter(orig)
+	if err != nil {
+		t.Fatalf("parse project.md: %v", err)
+	}
+	withBody, err := marshal.Render(&marshal.Document{Frontmatter: doc.Frontmatter, Body: "a body that cannot be cleared"})
+	if err != nil {
+		t.Fatalf("render project.md with a body: %v", err)
+	}
+	claudeToolWrite(t, path, withBody)
+	waitForCacheExpiry()
+
+	// Now empty the body, keeping the frontmatter — the shape a "clear the
+	// description" edit takes, and the shape the restore half of an undo takes.
+	cleared, err := marshal.Render(&marshal.Document{Frontmatter: doc.Frontmatter, Body: ""})
+	if err != nil {
+		t.Fatalf("render project.md with an empty body: %v", err)
+	}
+	werr := claudeToolSaveExpectingError(t, path, cleared)
+	if !errors.Is(werr, syscall.EINVAL) {
+		t.Errorf("clearing a project body returned %v, want EINVAL — Linear cannot apply it, "+
+			"so the caller needs a verdict they can act on rather than a retryable-looking EIO", werr)
+	}
+
+	errPath := filepath.Join(projectDirPath(testTeamKey, slug), ".error")
+	data := readFileUntilContains(t, errPath, "kept the previous body", errorVisibilityWait)
+	for _, want := range []string{"kept the previous body", "Re-saving the same empty body"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("project .error does not mention %q, got:\n%s", want, data)
+		}
 	}
 }
 

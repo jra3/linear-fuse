@@ -62,8 +62,13 @@ type writeBackSpec[T any] struct {
 // commitWriteBack runs the invariant tail of an edit after the API has accepted
 // the write. It returns the fresh value (nil if it could not be fetched) and the
 // errno the Flush should return: syscall.EIO on a fatal read-your-writes
-// divergence, 0 otherwise (including benign reformats, which leave a note in
-// .error but let the close succeed).
+// divergence — unless a divergence overrode that errno (see below) — and 0
+// otherwise (including benign reformats, which leave a note in .error but let the
+// close succeed).
+//
+// Callers that BRANCH on this errno (renamesave.go does) must therefore not read
+// "not EIO" as "nothing reached Linear": every value below except the front
+// half's own comes from a mutation that already landed.
 //
 // Contract:
 //   - fetch fails        → the write succeeded but its verification re-read did
@@ -75,7 +80,10 @@ type writeBackSpec[T any] struct {
 //     into the live fd — the EIO is a wedge signal, not data loss (#278).
 //   - no divergence      → clear .error, return (fresh, 0).
 //   - benign reformat    → set .error note, return (fresh, 0).
-//   - fatal divergence   → set .error, return (fresh, syscall.EIO).
+//   - fatal divergence   → set .error, return (fresh, syscall.EIO), or the errno
+//     a writeBackResult overrode it with when retrying is known to be futile.
+//     The one such case today is a declined body-clear → EINVAL (#398). A
+//     retryable divergence in the same save outranks the override and keeps EIO.
 func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackSpec[T]) (fresh *T, errno syscall.Errno) {
 	start := time.Now()
 	defer func() { recordFuseOp(ctx, "flush", start, errno) }()
@@ -108,7 +116,7 @@ func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackS
 		}
 	}
 
-	divergence, fatal := writeBackError(spec.compare(fresh)...)
+	divergence, fatal, fatalErrno := writeBackError(spec.compare(fresh)...)
 	if divergence == "" {
 		sink.ClearWriteError(spec.errKey)
 		return fresh, 0
@@ -117,6 +125,13 @@ func commitWriteBack[T any](ctx context.Context, sink errorSink, spec writeBackS
 	log.Printf("Read-your-writes %s on %s:\n%s", writeBackKind(fatal), spec.errKey, divergence)
 	sink.SetWriteError(spec.errKey, divergence)
 	if fatal {
+		// EIO unless the result named something else. The one exception so far is
+		// a body-clear Linear declines to apply (#398): the write cannot ever
+		// stick, so EINVAL — "this input is not acceptable" — is the truthful
+		// verdict, where EIO would tell the caller to retry forever.
+		if fatalErrno != 0 {
+			return fresh, fatalErrno
+		}
 		return fresh, syscall.EIO
 	}
 	return fresh, 0

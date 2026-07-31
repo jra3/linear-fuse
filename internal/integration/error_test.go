@@ -1,8 +1,14 @@
 package integration
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/jra3/linear-fuse/internal/marshal"
 )
 
 // =============================================================================
@@ -173,6 +179,16 @@ func TestMalformedYAMLDoesNotCrash(t *testing.T) {
 	}
 }
 
+// TestEmptyWriteDoesNotCorrupt is the live half of #397. An emptied issue.md is
+// a truncation accident — a crashed editor, a `> file`, a botched Write tool
+// call — and it must be REJECTED, not applied: an empty document has no fields,
+// so applying it clears every removable field the issue had (measured: assignee,
+// due, estimate, labels, and the body, in one mutation).
+//
+// This test used to observe that and t.Logf about it, so a test named
+// "DoesNotCorrupt" reported PASS while watching the corruption. The assertions
+// below are the ones its name always claimed: the write fails with EINVAL, the
+// .error explains it, and the issue's fields are untouched.
 func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
 	skipIfNoWriteTests(t)
 	issue, cleanup, err := createTestIssue("Empty Write Test")
@@ -189,22 +205,73 @@ func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to read issue: %v", err)
 	}
-
-	// Write empty content
-	err = os.WriteFile(path, []byte{}, 0644)
-	// Should either fail or be handled gracefully
-	_ = err
-
-	// Verify via filesystem that issue still exists
-	fsIssue, err := getIssueFromFilesystem(issue.Identifier)
+	doc, err := parseFrontmatter(original)
 	if err != nil {
-		t.Fatalf("Issue became inaccessible after empty write: %v", err)
+		t.Fatalf("parse original issue.md: %v", err)
 	}
 
-	// Original title should still be there (empty write shouldn't corrupt)
-	doc, _ := parseFrontmatter(original)
+	// Give the issue a real body FIRST. createTestIssue mkdirs the issue with
+	// nothing but a title, so without this the description is "" and the
+	// body-was-not-cleared assertion below compares "" to "" — it would pass just
+	// as happily if the empty write had wiped the body, which is the whole point
+	// of #397. The write goes through the mount so it needs no option the helper
+	// honours.
+	withBody, err := marshal.Render(&marshal.Document{
+		Frontmatter: doc.Frontmatter,
+		Body:        "a body that an empty write must not clear",
+	})
+	if err != nil {
+		t.Fatalf("render issue.md with a body: %v", err)
+	}
+	claudeToolWrite(t, path, withBody)
+	waitForCacheExpiry()
+
+	original, err = readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("re-read issue.md after seeding the body: %v", err)
+	}
+	doc, err = parseFrontmatter(original)
+	if err != nil {
+		t.Fatalf("parse seeded issue.md: %v", err)
+	}
 	originalTitle, _ := doc.Frontmatter["title"].(string)
-	if fsIssue.Title != originalTitle {
-		t.Logf("Note: Empty write may have affected issue (original: %q, current: %q)", originalTitle, fsIssue.Title)
+	originalBody := doc.Body
+	if strings.TrimSpace(originalBody) == "" {
+		t.Fatal("issue.md still has no body after seeding one; the body-wipe assertion below would be vacuous")
+	}
+
+	// Empty the file the way a truncating save does. The rename form is used
+	// deliberately: an O_TRUNC+write can have its verdict masked when the kernel
+	// serves the write from a primed page cache, whereas a rename runs Flush
+	// inline and hands back the errno (the same reason claudeToolSaveExpectingError
+	// exists).
+	werr := claudeToolSaveExpectingError(t, path, []byte{})
+	if !errors.Is(werr, syscall.EINVAL) {
+		t.Errorf("emptying issue.md returned %v, want EINVAL — an empty document has no fields, "+
+			"so applying it clears every removable field the issue had", werr)
+	}
+
+	// The rejection is legible: .error says what happened and how to recover.
+	errPath := filepath.Join(issueDirPath(testTeamKey, issue.Identifier), ".error")
+	data := readFileUntilContains(t, errPath, "Empty write rejected", errorVisibilityWait)
+	for _, want := range []string{"Empty write rejected", "Nothing was written"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf(".error does not mention %q after an empty write, got:\n%s", want, data)
+		}
+	}
+
+	// And nothing was applied. The check reads the stored row rather than the file
+	// so it sees what LINEAR holds: the atomic-save path this test uses lands the
+	// empty bytes on a transient node, so issue.md still serves its own content
+	// either way and would not distinguish "rejected" from "applied".
+	fresh, err := getIssueFromSQLite(issue.ID)
+	if err != nil {
+		t.Fatalf("issue not readable after the rejected write: %v", err)
+	}
+	if fresh.Title != originalTitle {
+		t.Errorf("title = %q after a rejected empty write, want the original %q", fresh.Title, originalTitle)
+	}
+	if strings.TrimSpace(fresh.Description) != strings.TrimSpace(originalBody) {
+		t.Errorf("description = %q after a rejected empty write, want the original %q", fresh.Description, originalBody)
 	}
 }
