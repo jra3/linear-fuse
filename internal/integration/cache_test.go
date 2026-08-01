@@ -102,11 +102,7 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 
 	// Count initial comments
 	commentsDir := commentsPath(testTeamKey, issue.Identifier)
-	entries1, err := os.ReadDir(commentsDir)
-	if err != nil {
-		t.Fatalf("Failed to read comments: %v", err)
-	}
-	initialCount := len(entries1)
+	initialCount := countItemFiles(t, commentsDir)
 
 	// Create comment via _create
 	commentBody := "[TEST] Cache invalidation comment"
@@ -116,15 +112,11 @@ func TestCommentCreateInvalidatesCache(t *testing.T) {
 	}
 
 	// No wait needed - kernel cache invalidated on filesystem write
-	// Re-read comments directory
-	entries2, err := os.ReadDir(commentsDir)
-	if err != nil {
-		t.Fatalf("Failed to re-read comments: %v", err)
-	}
-
-	// Should have one more entry (the new comment)
-	if len(entries2) != initialCount+1 {
-		t.Errorf("Comment cache not invalidated, expected %d entries, got %d", initialCount+1, len(entries2))
+	// Should have one more comment. Count .md files, not directory entries:
+	// each comment also carries a .meta sidecar, so the raw entry count moves
+	// by two (see countItemFiles).
+	if got := countItemFiles(t, commentsDir); got != initialCount+1 {
+		t.Errorf("Comment cache not invalidated, expected %d comments, got %d", initialCount+1, got)
 	}
 }
 
@@ -143,11 +135,7 @@ func TestCommentVisibleImmediatelyAfterCreate(t *testing.T) {
 
 	// First read populates the cache
 	commentsDir := commentsPath(testTeamKey, issue.Identifier)
-	entries1, err := os.ReadDir(commentsDir)
-	if err != nil {
-		t.Fatalf("Failed to read comments: %v", err)
-	}
-	initialCount := len(entries1)
+	initialCount := countItemFiles(t, commentsDir)
 
 	// Create comment via _create
 	commentBody := "[TEST] Immediate visibility comment"
@@ -156,16 +144,11 @@ func TestCommentVisibleImmediatelyAfterCreate(t *testing.T) {
 		t.Fatalf("Failed to create comment: %v", err)
 	}
 
-	// NO wait needed - kernel cache is invalidated on filesystem write
-	// Re-read comments directory - should see new comment immediately
-	entries2, err := os.ReadDir(commentsDir)
-	if err != nil {
-		t.Fatalf("Failed to re-read comments: %v", err)
-	}
-
-	// Should have one more entry without waiting for cache expiry
-	if len(entries2) != initialCount+1 {
-		t.Errorf("Comment not immediately visible after creation, expected %d entries, got %d", initialCount+1, len(entries2))
+	// NO wait needed - kernel cache is invalidated on filesystem write.
+	// Should see one more comment without waiting for cache expiry. Counts
+	// .md files, not entries — each comment carries a .meta sidecar too.
+	if got := countItemFiles(t, commentsDir); got != initialCount+1 {
+		t.Errorf("Comment not immediately visible after creation, expected %d comments, got %d", initialCount+1, got)
 	}
 }
 
