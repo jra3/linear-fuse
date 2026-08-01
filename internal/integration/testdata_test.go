@@ -26,8 +26,13 @@ var (
 // The mode interlocks (skipIfNoWriteTests / skipIfLiveAPI) live in
 // modes_test.go, alongside the workspace-derived identifier pickers.
 
-// rateLimitWait ensures we don't make API calls too quickly
+// rateLimitWait ensures we don't make API calls too quickly. In fixture mode
+// there is no API to pace — the mutation fake answers in-process — so it returns
+// immediately rather than costing every mock-backed create a full second.
 func rateLimitWait() {
+	if !liveAPIMode {
+		return
+	}
 	rateLimitMu.Lock()
 	defer rateLimitMu.Unlock()
 

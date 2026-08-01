@@ -97,12 +97,19 @@ Which mode a test runs in is declared in exactly one place —
 - `skipIfNoWriteTests(t)` — needs `liveAPIMode` **and** `LINEARFS_WRITE_TESTS=1`.
   It guards the tests that mutate a real workspace.
 - `skipIfLiveAPI(t, why)` — skips when `liveAPIMode` is true, printing `why` in
-  place of the test. It is the inverse interlock, and covers both kinds of
+  place of the test. It is the inverse interlock, and covers three kinds of
   fixture dependence: the write-contract tests that write *through the mount* to
   assert a structural invariant (#131, #137, #140, #142) — inert offline, but a
   real mutation live, and `TestMkdirIssueFailureIsLegible` leaks an issue it
-  cannot clean up (`fixtureWriteContract`) — and the read tests that assert
-  against seeded rows like `TST-1` or `test-project` (`fixtureSeededData`).
+  cannot clean up (`fixtureWriteContract`) — the read tests that assert
+  against seeded rows like `TST-1` or `test-project` (`fixtureSeededData`) — and
+  the tests whose assertion needs the mock mutator to model a specific BACKEND
+  behavior the real one need not have (`WithBodyReformat`,
+  `WithEmptyContentIgnored`), which take a `why` naming that dependency. #411 is
+  what the last kind costs when it is guarded the other way:
+  `TestClearProjectBodyIsRejectedLegibly` asserted the verdict for a server that
+  declines an empty body, so live it failed the moment Linear applied one —
+  after creating a real project to find that out.
   Never convert one guard to the other: `skipIfNoWriteTests` on a fixture-mode
   guard deletes it from the default offline suite, the only place it runs.
 - **no guard** — the test runs in every mode, and therefore may not name a

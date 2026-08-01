@@ -27,8 +27,9 @@ import (
 //   - skipIfNoWriteTests(t)   — live + writes only: the tests that mutate a real
 //     workspace.
 //   - skipIfLiveAPI(t, why)   — fixture only, with `why` naming the kind of
-//     fixture dependence (the constants below). Its condition is the exact
-//     inverse of skipIfNoWriteTests; the two must never agree to run one test.
+//     fixture dependence (the constants below, or the mock-modelled backend
+//     behaviour described under them). Its condition is the exact inverse of
+//     skipIfNoWriteTests; the two must never agree to run one test.
 //   - no guard                — runs in every mode. A test in this group may not
 //     name a seeded row: derive identifiers with someIssueID/someProjectSlug.
 //
@@ -56,6 +57,19 @@ const (
 	// suite, which is the only place it ever runs.
 	fixtureWriteContract = "fixture-mode write-contract guard; the same write would mutate a real workspace under a live key"
 )
+
+// The third kind of fixture dependence has no shared constant, because the
+// useful part of the sentence differs per test: the assertion needs the mock
+// mutator to MODEL A BACKEND BEHAVIOUR that the real one need not have —
+// markdown reformat-on-store (mockmutation.WithBodyReformat), or a backend that
+// ignores an empty content (mockmutation.WithEmptyContentIgnored). These take a
+// `why` naming the option they depend on.
+//
+// Guarded the other way, such a test asserts a belief about Linear that nothing
+// upholds: #411 is TestClearProjectBodyIsRejectedLegibly under
+// skipIfNoWriteTests, asserting the declined-clear verdict against whatever the
+// server happened to do — so it failed the first live write run for a non-bug,
+// having created a real project to get there.
 
 // skipIfNoWriteTests skips the test unless it is running in live + writes mode.
 // It guards the tests that mutate a real workspace. liveAPIMode is checked

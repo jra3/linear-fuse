@@ -243,9 +243,9 @@ func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
 	// Empty the file the way a truncating save does. The rename form is used
 	// deliberately: an O_TRUNC+write can have its verdict masked when the kernel
 	// serves the write from a primed page cache, whereas a rename runs Flush
-	// inline and hands back the errno (the same reason claudeToolSaveExpectingError
+	// inline and hands back the errno (the same reason claudeToolAtomicSave
 	// exists).
-	werr := claudeToolSaveExpectingError(t, path, []byte{})
+	werr := claudeToolAtomicSave(t, path, []byte{})
 	if !errors.Is(werr, syscall.EINVAL) {
 		t.Errorf("emptying issue.md returned %v, want EINVAL — an empty document has no fields, "+
 			"so applying it clears every removable field the issue had", werr)
