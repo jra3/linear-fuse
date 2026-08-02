@@ -183,6 +183,16 @@ offline fixture suite; the label promised mutation and the run delivered none.
 Now that it does what it says, the exposure is real and worth stating: whoever can dispatch that
 workflow can write to the Linear workspace the secret belongs to, so the secret
 should scope to a throwaway/test workspace rather than a production one, and the
+job now states which workspace it accepts rather than trusting the secret to be
+the right one: it sets `LINEARFS_TEST_TEAM`, and setup fails if the key's
+workspace has no team by that key (`pickTestTeam`). That check is the enforcement
+point for "throwaway workspace, not a production one" — a rotated-in key for the
+wrong workspace fails before the first mutation instead of writing to whatever
+team it found. Local runs get the same guarantee from `.env`, which the live make
+targets read in place of the ambient environment for the same reason: a developer's
+exported `LINEAR_API_KEY` is normally their real workspace. The exposure this
+closes is not hypothetical — a local write run against a work workspace is how it
+was found, its `TST` team having been enough to satisfy the old fallback. The
 job stays manual-dispatch (never `push`/`pull_request`, never `pull_request_target`,
 where a fork could reach it) behind its `run_write_tests` confirmation input — which
 was itself declared-but-unread until #386 wired it to a job-level `if`, so the

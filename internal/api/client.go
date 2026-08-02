@@ -781,6 +781,13 @@ func (c *Client) GetViewer(ctx context.Context) (*User, error) {
 	return fetchOne[User](ctx, c, queryViewer, nil, "viewer")
 }
 
+// GetOrganization fetches the workspace this key authenticates to. It answers
+// "whose data am I about to touch?" in one cheap call, ahead of any read that
+// would make the answer obvious only in hindsight.
+func (c *Client) GetOrganization(ctx context.Context) (*Organization, error) {
+	return fetchOne[Organization](ctx, c, queryOrganization, nil, "organization")
+}
+
 // CreateIssue creates a new issue
 func (c *Client) CreateIssue(ctx context.Context, input map[string]any) (*Issue, error) {
 	return execMutation[Issue](ctx, c, mutationCreateIssue, map[string]any{"input": input}, "issueCreate", "issue")

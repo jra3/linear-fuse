@@ -101,6 +101,17 @@ type User struct {
 	Active      bool   `json:"active"`
 }
 
+// Organization identifies the workspace a key authenticates to. Nothing in the
+// filesystem renders it; it exists so a caller about to act on a real workspace
+// can NAME the one it reached — the live test suite prints it before it mounts,
+// because "which workspace is this key on?" was otherwise answerable only by
+// recognising the team list.
+type Organization struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	URLKey string `json:"urlKey"`
+}
+
 type Labels struct {
 	Nodes []Label `json:"nodes"`
 }

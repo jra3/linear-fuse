@@ -26,6 +26,20 @@ test:
 test-cover:
 	go test ./... -cover
 
+# Live runs take their credentials from .env (gitignored), never from the ambient
+# environment. LINEAR_API_KEY in a developer's shell is normally the key for the
+# workspace they actually work in, and a live run of this suite reads that whole
+# workspace and — in write mode — creates issues and projects in it. .env is the
+# one file whose contents are chosen for testing, so the live targets read it and
+# refuse to run without it. Pair it with LINEARFS_TEST_TEAM (see .env.example):
+# naming the team makes a key for the wrong workspace fail during setup.
+#
+# It deliberately OVERRIDES anything already exported: an ambient key silently
+# winning over the file is the exact failure this exists to prevent.
+LIVE_ENV = test -f .env || { echo "no .env: copy .env.example and fill in the TEST workspace's key"; exit 1; }; \
+	set -a; . ./.env; set +a; \
+	test -n "$$LINEAR_API_KEY" || { echo "LINEAR_API_KEY missing from .env (see .env.example)"; exit 1; };
+
 # Run the integration suite against the LIVE Linear API, READS ONLY. Consumes real
 # API quota — the offline fixture suite is plain `make test`, which needs no key.
 # LINEARFS_LIVE_API is what liveAPIMode reads; both targets demanded a key and then
@@ -36,14 +50,12 @@ test-cover:
 # readiness gate (waitForInitialSync) spends up to a third of it waiting for the
 # cold-start full sync, so this must leave the tests themselves room.
 integration-tests-ro:
-	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 go test -v -timeout 15m ./internal/integration/...
+	@$(LIVE_ENV) LINEARFS_LIVE_API=1 go test -v -timeout 15m ./internal/integration/...
 
 # Run the integration suite including the write tests. This CREATES AND MODIFIES
 # REAL LINEAR DATA and may hit API limits on free workspaces.
 integration-tests-rw:
-	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
-	LINEAR_API_KEY=$(LINEAR_API_KEY) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
+	@$(LIVE_ENV) LINEARFS_LIVE_API=1 LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
 
 # Both, in that order. -rw is a SUPERSET of -ro, not a disjoint half: WRITE_TESTS=1
 # only ADDS the 55 write tests, so the read suite runs twice. What this buys is

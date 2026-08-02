@@ -56,14 +56,29 @@ LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx go test -v -timeout 15m ./internal/integr
 LINEARFS_LIVE_API=1 LINEAR_API_KEY=xxx LINEARFS_WRITE_TESTS=1 go test -v -timeout 25m ./internal/integration/...
 ```
 
-The make targets wrap the two live modes (all three require `LINEAR_API_KEY`; the
-default offline suite is plain `make test` and needs no key):
+The make targets wrap the two live modes (the default offline suite is plain
+`make test` and needs no key):
 
 ```bash
 make integration-tests-ro    # live API, READS ONLY
 make integration-tests-rw    # live API + writes: CREATES AND MODIFIES REAL LINEAR DATA
 make integration-tests       # -ro then -rw (rw is a superset; the value is sequencing)
 ```
+
+**Which workspace a live run touches is a choice, not an accident.** The live
+targets read `.env` (gitignored; see `.env.example`) and OVERRIDE the ambient
+environment, because a `LINEAR_API_KEY` exported in a shell is normally the key
+for the workspace you actually work in — and a live run reads that entire
+workspace, then in write mode creates issues and projects in it. `.env` carries
+two lines: the test workspace's key, and `LINEARFS_TEST_TEAM`.
+
+`LINEARFS_TEST_TEAM` is the interlock. Set it and `pickTestTeam` either finds
+that team or fails setup naming the teams it did find; unset, it falls back to
+"prefer TST, else the first team listed", which is how a run with the wrong key
+in the environment quietly proceeded against a real work workspace that happened
+to have a TST team. The CI write job sets it explicitly for the same reason (it
+cannot read `.env`). Every live run also logs the resolved organization — and,
+in write mode, says so loudly — before it mounts anything.
 
 Live mode gates setup on the sync worker's persisted full-cycle stamp
 (`sync.ScheduleKeyFullCycle`) before any test touches the mount: its SQLite cache

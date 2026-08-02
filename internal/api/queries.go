@@ -719,6 +719,18 @@ query Viewer {
 }
 ` + userFieldsFragment
 
+// queryOrganization identifies the workspace behind the key. Scalars only and no
+// fragment: nothing else selects an Organization, so there is no second field
+// set to drift away from.
+const queryOrganization = `
+query Organization {
+  organization {
+    id
+    name
+    urlKey
+  }
+}`
+
 const mutationUpdateIssue = `
 mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
   issueUpdate(id: $id, input: $input) {

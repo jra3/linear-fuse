@@ -98,6 +98,15 @@ func TestMain(m *testing.M) {
 // setupLiveAPI configures tests to run against real Linear API
 func setupLiveAPI(apiKey string) error {
 	var err error
+
+	// Name the workspace BEFORE anything is mounted or synced. A live run
+	// authenticates with whatever LINEAR_API_KEY is in the environment, and the
+	// only previous evidence of which workspace that was arrived implicitly —
+	// team names in a later log line, or an unexplained multi-minute sync of a
+	// workspace far bigger than the test one. In write mode the answer arrives
+	// after the mutations. One call, first line of the run.
+	announceLiveWorkspace(apiKey)
+
 	mountPoint, err = os.MkdirTemp("", "linearfs-test-*")
 	if err != nil {
 		return fmt.Errorf("create mount point: %w", err)
@@ -668,23 +677,80 @@ func discoverTestTeam() error {
 	if err != nil {
 		return fmt.Errorf("failed to get teams: %w", err)
 	}
-	if len(teams) == 0 {
-		return fmt.Errorf("no teams found in workspace")
+
+	team, err := pickTestTeam(teams, os.Getenv("LINEARFS_TEST_TEAM"))
+	if err != nil {
+		return err
+	}
+	testTeamID = team.ID
+	testTeamKey = team.Key
+	return nil
+}
+
+// pickTestTeam chooses the team a live run acts on. `want` is LINEARFS_TEST_TEAM:
+// name a team and the run either gets THAT team or fails — it is the one place
+// an invocation can state which workspace it believes it is talking to, and a
+// key pointed somewhere else fails setup rather than finding some other team to
+// mutate. Unset keeps the historical prefer-TST-else-first behaviour.
+//
+// Pure so workspace_test.go can drive it in every mode; discoverTestTeam owns
+// the fetch.
+func pickTestTeam(teams []api.Team, want string) (api.Team, error) {
+	keys := make([]string, 0, len(teams))
+	for _, t := range teams {
+		keys = append(keys, t.Key)
 	}
 
-	// Prefer TST team for tests, fall back to first team
-	for _, team := range teams {
-		if team.Key == "TST" {
-			testTeamID = team.ID
-			testTeamKey = team.Key
-			return nil
+	if want != "" {
+		for _, t := range teams {
+			if t.Key == want {
+				return t, nil
+			}
+		}
+		return api.Team{}, fmt.Errorf("LINEARFS_TEST_TEAM=%s, but this API key's workspace has no team %s "+
+			"(it has: %s). The key is almost certainly for a different workspace than the run intends — "+
+			"which matters most in write mode, where the fallback this replaces would have created issues "+
+			"and projects in whichever workspace the key DID reach",
+			want, want, strings.Join(keys, ", "))
+	}
+
+	if len(teams) == 0 {
+		return api.Team{}, fmt.Errorf("no teams found in workspace")
+	}
+	for _, t := range teams {
+		if t.Key == fixtureTeamKeyPreference {
+			return t, nil
 		}
 	}
+	return teams[0], nil
+}
 
-	// Fallback to first team if TST not found
-	testTeamID = teams[0].ID
-	testTeamKey = teams[0].Key
-	return nil
+// fixtureTeamKeyPreference is the team key a live run falls back to preferring
+// when LINEARFS_TEST_TEAM is unset — the same key the fixture population uses,
+// so an unconfigured live run lands on the workspace's test team if it has one.
+const fixtureTeamKeyPreference = "TST"
+
+// announceLiveWorkspace logs the workspace behind the key, and in write mode
+// says plainly that this run creates and modifies data in it. It is diagnostic,
+// not a gate: a failure to resolve the organization is reported and the run
+// continues, because the interlock that can actually stop a wrong-workspace run
+// is LINEARFS_TEST_TEAM in pickTestTeam.
+func announceLiveWorkspace(apiKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	org, err := api.NewClient(apiKey).GetOrganization(ctx)
+	if err != nil {
+		log.Printf("LIVE MODE: could not identify the workspace behind LINEAR_API_KEY: %v", err)
+		return
+	}
+	if os.Getenv("LINEARFS_WRITE_TESTS") == "1" {
+		log.Printf("LIVE WRITE MODE: this run CREATES AND MODIFIES real data in workspace %q (%s). "+
+			"Set LINEARFS_TEST_TEAM to the team you intend to write to and setup will refuse any other workspace.",
+			org.Name, org.URLKey)
+		return
+	}
+	log.Printf("LIVE MODE (reads only): workspace %q (%s)", org.Name, org.URLKey)
 }
 
 func cleanup() {
