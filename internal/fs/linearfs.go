@@ -48,6 +48,15 @@ type LinearFS struct {
 	gid        uint32 // Owner GID for files/dirs
 	mountPoint string // Filesystem mount path (for README generation)
 
+	// kernelEntryTimeout is how long the kernel may serve a looked-up entry from
+	// its own cache before re-asking — the mount's staleness bound for a remote
+	// change, since sync never notifies the kernel. MountFS publishes it (before
+	// the serve loop starts, like mountPoint) so nodes that set a per-directory
+	// timeout read the SAME policy the mount was given, rather than a literal of
+	// their own: the issue directory carried a second hardcoded 30s, and a mount
+	// configured otherwise silently did not apply to it.
+	kernelEntryTimeout time.Duration
+
 	// userFeedback (config UserFeedback / env USER_FEEDBACK, default off) makes
 	// the generated README carry the agent self-reporting protocol. Read only
 	// by generateReadme; off means the README is unchanged.
@@ -774,9 +783,53 @@ func (lfs *LinearFS) projectLabelNames(ctx context.Context, ids []string) []stri
 	return names
 }
 
+// Kernel cache timeouts. The kernel serves attrs and directory entries from its
+// own caches for this long before asking us again, so they are the mount's
+// staleness bound for a remote change the sync worker landed WITHOUT notifying
+// the kernel — which is every remote change (sync deliberately never notifies;
+// see docs/ARCHITECTURE.md). Long is right in production: it is what keeps
+// kernel→userspace calls down on a mount whose data changes on human timescales.
+const (
+	DefaultAttrTimeout  = 60 * time.Second
+	DefaultEntryTimeout = 30 * time.Second
+)
+
+// entryTimeout is the kernel-entry cache bound a node should hand its children.
+// It falls back to the default so a LinearFS built without MountFS (unit tests)
+// behaves like production.
+func (lfs *LinearFS) entryTimeout() time.Duration {
+	if lfs.kernelEntryTimeout <= 0 {
+		return DefaultEntryTimeout
+	}
+	return lfs.kernelEntryTimeout
+}
+
+// MountOption tunes a mount. The defaults are production's; the options exist
+// for callers whose constraints differ from a desktop mount's.
+type MountOption func(*mountConfig)
+
+type mountConfig struct {
+	attrTimeout, entryTimeout time.Duration
+}
+
+// WithKernelCacheTimeouts overrides how long the kernel may serve attrs and
+// directory entries from cache.
+//
+// The integration suite is the caller that needs this. Timeout-driven
+// revalidation can only be observed by WAITING — the expiry is the kernel's own,
+// on the kernel's clock, so no injected clock and no amount of test scaffolding
+// can bring it forward. A test of that path against the 30s default is a test
+// that sleeps 31 seconds, and two of them were the whole runtime of the offline
+// suite. Mounting the fixture with a short timeout keeps the mechanism exactly
+// as it is — the kernel expires the entry, the next walk re-Lookups, the
+// nodeRefresher seam runs — and shortens only the interval.
+func WithKernelCacheTimeouts(attr, entry time.Duration) MountOption {
+	return func(c *mountConfig) { c.attrTimeout, c.entryTimeout = attr, entry }
+}
+
 // MountFS mounts an existing LinearFS instance at the given path.
 // This is useful for testing when you need to configure LinearFS before mounting.
-func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error) {
+func MountFS(mountpoint string, lfs *LinearFS, debug bool, opts ...MountOption) (*fuse.Server, error) {
 	root := &RootNode{BaseNode: BaseNode{lfs: lfs}}
 
 	// Publish the mount path *before* fs.Mount starts the serve loop. Handlers
@@ -785,11 +838,14 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error)
 	// — a plain data race the first README lookup can hit.
 	lfs.mountPoint = mountpoint
 
-	// Use longer timeouts to reduce kernel→userspace calls
-	attrTimeout := 60 * time.Second
-	entryTimeout := 30 * time.Second
+	mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
+	for _, o := range opts {
+		o(&mc)
+	}
+	attrTimeout, entryTimeout := mc.attrTimeout, mc.entryTimeout
+	lfs.kernelEntryTimeout = entryTimeout // published before the serve loop, as above
 
-	opts := &fs.Options{
+	fsOpts := &fs.Options{
 		AttrTimeout:  &attrTimeout,
 		EntryTimeout: &entryTimeout,
 		MountOptions: fuse.MountOptions{
@@ -799,7 +855,7 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool) (*fuse.Server, error)
 		},
 	}
 
-	server, err := fs.Mount(mountpoint, root, opts)
+	server, err := fs.Mount(mountpoint, root, fsOpts)
 	if err != nil {
 		return nil, err
 	}

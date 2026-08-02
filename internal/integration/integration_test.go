@@ -68,6 +68,7 @@ func TestMain(m *testing.M) {
 			_ = os.RemoveAll(fields[1])
 		}
 	}
+	sweepAbandonedTestDirs()
 
 	apiKey := os.Getenv("LINEAR_API_KEY")
 	liveAPIMode = os.Getenv("LINEARFS_LIVE_API") == "1" && apiKey != ""
@@ -168,6 +169,111 @@ func setupLiveAPI(apiKey string) error {
 	}
 
 	return nil
+}
+
+// staleTestDirGrace is how recently a leftover temp dir must have been touched
+// to be treated as a CONCURRENT run's rather than an abandoned one. It is above
+// the longest run the Makefile budgets (25m for the live write suite), because
+// the cost of the two mistakes is not symmetric: sweeping a live run's state dir
+// corrupts that run, while leaving an abandoned dir another hour costs 1.5MB.
+const staleTestDirGrace = time.Hour
+
+// sweepAbandonedTestDirs removes the mountpoint and state dirs left by runs that
+// died before cleanup() — a killed run, a panic, a SIGPIPE from piping `go test`
+// into `head`. cleanup() already removes its own, so nothing accumulates from a
+// normal exit; what accumulated (28 dirs, 45MB, found the hard way) all came
+// from runs that never reached it, plus the ones whose lazy-detached mount was
+// still attached when RemoveAll ran.
+//
+// The preflight above only sweeps dirs that are still MOUNTED. This is the other
+// half: dirs with no mount at all, which nothing was looking at.
+func sweepAbandonedTestDirs() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "linearfs-test-*"))
+	if err != nil || len(matches) == 0 {
+		return
+	}
+	mounted := map[string]bool{}
+	if mounts, err := os.ReadFile("/proc/self/mounts"); err == nil {
+		for _, line := range strings.Split(string(mounts), "\n") {
+			if fields := strings.Fields(line); len(fields) >= 2 {
+				mounted[fields[1]] = true
+			}
+		}
+	}
+
+	swept := 0
+	for _, dir := range matches {
+		if mounted[dir] {
+			continue // a live run owns it; the preflight above has the policy
+		}
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if time.Since(info.ModTime()) < staleTestDirGrace {
+			continue // too fresh to be certain it is abandoned
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("Warning: could not remove abandoned test dir %s: %v", dir, err)
+			continue
+		}
+		swept++
+	}
+	if swept > 0 {
+		log.Printf("Swept %d abandoned test dir(s) from %s", swept, os.TempDir())
+	}
+}
+
+// Kernel cache timeouts for the FIXTURE mount, named here so the tests that wait
+// out an expiry derive their wait from the mount's actual policy instead of a
+// literal that can drift from it.
+//
+// They are the PRODUCTION defaults, deliberately, and that costs the offline
+// suite ~60s: the two timeout-driven revalidation tests must wait out a real 30s
+// entry timeout, because the expiry belongs to the kernel and runs on the
+// kernel's clock — no injected clock can bring it forward, so shortening the
+// timeout is the only lever (fs.WithKernelCacheTimeouts exists for it).
+//
+// Shortening was tried and REVERTED: at 1s and at 5s,
+// TestRemoteUpdateVisibleAfterKernelRevalidation becomes order-dependent — it
+// passes alone and fails roughly one run in three inside the full suite, with
+// issue.md never refreshing even after 10s of polling. Something earlier in the
+// suite leaves the node unable to refresh, and until that is understood a fast
+// suite here would mean a flaky one. See the ticket; the plumbing is in place
+// for when it is.
+const (
+	fixtureAttrTimeout  = fs.DefaultAttrTimeout
+	fixtureEntryTimeout = fs.DefaultEntryTimeout
+)
+
+// kernelRevalidationWait bounds the poll below. It is a timeout, not a delay:
+// the common case returns in one iteration.
+const kernelRevalidationWait = 10 * time.Second
+
+// waitForKernelEntryExpiry waits for the kernel to drop its cached entry/attrs
+// for path and serve the remote update behind it, then returns.
+//
+// Two parts, and both are load-bearing. The sleep is real time past the mount's
+// entry timeout: the expiry belongs to the kernel and runs on the kernel's
+// clock, so no injected clock can bring it forward — shortening the timeout
+// (fixtureEntryTimeout) is the only lever, and it changes the interval, not the
+// mechanism. The poll is because WHEN the revalidation lands after that is the
+// kernel's business too: content comes back through the page cache, which drops
+// when a revalidated attr shows a changed mtime, and under full-suite load that
+// arrives a beat later than it does for the test run alone. A single sleep of
+// timeout+margin is therefore a race that passes in isolation and fails in the
+// suite — which is exactly how it behaved — and a bigger margin is only a slower
+// race. On timeout this returns anyway, leaving the caller's assertions to
+// report precisely what was still stale.
+func waitForKernelEntryExpiry(path, want string) {
+	time.Sleep(fixtureEntryTimeout + 250*time.Millisecond)
+	deadline := time.Now().Add(kernelRevalidationWait)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && strings.Contains(string(data), want) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // Store-readiness bounds. The cold-start cycle is a FULL workspace sync of a
@@ -390,8 +496,11 @@ func setupSQLiteFixtures() error {
 		return fmt.Errorf("inject store: %w", err)
 	}
 
-	// Mount the filesystem
-	server, err = fs.MountFS(mountPoint, lfs, false)
+	// Mount with the fixture's kernel cache timeouts, stated explicitly rather
+	// than inherited: staleness_test.go waits these out, so the value the mount
+	// gets and the value the tests sleep are one constant (see them above).
+	server, err = fs.MountFS(mountPoint, lfs, false,
+		fs.WithKernelCacheTimeouts(fixtureAttrTimeout, fixtureEntryTimeout))
 	if err != nil {
 		lfs.Close()
 		store.Close()
@@ -792,10 +901,16 @@ func cleanup() {
 	if offlineAPIServer != nil {
 		offlineAPIServer.Close()
 	}
-	if mountPoint != "" {
-		os.RemoveAll(mountPoint)
-	}
-	if stateDir != "" {
-		os.RemoveAll(stateDir)
+	// Say so when removal fails rather than swallowing it: the usual cause is a
+	// lazy-detached mount still attached at this instant, and a silent failure
+	// here is how leftovers accumulated unnoticed. sweepAbandonedTestDirs picks
+	// up whatever survives, on a later run.
+	for _, dir := range []string{mountPoint, stateDir} {
+		if dir == "" {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("Warning: could not remove %s: %v (a later run will sweep it)", dir, err)
+		}
 	}
 }
