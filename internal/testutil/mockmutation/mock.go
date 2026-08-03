@@ -309,7 +309,37 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	if sid, ok := input["stateId"].(string); ok && sid != "" {
 		iss.State = api.State{ID: sid, Name: c.stateName(ctx, sid)}
 	}
+	// A team move, modelled the way Linear actually behaves (#429): the issue
+	// joins the new team AND is re-numbered into that team's sequence, so its
+	// identifier — and therefore its path on the mount — changes. Faking the move
+	// without the re-numbering would let a test pass while the real thing left a
+	// stale path behind, which is the interesting half of the feature.
+	if tid, ok := input["teamId"].(string); ok && tid != "" {
+		if team := c.teamByID(ctx, tid); team != nil {
+			iss.Team = team
+			iss.Identifier = fmt.Sprintf("%s-%d", team.Key, c.next())
+		}
+	}
 	c.issueEdit[issueID] = iss
+	return nil
+}
+
+// teamByID reads a team from the seeded store so a move echoes the destination's
+// real key and name, not a fabricated one. Nil when unknown — the move then does
+// not happen, which the write-back's team check reports.
+func (c *Client) teamByID(ctx context.Context, id string) *api.Team {
+	if c.store == nil {
+		return nil
+	}
+	teams, err := c.store.Queries().ListTeams(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, t := range teams {
+		if t.ID == id {
+			return &api.Team{ID: t.ID, Key: t.Key, Name: t.Name}
+		}
+	}
 	return nil
 }
 

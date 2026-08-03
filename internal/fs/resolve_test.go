@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jra3/linear-fuse/internal/api"
@@ -12,6 +13,7 @@ import (
 // fakeResolver resolves names via simple maps and errors on anything unknown. It
 // satisfies issueResolver, so resolveIssueUpdate is tested with no repo or API.
 type fakeResolver struct {
+	teams      map[string]string // key -> id
 	states     map[string]string
 	users      map[string]string
 	labels     map[string]string // name -> id; absence means "not found"
@@ -19,9 +21,23 @@ type fakeResolver struct {
 	projects   map[string]string
 	milestones map[string]string
 	cycles     map[string]string
+	// scopedWith records, per field, the teamID each team-scoped resolver was
+	// actually called with. It is what lets a test assert the ordering
+	// resolveIssueUpdate promises: in an edit that also moves the issue, the
+	// team-scoped names must resolve against the DESTINATION team. A map (a
+	// reference) so the value-typed fake still records.
+	scopedWith map[string]string
 }
 
-func (f fakeResolver) ResolveStateID(_ context.Context, _, name string) (string, error) {
+func (f fakeResolver) ResolveTeamID(_ context.Context, key string) (string, error) {
+	if id, ok := f.teams[key]; ok {
+		return id, nil
+	}
+	return "", errors.New("unknown team " + key)
+}
+
+func (f fakeResolver) ResolveStateID(_ context.Context, teamID, name string) (string, error) {
+	f.scopedWith["status"] = teamID
 	if id, ok := f.states[name]; ok {
 		return id, nil
 	}
@@ -33,7 +49,8 @@ func (f fakeResolver) ResolveUserID(_ context.Context, id string) (string, error
 	}
 	return "", errors.New("unknown user " + id)
 }
-func (f fakeResolver) ResolveLabelIDs(_ context.Context, _ string, names []string) ([]string, []string, error) {
+func (f fakeResolver) ResolveLabelIDs(_ context.Context, teamID string, names []string) ([]string, []string, error) {
+	f.scopedWith["labels"] = teamID
 	var ids, notFound []string
 	for _, n := range names {
 		if id, ok := f.labels[n]; ok {
@@ -50,7 +67,8 @@ func (f fakeResolver) ResolveIssueID(_ context.Context, id string) (string, erro
 	}
 	return "", errors.New("unknown issue " + id)
 }
-func (f fakeResolver) ResolveProjectID(_ context.Context, _, name string) (string, error) {
+func (f fakeResolver) ResolveProjectID(_ context.Context, teamID, name string) (string, error) {
+	f.scopedWith["project"] = teamID
 	if id, ok := f.projects[name]; ok {
 		return id, nil
 	}
@@ -62,7 +80,8 @@ func (f fakeResolver) ResolveMilestoneID(_ context.Context, _, name string) (str
 	}
 	return "", errors.New("unknown milestone " + name)
 }
-func (f fakeResolver) ResolveCycleID(_ context.Context, _, name string) (string, error) {
+func (f fakeResolver) ResolveCycleID(_ context.Context, teamID, name string) (string, error) {
+	f.scopedWith["cycle"] = teamID
 	if id, ok := f.cycles[name]; ok {
 		return id, nil
 	}
@@ -75,6 +94,8 @@ func teamedIssue() *api.Issue {
 
 func fullResolver() fakeResolver {
 	return fakeResolver{
+		teams:      map[string]string{"SPY": "team-spy"},
+		scopedWith: map[string]string{},
 		states:     map[string]string{"In Progress": "state-1"},
 		users:      map[string]string{"a@b.com": "user-1"},
 		labels:     map[string]string{"Bug": "label-1", "Backend": "label-2"},
@@ -255,4 +276,72 @@ func TestFreshestByID(t *testing.T) {
 	if got := freshestByID(nil, "b", idOf, fallback); got != fallback {
 		t.Errorf("empty returned %+v, want fallback", got)
 	}
+}
+
+// TestResolveIssueUpdate_Team pins the team move's resolution contract (#429).
+//
+// The ordering case is the one that matters and the one that is easy to get
+// wrong: an edit may move the issue AND change a team-scoped field in the same
+// save, and every team-scoped resolver must then be scoped to the DESTINATION
+// team. Resolving against the old team either misses a name that only exists in
+// the new one or — the silent failure — resolves a same-named state/label in the
+// OLD team and sends its ID to an issue that no longer lives there.
+func TestResolveIssueUpdate_Team(t *testing.T) {
+	t.Run("key resolves to id", func(t *testing.T) {
+		updates := map[string]any{"teamId": "SPY"}
+		if ferr := resolveIssueUpdate(context.Background(), fullResolver(), teamedIssue(), updates); ferr != nil {
+			t.Fatalf("unexpected FieldError: %v", ferr)
+		}
+		if updates["teamId"] != "team-spy" {
+			t.Errorf("teamId = %v, want the resolved id team-spy", updates["teamId"])
+		}
+	})
+
+	t.Run("team-scoped fields resolve against the destination", func(t *testing.T) {
+		r := fullResolver()
+		updates := map[string]any{
+			"teamId":    "SPY",
+			"stateId":   "In Progress",
+			"labelIds":  []string{"Bug"},
+			"projectId": "Apollo",
+			"cycleId":   "Sprint 42",
+		}
+		if ferr := resolveIssueUpdate(context.Background(), r, teamedIssue(), updates); ferr != nil {
+			t.Fatalf("unexpected FieldError: %v", ferr)
+		}
+		// teamedIssue() is on team-1; the edit moves it to team-spy.
+		for _, field := range []string{"status", "labels", "project", "cycle"} {
+			if got := r.scopedWith[field]; got != "team-spy" {
+				t.Errorf("%s resolved against team %q, want the destination team-spy", field, got)
+			}
+		}
+	})
+
+	t.Run("unknown key is a FieldError naming teams/", func(t *testing.T) {
+		updates := map[string]any{"teamId": "NOPE"}
+		ferr := resolveIssueUpdate(context.Background(), fullResolver(), teamedIssue(), updates)
+		if ferr == nil {
+			t.Fatal("expected a FieldError for an unknown team key")
+		}
+		if ferr.Field != "team" || ferr.Value != "NOPE" {
+			t.Errorf("FieldError = {Field:%q Value:%q}, want {team NOPE}", ferr.Field, ferr.Value)
+		}
+		// The message has to point somewhere actionable — the mount lists every
+		// valid key as a directory.
+		if !strings.Contains(ferr.Message, "teams/") {
+			t.Errorf("message %q does not point at the teams/ directory", ferr.Message)
+		}
+	})
+
+	t.Run("a move alone leaves other fields untouched", func(t *testing.T) {
+		// The issue has no team-scoped edits: nothing else may be invented, or a
+		// bare move would rewrite fields the writer never touched.
+		updates := map[string]any{"teamId": "SPY"}
+		if ferr := resolveIssueUpdate(context.Background(), fullResolver(), teamedIssue(), updates); ferr != nil {
+			t.Fatalf("unexpected FieldError: %v", ferr)
+		}
+		if len(updates) != 1 {
+			t.Errorf("updates = %v, want only teamId", updates)
+		}
+	})
 }

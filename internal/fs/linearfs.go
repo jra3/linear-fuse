@@ -619,6 +619,33 @@ func (lfs *LinearFS) ResolveIssueID(ctx context.Context, identifier string) (str
 	return issue.ID, nil
 }
 
+// ResolveTeamID converts a team KEY (the string that names the team's directory
+// and renders as issue.md's `team:`) to its ID, so an edit can move an issue
+// between teams (#429). What is rendered is what may be written back, so the key
+// resolves first; a team NAME is accepted as a fallback because a writer who
+// types "Engineering" for "ENG" meant something unambiguous. Both passes are
+// exact-then-case-insensitive (resolveByName).
+//
+// A local miss triggers one targeted teams refresh + retry, like every sibling
+// resolver — moving issues into a team created moments ago is exactly the case
+// where the cached catalog is behind.
+func (lfs *LinearFS) ResolveTeamID(ctx context.Context, key string) (string, error) {
+	return lfs.resolveWithRefresh(ctx, CatalogTeams, "", func() (string, error) {
+		teams, err := lfs.repo.GetTeams(ctx)
+		if err != nil {
+			return "", err
+		}
+		if id, err := resolveByName(teams, key, "team",
+			func(t api.Team) string { return t.Key /* safename:ok resolution key */ },
+			func(t api.Team) string { return t.ID }); err == nil {
+			return id, nil
+		}
+		return resolveByName(teams, key, "team",
+			func(t api.Team) string { return t.Name /* safename:ok resolution key */ },
+			func(t api.Team) string { return t.ID })
+	})
+}
+
 // ResolveStateID converts a state name to its ID for a given team. A local
 // catalog miss triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateName string) (string, error) {

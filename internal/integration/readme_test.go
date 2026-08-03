@@ -56,6 +56,23 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		}
 	}
 
+	// Team moves (#429): team: became editable, and it is the only edit that
+	// changes where the file lives. The re-numbering is the part an agent cannot
+	// discover by trying — it caches a path, the move invalidates it, and without
+	// the doc that reads as the filesystem losing the issue. The same-edit
+	// resolution scope is the other trap: a status: valid in the source team may
+	// not exist in the destination.
+	for _, want := range []string{"<team_moves>", "RE-NUMBERS", "DESTINATION team"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q (team-move contract)", want)
+		}
+	}
+	// And team: really is in the editable file, not the read-only sidecar — the
+	// README's frontmatter template is what an agent copies from.
+	if !strings.Contains(readme, "team: ENG") {
+		t.Error("README's issue.md template does not document the editable team: field")
+	}
+
 	// Atomic save (#438): every editor and the Edit/Write tools save by writing a
 	// temp file and renaming it over the target, and the README has to teach the
 	// two things that path's failures depend on — that the SAVE happens at the

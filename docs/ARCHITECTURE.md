@@ -306,7 +306,9 @@ staleness is bounded at `len(teams)` cycles.
 It does not go through the Repository for writes, and it performs **zero kernel
 invalidation** — remote-change visibility is timeout-bounded (see cross-cutting
 concerns). It also serves the write path's stale-catalog refreshes
-(`RefreshTeamCatalogs` / `RefreshWorkspaceCatalogs` — see the fs write flow).
+(`RefreshTeamCatalogs` / `RefreshWorkspaceCatalogs` / `RefreshTeams` — see the fs
+write flow; the teams list gets its own narrow refresh because the cycle, not
+either catalog drain, is what syncs it).
 
 ### `internal/reconcile` — the shared upsert-then-prune tail
 
@@ -584,9 +586,18 @@ building blocks:
   all of them must answer alike. Without it a server-side reformat that changed the
   byte count reached the client as a size mismatch, which editors report as a
   possibly truncated write on a save that fully succeeded.
-- `resolveByName` — collapses the five regular single-name→ID resolvers
-  (state, project, milestone, cycle, initiative); user, issue-identifier,
+- `resolveByName` — collapses the regular single-name→ID resolvers
+  (state, project, milestone, cycle, initiative, and team — which tries the key
+  first, then the name, since the key is what renders); user, issue-identifier,
   label, and project-slug resolution remain bespoke.
+- **A team move is the one edit that relocates its own file.** `team:` is an
+  editable `issue.md` field (#429), and Linear re-numbers a moved issue into the
+  destination team's sequence — so the path the write was made through ceases to
+  exist. That is why `editFlushSpec` carries an `invalidateExtra` hook alongside
+  the static `coherence` inode list: which directories and which entry NAMES go
+  stale is knowable only from what the mutation returned (old team's
+  `issues/`+`recent/` under the old identifier, new team's under the new one).
+  Every other edit is fully described by the inode list.
 
 **Read flow:** kernel → `Lookup`/`Readdir`/`Read` → Repository → SQLite →
 marshal to markdown bytes. `mtime` = `updatedAt`, `ctime` = `createdAt`.
@@ -614,15 +625,20 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `collectionDir.itemFileTarget` for a collection, where an existing `{name}.md`
    is a replace and a new one is a create — the same two outcomes, through the
    same closures, that the directory's named `Create` has.
-2. The fs layer **resolves names to IDs** (status→stateId, assignee
-   email→userId, labels→labelIds, project/milestone/cycle/parent→IDs). A local
-   catalog miss self-heals: a typed unknown-name error triggers exactly **one**
-   targeted catalog refresh — routed through the Sync Worker's
-   `RefreshTeamCatalogs`/`RefreshWorkspaceCatalogs` so budget gates and prune
-   licenses come free — then one retry before the write fails. This is the only
-   place the write path drives the worker. Edits decompose into shared halves:
-   `scalarEdit` (name/body), `labelsEdit`, `reconcileLinks` (initiative/project
-   links).
+2. The fs layer **resolves names to IDs** (team key→teamId, status→stateId,
+   assignee email→userId, labels→labelIds, project/milestone/cycle/parent→IDs).
+   **Ordering is load-bearing** in `resolveIssueUpdate`: `team` resolves FIRST,
+   because every other issue resolver is team-scoped and one edit may both move
+   the issue and change a scoped field — those names must resolve against the
+   DESTINATION team, or a same-named state in the source team resolves to an ID
+   the issue no longer has any relation to (#429). `project` before `milestone`
+   is the same rule one level down. A local catalog miss self-heals: a typed
+   unknown-name error triggers exactly **one** targeted catalog refresh — routed
+   through the Sync Worker's `RefreshTeamCatalogs`/`RefreshWorkspaceCatalogs`/
+   `RefreshTeams` so budget gates and prune licenses come free — then one retry
+   before the write fails. This is the only place the write path drives the
+   worker. Edits decompose into shared halves: `scalarEdit` (name/body),
+   `labelsEdit`, `reconcileLinks` (initiative/project links).
 3. On valid input, calls the `MutationClient`. `classifyMutationErr`
    (`createcommit.go`) is the single owner of the failure model: bad input →
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,

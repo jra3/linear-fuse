@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"syscall"
@@ -36,7 +37,14 @@ func (lfs *LinearFS) createIssueFromSpec(ctx context.Context, team api.Team, spe
 	if ferr := resolveIssueUpdate(ctx, lfs, &synthetic, spec); ferr != nil {
 		return nil, ferr
 	}
-	spec["teamId"] = team.ID
+	// An explicit `team:` in the spec WINS over the directory the create was
+	// addressed to (#429): naming the team in the content is the more deliberate
+	// signal, and the enclosing directory is only a default. resolveIssueUpdate
+	// has already turned that key into an ID above, so this fills in the default
+	// only when the writer named no team at all.
+	if _, named := spec["teamId"]; !named {
+		spec["teamId"] = team.ID
+	}
 	if t, ok := spec["title"].(string); !ok || t == "" {
 		spec["title"] = "Untitled issue"
 	}
@@ -491,6 +499,16 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// updates bridges the front half (which computes it) and the commit-tail
 	// compare (which reads it against the pre-write i.issue); mutate runs first.
 	var updates map[string]any
+	// wantTeamKey is the destination team's KEY, captured before resolution
+	// rewrites updates["teamId"] into an ID. The compare needs the key, because
+	// that is what a fresh issue reports (fresh.Team.Key) and what the writer
+	// wrote. Empty when the edit is not a move.
+	var wantTeamKey string
+	// prevTeam/prevIdentifier snapshot where the issue lived BEFORE the write, so
+	// the invalidation can drop it from the old team's listings. adopt overwrites
+	// i.issue with the moved entity, so these cannot be read afterwards.
+	prevTeam := i.issue.Team
+	prevIdentifier := i.issue.Identifier
 	return editFlush(ctx, i.lfs, &i.editBuffer, editFlushSpec[api.Issue]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			if i.lfs.debug {
@@ -509,10 +527,16 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				}
 				return false, 0
 			}
-			// Resolve the name-bearing relational fields (status, assignee,
+			// Capture the destination team KEY before resolution replaces it with
+			// an ID; the write-back compare below checks it against fresh.Team.Key.
+			if key, ok := updates["teamId"].(string); ok {
+				wantTeamKey = key
+			}
+			// Resolve the name-bearing relational fields (team, status, assignee,
 			// labels, parent, project, milestone, cycle) to Linear IDs. The
-			// resolver owns field ordering, the label-clearing special case, and
-			// the per-field error messages.
+			// resolver owns field ordering — team FIRST, so a move's other fields
+			// resolve against the destination — the label-clearing special case,
+			// and the per-field error messages.
 			if ferr := resolveIssueUpdate(ctx, i.lfs, &i.issue, updates); ferr != nil {
 				log.Printf("Failed to resolve update for %s: %s", i.issue.Identifier, ferr.Message)
 				i.lfs.SetIssueError(i.issue.ID, ferr.Detail())
@@ -546,6 +570,28 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				if want, ok := updates["description"].(string); ok {
 					results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
 				}
+				// A team move is checked by ID, not by the written key: the writer
+				// may have named the team by key or by name, and either resolves
+				// to the same ID (#429). It also gets its own comparison rather
+				// than writeBackDivergence, whose length heuristics are for free
+				// text — two different 3-letter team keys would read as a benign
+				// "reformat" when in fact the issue never moved.
+				if wantID, ok := updates["teamId"].(string); ok {
+					got := ""
+					if fresh.Team != nil {
+						got = fresh.Team.ID
+					}
+					if got != wantID {
+						landed := "no team"
+						if fresh.Team != nil {
+							landed = fresh.Team.Key
+						}
+						results = append(results, writeBackResult{
+							message: fmt.Sprintf("Field: team\nError: the move was accepted but the issue is in %s, not %s. The issue did NOT move — re-read the file to see where it is.", landed, wantTeamKey),
+							fatal:   true,
+						})
+					}
+				}
 				return results
 			},
 		},
@@ -559,6 +605,20 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 		},
 		coherence: []uint64{issueIno(i.issue.ID), metaIno(i.issue.ID)}, // issue.meta reflects the edit
 		pinIno:    issueIno(i.issue.ID),                                // issue.md's Lookup seeds from the pin
+		// A team move is the one edit whose stale entries a static inode list
+		// cannot name: which directories and which NAMES depend on what came
+		// back (#429). Linear re-numbers a moved issue, so it leaves the old
+		// team's listings under its old identifier and joins the new team's
+		// under a new one — four notifies no in-place edit ever needs.
+		invalidateExtra: func(fresh *api.Issue) {
+			if fresh.Team == nil || prevTeam == nil || fresh.Team.ID == prevTeam.ID {
+				return // not a move; the coherence set above is the whole story
+			}
+			i.lfs.InvalidateDeleted(issuesDirIno(prevTeam.ID), prevIdentifier)
+			i.lfs.InvalidateDeleted(recentDirIno(prevTeam.ID), prevIdentifier)
+			i.lfs.InvalidateCreated(issuesDirIno(fresh.Team.ID), fresh.Identifier)
+			i.lfs.InvalidateCreated(recentDirIno(fresh.Team.ID), fresh.Identifier)
+		},
 	})
 }
 

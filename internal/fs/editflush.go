@@ -94,6 +94,16 @@ type editFlushSpec[T any] struct {
 	// forgotten sidecar is a visible one-line omission, not a missing call
 	// buried in a handler. Invalidated only after the commit tail persists.
 	coherence []uint64
+	// invalidateExtra drops the cache a static inode list cannot name: entries
+	// whose DIRECTORY or NAME depends on what the write returned. Optional, and
+	// deliberately rare — one edit needs it (a team move, #429: the issue leaves
+	// the old team's listings under its old identifier and appears in the new
+	// team's under a new one, and only `fresh` knows either). Runs after the
+	// coherence set, on the same persisted-first rule; skipped when the commit
+	// tail returned no fresh entity, since there is then nothing to key off.
+	// The sibling create/delete tails have the same-named hook for the same
+	// reason (createcommit.go, deletecommit.go).
+	invalidateExtra func(fresh *T)
 	// restore re-renders the entity's CURRENT content, exactly as the node's
 	// construction seam rendered it. The shell calls it on one path only: the
 	// empty-write rejection below, where it puts those bytes back into the buffer
@@ -210,6 +220,9 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 	}
 	for _, ino := range spec.coherence {
 		sink.InvalidateUpdated(ino)
+	}
+	if spec.invalidateExtra != nil && fresh != nil {
+		spec.invalidateExtra(fresh)
 	}
 	eb.dirty = false
 	// Serve-your-own-writes (#365): adopt swapped only the entity, so the buffer

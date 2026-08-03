@@ -45,6 +45,7 @@ func TestIssueToMarkdown(t *testing.T) {
 				Project:   &api.Project{ID: "proj-1", Name: "Q1 Launch"},
 			},
 			wantContain: []string{
+				"team: ENG", // editable since #429 — the move surface
 				"title: Fix authentication bug",
 				"status: In Progress",
 				"priority: high",
@@ -61,7 +62,6 @@ func TestIssueToMarkdown(t *testing.T) {
 				"identifier: ENG-456",
 				"url:",
 				"updated:",
-				"team:", // read-only -> issue.meta
 			},
 		},
 		{
@@ -1010,6 +1010,7 @@ func TestIssueScalarFieldsWiring(t *testing.T) {
 	t.Parallel()
 	wantAPIKey := map[string]string{
 		"title":     "title",
+		"team":      "teamId",
 		"status":    "stateId",
 		"assignee":  "assigneeId",
 		"due":       "dueDate",
@@ -1033,8 +1034,9 @@ func TestIssueScalarFieldsWiring(t *testing.T) {
 		if f.apiKey != want {
 			t.Errorf("field %q apiKey = %q, want %q", f.yamlKey, f.apiKey, want)
 		}
-		// title and status have no removal semantics; everything else clears on absence.
-		wantRemovable := f.yamlKey != "title" && f.yamlKey != "status"
+		// title, team, and status have no removal semantics (an issue always has
+		// each of the three); everything else clears on absence.
+		wantRemovable := f.yamlKey != "title" && f.yamlKey != "team" && f.yamlKey != "status"
 		if f.removable != wantRemovable {
 			t.Errorf("field %q removable = %v, want %v", f.yamlKey, f.removable, wantRemovable)
 		}
@@ -1043,5 +1045,102 @@ func TestIssueScalarFieldsWiring(t *testing.T) {
 		if !seen[k] {
 			t.Errorf("expected field %q missing from issueScalarFields", k)
 		}
+	}
+}
+
+// TestIssueTeamIsEditableNotMeta pins the file each field lives in after #429:
+// team moved OUT of the read-only issue.meta and INTO the editable issue.md,
+// because moving an issue between teams is a normal Linear operation the
+// filesystem should express. The two assertions are one claim — a field lives in
+// exactly one file — and a regression that duplicated it would give a writer two
+// places to edit one value, only one of which is read.
+func TestIssueTeamIsEditableNotMeta(t *testing.T) {
+	t.Parallel()
+	issue := &api.Issue{
+		ID:         "issue-1",
+		Identifier: "ENG-1",
+		Title:      "Move me",
+		State:      api.State{ID: "state-1", Name: "Todo"},
+		Team:       &api.Team{ID: "team-1", Key: "ENG", Name: "Engineering"},
+		CreatedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
+		UpdatedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+
+	md, err := IssueToMarkdown(issue)
+	if err != nil {
+		t.Fatalf("IssueToMarkdown: %v", err)
+	}
+	if !strings.Contains(string(md), "team: ENG") {
+		t.Errorf("issue.md does not carry the editable team key:\n%s", md)
+	}
+
+	meta, err := IssueMetaToMarkdown(issue)
+	if err != nil {
+		t.Fatalf("IssueMetaToMarkdown: %v", err)
+	}
+	if strings.Contains(string(meta), "team:") {
+		t.Errorf("issue.meta still carries team, which is now editable in issue.md:\n%s", meta)
+	}
+}
+
+// TestMarkdownToIssueUpdateTeam pins the move's diff behavior: the team key is
+// emitted under teamId ONLY when it differs from the issue's current team, and
+// an absent key never clears it. The rendered value is the key, so an unchanged
+// round-trip of a rendered file must produce no update — otherwise every save of
+// any field would also re-send a team move.
+func TestMarkdownToIssueUpdateTeam(t *testing.T) {
+	t.Parallel()
+	original := &api.Issue{
+		ID:         "issue-1",
+		Identifier: "AGT-15",
+		Title:      "Move me",
+		State:      api.State{ID: "state-1", Name: "Todo"},
+		Team:       &api.Team{ID: "team-agt", Key: "AGT", Name: "Agents"},
+	}
+
+	cases := []struct {
+		name    string
+		content string
+		want    any // the expected update["teamId"], or nil for "absent"
+	}{
+		{
+			name:    "same team is not a change",
+			content: "---\ntitle: Move me\nteam: AGT\nstatus: Todo\n---\nbody",
+			want:    nil,
+		},
+		{
+			name:    "different team emits the key for resolution",
+			content: "---\ntitle: Move me\nteam: SPY\nstatus: Todo\n---\nbody",
+			want:    "SPY",
+		},
+		{
+			// team is non-removable: an issue always belongs to exactly one team,
+			// so an absent key means "unchanged", never "clear it".
+			name:    "absent team never clears",
+			content: "---\ntitle: Move me\nstatus: Todo\n---\nbody",
+			want:    nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			update, err := MarkdownToIssueUpdate([]byte(tc.content), original)
+			if err != nil {
+				t.Fatalf("MarkdownToIssueUpdate: %v", err)
+			}
+			got, present := update["teamId"]
+			if tc.want == nil {
+				if present {
+					t.Errorf("update carries teamId = %v, want it absent", got)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("update has no teamId, want %q", tc.want)
+			}
+			if got != tc.want {
+				t.Errorf("teamId = %v, want %v (the KEY, resolved to an ID downstream)", got, tc.want)
+			}
+		})
 	}
 }

@@ -57,6 +57,19 @@ type issueScalarField struct {
 
 var issueScalarFields = []issueScalarField{
 	{"title", "title", func(i *api.Issue) (string, bool) { return i.Title, true }, false},
+	// team moves the issue to another team (#429). Non-removable, like title and
+	// status: an issue always belongs to exactly one team, so an absent key means
+	// "unchanged", never "clear it". The rendered value is the team KEY — the same
+	// string that names the directory the issue lives under — so what a reader
+	// sees is what a writer may write back. Linear re-numbers a moved issue
+	// (AGT-15 → SPY-20), which is why the write-back compare checks it and the
+	// old path simply disappears.
+	{"team", "teamId", func(i *api.Issue) (string, bool) {
+		if i.Team != nil {
+			return i.Team.Key, true /* safename:ok resolution key */
+		}
+		return "", false
+	}, false},
 	{"status", "stateId", func(i *api.Issue) (string, bool) { return i.State.Name, i.State.ID != "" }, false},
 	{"assignee", "assigneeId", func(i *api.Issue) (string, bool) {
 		if i.Assignee != nil {
@@ -105,10 +118,12 @@ var issueScalarFields = []issueScalarField{
 func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 	fm := make(map[string]any)
 
-	// Editable scalar fields, table-driven (title, status, assignee, due, parent,
-	// project, milestone, cycle). team is read-only (an issue's team is fixed) — it
-	// lives in issue.meta, not here, so issue.md carries no editable-looking-but-
-	// ignored fields (#148).
+	// Editable scalar fields, table-driven (title, team, status, assignee, due,
+	// parent, project, milestone, cycle). team used to be read-only in issue.meta
+	// on the reasoning that an issue's team is fixed; it is not — moving an issue
+	// between teams is a normal Linear operation, and #429 made it editable here.
+	// It lives in exactly one file, this one, so issue.md still carries no
+	// editable-looking-but-ignored fields (#148).
 	for _, f := range issueScalarFields {
 		if v, present := f.current(issue); present {
 			fm[f.yamlKey] = v
@@ -156,9 +171,9 @@ func IssueMetaToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byt
 	fm["id"] = issue.ID
 	fm["identifier"] = issue.Identifier
 	fm["url"] = issue.URL
-	if issue.Team != nil {
-		fm["team"] = issue.Team.Key
-	}
+	// team is NOT here: it became editable in issue.md (#429), and a field lives
+	// in exactly one file. Duplicating it would give a writer two places to edit
+	// one value, only one of which is read.
 	fm["created"] = issue.CreatedAt.Format(time.RFC3339)
 	fm["updated"] = issue.UpdatedAt.Format(time.RFC3339)
 	if issue.Creator != nil {

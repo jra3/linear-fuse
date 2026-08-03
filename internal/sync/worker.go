@@ -8,6 +8,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -921,6 +922,32 @@ func (w *Worker) RefreshTeamCatalogs(ctx context.Context, teamID string) error {
 // GetWorkspace's LowBudget preflight.
 func (w *Worker) RefreshWorkspaceCatalogs(ctx context.Context) error {
 	return w.syncWorkspace(ctx)
+}
+
+// RefreshTeams synchronously re-syncs just the TEAMS LIST — the third sibling of
+// the two refreshes above, and separate from them because the teams list is
+// synced by the cycle itself rather than by either catalog drain. It backs the
+// team-move write path (#429): resolving `team:` to an ID misses locally when the
+// destination team was created since the last cycle, which is precisely when
+// someone is moving issues into it.
+//
+// Deliberately narrow: one GetTeams call and its upserts, no per-team metadata
+// drain (that is RefreshTeamCatalogs' job, and doing it here would turn one
+// name→ID retry into a full workspace re-sync). No prune either — this is a
+// resolution aid, and dropping teams on a partial fetch would be a far worse
+// failure than a stale row.
+func (w *Worker) RefreshTeams(ctx context.Context) error {
+	teams, err := w.client.GetTeams(ctx)
+	if err != nil {
+		return fmt.Errorf("get teams: %w", err)
+	}
+	var errs []error
+	for _, team := range teams {
+		if err := w.store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+			errs = append(errs, fmt.Errorf("upsert team %s: %w", team.Key, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // syncTeamMetadata syncs all metadata for a team: states, labels, cycles,

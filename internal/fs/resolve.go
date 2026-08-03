@@ -70,6 +70,7 @@ type FieldError = marshal.FieldError
 // issueResolver is the minimal set of name→ID lookups resolveIssueUpdate needs.
 // *LinearFS satisfies it through its existing Resolve* methods.
 type issueResolver interface {
+	ResolveTeamID(ctx context.Context, key string) (string, error)
 	ResolveStateID(ctx context.Context, teamID, stateName string) (string, error)
 	ResolveUserID(ctx context.Context, identifier string) (string, error)
 	ResolveLabelIDs(ctx context.Context, teamID string, labelNames []string) ([]string, []string, error)
@@ -86,6 +87,21 @@ func resolveIssueUpdate(ctx context.Context, r issueResolver, issue *api.Issue, 
 	teamID := ""
 	if issue.Team != nil {
 		teamID = issue.Team.ID
+	}
+
+	// team key -> team ID. FIRST, and load-bearing that it is first (#429): every
+	// resolver below is team-scoped, and a move may change status, labels,
+	// project or cycle in the SAME edit. Those names must resolve against the
+	// DESTINATION team — resolving them against the old one would either miss a
+	// name that exists in the new team or, worse, hit a same-named state in the
+	// old team and send its ID to an issue that no longer lives there.
+	if teamKey, ok := updates["teamId"].(string); ok {
+		newTeamID, err := r.ResolveTeamID(ctx, teamKey)
+		if err != nil {
+			return &FieldError{Field: "team", Value: teamKey, Message: err.Error() + ". See the teams/ directory for valid team keys."}
+		}
+		updates["teamId"] = newTeamID
+		teamID = newTeamID
 	}
 
 	// status name -> state ID

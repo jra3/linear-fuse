@@ -210,6 +210,7 @@ INITIATIVES:
          vim initiatives/platform-modernization/initiative.md  (edit projects: list)
          echo "text" > initiatives/my-initiative/docs/"Title.md"
          echo "---\nhealth: atRisk\n---\nUpdate text" > initiatives/my-initiative/updates/_create
+MOVE:    edit team: in issue.md to another team key  (re-numbers; see <team_moves>)
 DELETE:  rm relations/blocks-ENG-456.rel
          rm milestones/"Phase 1.md"
 ARCHIVE: rmdir %s/teams/ENG/issues/ENG-123
@@ -222,6 +223,7 @@ identity/timestamps/links live in the sibling issue.meta (identifier, url,
 branch, created, updated, …). A successful write never rewrites issue.md.
 ---
 title: "Fix bug"                    [editable]
+team: ENG                           [team key; changing it MOVES the issue — see <team_moves>]
 status: "In Progress"               [must match states.md]
 assignee: "user@example.com"        [email or display name]
 priority: high                      [none|low|medium|high|urgent]
@@ -240,6 +242,29 @@ Quote any value that starts with a YAML indicator ([ ] { } * & ! | > %% @ #
 title: "[1] Verify" not title: [1] Verify. On failure .error names the field
 and echoes the quoting hint. (Same rule for project.md / initiative.md.)
 </issue_frontmatter>
+
+<team_moves>
+Editing team: in issue.md MOVES the issue to that team. It is the only edit that
+changes where the file lives, so read this before doing it.
+
+- The value is the team KEY — the same string that names the directory
+  (teams/ENG/ -> team: ENG). A team name ("Engineering") is accepted too.
+- Linear RE-NUMBERS a moved issue into the destination team's sequence:
+  AGT-15 becomes SPY-20. The old path stops existing the moment the move lands,
+  and the new identifier is assigned by the server, so it cannot be predicted.
+  To find the issue afterwards, list the destination team — ls teams/SPY/recent/
+  puts it near the top (newest-first). Any path you cached is stale.
+- Fields changed IN THE SAME EDIT resolve against the DESTINATION team: a
+  status:, labels:, project: or cycle: value must exist in the team you are
+  moving to, not the one you are leaving. Move first and edit after if unsure.
+- Fields you do NOT touch are handled by Linear: it auto-maps the workflow state
+  to the destination team's equivalent, and drops team-scoped labels and cycles
+  that have no counterpart there. Re-read the file to see what survived.
+- An unknown team key is rejected (EINVAL) and .error names it; nothing moves.
+- On issues/_create, an explicit team: WINS over the directory you wrote to —
+  naming the team in the content is the more deliberate signal, and the
+  enclosing directory is only the default.
+</team_moves>
 
 <project_frontmatter>
 project.md holds only editable fields (below) + the content body. Read-only
@@ -396,7 +421,7 @@ label, assignee, project, milestone, cycle, or initiative created in Linear
 moments ago) triggers ONE targeted catalog refresh and one retry before the
 write fails — a value that really exists usually just works on first write.
 
-Validated issue fields: status, assignee, labels, priority, project, milestone, cycle, parent
+Validated issue fields: team, status, assignee, labels, priority, project, milestone, cycle, parent
 Validated project fields: initiatives, labels
 Reference files: states.md (valid statuses), labels.md (valid issue labels),
 project-labels.md (valid project labels), initiatives/ (valid initiatives)
