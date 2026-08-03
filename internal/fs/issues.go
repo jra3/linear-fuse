@@ -36,7 +36,12 @@ func (lfs *LinearFS) createIssueFromSpec(ctx context.Context, team api.Team, spe
 	if ferr := resolveIssueUpdate(ctx, lfs, &synthetic, spec); ferr != nil {
 		return nil, ferr
 	}
-	spec["teamId"] = team.ID
+	// An explicit `team:` in the spec wins over the directory (#429) — it is
+	// the more deliberate signal; resolveIssueUpdate already turned it into an
+	// ID (and resolved status/labels against it). The dir team is the default.
+	if _, ok := spec["teamId"]; !ok {
+		spec["teamId"] = team.ID
+	}
 	if t, ok := spec["title"].(string); !ok || t == "" {
 		spec["title"] = "Untitled issue"
 	}
@@ -543,10 +548,31 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				if want, ok := updates["description"].(string); ok {
 					results = append(results, writeBackDivergence("description (body)", want, fresh.Description, i.issue.Description))
 				}
+				if want, ok := updates["teamId"].(string); ok {
+					var got, prev string
+					if fresh.Team != nil {
+						got = fresh.Team.ID
+					}
+					if i.issue.Team != nil {
+						prev = i.issue.Team.ID
+					}
+					results = append(results, writeBackDivergence("team", want, got, prev))
+				}
 				return results
 			},
 		},
-		adopt: func(fresh *api.Issue) { i.issue = *fresh },
+		adopt: func(fresh *api.Issue) {
+			// A team move (#429) re-homes and re-numbers the issue: evict the
+			// old identifier from the old team's listings and announce the new
+			// one, so neither dir serves a stale entry for a dir-cache TTL.
+			if prev := i.issue.Team; prev != nil && fresh.Team != nil && prev.ID != fresh.Team.ID {
+				i.lfs.InvalidateDeleted(issuesDirIno(prev.ID), i.issue.Identifier)
+				i.lfs.InvalidateDeleted(recentDirIno(prev.ID), i.issue.Identifier)
+				i.lfs.InvalidateCreated(issuesDirIno(fresh.Team.ID), fresh.Identifier)
+				i.lfs.InvalidateCreated(recentDirIno(fresh.Team.ID), fresh.Identifier)
+			}
+			i.issue = *fresh
+		},
 		restore: func() []byte {
 			content, err := marshal.IssueToMarkdown(&i.issue)
 			if err != nil {

@@ -923,6 +923,22 @@ func (w *Worker) RefreshWorkspaceCatalogs(ctx context.Context) error {
 	return w.syncWorkspace(ctx)
 }
 
+// RefreshTeamList synchronously re-fetches the workspace's team list and
+// upserts it — the teams-catalog sibling of RefreshWorkspaceCatalogs, for
+// resolving a `team:` edit against a team created since the last cycle (#429).
+func (w *Worker) RefreshTeamList(ctx context.Context) error {
+	teams, err := w.client.GetTeams(ctx)
+	if err != nil {
+		return fmt.Errorf("get teams: %w", err)
+	}
+	for _, team := range teams {
+		if err := w.store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+			return fmt.Errorf("upsert team %s: %w", team.Key, err)
+		}
+	}
+	return nil
+}
+
 // syncTeamMetadata syncs all metadata for a team: states, labels, cycles,
 // projects (with milestones), and members. GetTeamMetadata drains every
 // unbounded connection, so meta is the complete server-side truth — which

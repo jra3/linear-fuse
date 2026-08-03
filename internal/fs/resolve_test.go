@@ -12,6 +12,7 @@ import (
 // fakeResolver resolves names via simple maps and errors on anything unknown. It
 // satisfies issueResolver, so resolveIssueUpdate is tested with no repo or API.
 type fakeResolver struct {
+	teams      map[string]string
 	states     map[string]string
 	users      map[string]string
 	labels     map[string]string // name -> id; absence means "not found"
@@ -19,9 +20,22 @@ type fakeResolver struct {
 	projects   map[string]string
 	milestones map[string]string
 	cycles     map[string]string
+	// gotStateTeamID, when set, records the teamID ResolveStateID was handed —
+	// the team-resolves-first contract (#429) is observable only through it.
+	gotStateTeamID *string
 }
 
-func (f fakeResolver) ResolveStateID(_ context.Context, _, name string) (string, error) {
+func (f fakeResolver) ResolveTeamID(_ context.Context, key string) (string, error) {
+	if id, ok := f.teams[key]; ok {
+		return id, nil
+	}
+	return "", errors.New("unknown team " + key)
+}
+
+func (f fakeResolver) ResolveStateID(_ context.Context, teamID, name string) (string, error) {
+	if f.gotStateTeamID != nil {
+		*f.gotStateTeamID = teamID
+	}
 	if id, ok := f.states[name]; ok {
 		return id, nil
 	}
@@ -75,6 +89,7 @@ func teamedIssue() *api.Issue {
 
 func fullResolver() fakeResolver {
 	return fakeResolver{
+		teams:      map[string]string{"SPY": "team-2"},
 		states:     map[string]string{"In Progress": "state-1"},
 		users:      map[string]string{"a@b.com": "user-1"},
 		labels:     map[string]string{"Bug": "label-1", "Backend": "label-2"},
@@ -129,6 +144,12 @@ func TestResolveIssueUpdate_FieldErrors(t *testing.T) {
 			wantField: "status", wantValue: "Bogus",
 		},
 		{
+			name:      "unknown team",
+			issue:     teamedIssue(),
+			updates:   map[string]any{"teamId": "NOPE"},
+			wantField: "team", wantValue: "NOPE",
+		},
+		{
 			name:      "state with no team",
 			issue:     &api.Issue{}, // no team
 			updates:   map[string]any{"stateId": "In Progress"},
@@ -162,6 +183,25 @@ func TestResolveIssueUpdate_FieldErrors(t *testing.T) {
 
 // TestResolveIssueUpdate_ClearLabels confirms an empty labels list clears via
 // removedLabelIds (Linear rejects an empty labelIds).
+// TestResolveIssueUpdate_TeamResolvesFirst pins the #429 ordering contract: a
+// team change resolves before every other relational field, so a status in the
+// same edit resolves against the team the issue is moving TO.
+func TestResolveIssueUpdate_TeamResolvesFirst(t *testing.T) {
+	r := fullResolver()
+	var stateTeamID string
+	r.gotStateTeamID = &stateTeamID
+	updates := map[string]any{"teamId": "SPY", "stateId": "In Progress"}
+	if ferr := resolveIssueUpdate(context.Background(), r, teamedIssue(), updates); ferr != nil {
+		t.Fatalf("unexpected FieldError: %v", ferr)
+	}
+	if updates["teamId"] != "team-2" {
+		t.Errorf("teamId = %v, want team-2", updates["teamId"])
+	}
+	if stateTeamID != "team-2" {
+		t.Errorf("status resolved against team %q, want the new team \"team-2\"", stateTeamID)
+	}
+}
+
 func TestResolveIssueUpdate_ClearLabels(t *testing.T) {
 	issue := teamedIssue()
 	issue.Labels.Nodes = []api.Label{{ID: "label-1"}, {ID: "label-2"}}

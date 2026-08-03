@@ -58,6 +58,15 @@ type issueScalarField struct {
 var issueScalarFields = []issueScalarField{
 	{"title", "title", func(i *api.Issue) (string, bool) { return i.Title, true }, false},
 	{"status", "stateId", func(i *api.Issue) (string, bool) { return i.State.Name, i.State.ID != "" }, false},
+	// team is editable (#429): changing it moves the issue. Non-removable — an
+	// issue always has a team. Linear re-numbers the issue in the target team;
+	// the write-back re-fetch adopts the new identifier.
+	{"team", "teamId", func(i *api.Issue) (string, bool) {
+		if i.Team != nil {
+			return i.Team.Key, true
+		}
+		return "", false
+	}, false},
 	{"assignee", "assigneeId", func(i *api.Issue) (string, bool) {
 		if i.Assignee != nil {
 			return i.Assignee.Email, true
@@ -105,10 +114,8 @@ var issueScalarFields = []issueScalarField{
 func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 	fm := make(map[string]any)
 
-	// Editable scalar fields, table-driven (title, status, assignee, due, parent,
-	// project, milestone, cycle). team is read-only (an issue's team is fixed) — it
-	// lives in issue.meta, not here, so issue.md carries no editable-looking-but-
-	// ignored fields (#148).
+	// Editable scalar fields, table-driven (title, status, team, assignee, due,
+	// parent, project, milestone, cycle). team edits move the issue (#429).
 	for _, f := range issueScalarFields {
 		if v, present := f.current(issue); present {
 			fm[f.yamlKey] = v
@@ -156,9 +163,6 @@ func IssueMetaToMarkdown(issue *api.Issue, attachments ...api.Attachment) ([]byt
 	fm["id"] = issue.ID
 	fm["identifier"] = issue.Identifier
 	fm["url"] = issue.URL
-	if issue.Team != nil {
-		fm["team"] = issue.Team.Key
-	}
 	fm["created"] = issue.CreatedAt.Format(time.RFC3339)
 	fm["updated"] = issue.UpdatedAt.Format(time.RFC3339)
 	if issue.Creator != nil {

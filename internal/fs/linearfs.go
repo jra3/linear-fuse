@@ -619,6 +619,19 @@ func (lfs *LinearFS) ResolveIssueID(ctx context.Context, identifier string) (str
 	return issue.ID, nil
 }
 
+// ResolveTeamID converts a team key to its ID (#429 team moves). A local
+// catalog miss triggers one targeted refresh + retry (see catalogrefresh.go).
+func (lfs *LinearFS) ResolveTeamID(ctx context.Context, teamKey string) (string, error) {
+	return lfs.resolveWithRefresh(ctx, CatalogTeams, "", func() (string, error) {
+		teams, err := lfs.repo.GetTeams(ctx)
+		if err != nil {
+			return "", err
+		}
+		return resolveByName(teams, teamKey, "team",
+			func(t api.Team) string { return t.Key /* safename:ok resolution key */ }, func(t api.Team) string { return t.ID })
+	})
+}
+
 // ResolveStateID converts a state name to its ID for a given team. A local
 // catalog miss triggers one targeted refresh + retry (see catalogrefresh.go).
 func (lfs *LinearFS) ResolveStateID(ctx context.Context, teamID string, stateName string) (string, error) {

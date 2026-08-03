@@ -1,6 +1,7 @@
 package marshal
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,7 @@ func TestIssueToMarkdown(t *testing.T) {
 			wantContain: []string{
 				"title: Fix authentication bug",
 				"status: In Progress",
+				"team: ENG",
 				"priority: high",
 				"assignee: alice@example.com",
 				"due: \"2025-02-01\"",
@@ -61,7 +63,6 @@ func TestIssueToMarkdown(t *testing.T) {
 				"identifier: ENG-456",
 				"url:",
 				"updated:",
-				"team:", // read-only -> issue.meta
 			},
 		},
 		{
@@ -459,6 +460,42 @@ New description`,
 				} else if gotVal != want {
 					t.Errorf("MarkdownToIssueUpdate() field %q = %v, want %v", k, gotVal, want)
 				}
+			}
+		})
+	}
+}
+
+// TestMarkdownToIssueUpdateTeamMove pins the team-move surface (#429): a
+// changed `team:` emits teamId, an unchanged one emits nothing, and an absent
+// one clears nothing — team has no removal semantics.
+func TestMarkdownToIssueUpdateTeamMove(t *testing.T) {
+	t.Parallel()
+	original := &api.Issue{
+		ID:          "issue-123",
+		Title:       "Original Title",
+		Description: "Body",
+		State:       api.State{ID: "state-1", Name: "Todo", Type: "unstarted"},
+		Team:        &api.Team{ID: "team-1", Key: "ENG", Name: "Engineering"},
+	}
+
+	tests := []struct {
+		name       string
+		team       string // frontmatter line, "" = omit
+		wantUpdate map[string]any
+	}{
+		{name: "team changed", team: "team: SPY\n", wantUpdate: map[string]any{"teamId": "SPY"}},
+		{name: "team unchanged", team: "team: ENG\n", wantUpdate: map[string]any{}},
+		{name: "team absent does not clear", team: "", wantUpdate: map[string]any{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := "---\ntitle: Original Title\nstatus: Todo\npriority: none\n" + tt.team + "---\nBody"
+			update, err := MarkdownToIssueUpdate([]byte(content), original)
+			if err != nil {
+				t.Fatalf("MarkdownToIssueUpdate() error = %v", err)
+			}
+			if !reflect.DeepEqual(update, tt.wantUpdate) {
+				t.Errorf("update = %#v, want %#v", update, tt.wantUpdate)
 			}
 		})
 	}
@@ -1011,6 +1048,7 @@ func TestIssueScalarFieldsWiring(t *testing.T) {
 	wantAPIKey := map[string]string{
 		"title":     "title",
 		"status":    "stateId",
+		"team":      "teamId",
 		"assignee":  "assigneeId",
 		"due":       "dueDate",
 		"parent":    "parentId",
@@ -1033,8 +1071,9 @@ func TestIssueScalarFieldsWiring(t *testing.T) {
 		if f.apiKey != want {
 			t.Errorf("field %q apiKey = %q, want %q", f.yamlKey, f.apiKey, want)
 		}
-		// title and status have no removal semantics; everything else clears on absence.
-		wantRemovable := f.yamlKey != "title" && f.yamlKey != "status"
+		// title, status, and team have no removal semantics; everything else
+		// clears on absence.
+		wantRemovable := f.yamlKey != "title" && f.yamlKey != "status" && f.yamlKey != "team"
 		if f.removable != wantRemovable {
 			t.Errorf("field %q removable = %v, want %v", f.yamlKey, f.removable, wantRemovable)
 		}

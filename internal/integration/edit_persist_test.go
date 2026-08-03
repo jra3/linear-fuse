@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/marshal"
+	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
 
@@ -686,5 +689,98 @@ func TestOffline_InitiativeEditPersistsDescription(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("initiative edit lost %q\n--- got ---\n%s", want, got)
 		}
+	}
+}
+
+// TestOffline_TeamMoveRehomesIssue drives the team-move surface (#429) end to
+// end: editing `team:` in issue.md moves the issue to the target team. The mock
+// mutator models the API's re-home + re-number, so the issue must reappear
+// under the target team's issues/ with a NEW identifier and leave the source
+// team's listing. A probe issue is created (and archived after) so the shared
+// fixture rows stay untouched.
+func TestOffline_TeamMoveRehomesIssue(t *testing.T) {
+	skipIfLiveAPI(t, "fixture-mode offline edit-persistence check; uses the mock mutator")
+	enableMockMutations(t)
+
+	// The shared fixture seeds a single team, so the move target is seeded
+	// here (same pattern as the staleness isolation tests) and removed after.
+	const targetTeamKey = "MOV"
+	ctx := context.Background()
+	target := fixtures.FixtureAPITeam()
+	target.ID = "team-move-target"
+	target.Key = targetTeamKey
+	target.Name = "Move Target"
+	if err := testStore.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(target)); err != nil {
+		t.Fatalf("seed target team: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testStore.DB().Exec("DELETE FROM teams WHERE id = ?", target.ID) })
+
+	const title = "Offline Team Move Probe"
+	if err := os.Mkdir(filepath.Join(issuesPath(testTeamKey), title), 0o755); err != nil {
+		t.Fatalf("mkdir probe issue: %v", err)
+	}
+	last := lastEntryByTitle(t, issuesLastPath(testTeamKey), title)
+	if last == nil {
+		t.Fatalf("issues/.last has no entry titled %q", title)
+	}
+	oldID := last["identifier"]
+	if oldID == "" {
+		t.Fatalf("issues/.last entry missing identifier: %v", last)
+	}
+
+	path := filepath.Join(issueDirPath(testTeamKey, oldID), "issue.md")
+	orig, err := readFileWithRetry(path, defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read probe issue.md: %v", err)
+	}
+	doc, err := marshal.Parse(orig)
+	if err != nil {
+		t.Fatalf("parse probe issue.md: %v", err)
+	}
+	doc.Frontmatter["team"] = targetTeamKey
+	edited, err := marshal.Render(doc)
+	if err != nil {
+		t.Fatalf("render edited issue.md: %v", err)
+	}
+	claudeToolWrite(t, path, edited)
+
+	// The move re-numbered the issue, so find it under the target team by
+	// title rather than by a predicted identifier.
+	var newID string
+	for _, e := range mustReadDir(t, issuesPath(targetTeamKey)) {
+		if !e.IsDir() {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(issuesPath(targetTeamKey), e.Name(), "issue.md"))
+		if err == nil && strings.Contains(string(content), title) {
+			newID = e.Name()
+			break
+		}
+	}
+	if newID == "" {
+		t.Fatalf("moved issue %q not found under teams/%s/issues/", title, targetTeamKey)
+	}
+	t.Cleanup(func() {
+		// Archive the probe from its post-move home; ignore errors — a failed
+		// assertion above may have left it elsewhere, and cleanup is best-effort.
+		_ = os.Remove(issueDirPath(targetTeamKey, newID))
+	})
+	if newID == oldID {
+		t.Errorf("identifier unchanged after team move: %q (move must re-number)", newID)
+	}
+	if !strings.HasPrefix(newID, targetTeamKey+"-") {
+		t.Errorf("moved identifier = %q, want %s-N", newID, targetTeamKey)
+	}
+
+	// The moved issue serves its new team, and the source listing forgets it.
+	moved, err := readFileWithRetry(filepath.Join(issueDirPath(targetTeamKey, newID), "issue.md"), defaultWaitTime)
+	if err != nil {
+		t.Fatalf("read moved issue.md: %v", err)
+	}
+	if !strings.Contains(string(moved), "team: "+targetTeamKey) {
+		t.Errorf("moved issue.md does not carry team: %s\n--- got ---\n%s", targetTeamKey, moved)
+	}
+	if !dirLacks(issuesPath(testTeamKey), oldID) {
+		t.Errorf("source team still lists %q after the move", oldID)
 	}
 }

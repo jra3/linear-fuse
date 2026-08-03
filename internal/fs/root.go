@@ -220,6 +220,9 @@ branch, created, updated, …). A successful write never rewrites issue.md.
 ---
 title: "Fix bug"                    [editable]
 status: "In Progress"               [must match states.md]
+team: ENG                           [team key; changing it MOVES the issue —
+                                     Linear re-numbers it in the target team,
+                                     so its directory name changes]
 assignee: "user@example.com"        [email or display name]
 priority: high                      [none|low|medium|high|urgent]
 labels: [Bug, Backend]              [must match labels.md]
@@ -367,7 +370,7 @@ label, assignee, project, milestone, cycle, or initiative created in Linear
 moments ago) triggers ONE targeted catalog refresh and one retry before the
 write fails — a value that really exists usually just works on first write.
 
-Validated issue fields: status, assignee, labels, priority, project, milestone, cycle, parent
+Validated issue fields: status, team, assignee, labels, priority, project, milestone, cycle, parent
 Validated project fields: initiatives, labels
 Reference files: states.md (valid statuses), labels.md (valid issue labels),
 project-labels.md (valid project labels), initiatives/ (valid initiatives)

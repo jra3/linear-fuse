@@ -244,6 +244,20 @@ func (c *Client) stateName(ctx context.Context, id string) string {
 	return ""
 }
 
+func (c *Client) teamKeyByID(ctx context.Context, id string) string {
+	if c.store == nil {
+		return ""
+	}
+	if teams, err := c.store.Queries().ListTeams(ctx); err == nil {
+		for _, t := range teams {
+			if t.ID == id {
+				return t.Key
+			}
+		}
+	}
+	return ""
+}
+
 func (c *Client) labelName(ctx context.Context, id string) string {
 	if c.store == nil {
 		return ""
@@ -308,6 +322,15 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	}
 	if sid, ok := input["stateId"].(string); ok && sid != "" {
 		iss.State = api.State{ID: sid, Name: c.stateName(ctx, sid)}
+	}
+	if tid, ok := input["teamId"].(string); ok && tid != "" {
+		if iss.Team == nil || iss.Team.ID != tid {
+			// A team move re-homes AND re-numbers the issue, like the real API
+			// (#429): the verify getter must serve the new identifier.
+			key := c.teamKeyByID(ctx, tid)
+			iss.Team = &api.Team{ID: tid, Key: key}
+			iss.Identifier = fmt.Sprintf("%s-%d", key, c.next())
+		}
 	}
 	c.issueEdit[issueID] = iss
 	return nil

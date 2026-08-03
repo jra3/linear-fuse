@@ -32,6 +32,7 @@ const (
 	CatalogCycles      CatalogKind = "cycles"      // scopeID = team ID
 	CatalogUsers       CatalogKind = "users"       // scopeID unused (workspace)
 	CatalogInitiatives CatalogKind = "initiatives" // scopeID unused (workspace)
+	CatalogTeams       CatalogKind = "teams"       // scopeID unused (workspace)
 )
 
 // unknownNameError marks a LOCAL name→ID resolution miss: the name is absent
@@ -93,6 +94,8 @@ func (lfs *LinearFS) refreshCatalogViaSync(ctx context.Context, kind CatalogKind
 	switch kind {
 	case CatalogUsers, CatalogInitiatives:
 		return w.RefreshWorkspaceCatalogs(ctx)
+	case CatalogTeams:
+		return w.RefreshTeamList(ctx)
 	case CatalogMilestones:
 		// Milestones ride the team-metadata drain (nested under projects);
 		// map the owning project to its canonical team first — locally, no
