@@ -191,6 +191,8 @@ Timestamps are preserved across all views:
 │       ├── team.md              # Team metadata (read-only)
 │       ├── states.md            # Workflow states (read-only)
 │       ├── labels.md            # Labels reference (read-only)
+│       ├── parent               # Symlink to parent team (sub-teams only)
+│       ├── subteams/            # Sub-team symlinks (teams/ itself stays flat)
 │       ├── by/                  # Filter issues by attribute
 │       │   ├── status/<name>/   # Issues filtered by status (symlinks)
 │       │   ├── label/<name>/    # Issues filtered by label (symlinks)

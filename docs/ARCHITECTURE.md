@@ -346,7 +346,11 @@ Design conventions:
   inverse direction — a parent's children — is a query over that column, never
   a second stored copy, so the two directions cannot drift apart. New columns
   land last in `schema.sql` and get a bootstrap `ALTER` in `migrateSchema`, so
-  a fresh and a migrated database agree.
+  a fresh and a migrated database agree — and an **index over such a column is
+  created in `migrateSchema` too, never in `schema.sql`**, which runs first and
+  would fail "no such column" on an upgraded database, tripping the
+  drop-and-recreate fallback below and discarding the user's cache instead of
+  migrating it (#432 tracks the missing guard).
 - **Hydrate-then-overlay:** for entities with extracted columns (states,
   labels, users, cycles, milestones, …), reverse converters unmarshal the
   `data` blob first, then overlay the columns — so no field is silently

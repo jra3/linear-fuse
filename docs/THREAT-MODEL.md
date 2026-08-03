@@ -61,7 +61,7 @@ filesystem**:
 
 - **Filenames / directory names** — every name/target builder in `internal/fs`
   routes its output through the single `safeName(raw, id)` chokepoint
-  (`internal/fs/safename.go`, #345): `cycleDirName`, `userDirName`,
+  (`internal/fs/safename.go`, #345): `teamDirName`, `cycleDirName`, `userDirName`,
   `sanitizeFilename` (attachment/link `.link` + embedded-file names),
   `labelFilename`, `documentFilename`, `milestoneFilename`, `projectDirName`,
   `initiativeDirName`, `initiativeProjectDirName`, and the `by/` status/label/
