@@ -31,12 +31,21 @@ func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, len(teams))
 	for i, team := range teams {
 		entries[i] = fuse.DirEntry{
-			Name: safeName(team.Key, team.ID),
+			Name: teamDirName(team),
 			Mode: syscall.S_IFDIR,
 		}
 	}
 
 	return fs.NewListDirStream(entries), 0
+}
+
+// teamDirName is the single owner of "what a team's directory under teams/ is
+// called". Readdir, Lookup, the parent/subteam symlink targets and the
+// frontmatter cross-references all derive from here, so a key safeName rewrites
+// stays listable, resolvable and traversable rather than agreeing in one place
+// and diverging in another.
+func teamDirName(team api.Team) string {
+	return safeName(team.Key, team.ID)
 }
 
 func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -46,7 +55,7 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	}
 
 	for _, team := range teams {
-		if team.Key == name {
+		if teamDirName(team) == name {
 			node := &TeamNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 			return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), teamDirIno(team.ID), inheritTimeout), 0
 		}
@@ -111,7 +120,14 @@ func parentLinkTarget(team api.Team) string {
 	}
 	// From teams/{KEY}/parent, ".." is teams/ — the sibling team dir is one
 	// level up, named exactly as TeamsNode lists it.
-	return "../" + safeName(team.Parent.Key, team.Parent.ID)
+	return "../" + teamDirName(*team.Parent)
+}
+
+// subteamLinkTarget is the target of teams/{KEY}/subteams/{CKEY}: the sibling
+// team dir, two levels up. Readdir names the entry and Lookup builds the
+// target, so both go through teamDirName here and cannot disagree.
+func subteamLinkTarget(child api.Team) string {
+	return "../../" + teamDirName(child)
 }
 
 func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -125,10 +141,7 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		lfs := t.lfs
 		return t.lookupRenderFile(ctx, out, "team.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
 			children, err := lfs.repo.GetTeamChildren(ctx, team.ID)
-			if err != nil {
-				children = nil
-			}
-			return teamMarkdown(team, children), team.UpdatedAt, team.CreatedAt
+			return teamMarkdown(team, children, err), team.UpdatedAt, team.CreatedAt
 		}, 0, inheritTimeout), 0
 
 	case "parent":
@@ -246,7 +259,7 @@ func (n *SubteamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 	entries := make([]fuse.DirEntry, len(children))
 	for i, child := range children {
 		entries[i] = fuse.DirEntry{
-			Name: safeName(child.Key, child.ID),
+			Name: teamDirName(child),
 			Mode: syscall.S_IFLNK,
 		}
 	}
@@ -259,13 +272,10 @@ func (n *SubteamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		return nil, syscall.EIO
 	}
 	for _, child := range children {
-		childName := safeName(child.Key, child.ID)
-		if childName != name {
+		if teamDirName(child) != name {
 			continue
 		}
-		// The link lives at teams/{KEY}/subteams/{CKEY}; the sibling team dir
-		// is two levels up.
-		return n.newSymlinkInode(ctx, out, "../../"+childName, child.CreatedAt, child.UpdatedAt), 0
+		return n.newSymlinkInode(ctx, out, subteamLinkTarget(child), child.CreatedAt, child.UpdatedAt), 0
 	}
 	return nil, syscall.ENOENT
 }
@@ -277,7 +287,14 @@ func (n *SubteamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 // the directory names the symlinks point at (safeName'd, so frontmatter and
 // listing agree), and `parent_id` carries the raw edge — which is all that is
 // left when the parent team itself is not in the local workspace copy.
-func teamMarkdown(team api.Team, children []api.Team) []byte {
+//
+// childrenErr is the verdict of the sub-team load, and it is NOT the same as an
+// empty list: a failed load omits the `subteams` key entirely (absence means
+// unknown) and says so in the body, because rendering "no sub-teams" would
+// contradict subteams/ Readdir, which returns EIO for the same failure. This
+// follows states.md/labels.md, which emit "# Error loading …" rather than an
+// empty catalog.
+func teamMarkdown(team api.Team, children []api.Team, childrenErr error) []byte {
 	fm := map[string]any{
 		"id":      team.ID,
 		"key":     team.Key,
@@ -291,16 +308,19 @@ func teamMarkdown(team api.Team, children []api.Team) []byte {
 	if team.Parent != nil {
 		fm["parent_id"] = team.Parent.ID
 		if team.Parent.Key != "" {
-			fm["parent"] = safeName(team.Parent.Key, team.Parent.ID)
+			fm["parent"] = teamDirName(*team.Parent)
 			hierarchy += fmt.Sprintf("- **Parent team:** %s (`parent` symlink)\n", team.Parent.Key)
 		} else {
 			hierarchy += fmt.Sprintf("- **Parent team:** %s (not in this workspace copy)\n", team.Parent.ID)
 		}
 	}
-	if len(children) > 0 {
+	switch {
+	case childrenErr != nil:
+		hierarchy += "- **Sub-teams:** error loading sub-teams — unknown, not none (`subteams/` reports the same failure)\n"
+	case len(children) > 0:
 		keys := make([]string, 0, len(children))
 		for _, c := range children {
-			keys = append(keys, safeName(c.Key, c.ID))
+			keys = append(keys, teamDirName(c))
 		}
 		fm["subteams"] = keys
 		hierarchy += fmt.Sprintf("- **Sub-teams:** %s (`subteams/`)\n", strings.Join(keys, ", "))

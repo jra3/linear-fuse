@@ -56,9 +56,18 @@ var (
 	_ fs.NodeRmdirer = (*ProjectNode)(nil)
 	_ fs.NodeRmdirer = (*InitiativeNode)(nil)
 	_ fs.NodeRmdirer = (*InitiativesNode)(nil)
+	// TeamNode owns every structural sub-directory of a team — subteams/,
+	// issues/, cycles/, projects/, by/, recent/, docs/, labels/ — and Unlink
+	// alone does not cover them: the kernel dispatches rmdir to Rmdir, so
+	// without this handler `rmdir teams/TST/subteams` reports success and
+	// no-ops.
+	_ fs.NodeRmdirer = (*TeamNode)(nil)
+	_ fs.NodeRmdirer = (*SubteamsNode)(nil)
 )
 
 func (*IssueDirectoryNode) Rmdir(context.Context, string) syscall.Errno { return removalRejected() }
 func (*ProjectNode) Rmdir(context.Context, string) syscall.Errno        { return removalRejected() }
 func (*InitiativeNode) Rmdir(context.Context, string) syscall.Errno     { return removalRejected() }
 func (*InitiativesNode) Rmdir(context.Context, string) syscall.Errno    { return removalRejected() }
+func (*TeamNode) Rmdir(context.Context, string) syscall.Errno           { return removalRejected() }
+func (*SubteamsNode) Rmdir(context.Context, string) syscall.Errno       { return removalRejected() }

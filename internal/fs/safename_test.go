@@ -146,6 +146,10 @@ func TestBuilders_HostileCorpus(t *testing.T) {
 		// projectDirName
 		assertSafe(t, "projectDirName", raw, projectDirName(api.Project{ID: "prj-1", Slug: "prj-slug", Name: raw}))
 
+		// teamDirName: the single owner of a team's directory name, and the
+		// component every team-rooted symlink target interpolates.
+		assertSafe(t, "teamDirName", raw, teamDirName(api.Team{ID: "team-1", Key: raw}))
+
 		// initiativeDirName
 		assertSafe(t, "initiativeDirName", raw, initiativeDirName(api.Initiative{ID: "ini-1", Name: raw}))
 
@@ -167,6 +171,27 @@ func TestBuilders_HostileCorpus(t *testing.T) {
 			if !strings.HasSuffix(gotTarget, wantSuffix) {
 				t.Errorf("teamIssueTarget(%q) = %q: components must be safeName'd (want suffix %q)", raw, gotTarget, wantSuffix)
 			}
+		}
+
+		// parentLinkTarget (symlink target): the ANOTHER-entity case — the
+		// parent's remote key crosses into this team's target, so a hostile key
+		// must stay one component and never climb past teams/. An absent key
+		// legitimately yields "" (Readdir lists no parent); assert only when a
+		// target is produced.
+		if gotTarget := parentLinkTarget(api.Team{ID: "team-1", Key: "OK", Parent: &api.Team{ID: "team-p", Key: raw}}); gotTarget != "" {
+			assertSafe(t, "parentLinkTarget", raw, strings.TrimPrefix(gotTarget, "../"))
+			if want := "../" + safeName(raw, "team-p"); gotTarget != want {
+				t.Errorf("parentLinkTarget(%q) = %q, want %q (exactly one level up, one component)", raw, gotTarget, want)
+			}
+		}
+
+		// subteamLinkTarget (symlink target) and the entry name SubteamsNode
+		// lists it under: both derive from teamDirName, and the target must be
+		// exactly two levels up plus that one component.
+		child := api.Team{ID: "team-c", Key: raw}
+		assertSafe(t, "subteamLinkTarget", raw, strings.TrimPrefix(subteamLinkTarget(child), "../../"))
+		if got, want := subteamLinkTarget(child), "../../"+teamDirName(child); got != want {
+			t.Errorf("subteamLinkTarget(%q) = %q, want %q (target must equal the listed entry name)", raw, got, want)
 		}
 	}
 }

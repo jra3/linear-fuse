@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func TestTeamCatalogHostileNames(t *testing.T) {
 
 	t.Run("team.md", func(t *testing.T) {
 		t.Parallel()
-		content := teamMarkdown(team, nil)
+		content := teamMarkdown(team, nil, nil)
 		doc, err := marshal.Parse(content)
 		if err != nil {
 			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
@@ -99,7 +100,7 @@ func TestTeamHierarchyRender(t *testing.T) {
 		{ID: "team-be", Key: "BE", Name: "Backend"},
 	}
 
-	doc, err := marshal.Parse(teamMarkdown(team, children))
+	doc, err := marshal.Parse(teamMarkdown(team, children, nil))
 	if err != nil {
 		t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestTeamHierarchyRender(t *testing.T) {
 	// An edge whose team is absent from the local copy: the raw ID is all
 	// there is, so no key is invented and no symlink is listed.
 	orphan := api.Team{ID: "team-2", Key: "OPS", Name: "Ops", Parent: &api.Team{ID: "team-ghost"}}
-	doc, err = marshal.Parse(teamMarkdown(orphan, nil))
+	doc, err = marshal.Parse(teamMarkdown(orphan, nil, nil))
 	if err != nil {
 		t.Fatalf("team.md render for an unresolvable parent: %v", err)
 	}
@@ -136,5 +137,34 @@ func TestTeamHierarchyRender(t *testing.T) {
 	}
 	if got := parentLinkTarget(orphan); got != "" {
 		t.Errorf("parent link target = %q, want \"\" (Readdir must not list a dangling parent)", got)
+	}
+
+	// Every listed sub-team resolves through the same builder the entry name
+	// comes from, so the frontmatter value IS the last component of the target.
+	for _, c := range children {
+		if got, want := subteamLinkTarget(c), "../../"+teamDirName(c); got != want {
+			t.Errorf("subteam link target for %s = %q, want %q", c.Key, got, want)
+		}
+	}
+}
+
+// TestTeamHierarchyChildrenLoadFailure pins the difference between "no
+// sub-teams" and "could not find out". subteams/ Readdir returns EIO when the
+// children load fails; team.md must not answer the same question with a
+// confident "none", or the two surfaces contradict each other.
+func TestTeamHierarchyChildrenLoadFailure(t *testing.T) {
+	t.Parallel()
+	team := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering"}
+
+	content := teamMarkdown(team, nil, errors.New("database is locked"))
+	doc, err := marshal.Parse(content)
+	if err != nil {
+		t.Fatalf("team.md render on a children load failure is not parseable: %v", err)
+	}
+	if v, ok := doc.Frontmatter["subteams"]; ok {
+		t.Errorf("team.md carries subteams: %v after a load failure; absence must mean unknown, not empty", v)
+	}
+	if !strings.Contains(string(content), "error loading sub-teams") {
+		t.Errorf("team.md is silent about the failed sub-team load:\n%s", content)
 	}
 }

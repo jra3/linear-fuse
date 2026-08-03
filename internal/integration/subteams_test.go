@@ -63,6 +63,16 @@ func TestSubteamSymlinksResolve(t *testing.T) {
 	if err := os.Remove(filepath.Join(teamPath("SUB"), "parent")); err == nil {
 		t.Error("rm SUB/parent succeeded, want EPERM")
 	}
+	// And rmdir of the view itself: go-fuse dispatches it to the TEAM node, so
+	// a missing Rmdir handler there reports success while no-opping — the
+	// #286/#287 shape, one syscall away from the rm above.
+	subteamsDir := filepath.Join(teamPath(testTeamKey), "subteams")
+	if err := os.Remove(subteamsDir); err == nil {
+		t.Error("rmdir subteams/ succeeded, want EPERM (structural directory, not removable)")
+	}
+	if _, err := os.Stat(subteamsDir); err != nil {
+		t.Errorf("subteams/ is gone after a rejected rmdir: %v", err)
+	}
 
 	// A top-level team lists no parent entry at all — absence is how the
 	// filesystem says "no parent", so the entry must not exist as a dangler.
