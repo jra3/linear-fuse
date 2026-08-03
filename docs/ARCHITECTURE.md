@@ -341,6 +341,12 @@ Design conventions:
   schema stable as Linear's API grows.
 - **`synced_at` everywhere** for staleness detection; issues additionally carry
   `detail_synced_at`, stamped only when a detail batch persisted cleanly.
+- **Hierarchy edges are stored once,** as a `parent_id` column on the child
+  (`issues.parent_id`, `teams.parent_id`, `project_labels.parent_id`). The
+  inverse direction — a parent's children — is a query over that column, never
+  a second stored copy, so the two directions cannot drift apart. New columns
+  land last in `schema.sql` and get a bootstrap `ALTER` in `migrateSchema`, so
+  a fresh and a migrated database agree.
 - **Hydrate-then-overlay:** for entities with extracted columns (states,
   labels, users, cycles, milestones, …), reverse converters unmarshal the
   `data` blob first, then overlay the columns — so no field is silently
@@ -497,7 +503,8 @@ building blocks:
   cache.
 - `symlinkNode` — the one module behind every symlink view: `by/status|label|
   assignee`, `cycles/` (+ the `current` alias), `recent/`, `users/`, `my/`,
-  `children/`, project issue symlinks, and initiative→project links. Target and
+  `children/`, the team hierarchy (`teams/{KEY}/parent` and `subteams/`),
+  project issue symlinks, and initiative→project links. Target and
   times are fixed at construction (a Lookup answer and a later Getattr can never
   disagree); an unresolvable target is `ENOENT` at Lookup, never a dangling
   placeholder.

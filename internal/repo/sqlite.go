@@ -412,7 +412,45 @@ func (r *SQLiteRepository) GetTeams(ctx context.Context) ([]api.Team, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list teams: %w", err)
 	}
-	return db.DBTeamsToAPITeams(teams), nil
+	return stitchParents(db.DBTeamsToAPITeams(teams)), nil
+}
+
+// GetTeamChildren returns the sub-teams of a team — the inverse of the
+// parent_id edge, read from the column rather than a stored second copy. Each
+// child carries its Parent as a bare ID (it is the queried team by
+// construction); callers here want the child's own Key, which is the row's.
+func (r *SQLiteRepository) GetTeamChildren(ctx context.Context, teamID string) ([]api.Team, error) {
+	rows, err := r.store.Queries().ListSubteams(ctx, sql.NullString{String: teamID, Valid: teamID != ""})
+	if err != nil {
+		return nil, fmt.Errorf("list subteams: %w", err)
+	}
+	return db.DBTeamsToAPITeams(rows), nil
+}
+
+// stitchParents fills each team's Parent with the Key/Name of the team the
+// parent_id points at, using the result set already in hand (the teams table
+// is the whole workspace, so no extra query). A parent absent from the set —
+// a sub-team whose parent the API key cannot see — keeps its bare ID, which
+// the fs surfaces read as "known edge, unknown team" rather than inventing a
+// key. The stitched parent's own Parent stays nil: one level, no recursion.
+func stitchParents(teams []api.Team) []api.Team {
+	byID := make(map[string]api.Team, len(teams))
+	for _, t := range teams {
+		byID[t.ID] = t
+	}
+	for i := range teams {
+		p := teams[i].Parent
+		if p == nil {
+			continue
+		}
+		if full, ok := byID[p.ID]; ok {
+			teams[i].Parent = &api.Team{
+				ID: full.ID, Key: full.Key, Name: full.Name, Icon: full.Icon,
+				CreatedAt: full.CreatedAt, UpdatedAt: full.UpdatedAt,
+			}
+		}
+	}
+	return teams
 }
 
 // =============================================================================

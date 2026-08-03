@@ -12,6 +12,18 @@ type Team struct {
 	Icon      string    `json:"icon"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Parent is the sub-team edge (Linear's Team.parent). Only the ID survives
+	// the DB round-trip; the repo read stitches Key/Name from the teams it
+	// already loaded, and never fills the parent's own Parent — one level, so
+	// a Team value cannot recurse.
+	//
+	// There is deliberately no Children field: sub-teams are derived from the
+	// other teams' parent_id, so the edge is stored in exactly one place and
+	// has no second copy to drift. Read them with repo.GetTeamChildren.
+	// Linear's Team.children is also `[Team!]!` — a bare list, not a
+	// connection (verified against the live API) — so selecting it would take
+	// whatever the server chose to return with no pageInfo to check.
+	Parent *Team `json:"parent,omitempty"`
 }
 
 type Issue struct {

@@ -63,7 +63,7 @@ func TestTeamCatalogHostileNames(t *testing.T) {
 
 	t.Run("team.md", func(t *testing.T) {
 		t.Parallel()
-		content := teamMarkdown(team)
+		content := teamMarkdown(team, nil)
 		doc, err := marshal.Parse(content)
 		if err != nil {
 			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
@@ -75,5 +75,66 @@ func TestTeamCatalogHostileNames(t *testing.T) {
 		if !strings.Contains(string(content), "- **Key:** ENG") {
 			t.Errorf("team.md body missing the key bullet:\n%s", content)
 		}
+		// A top-level, childless team names no hierarchy it doesn't have —
+		// absence is the disclosure, so an agent never chases a `parent`
+		// symlink that Readdir doesn't list.
+		for _, key := range []string{"parent", "parent_id", "subteams"} {
+			if _, ok := doc.Frontmatter[key]; ok {
+				t.Errorf("team.md carries %q for a team with no parent and no sub-teams", key)
+			}
+		}
 	})
+}
+
+// TestTeamHierarchyRender pins the two directions of the sub-team edge in
+// team.md: the frontmatter values must be the DIRECTORY NAMES the `parent` and
+// `subteams/` symlinks point at, so an agent that reads the frontmatter and an
+// agent that reads the listing traverse to the same place.
+func TestTeamHierarchyRender(t *testing.T) {
+	t.Parallel()
+	parent := &api.Team{ID: "team-plat", Key: "PLAT", Name: "Platform"}
+	team := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering", Parent: parent}
+	children := []api.Team{
+		{ID: "team-fe", Key: "FE", Name: "Frontend"},
+		{ID: "team-be", Key: "BE", Name: "Backend"},
+	}
+
+	doc, err := marshal.Parse(teamMarkdown(team, children))
+	if err != nil {
+		t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+	}
+	if got := doc.Frontmatter["parent"]; got != "PLAT" {
+		t.Errorf("parent = %v, want PLAT", got)
+	}
+	if got := doc.Frontmatter["parent_id"]; got != "team-plat" {
+		t.Errorf("parent_id = %v, want team-plat", got)
+	}
+	subteams, _ := doc.Frontmatter["subteams"].([]any)
+	if len(subteams) != 2 || subteams[0] != "FE" || subteams[1] != "BE" {
+		t.Errorf("subteams = %v, want [FE BE]", doc.Frontmatter["subteams"])
+	}
+
+	// The frontmatter key must equal the last component of the symlink target:
+	// one is derived from the other, and a divergence sends `cd $(parent)` to
+	// a directory that does not exist.
+	if got, want := parentLinkTarget(team), "../PLAT"; got != want {
+		t.Errorf("parent link target = %q, want %q", got, want)
+	}
+
+	// An edge whose team is absent from the local copy: the raw ID is all
+	// there is, so no key is invented and no symlink is listed.
+	orphan := api.Team{ID: "team-2", Key: "OPS", Name: "Ops", Parent: &api.Team{ID: "team-ghost"}}
+	doc, err = marshal.Parse(teamMarkdown(orphan, nil))
+	if err != nil {
+		t.Fatalf("team.md render for an unresolvable parent: %v", err)
+	}
+	if _, ok := doc.Frontmatter["parent"]; ok {
+		t.Errorf("team.md named a parent key for a parent it cannot resolve: %v", doc.Frontmatter["parent"])
+	}
+	if got := doc.Frontmatter["parent_id"]; got != "team-ghost" {
+		t.Errorf("parent_id = %v, want team-ghost (the edge is known even when the team is not)", got)
+	}
+	if got := parentLinkTarget(orphan); got != "" {
+		t.Errorf("parent link target = %q, want \"\" (Readdir must not list a dangling parent)", got)
+	}
 }

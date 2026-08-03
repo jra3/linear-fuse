@@ -98,8 +98,11 @@ Mount point: %s (all paths below are relative to this mount point)
 
 <directory_structure>
 teams/{KEY}/
-  team.md, states.md, labels.md     [read-only metadata]
+  team.md, states.md, labels.md     [read-only metadata; team.md names parent/subteams]
   project-labels.md                 [symlink to ../../project-labels.md]
+  parent                            [symlink to ../{PARENT_KEY}; listed only for a sub-team]
+  subteams/{KEY}                    [symlinks to sub-team dirs; teams/ itself stays flat,
+                                     so every team is also reachable at teams/{KEY}]
   docs/                             [team-level documents; same surface as issues/docs]
   issues/                           [mkdir "Title" for quick create]
     _create                         [write full frontmatter+body to create one issue with all fields]

@@ -33,6 +33,7 @@ var (
 	_ fs.NodeUnlinker = (*InitiativeProjectsNode)(nil)
 	_ fs.NodeUnlinker = (*ProjectsNode)(nil)
 	_ fs.NodeUnlinker = (*TeamNode)(nil)
+	_ fs.NodeUnlinker = (*SubteamsNode)(nil)
 	_ fs.NodeUnlinker = (*RootNode)(nil)
 )
 
@@ -45,6 +46,7 @@ func (*InitiativeProjectsNode) Unlink(context.Context, string) syscall.Errno {
 }
 func (*ProjectsNode) Unlink(context.Context, string) syscall.Errno { return removalRejected() }
 func (*TeamNode) Unlink(context.Context, string) syscall.Errno     { return removalRejected() }
+func (*SubteamsNode) Unlink(context.Context, string) syscall.Errno { return removalRejected() }
 func (*RootNode) Unlink(context.Context, string) syscall.Errno     { return removalRejected() }
 
 // Rmdir guards — rmdir of an entity's structural sub-directory, or of an

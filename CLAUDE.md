@@ -167,6 +167,8 @@ Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS
 ~/linear/
 ├── teams/<KEY>/
 │   ├── team.md, states.md, labels.md    # Team metadata (read-only)
+│   ├── parent                            # Symlink to the parent team (sub-teams only)
+│   ├── subteams/<KEY>                    # Sub-team symlinks; teams/ itself stays flat
 │   ├── issues/
 │   │   └── <ID>/
 │   │       ├── issue.md                  # Issue content (read/write)

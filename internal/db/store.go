@@ -150,8 +150,33 @@ func migrateSchema(db *sql.DB) error {
 		if _, err := db.Exec("ALTER TABLE documents ADD COLUMN team_id TEXT"); err != nil {
 			return fmt.Errorf("add documents.team_id: %w", err)
 		}
-		if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_documents_team ON documents(team_id)"); err != nil {
-			return fmt.Errorf("index documents.team_id: %w", err)
+	}
+
+	// parent_id carries the sub-team edge. Same sqlc guarantee as above; the
+	// index backs ListSubteams, the only reader of the inverse direction.
+	hasTeamParent, err := tableHasColumn(db, "teams", "parent_id")
+	if err != nil {
+		return err
+	}
+	if !hasTeamParent {
+		if _, err := db.Exec("ALTER TABLE teams ADD COLUMN parent_id TEXT"); err != nil {
+			return fmt.Errorf("add teams.parent_id: %w", err)
+		}
+	}
+
+	// Indexes over ALTER-added columns are created HERE, not in schema.sql,
+	// and unconditionally (IF NOT EXISTS covers both the fresh database, whose
+	// column came from schema.sql, and the just-migrated one). schema.sql runs
+	// BEFORE this function, so on an old database the column does not exist yet
+	// and an index over it fails the whole schema exec — an error Open reads as
+	// "incompatible schema" and answers by deleting the cache, skipping this
+	// migration entirely and forcing a full resync.
+	for _, idx := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_documents_team ON documents(team_id)",
+		"CREATE INDEX IF NOT EXISTS idx_teams_parent ON teams(parent_id)",
+	} {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("create migrated-column index: %w", err)
 		}
 	}
 	return nil

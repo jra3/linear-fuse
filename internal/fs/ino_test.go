@@ -74,15 +74,16 @@ func TestInodeNamespaceDistinct(t *testing.T) {
 		"successIno":              successIno(id),
 		// View/entity directory kinds (composite keys get the shared id for
 		// every part — distinctness must hold regardless).
-		"viewDirIno":    viewDirIno(id),
-		"myDirIno":      myDirIno(id),
-		"teamDirIno":    teamDirIno(id),
-		"cyclesDirIno":  cyclesDirIno(id),
-		"cycleDirIno":   cycleDirIno(id),
-		"byDirIno":      byDirIno(id),
-		"byCategoryIno": byCategoryIno(id, id),
-		"byValueIno":    byValueIno(id, id, id),
-		"userDirIno":    userDirIno(id),
+		"viewDirIno":     viewDirIno(id),
+		"myDirIno":       myDirIno(id),
+		"teamDirIno":     teamDirIno(id),
+		"subteamsDirIno": subteamsDirIno(id),
+		"cyclesDirIno":   cyclesDirIno(id),
+		"cycleDirIno":    cycleDirIno(id),
+		"byDirIno":       byDirIno(id),
+		"byCategoryIno":  byCategoryIno(id, id),
+		"byValueIno":     byValueIno(id, id, id),
+		"userDirIno":     userDirIno(id),
 	}
 
 	seen := make(map[uint64]string, len(namespace))

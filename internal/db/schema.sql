@@ -75,8 +75,20 @@ CREATE TABLE IF NOT EXISTS teams (
     icon TEXT,
     created_at DATETIME,
     updated_at DATETIME,
-    synced_at DATETIME NOT NULL
+    synced_at DATETIME NOT NULL,
+    -- Sub-team edge (Linear's Team.parent). NULL for a top-level team. The
+    -- inverse (children) is a query over this column, never a stored second
+    -- copy. Declared last to match where migrateSchema's ALTER appends it.
+    parent_id TEXT
 );
+
+-- NOTE: idx_teams_parent is created by migrateSchema, not here. An index over
+-- an ALTER-added column CANNOT live in this file: on a database created before
+-- the column existed, CREATE TABLE IF NOT EXISTS leaves the old table alone and
+-- the index statement then fails with "no such column" — which Open reads as
+-- "incompatible schema" and answers by DELETING the cache, so the migration
+-- never runs and every user resyncs from scratch on upgrade. Same for
+-- idx_documents_team.
 
 -- =============================================================================
 -- Workflow States (per team)
@@ -300,8 +312,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_slug ON documents(slug_id);
 CREATE INDEX IF NOT EXISTS idx_documents_issue ON documents(issue_id);
 CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_documents_initiative ON documents(initiative_id);
-CREATE INDEX IF NOT EXISTS idx_documents_team ON documents(team_id);
 CREATE INDEX IF NOT EXISTS idx_documents_creator ON documents(creator_id);
+-- idx_documents_team lives in migrateSchema; see the note on teams.parent_id.
 
 -- =============================================================================
 -- Initiatives

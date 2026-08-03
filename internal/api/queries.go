@@ -16,6 +16,7 @@ query Teams($after: String) {
       icon
       createdAt
       updatedAt
+      parent { id key name }
     }
   }
 }

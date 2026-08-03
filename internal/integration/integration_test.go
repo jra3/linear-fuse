@@ -650,6 +650,13 @@ func populateTestFixtures(ctx context.Context, store *db.Store) error {
 		return err
 	}
 
+	// A sub-team of TST: the fixture set's only team hierarchy, so the
+	// parent/subteams surfaces have a real edge to render offline. It carries
+	// no issues or states of its own — the edge is the surface under test.
+	if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(fixtures.FixtureAPISubteam())); err != nil {
+		return err
+	}
+
 	// Populate users
 	if err := fixtures.PopulateUsers(ctx, store, users); err != nil {
 		return err

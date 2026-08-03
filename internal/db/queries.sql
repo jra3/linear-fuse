@@ -126,16 +126,23 @@ ON CONFLICT(key) DO UPDATE SET last_run = excluded.last_run;
 -- name: ListTeams :many
 SELECT * FROM teams ORDER BY name;
 
+-- ListSubteams reads the sub-team edge in the inverse direction: the children
+-- of a team are the teams naming it as parent. Ordered by key because key is
+-- the directory name the caller renders.
+-- name: ListSubteams :many
+SELECT * FROM teams WHERE parent_id = ? ORDER BY key;
+
 -- name: UpsertTeam :exec
-INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     key = excluded.key,
     name = excluded.name,
     icon = excluded.icon,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
-    synced_at = excluded.synced_at;
+    synced_at = excluded.synced_at,
+    parent_id = excluded.parent_id;
 
 -- Full-text search queries are handled with raw SQL (FTS5 not supported by sqlc)
 -- See internal/db/search.go for FTS implementation

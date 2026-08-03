@@ -74,10 +74,15 @@ filesystem**:
   (`scripts/check-safename.sh`, `make check-safename`) flags any builder
   returning a raw remote name field without it.
 - **Symlink targets** — `symlinkNode` backs every symlink view (`by/`, `cycles/`,
-  `recent/`, `users/`, `my/`, `children/`, project issue links, initiative→project
-  links). A target is remote-derived; every interpolated component (issue
-  identifier, team key, project dir name) passes through `safeName` so a hostile
-  value cannot traverse out of its directory.
+  `recent/`, `users/`, `my/`, `children/`, the team hierarchy —
+  `teams/{KEY}/parent` and `subteams/` — project issue links,
+  initiative→project links). A target is remote-derived; every interpolated
+  component (issue identifier, team key, project dir name) passes through
+  `safeName` so a hostile value cannot traverse out of its directory. The team
+  hierarchy is the case where a remote key crosses *into another entity's*
+  target: `parent` interpolates the PARENT team's key, so the render and the
+  listing both take it from `parentLinkTarget`, and a parent the local
+  workspace copy cannot name yields no entry at all rather than a guessed one.
 - **Disk-write paths** — the embedded-file cache writes bytes to a path derived
   from remote data (see also TB2).
 
