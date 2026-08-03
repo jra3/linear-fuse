@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,12 +31,21 @@ func (t *TeamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, len(teams))
 	for i, team := range teams {
 		entries[i] = fuse.DirEntry{
-			Name: safeName(team.Key, team.ID),
+			Name: teamDirName(team),
 			Mode: syscall.S_IFDIR,
 		}
 	}
 
 	return fs.NewListDirStream(entries), 0
+}
+
+// teamDirName is the single owner of "what a team's directory under teams/ is
+// called". Readdir, Lookup, the parent/subteam symlink targets and the
+// frontmatter cross-references all derive from here, so a key safeName rewrites
+// stays listable, resolvable and traversable rather than agreeing in one place
+// and diverging in another.
+func teamDirName(team api.Team) string {
+	return safeName(team.Key, team.ID)
 }
 
 func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -45,7 +55,7 @@ func (t *TeamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	}
 
 	for _, team := range teams {
-		if team.Key == name {
+		if teamDirName(team) == name {
 			node := &TeamNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
 			return t.newDirInode(ctx, out, name, node, dirAttr(team.CreatedAt, team.UpdatedAt), teamDirIno(team.ID), inheritTimeout), 0
 		}
@@ -86,18 +96,70 @@ func (t *TeamNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		{Name: "recent", Mode: syscall.S_IFDIR},
 		{Name: "docs", Mode: syscall.S_IFDIR},
 		{Name: "labels", Mode: syscall.S_IFDIR},
+		{Name: "subteams", Mode: syscall.S_IFDIR},
+	}
+
+	// The parent symlink is listed only when the team HAS a resolvable parent:
+	// a top-level team is the common case, and an unconditional entry would
+	// dangle for every one of them. subteams/ stays unconditional (an empty
+	// directory is honest and needs no query), matching issues' children/.
+	if parentLinkTarget(t.entity()) != "" {
+		entries = append(entries, fuse.DirEntry{Name: "parent", Mode: syscall.S_IFLNK})
 	}
 
 	return fs.NewListDirStream(entries), 0
+}
+
+// parentLinkTarget returns the symlink target for a team's parent, or "" when
+// the team has no parent — or has one the local workspace copy cannot name (an
+// edge to a team this API key never listed). Readdir and Lookup must agree on
+// that verdict, so both ask here.
+func parentLinkTarget(team api.Team) string {
+	if team.Parent == nil || team.Parent.Key == "" {
+		return ""
+	}
+	// From teams/{KEY}/parent, ".." is teams/ — the sibling team dir is one
+	// level up, named exactly as TeamsNode lists it.
+	return "../" + teamDirName(*team.Parent)
+}
+
+// subteamLinkTarget is the target of teams/{KEY}/subteams/{CKEY}: the sibling
+// team dir, two levels up. Readdir names the entry and Lookup builds the
+// target, so both go through teamDirName here and cannot disagree.
+func subteamLinkTarget(child api.Team) string {
+	return "../../" + teamDirName(child)
 }
 
 func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	team := t.entity() // snapshot captured by the arms and their closures
 	switch name {
 	case "team.md":
-		return t.lookupRenderFile(ctx, out, "team.md", func(context.Context) ([]byte, time.Time, time.Time) {
-			return teamMarkdown(team), team.UpdatedAt, team.CreatedAt
+		// The sub-team edges are rendered here, so team.md needs the children
+		// listing — a SQLite read per render, like states.md/labels.md. The
+		// team's own times stay the reported ones: a child appearing is a
+		// change to the child's row, not to this team.
+		lfs := t.lfs
+		return t.lookupRenderFile(ctx, out, "team.md", func(ctx context.Context) ([]byte, time.Time, time.Time) {
+			children, err := lfs.repo.GetTeamChildren(ctx, team.ID)
+			return teamMarkdown(team, children, err), team.UpdatedAt, team.CreatedAt
 		}, 0, inheritTimeout), 0
+
+	case "parent":
+		target := parentLinkTarget(team)
+		if target == "" {
+			return nil, syscall.ENOENT
+		}
+		// The parent's times, not this team's: a stat through the link reports
+		// the parent dir's own attributes anyway, and these are what the
+		// stitched parent carries.
+		return t.newSymlinkInode(ctx, out, target, team.Parent.CreatedAt, team.Parent.UpdatedAt), 0
+
+	case "subteams":
+		node := &SubteamsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, entityCell: entityCell[api.Team]{val: team}}
+		// 0555: a read-only view. Sub-team membership is set in Linear, not by
+		// mkdir here.
+		na := nodeAttr{mode: 0555 | syscall.S_IFDIR, created: team.CreatedAt, updated: team.UpdatedAt}
+		return t.newDirInode(ctx, out, name, node, na, subteamsDirIno(team.ID), inheritTimeout), 0
 
 	case "states.md":
 		// states.md has no single mtime (it lists a collection); report the
@@ -170,9 +232,69 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	return nil, syscall.ENOENT
 }
 
+// SubteamsNode represents the /teams/{KEY}/subteams/ directory: symlinks to
+// the sibling directories of this team's sub-teams. Read-only — the hierarchy
+// is set in Linear, and teams/ stays flat, so a sub-team is reachable both by
+// its own key and through here.
+type SubteamsNode struct {
+	attrNode
+	entityCell[api.Team]
+}
+
+var _ fs.NodeReaddirer = (*SubteamsNode)(nil)
+var _ fs.NodeLookuper = (*SubteamsNode)(nil)
+var _ fs.NodeGetattrer = (*SubteamsNode)(nil)
+
+func (n *SubteamsNode) refreshFrom(fresh fs.InodeEmbedder) {
+	if f, ok := fresh.(*SubteamsNode); ok {
+		n.setEntity(f.entity())
+	}
+}
+
+func (n *SubteamsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	children, err := n.lfs.repo.GetTeamChildren(ctx, n.entity().ID)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	entries := make([]fuse.DirEntry, len(children))
+	for i, child := range children {
+		entries[i] = fuse.DirEntry{
+			Name: teamDirName(child),
+			Mode: syscall.S_IFLNK,
+		}
+	}
+	return fs.NewListDirStream(entries), 0
+}
+
+func (n *SubteamsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	children, err := n.lfs.repo.GetTeamChildren(ctx, n.entity().ID)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	for _, child := range children {
+		if teamDirName(child) != name {
+			continue
+		}
+		return n.newSymlinkInode(ctx, out, subteamLinkTarget(child), child.CreatedAt, child.UpdatedAt), 0
+	}
+	return nil, syscall.ENOENT
+}
+
 // teamMarkdown renders the team.md content for a team. Frontmatter goes
 // through renderWithFrontmatter so hostile names stay valid YAML.
-func teamMarkdown(team api.Team) []byte {
+//
+// The hierarchy is disclosed in both directions: `parent` and `subteams` carry
+// the directory names the symlinks point at (safeName'd, so frontmatter and
+// listing agree), and `parent_id` carries the raw edge — which is all that is
+// left when the parent team itself is not in the local workspace copy.
+//
+// childrenErr is the verdict of the sub-team load, and it is NOT the same as an
+// empty list: a failed load omits the `subteams` key entirely (absence means
+// unknown) and says so in the body, because rendering "no sub-teams" would
+// contradict subteams/ Readdir, which returns EIO for the same failure. This
+// follows states.md/labels.md, which emit "# Error loading …" rather than an
+// empty catalog.
+func teamMarkdown(team api.Team, children []api.Team, childrenErr error) []byte {
 	fm := map[string]any{
 		"id":      team.ID,
 		"key":     team.Key,
@@ -181,12 +303,35 @@ func teamMarkdown(team api.Team) []byte {
 		"created": team.CreatedAt.Format(time.RFC3339),
 		"updated": team.UpdatedAt.Format(time.RFC3339),
 	}
+
+	hierarchy := ""
+	if team.Parent != nil {
+		fm["parent_id"] = team.Parent.ID
+		if team.Parent.Key != "" {
+			fm["parent"] = teamDirName(*team.Parent)
+			hierarchy += fmt.Sprintf("- **Parent team:** %s (`parent` symlink)\n", team.Parent.Key)
+		} else {
+			hierarchy += fmt.Sprintf("- **Parent team:** %s (not in this workspace copy)\n", team.Parent.ID)
+		}
+	}
+	switch {
+	case childrenErr != nil:
+		hierarchy += "- **Sub-teams:** error loading sub-teams — unknown, not none (`subteams/` reports the same failure)\n"
+	case len(children) > 0:
+		keys := make([]string, 0, len(children))
+		for _, c := range children {
+			keys = append(keys, teamDirName(c))
+		}
+		fm["subteams"] = keys
+		hierarchy += fmt.Sprintf("- **Sub-teams:** %s (`subteams/`)\n", strings.Join(keys, ", "))
+	}
+
 	body := fmt.Sprintf(`
 # %s
 
 - **Key:** %s
 - **ID:** %s
-`, team.Name, team.Key, team.ID)
+%s`, team.Name, team.Key, team.ID, hierarchy)
 	return renderWithFrontmatter(fm, body)
 }
 

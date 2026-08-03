@@ -105,9 +105,10 @@ func myDirIno(name string) uint64   { return ino("mydir", name) }
 
 // Team tree -----------------------------------------------------------------
 
-func teamDirIno(teamID string) uint64   { return ino("teamdir", teamID) }
-func cyclesDirIno(teamID string) uint64 { return ino("cyclesdir", teamID) }
-func cycleDirIno(cycleID string) uint64 { return ino("cycledir", cycleID) }
+func teamDirIno(teamID string) uint64     { return ino("teamdir", teamID) }
+func subteamsDirIno(teamID string) uint64 { return ino("subteams", teamID) }
+func cyclesDirIno(teamID string) uint64   { return ino("cyclesdir", teamID) }
+func cycleDirIno(cycleID string) uint64   { return ino("cycledir", cycleID) }
 
 // Filter views (by/) ----------------------------------------------------------
 // Composite keys: a category dir is per team+category, a value dir per

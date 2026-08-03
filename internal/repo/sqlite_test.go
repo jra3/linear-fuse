@@ -55,6 +55,81 @@ func TestSQLiteRepository_Teams(t *testing.T) {
 	}
 }
 
+// TestSQLiteRepository_TeamHierarchy pins the two halves of the sub-team edge
+// the repo owns: GetTeams stitches a parent's Key/Name over the bare parent_id
+// (the fs renders a KEY, and the DB stores only an ID), and GetTeamChildren
+// reads the inverse direction off the same column.
+func TestSQLiteRepository_TeamHierarchy(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	repo := NewSQLiteRepository(store, nil)
+	ctx := context.Background()
+
+	parent := api.Team{ID: "team-p", Key: "PLAT", Name: "Platform", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	child := api.Team{ID: "team-c", Key: "FE", Name: "Frontend", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Parent: &api.Team{ID: "team-p"}}
+	// An edge pointing at a team this workspace copy does not have: the ID is
+	// real, the team is not, and nothing may invent a key for it.
+	orphan := api.Team{ID: "team-o", Key: "OPS", Name: "Ops", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Parent: &api.Team{ID: "team-ghost"}}
+
+	for _, team := range []api.Team{parent, child, orphan} {
+		if err := store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
+			t.Fatalf("insert %s: %v", team.Key, err)
+		}
+	}
+
+	teams, err := repo.GetTeams(ctx)
+	if err != nil {
+		t.Fatalf("GetTeams failed: %v", err)
+	}
+	byKey := make(map[string]api.Team, len(teams))
+	for _, team := range teams {
+		byKey[team.Key] = team
+	}
+
+	if got := byKey["PLAT"].Parent; got != nil {
+		t.Errorf("PLAT.Parent = %+v, want nil (top-level team)", got)
+	}
+	switch got := byKey["FE"].Parent; {
+	case got == nil:
+		t.Error("FE.Parent = nil, want the stitched PLAT")
+	case got.Key != "PLAT" || got.Name != "Platform" || got.ID != "team-p":
+		t.Errorf("FE.Parent = %+v, want PLAT/Platform/team-p stitched from the result set", got)
+	case got.Parent != nil:
+		t.Error("FE.Parent.Parent is populated — the stitch must stop at one level")
+	}
+	switch got := byKey["OPS"].Parent; {
+	case got == nil:
+		t.Error("OPS.Parent = nil, want the bare unresolvable edge")
+	case got.ID != "team-ghost":
+		t.Errorf("OPS.Parent.ID = %q, want team-ghost", got.ID)
+	case got.Key != "":
+		t.Errorf("OPS.Parent.Key = %q, want empty — the team is not in this copy, so no key may be invented", got.Key)
+	}
+
+	children, err := repo.GetTeamChildren(ctx, "team-p")
+	if err != nil {
+		t.Fatalf("GetTeamChildren failed: %v", err)
+	}
+	if len(children) != 1 || children[0].Key != "FE" {
+		t.Fatalf("GetTeamChildren(team-p) = %+v, want [FE]", children)
+	}
+	// A leaf team has no children, and the query must not fall back to
+	// "everything with a NULL parent" for an unknown ID.
+	for _, id := range []string{"team-c", "no-such-team"} {
+		got, err := repo.GetTeamChildren(ctx, id)
+		if err != nil {
+			t.Fatalf("GetTeamChildren(%s) failed: %v", id, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("GetTeamChildren(%s) = %+v, want none", id, got)
+		}
+	}
+}
+
 func TestSQLiteRepository_Issues(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)

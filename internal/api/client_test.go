@@ -101,6 +101,59 @@ func TestGetTeamsDrainsPages(t *testing.T) {
 	}
 }
 
+// TestGetTeamsDecodesParentEdge covers the wire end of the sub-team edge: the
+// Teams query must SELECT parent (a selection the rest of the suite cannot see,
+// because every other layer is seeded from the store, not from a response), and
+// the response must decode into Team.Parent. Without this, dropping the
+// selection or the json tag leaves every team parentless and the whole
+// hierarchy surface silently empty — with no offline test failing, since a live
+// workspace on a plan without team nesting cannot cover it either (#435).
+func TestGetTeamsDecodesParentEdge(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	top := testutil.FixtureTeam()
+	sub := testutil.FixtureTeam()
+	sub["id"] = "team-sub"
+	sub["key"] = "SUB"
+	sub["name"] = "Sub Team"
+	sub["parent"] = map[string]any{"id": "team-123", "key": "TST", "name": "Test Team"}
+	mock.SetResponse("Teams", testutil.TeamsResponse(top, sub))
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
+
+	teams, err := client.GetTeams(context.Background())
+	if err != nil {
+		t.Fatalf("GetTeams failed: %v", err)
+	}
+	if len(teams) != 2 {
+		t.Fatalf("expected 2 teams, got %d", len(teams))
+	}
+
+	// The selection itself: a Team.parent the query never asks for decodes as
+	// nil no matter how correct the Go side is.
+	if call := mock.LastCall(); call == nil || !strings.Contains(call.Query, "parent {") {
+		t.Errorf("Teams query does not select parent:\n%s", mock.LastCall().Query)
+	}
+
+	if teams[0].Parent != nil {
+		t.Errorf("top-level team decoded a parent: %+v", teams[0].Parent)
+	}
+	parent := teams[1].Parent
+	if parent == nil {
+		t.Fatal("sub-team decoded no parent — the edge never reaches the store")
+	}
+	if parent.ID != "team-123" || parent.Key != "TST" || parent.Name != "Test Team" {
+		t.Errorf("parent = %+v, want {ID:team-123 Key:TST Name:Test Team}", parent)
+	}
+	// One level only: the wire carries no grandparent and nothing invents one.
+	if parent.Parent != nil {
+		t.Errorf("parent carries its own parent: %+v", parent.Parent)
+	}
+}
+
 // TestGetProjectUpdatesDrainsPages proves the updates read drains past the
 // old implicit 50-cap: updates accumulate over a project's lifetime and the
 // SWR refresh is upsert-only, so a capped read silently froze completeness.

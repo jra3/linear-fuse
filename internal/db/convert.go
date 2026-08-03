@@ -112,8 +112,14 @@ func DBIssuesToAPIIssues(issues []Issue) ([]api.Issue, error) {
 	return result, nil
 }
 
-// APITeamToDBTeam converts an api.Team to db.UpsertTeamParams
+// APITeamToDBTeam converts an api.Team to db.UpsertTeamParams. parent_id comes
+// from the team's own Parent edge (Linear's Team.parent); a top-level team
+// stores NULL.
 func APITeamToDBTeam(team api.Team) UpsertTeamParams {
+	var parentID sql.NullString
+	if team.Parent != nil {
+		parentID = sql.NullString{String: team.Parent.ID, Valid: team.Parent.ID != ""}
+	}
 	return UpsertTeamParams{
 		ID:   team.ID,
 		Key:  team.Key,
@@ -128,12 +134,15 @@ func APITeamToDBTeam(team api.Team) UpsertTeamParams {
 			Valid: !team.UpdatedAt.IsZero(),
 		},
 		SyncedAt: Now(),
+		ParentID: parentID,
 	}
 }
 
-// DBTeamToAPITeam converts a db.Team to api.Team
+// DBTeamToAPITeam converts a db.Team to api.Team. Parent comes strictly from
+// the parent_id column, so only the ID is populated here — the repo read
+// stitches Key/Name over it from the teams it already loaded.
 func DBTeamToAPITeam(team Team) api.Team {
-	return api.Team{
+	t := api.Team{
 		ID:        team.ID,
 		Key:       team.Key,
 		Name:      team.Name,
@@ -141,6 +150,10 @@ func DBTeamToAPITeam(team Team) api.Team {
 		CreatedAt: team.CreatedAt.Time,
 		UpdatedAt: team.UpdatedAt.Time,
 	}
+	if team.ParentID.Valid && team.ParentID.String != "" {
+		t.Parent = &api.Team{ID: team.ParentID.String}
+	}
+	return t
 }
 
 // DBTeamsToAPITeams converts a slice of db.Team to api.Team

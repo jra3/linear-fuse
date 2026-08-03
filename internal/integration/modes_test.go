@@ -173,7 +173,10 @@ func someProjectDir(t *testing.T) string {
 
 // fixtureLiterals are the seeded names that only exist in the fixture store.
 // A test that spells one is asserting against the fixture seed by definition.
-var fixtureLiterals = []string{`"TST-`, `"test-project"`}
+// SUB is the fixture's sub-team of TST — the only team hierarchy the offline
+// set has, and absent from any live workspace, so naming it is the same claim
+// as naming TST-1.
+var fixtureLiterals = []string{`"TST-`, `"test-project"`, `"SUB"`, `"SUB-`}
 
 // TestFixtureLiteralsCarryTheGuard is the standing check for #395: a test that
 // names a seeded row must say so with skipIfLiveAPI, because a live workspace

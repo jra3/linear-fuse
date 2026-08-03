@@ -1654,6 +1654,45 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 	return items, nil
 }
 
+const listSubteams = `-- name: ListSubteams :many
+SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id FROM teams WHERE parent_id = ? ORDER BY key
+`
+
+// ListSubteams reads the sub-team edge in the inverse direction: the children
+// of a team are the teams naming it as parent. Ordered by key because key is
+// the directory name the caller renders.
+func (q *Queries) ListSubteams(ctx context.Context, parentID sql.NullString) ([]Team, error) {
+	rows, err := q.db.QueryContext(ctx, listSubteams, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Team{}
+	for rows.Next() {
+		var i Team
+		if err := rows.Scan(
+			&i.ID,
+			&i.Key,
+			&i.Name,
+			&i.Icon,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SyncedAt,
+			&i.ParentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTeamCycles = `-- name: ListTeamCycles :many
 
 SELECT id, team_id, number, name, description, starts_at, ends_at, completed_at, progress, created_at, updated_at, synced_at, data FROM cycles WHERE team_id = ? ORDER BY number DESC
@@ -2252,7 +2291,7 @@ func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) (
 
 const listTeams = `-- name: ListTeams :many
 
-SELECT id, "key", name, icon, created_at, updated_at, synced_at FROM teams ORDER BY name
+SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id FROM teams ORDER BY name
 `
 
 // Teams queries
@@ -2273,6 +2312,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SyncedAt,
+			&i.ParentID,
 		); err != nil {
 			return nil, err
 		}
@@ -3741,15 +3781,16 @@ func (q *Queries) UpsertSyncSchedule(ctx context.Context, arg UpsertSyncSchedule
 }
 
 const upsertTeam = `-- name: UpsertTeam :exec
-INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     key = excluded.key,
     name = excluded.name,
     icon = excluded.icon,
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
-    synced_at = excluded.synced_at
+    synced_at = excluded.synced_at,
+    parent_id = excluded.parent_id
 `
 
 type UpsertTeamParams struct {
@@ -3760,6 +3801,7 @@ type UpsertTeamParams struct {
 	CreatedAt sql.NullTime   `json:"created_at"`
 	UpdatedAt sql.NullTime   `json:"updated_at"`
 	SyncedAt  time.Time      `json:"synced_at"`
+	ParentID  sql.NullString `json:"parent_id"`
 }
 
 func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
@@ -3771,6 +3813,7 @@ func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.SyncedAt,
+		arg.ParentID,
 	)
 	return err
 }

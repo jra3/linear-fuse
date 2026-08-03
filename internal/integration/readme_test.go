@@ -47,7 +47,10 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	// "outcome: failed" pins the .last outcome-log contract (#370): a failed
 	// create appends a countable failure entry rather than .error collapsing to
 	// only the last failure of a batch.
-	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item", "targeted catalog refresh", "outcome: failed"} {
+	// "subteams/" pins the team-hierarchy surface: teams/ stays flat, so a
+	// sub-team is only discoverable through the symlinks and team.md's
+	// parent/subteams keys — a README that omits them hides the whole edge.
+	for _, want := range []string{".last", "issue.meta", "initiative.meta", "recent/", "recent created updates", "relations, updates", "creates one item", "targeted catalog refresh", "outcome: failed", "subteams/"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README does not mention %q", want)
 		}

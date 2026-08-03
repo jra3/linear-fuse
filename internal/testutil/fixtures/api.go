@@ -27,6 +27,23 @@ func FixtureAPITeam() api.Team {
 	}
 }
 
+// FixtureAPISubteam returns a sub-team of FixtureAPITeam — the fixture set's
+// only team hierarchy, so the offline suite has a real parent/child edge to
+// assert `parent`/`subteams/` against instead of passing vacuously on a flat
+// workspace. Deliberately bare (no states, issues, projects): the surface
+// under test is the edge, not the team's contents.
+func FixtureAPISubteam() api.Team {
+	return api.Team{
+		ID:        "team-sub",
+		Key:       "SUB",
+		Name:      "Sub Team",
+		Icon:      "team",
+		CreatedAt: fixtureTime,
+		UpdatedAt: fixtureTime,
+		Parent:    &api.Team{ID: "team-1", Key: "TST", Name: "Test Team"},
+	}
+}
+
 // FixtureAPITeams returns multiple test teams.
 func FixtureAPITeams() []api.Team {
 	return []api.Team{

@@ -91,5 +91,5 @@ func teamIssueTarget(issue api.Issue) (string, syscall.Errno) {
 	// target; safeName keeps each a single path-safe component so a hostile
 	// value can never traverse out of teams/.
 	return fmt.Sprintf("../../teams/%s/issues/%s",
-		safeName(issue.Team.Key, issue.Team.ID), safeName(issue.Identifier, issue.ID)), 0
+		teamDirName(*issue.Team), safeName(issue.Identifier, issue.ID)), 0
 }

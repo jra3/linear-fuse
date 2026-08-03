@@ -138,7 +138,7 @@ func TestTeamsListing(t *testing.T) {
 }
 
 func TestTeamDirectoryContents(t *testing.T) {
-	expected := []string{"team.md", "states.md", "labels.md", "by", "issues", "cycles", "projects"}
+	expected := []string{"team.md", "states.md", "labels.md", "by", "issues", "cycles", "projects", "subteams"}
 	entryNames := dirNames(t, teamPath(testTeamKey))
 
 	for _, name := range expected {

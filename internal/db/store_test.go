@@ -812,6 +812,119 @@ func TestMigrateAddsDetailSyncedAt(t *testing.T) {
 	again.Close()
 }
 
+// TestMigrateAddsTeamParentID: the same bootstrap-ALTER contract for the
+// sub-team edge, plus the rule that makes it work — an index over an
+// ALTER-added column belongs in migrateSchema, never in schema.sql. A cache
+// database created before teams.parent_id existed must gain the column on Open
+// (without it every ListTeams fails "no such column" and the mount goes dark,
+// since sqlc expands SELECT * to schema.sql's column list) and must SURVIVE:
+// an index statement that references the not-yet-added column fails the schema
+// exec, which Open answers by deleting the cache. The pre-team_id documents
+// table rides along because a real upgraded cache lacks both columns at once.
+func TestMigrateAddsTeamParentID(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "old-teams.db")
+
+	raw, err := sql.Open("sqlite", "file:"+dbPath+"?_time_format=sqlite")
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE teams (
+		id TEXT PRIMARY KEY,
+		key TEXT UNIQUE NOT NULL,
+		name TEXT NOT NULL,
+		icon TEXT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		synced_at DATETIME NOT NULL
+	)`); err != nil {
+		t.Fatalf("create old teams table: %v", err)
+	}
+	if _, err := raw.Exec(`INSERT INTO teams (id, key, name, synced_at) VALUES ('team-old', 'OLD', 'Old Team', ?)`,
+		Now()); err != nil {
+		t.Fatalf("insert old row: %v", err)
+	}
+	// A real upgraded cache is missing every ALTER-added column at once, so the
+	// pre-team_id documents table rides along: it is the other index that had
+	// to move out of schema.sql, and if either one is left there the schema
+	// exec fails and Open deletes this database instead of migrating it.
+	if _, err := raw.Exec(`CREATE TABLE documents (
+		id TEXT PRIMARY KEY,
+		title TEXT NOT NULL,
+		slug_id TEXT,
+		issue_id TEXT,
+		project_id TEXT,
+		initiative_id TEXT,
+		creator_id TEXT,
+		url TEXT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		synced_at DATETIME NOT NULL,
+		data JSON NOT NULL
+	)`); err != nil {
+		t.Fatalf("create old documents table: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open on pre-migration db failed: %v", err)
+	}
+	defer store.Close()
+
+	for _, col := range []struct{ table, column string }{
+		{"teams", "parent_id"},
+		{"documents", "team_id"},
+	} {
+		has, err := tableHasColumn(store.DB(), col.table, col.column)
+		if err != nil {
+			t.Fatalf("tableHasColumn %s.%s: %v", col.table, col.column, err)
+		}
+		if !has {
+			t.Fatalf("%s.%s missing after Open — migration did not run", col.table, col.column)
+		}
+	}
+
+	ctx := context.Background()
+	teams, err := store.Queries().ListTeams(ctx)
+	if err != nil {
+		t.Fatalf("ListTeams on migrated db: %v", err)
+	}
+	if len(teams) != 1 || teams[0].Key != "OLD" {
+		t.Fatalf("ListTeams = %v, want the one pre-migration team — column scan misaligned", teams)
+	}
+	if teams[0].ParentID.Valid {
+		t.Errorf("pre-migration team parent_id = %v, want NULL", teams[0].ParentID.String)
+	}
+
+	// The edge is writable on the migrated table, and readable back through
+	// the inverse query.
+	if err := store.Queries().UpsertTeam(ctx, APITeamToDBTeam(api.Team{
+		ID: "team-child", Key: "CHILD", Name: "Child Team",
+		Parent: &api.Team{ID: "team-old"},
+	})); err != nil {
+		t.Fatalf("UpsertTeam with parent on migrated db: %v", err)
+	}
+	kids, err := store.Queries().ListSubteams(ctx, sql.NullString{String: "team-old", Valid: true})
+	if err != nil {
+		t.Fatalf("ListSubteams on migrated db: %v", err)
+	}
+	if len(kids) != 1 || kids[0].Key != "CHILD" {
+		t.Fatalf("ListSubteams = %v, want [CHILD]", kids)
+	}
+
+	store.Close()
+
+	// Idempotent: reopening the already-migrated database succeeds.
+	again, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen migrated db failed: %v", err)
+	}
+	again.Close()
+}
+
 // TestUpsertIssuePreservesDetailSyncedAt: UpsertIssue deliberately omits
 // detail_synced_at from its INSERT list and conflict SET clause — the stamp is
 // owned by the detail-sync paths, so an entity sync upsert must neither set it

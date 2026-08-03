@@ -317,6 +317,7 @@ type Team struct {
 	CreatedAt sql.NullTime   `json:"created_at"`
 	UpdatedAt sql.NullTime   `json:"updated_at"`
 	SyncedAt  time.Time      `json:"synced_at"`
+	ParentID  sql.NullString `json:"parent_id"`
 }
 
 type TeamMember struct {
