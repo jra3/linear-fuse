@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -126,9 +127,72 @@ func mkdirIssueWithRetry(issuePath string) error {
 	return fmt.Errorf("still EAGAIN after %d attempts: %w", mkdirIssueRetries+1, err)
 }
 
+// issueOptionInput folds the caller's options into an IssueUpdateInput. The
+// IssueOption constructors already write Linear's own field names
+// (description, dueDate, stateId, cycleId, …), so the map goes to
+// UpdateIssue untranslated.
+func issueOptionInput(opts []IssueOption) map[string]any {
+	input := make(map[string]any, len(opts))
+	for _, opt := range opts {
+		opt(input)
+	}
+	return input
+}
+
+// configureTestIssue applies the fields mkdir cannot carry, and returns the
+// issue as the server now holds it.
+//
+// Every createTestIssue caller is behind skipIfNoWriteTests, so this only ever
+// runs live and apiClient is the real client — in fixture mode it would reach
+// offlineAPIServer and fail by design.
+func configureTestIssue(id, identifier string, input map[string]any) (*api.Issue, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	keys := make([]string, 0, len(input))
+	for k := range input {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	rateLimitWait()
+	if err := apiClient.UpdateIssue(ctx, id, input); err != nil {
+		return nil, fmt.Errorf("apply test-issue options %v to %s: %w", keys, identifier, err)
+	}
+
+	// The mutation went straight to Linear, so the mount still serves the
+	// pre-update issue out of SQLite. Refetch and upsert, the same thing a
+	// write through the mount would have done in its flush handler.
+	rateLimitWait()
+	fresh, err := apiClient.GetIssue(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("refetch %s after applying %v: %w", identifier, keys, err)
+	}
+	if err := lfs.UpsertIssue(ctx, *fresh); err != nil {
+		return nil, fmt.Errorf("upsert %s after applying %v: %w", identifier, keys, err)
+	}
+
+	// The identifier search above read issue.md, which primes the kernel page
+	// cache with the pre-update body — a later read would otherwise be served
+	// the stale bytes rather than the fields we just set. Stat for the inode
+	// the kernel knows this file by and drop it. Best-effort: a miss here
+	// costs freshness, not correctness, and must not fail setup.
+	if fi, err := os.Stat(issueFilePath(testTeamKey, identifier)); err == nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			lfs.InvalidateUpdated(st.Ino)
+		}
+	}
+
+	return fresh, nil
+}
+
 // createTestIssue creates an issue via filesystem mkdir for testing.
 // The title is prefixed with [TEST] and a timestamp.
 // Returns the issue and a cleanup function (currently no-op since Linear doesn't have delete).
+//
+// mkdir carries the title and nothing else, so any IssueOption the caller
+// passes is applied afterward by configureTestIssue, and the returned issue is
+// the server's post-update copy rather than a locally-built stub.
 func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), error) {
 	rateLimitWait() // Prevent API rate limiting
 
@@ -182,6 +246,19 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 				Identifier: identifier,
 				Title:      fullTitle,
 				Team:       &api.Team{Key: testTeamKey, ID: testTeamID},
+			}
+
+			// mkdir carries only the title, so every option the caller passed
+			// still has to be applied. Skipping this is what made 7 tests set
+			// themselves up wrong in silence — clearing a due date that was
+			// never set, editing an empty description, removing a cycle
+			// membership that never existed (#405).
+			if input := issueOptionInput(opts); len(input) > 0 {
+				fresh, err := configureTestIssue(id, identifier, input)
+				if err != nil {
+					return nil, nil, err
+				}
+				issue = fresh
 			}
 
 			cleanup := func() {
