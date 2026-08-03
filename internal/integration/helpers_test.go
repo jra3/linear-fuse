@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,30 @@ func firstRealEntry(entries []os.DirEntry) string {
 		}
 	}
 	return ""
+}
+
+// countItemFiles counts the item .md files in a collection directory, which is
+// almost never the same number as len(os.ReadDir(dir)).
+//
+// A collection listing is three things concatenated (collectionDir.entries):
+// the trio (_create, .error, .last), one .md per item, and one .meta sidecar
+// per .md. So a directory holding N items has N*2+3 entries, and adding one
+// item moves the raw count by two, not one. Asserting on entry counts couples a
+// test to the trio and sidecar layout; asserting on .md files says what the
+// test actually means.
+func countItemFiles(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	n := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".md") {
+			n++
+		}
+	}
+	return n
 }
 
 // Path builders
