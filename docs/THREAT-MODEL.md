@@ -192,8 +192,7 @@ module dependency set.
 **CI's use of the live workspace credential (#386).** One workflow authenticates
 to Linear with a real key and mutates a real workspace: the `workflow_dispatch`-only
 "Integration Tests (Write)" job, which sets `LINEARFS_LIVE_API=1` +
-`LINEARFS_WRITE_TESTS=1` and runs the 55 write tests gated behind
-`skipIfNoWriteTests`. Before #386 it set `LINEARFS_WRITE_TESTS` but never
+`LINEARFS_WRITE_TESTS=1` and runs every test gated behind `skipIfNoWriteTests`. Before #386 it set `LINEARFS_WRITE_TESTS` but never
 `LINEARFS_LIVE_API` — and `skipIfNoWriteTests` skips on `!liveAPIMode` first — so
 the injected `LINEAR_API_KEY` secret went unused and the job silently ran the
 offline fixture suite; the label promised mutation and the run delivered none.

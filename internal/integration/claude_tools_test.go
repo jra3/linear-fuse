@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jra3/linear-fuse/internal/marshal"
+	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
 
 // =============================================================================
@@ -90,7 +91,7 @@ func claudeToolWrite(t *testing.T, path string, content []byte) {
 	}
 }
 
-// claudeToolSaveExpectingError emulates the atomic save-via-rename that Claude
+// claudeToolAtomicSave emulates the atomic save-via-rename that Claude
 // Code's Edit/Write tools and editors (vim, VS Code) actually use: write a
 // sibling temp file, then rename it over the target. It returns the error the
 // rename surfaces. Unlike a raw truncate+write+close, the rename routes the bytes
@@ -98,8 +99,10 @@ func claudeToolWrite(t *testing.T, path string, content []byte) {
 // (and its validation) inline and returns the errno directly — so a rejected
 // write fails loudly and deterministically, instead of having the verdict masked
 // when the kernel serves an O_TRUNC+write entirely from a primed page cache.
-// Used to assert that invalid writes fail loudly rather than succeeding silently.
-func claudeToolSaveExpectingError(t *testing.T, path string, content []byte) error {
+// Returning the errno rather than failing the test is what lets a caller assert
+// either verdict: that an invalid write fails loudly, or that a save the test
+// needs to succeed did.
+func claudeToolAtomicSave(t *testing.T, path string, content []byte) error {
 	t.Helper()
 
 	tmp := path + ".tmp.999.deadbeef"
@@ -149,6 +152,39 @@ func firstInitiativeDir() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no initiative directory found")
+}
+
+// restorableInitiativeDir returns the first initiative whose initiative.md has a
+// non-empty body. It is what a borrow-edit-restore test must use instead of
+// firstInitiativeDir: there is no initiative-create surface, so such a test
+// edits a real initiative and puts it back — and putting an originally-EMPTY
+// body back is a body-clear, which a backend that ignores an empty content
+// declines (#398). The restore would fail with EINVAL and the test's marker
+// would stay in a real initiative permanently (#411). Scanning past an
+// empty-bodied first initiative keeps the coverage that skipping there loses.
+func restorableInitiativeDir() (string, error) {
+	entries, err := os.ReadDir(initiativesPath())
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := initiativePath(e.Name())
+		content, err := os.ReadFile(filepath.Join(dir, "initiative.md"))
+		if err != nil {
+			continue
+		}
+		doc, err := parseFrontmatter(content)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(doc.Body) != "" {
+			return dir, nil
+		}
+	}
+	return "", fmt.Errorf("no initiative with a non-empty body found")
 }
 
 // TestClaudeToolFsyncSupportedOnWritableFiles is the core #139 regression guard:
@@ -506,7 +542,7 @@ func TestWriteInvalidInputIsLoud(t *testing.T) {
 	const badValue = "__no_such_initiative__"
 	bad := []byte("---\nname: Test Project\ninitiatives: [\"" + badValue + "\"]\n---\n\nbody\n")
 
-	werr := claudeToolSaveExpectingError(t, path, bad)
+	werr := claudeToolAtomicSave(t, path, bad)
 	if !errors.Is(werr, syscall.EINVAL) {
 		t.Fatalf("expected EINVAL writing unknown initiative, got %v", werr)
 	}
@@ -673,9 +709,13 @@ func TestReadYourWritesLargeBody(t *testing.T) {
 // `content` (#398). Editing a borrowed project therefore left a `linearfs-smoke-`
 // marker in a real project's description permanently. A project the test owns is
 // archived at the end, so nothing needs restoring.
+//
+// It works in fixture mode too, given enableMockMutations: the mkdir/rmdir go
+// through the fake, and the fixture project's body is likewise not restorable
+// once a test models the declining backend (#411).
 func createTestProject(t *testing.T, name string) (slug string, cleanup func()) {
 	t.Helper()
-	rateLimitWait()
+	rateLimitWait() // no-op in fixture mode
 
 	title := fmt.Sprintf("[TEST] %s %d", name, time.Now().UnixMilli())
 	if err := os.Mkdir(filepath.Join(projectsPath(testTeamKey), title), 0o755); err != nil {
@@ -726,18 +766,25 @@ func TestClaudeToolEditPersistsProjectDescription(t *testing.T) {
 	}
 }
 
-// TestClearProjectBodyIsRejectedLegibly is the live half of #398. Linear accepts
-// an empty `content` and then ignores it, so emptying a project body does not
-// take effect. The read-your-writes check catches that correctly; what was wrong
-// was the verdict — EIO, which reads as "retry", for a write that can never
-// succeed no matter how many times it is retried. It must be EINVAL, with a
-// .error saying the previous body was kept and what to write instead.
+// TestClearProjectBodyIsRejectedLegibly covers #398. A backend that accepts an
+// empty `content` and then ignores it — which is what Linear did when #398 was
+// filed — leaves the previous body in place. The read-your-writes check catches
+// that correctly; what was wrong was the verdict: EIO, which reads as "retry",
+// for a write that can never succeed no matter how many times it is retried. It
+// must be EINVAL, with a .error saying the previous body was kept and what to
+// write instead.
 //
-// Live-only by necessity: the verdict is derived from what the SERVER did with
-// the empty content, and the offline mock applies it (correctly reporting
-// success), so there is nothing to assert in fixture mode.
+// Fixture-mode by necessity, which is the opposite of what it first said (#411).
+// scalarEdit.clearsBody is deliberately not a pre-flight refusal: the EINVAL is
+// derived from what the SERVER did with the empty content, so a backend that
+// APPLIES it just succeeds. Live, Linear applied it and the test failed on a
+// non-bug — after mutating a real workspace to get there. The declining backend
+// is now something the fake models on request (WithEmptyContentIgnored), which
+// makes the verdict deterministic and costs no real project.
 func TestClearProjectBodyIsRejectedLegibly(t *testing.T) {
-	skipIfNoWriteTests(t)
+	skipIfLiveAPI(t, "the EINVAL verdict requires a backend that DECLINES an empty content — "+
+		"that is the mock mutator (WithEmptyContentIgnored), not Linear, which may simply apply it")
+	enableMockMutations(t, mockmutation.WithEmptyContentIgnored())
 
 	slug, cleanup := createTestProject(t, "Clear Body")
 	defer cleanup()
@@ -758,7 +805,14 @@ func TestClearProjectBodyIsRejectedLegibly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render project.md with a body: %v", err)
 	}
-	claudeToolWrite(t, path, withBody)
+	// Both saves take the SAME atomic-rename path. The rename's Flush diffs
+	// against the project directory node's cached entity, which it refreshes on
+	// each successful save; a plain truncate+write save does not refresh it, so
+	// seeding that way leaves the clear diffing against the pre-seed body — no
+	// change, no mutation, and nothing for the verdict to be about.
+	if err := claudeToolAtomicSave(t, path, withBody); err != nil {
+		t.Fatalf("seed a body via atomic save: %v", err)
+	}
 	waitForCacheExpiry()
 
 	// Now empty the body, keeping the frontmatter — the shape a "clear the
@@ -767,7 +821,7 @@ func TestClearProjectBodyIsRejectedLegibly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render project.md with an empty body: %v", err)
 	}
-	werr := claudeToolSaveExpectingError(t, path, cleared)
+	werr := claudeToolAtomicSave(t, path, cleared)
 	if !errors.Is(werr, syscall.EINVAL) {
 		t.Errorf("clearing a project body returned %v, want EINVAL — Linear cannot apply it, "+
 			"so the caller needs a verdict they can act on rather than a retryable-looking EIO", werr)
@@ -784,12 +838,18 @@ func TestClearProjectBodyIsRejectedLegibly(t *testing.T) {
 
 // TestClaudeToolEditPersistsInitiativeDescription is the initiative counterpart
 // to the project persistence test. It skips if the workspace has no initiative.
+//
+// Unlike the project half it borrows a real initiative rather than creating one
+// (there is no initiative-create surface), so it takes one it can put back:
+// restoring an originally-EMPTY body is a body-clear, which a backend that
+// ignores an empty content declines — the restore fails with EINVAL and the
+// marker stays in a real initiative for good (#398, #411).
 func TestClaudeToolEditPersistsInitiativeDescription(t *testing.T) {
 	skipIfNoWriteTests(t)
 
-	dir, err := firstInitiativeDir()
+	dir, err := restorableInitiativeDir()
 	if err != nil {
-		t.Skipf("no initiative in workspace: %v", err)
+		t.Skipf("no restorable initiative in workspace: %v", err)
 	}
 	path := filepath.Join(dir, "initiative.md")
 	orig, err := os.ReadFile(path)

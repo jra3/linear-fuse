@@ -57,6 +57,10 @@ type Client struct {
 	// Linear's server-side markdown normalization (see WithBodyReformat). nil
 	// means the fake stores what it was sent, verbatim.
 	bodyReformat func(string) string
+	// emptyContentIgnored makes a project/initiative content update of "" a no-op
+	// on the stored body, modelling the backend behaviour behind #398 (see
+	// WithEmptyContentIgnored). false means an empty content clears the body.
+	emptyContentIgnored bool
 	// liveLinkOverride, when set for a parent ID (project or initiative), replaces
 	// the store-backed authoritative live link list served by the liveReader seam.
 	// It lets a test present a phantom — a link the store still has but Linear no
@@ -94,6 +98,22 @@ func WithStore(store *db.Store) Option {
 // conservative choice for every other test.
 func WithBodyReformat(fn func(string) string) Option {
 	return func(c *Client) { c.bodyReformat = fn }
+}
+
+// WithEmptyContentIgnored models the other server behaviour the fake otherwise
+// cannot: a backend that ACCEPTS an empty `content` on a project/initiative
+// update, reports success, and then keeps the previous body — what Linear did
+// when #398 was filed. With it, a body-clear reads back unchanged, which is the
+// only condition under which the write-back tail can reach its declined-clear
+// verdict (EINVAL + clearBodyMessage) instead of reporting a faithful write.
+//
+// It exists because that verdict is derived from what the server DID, never from
+// a hardcoded belief about Linear (scalarEdit.clearsBody) — so asserting it live
+// asserts a backend behaviour nothing guarantees, and mutates a real workspace to
+// do it (#411). Off by default: the fake otherwise applies an empty content like
+// any other value.
+func WithEmptyContentIgnored() Option {
+	return func(c *Client) { c.emptyContentIgnored = true }
 }
 
 // New returns a fake mutation client. Created issues get identifiers like
@@ -250,6 +270,17 @@ func (c *Client) reformat(body string) string {
 		return body
 	}
 	return c.bodyReformat(body)
+}
+
+// storedContent returns the body the fake should keep for a project/initiative
+// content update: what it was sent (normalized like any stored body), or the
+// current value when the fake is modelling a backend that ignores an empty
+// content (WithEmptyContentIgnored).
+func (c *Client) storedContent(current, sent string) string {
+	if c.emptyContentIgnored && sent == "" {
+		return current
+	}
+	return c.reformat(sent)
 }
 
 func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[string]any) error {
@@ -414,7 +445,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 		proj.Name = *input.Name
 	}
 	if input.Content != nil { // the editable body maps here (#5)
-		proj.Content = c.reformat(*input.Content)
+		proj.Content = c.storedContent(proj.Content, *input.Content)
 	}
 	if input.Description != nil {
 		proj.Description = *input.Description
@@ -498,7 +529,7 @@ func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, inpu
 		init.Name = *input.Name
 	}
 	if input.Content != nil { // the editable body maps here (#5)
-		init.Content = c.reformat(*input.Content)
+		init.Content = c.storedContent(init.Content, *input.Content)
 	}
 	if input.Description != nil {
 		init.Description = *input.Description
