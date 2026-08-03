@@ -328,7 +328,9 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 	if issue.Team != nil {
 		teamID = issue.Team.ID
 	}
-	m := newDirManifest(&n.BaseNode, issue.ID, issue.CreatedAt, issue.UpdatedAt, 30*time.Second)
+	// The issue dir hands its children the mount's entry timeout, not a literal
+	// of its own: issue.md's staleness bound IS the mount's kernel-cache policy.
+	m := newDirManifest(&n.BaseNode, issue.ID, issue.CreatedAt, issue.UpdatedAt, n.lfs.entryTimeout())
 
 	// issue.md is editable-only; identity/links/relations live in issue.meta.
 	m.file("issue.md", issueIno(issue.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {

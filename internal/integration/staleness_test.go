@@ -95,16 +95,20 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	}
 
 	// Let the kernel's caches expire for real — the production freshness
-	// mechanism. The sync worker never notifies the kernel; entry timeouts
-	// (30s) make the next path walk re-Lookup every component, and each
-	// re-Lookup runs the nodeRefresher seam. (The ino namespace is total now —
-	// every ancestor dir has a derivable stable ino — but timeout-driven
-	// revalidation remains the production mechanism, so it is what this
-	// exercises.)
+	// mechanism. The sync worker never notifies the kernel; entry timeouts make
+	// the next path walk re-Lookup every component, and each re-Lookup runs the
+	// nodeRefresher seam. (The ino namespace is total now — every ancestor dir
+	// has a derivable stable ino — but timeout-driven revalidation remains the
+	// production mechanism, so it is what this exercises.)
+	//
+	// The wait is real time and cannot be otherwise: the expiry is the kernel's,
+	// on its clock. fixtureEntryTimeout is the only lever, and it is currently
+	// the production 30s — see the comment on it for why shortening it was
+	// reverted. -short is the escape hatch until that is resolved.
 	if testing.Short() {
-		t.Skip("waits out the 30s kernel entry timeout; skipped with -short")
+		t.Skip("waits out the mount's kernel entry timeout (30s); skipped with -short")
 	}
-	time.Sleep(31 * time.Second)
+	waitForKernelEntryExpiry(path, "Renamed By Remote Sync")
 
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -286,9 +290,9 @@ func TestRemoteTeamUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	// variant above: expiry forces the next path walk to re-Lookup every
 	// component, and each re-Lookup runs the nodeRefresher seam.
 	if testing.Short() {
-		t.Skip("waits out the 30s kernel entry timeout; skipped with -short")
+		t.Skip("waits out the mount's kernel entry timeout (30s); skipped with -short")
 	}
-	time.Sleep(31 * time.Second)
+	waitForKernelEntryExpiry(teamFile, "Renamed Team By Remote Sync")
 
 	after, err := os.ReadFile(teamFile)
 	if err != nil {

@@ -68,6 +68,7 @@ func TestMain(m *testing.M) {
 			_ = os.RemoveAll(fields[1])
 		}
 	}
+	sweepAbandonedTestDirs()
 
 	apiKey := os.Getenv("LINEAR_API_KEY")
 	liveAPIMode = os.Getenv("LINEARFS_LIVE_API") == "1" && apiKey != ""
@@ -98,6 +99,15 @@ func TestMain(m *testing.M) {
 // setupLiveAPI configures tests to run against real Linear API
 func setupLiveAPI(apiKey string) error {
 	var err error
+
+	// Name the workspace BEFORE anything is mounted or synced. A live run
+	// authenticates with whatever LINEAR_API_KEY is in the environment, and the
+	// only previous evidence of which workspace that was arrived implicitly —
+	// team names in a later log line, or an unexplained multi-minute sync of a
+	// workspace far bigger than the test one. In write mode the answer arrives
+	// after the mutations. One call, first line of the run.
+	announceLiveWorkspace(apiKey)
+
 	mountPoint, err = os.MkdirTemp("", "linearfs-test-*")
 	if err != nil {
 		return fmt.Errorf("create mount point: %w", err)
@@ -159,6 +169,111 @@ func setupLiveAPI(apiKey string) error {
 	}
 
 	return nil
+}
+
+// staleTestDirGrace is how recently a leftover temp dir must have been touched
+// to be treated as a CONCURRENT run's rather than an abandoned one. It is above
+// the longest run the Makefile budgets (25m for the live write suite), because
+// the cost of the two mistakes is not symmetric: sweeping a live run's state dir
+// corrupts that run, while leaving an abandoned dir another hour costs 1.5MB.
+const staleTestDirGrace = time.Hour
+
+// sweepAbandonedTestDirs removes the mountpoint and state dirs left by runs that
+// died before cleanup() — a killed run, a panic, a SIGPIPE from piping `go test`
+// into `head`. cleanup() already removes its own, so nothing accumulates from a
+// normal exit; what accumulated (28 dirs, 45MB, found the hard way) all came
+// from runs that never reached it, plus the ones whose lazy-detached mount was
+// still attached when RemoveAll ran.
+//
+// The preflight above only sweeps dirs that are still MOUNTED. This is the other
+// half: dirs with no mount at all, which nothing was looking at.
+func sweepAbandonedTestDirs() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "linearfs-test-*"))
+	if err != nil || len(matches) == 0 {
+		return
+	}
+	mounted := map[string]bool{}
+	if mounts, err := os.ReadFile("/proc/self/mounts"); err == nil {
+		for _, line := range strings.Split(string(mounts), "\n") {
+			if fields := strings.Fields(line); len(fields) >= 2 {
+				mounted[fields[1]] = true
+			}
+		}
+	}
+
+	swept := 0
+	for _, dir := range matches {
+		if mounted[dir] {
+			continue // a live run owns it; the preflight above has the policy
+		}
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if time.Since(info.ModTime()) < staleTestDirGrace {
+			continue // too fresh to be certain it is abandoned
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("Warning: could not remove abandoned test dir %s: %v", dir, err)
+			continue
+		}
+		swept++
+	}
+	if swept > 0 {
+		log.Printf("Swept %d abandoned test dir(s) from %s", swept, os.TempDir())
+	}
+}
+
+// Kernel cache timeouts for the FIXTURE mount, named here so the tests that wait
+// out an expiry derive their wait from the mount's actual policy instead of a
+// literal that can drift from it.
+//
+// They are the PRODUCTION defaults, deliberately, and that costs the offline
+// suite ~60s: the two timeout-driven revalidation tests must wait out a real 30s
+// entry timeout, because the expiry belongs to the kernel and runs on the
+// kernel's clock — no injected clock can bring it forward, so shortening the
+// timeout is the only lever (fs.WithKernelCacheTimeouts exists for it).
+//
+// Shortening was tried and REVERTED: at 1s and at 5s,
+// TestRemoteUpdateVisibleAfterKernelRevalidation becomes order-dependent — it
+// passes alone and fails roughly one run in three inside the full suite, with
+// issue.md never refreshing even after 10s of polling. Something earlier in the
+// suite leaves the node unable to refresh, and until that is understood a fast
+// suite here would mean a flaky one. See the ticket; the plumbing is in place
+// for when it is.
+const (
+	fixtureAttrTimeout  = fs.DefaultAttrTimeout
+	fixtureEntryTimeout = fs.DefaultEntryTimeout
+)
+
+// kernelRevalidationWait bounds the poll below. It is a timeout, not a delay:
+// the common case returns in one iteration.
+const kernelRevalidationWait = 10 * time.Second
+
+// waitForKernelEntryExpiry waits for the kernel to drop its cached entry/attrs
+// for path and serve the remote update behind it, then returns.
+//
+// Two parts, and both are load-bearing. The sleep is real time past the mount's
+// entry timeout: the expiry belongs to the kernel and runs on the kernel's
+// clock, so no injected clock can bring it forward — shortening the timeout
+// (fixtureEntryTimeout) is the only lever, and it changes the interval, not the
+// mechanism. The poll is because WHEN the revalidation lands after that is the
+// kernel's business too: content comes back through the page cache, which drops
+// when a revalidated attr shows a changed mtime, and under full-suite load that
+// arrives a beat later than it does for the test run alone. A single sleep of
+// timeout+margin is therefore a race that passes in isolation and fails in the
+// suite — which is exactly how it behaved — and a bigger margin is only a slower
+// race. On timeout this returns anyway, leaving the caller's assertions to
+// report precisely what was still stale.
+func waitForKernelEntryExpiry(path, want string) {
+	time.Sleep(fixtureEntryTimeout + 250*time.Millisecond)
+	deadline := time.Now().Add(kernelRevalidationWait)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && strings.Contains(string(data), want) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // Store-readiness bounds. The cold-start cycle is a FULL workspace sync of a
@@ -381,8 +496,11 @@ func setupSQLiteFixtures() error {
 		return fmt.Errorf("inject store: %w", err)
 	}
 
-	// Mount the filesystem
-	server, err = fs.MountFS(mountPoint, lfs, false)
+	// Mount with the fixture's kernel cache timeouts, stated explicitly rather
+	// than inherited: staleness_test.go waits these out, so the value the mount
+	// gets and the value the tests sleep are one constant (see them above).
+	server, err = fs.MountFS(mountPoint, lfs, false,
+		fs.WithKernelCacheTimeouts(fixtureAttrTimeout, fixtureEntryTimeout))
 	if err != nil {
 		lfs.Close()
 		store.Close()
@@ -668,23 +786,80 @@ func discoverTestTeam() error {
 	if err != nil {
 		return fmt.Errorf("failed to get teams: %w", err)
 	}
-	if len(teams) == 0 {
-		return fmt.Errorf("no teams found in workspace")
+
+	team, err := pickTestTeam(teams, os.Getenv("LINEARFS_TEST_TEAM"))
+	if err != nil {
+		return err
+	}
+	testTeamID = team.ID
+	testTeamKey = team.Key
+	return nil
+}
+
+// pickTestTeam chooses the team a live run acts on. `want` is LINEARFS_TEST_TEAM:
+// name a team and the run either gets THAT team or fails — it is the one place
+// an invocation can state which workspace it believes it is talking to, and a
+// key pointed somewhere else fails setup rather than finding some other team to
+// mutate. Unset keeps the historical prefer-TST-else-first behaviour.
+//
+// Pure so workspace_test.go can drive it in every mode; discoverTestTeam owns
+// the fetch.
+func pickTestTeam(teams []api.Team, want string) (api.Team, error) {
+	keys := make([]string, 0, len(teams))
+	for _, t := range teams {
+		keys = append(keys, t.Key)
 	}
 
-	// Prefer TST team for tests, fall back to first team
-	for _, team := range teams {
-		if team.Key == "TST" {
-			testTeamID = team.ID
-			testTeamKey = team.Key
-			return nil
+	if want != "" {
+		for _, t := range teams {
+			if t.Key == want {
+				return t, nil
+			}
+		}
+		return api.Team{}, fmt.Errorf("LINEARFS_TEST_TEAM=%s, but this API key's workspace has no team %s "+
+			"(it has: %s). The key is almost certainly for a different workspace than the run intends — "+
+			"which matters most in write mode, where the fallback this replaces would have created issues "+
+			"and projects in whichever workspace the key DID reach",
+			want, want, strings.Join(keys, ", "))
+	}
+
+	if len(teams) == 0 {
+		return api.Team{}, fmt.Errorf("no teams found in workspace")
+	}
+	for _, t := range teams {
+		if t.Key == fixtureTeamKeyPreference {
+			return t, nil
 		}
 	}
+	return teams[0], nil
+}
 
-	// Fallback to first team if TST not found
-	testTeamID = teams[0].ID
-	testTeamKey = teams[0].Key
-	return nil
+// fixtureTeamKeyPreference is the team key a live run falls back to preferring
+// when LINEARFS_TEST_TEAM is unset — the same key the fixture population uses,
+// so an unconfigured live run lands on the workspace's test team if it has one.
+const fixtureTeamKeyPreference = "TST"
+
+// announceLiveWorkspace logs the workspace behind the key, and in write mode
+// says plainly that this run creates and modifies data in it. It is diagnostic,
+// not a gate: a failure to resolve the organization is reported and the run
+// continues, because the interlock that can actually stop a wrong-workspace run
+// is LINEARFS_TEST_TEAM in pickTestTeam.
+func announceLiveWorkspace(apiKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	org, err := api.NewClient(apiKey).GetOrganization(ctx)
+	if err != nil {
+		log.Printf("LIVE MODE: could not identify the workspace behind LINEAR_API_KEY: %v", err)
+		return
+	}
+	if os.Getenv("LINEARFS_WRITE_TESTS") == "1" {
+		log.Printf("LIVE WRITE MODE: this run CREATES AND MODIFIES real data in workspace %q (%s). "+
+			"Set LINEARFS_TEST_TEAM to the team you intend to write to and setup will refuse any other workspace.",
+			org.Name, org.URLKey)
+		return
+	}
+	log.Printf("LIVE MODE (reads only): workspace %q (%s)", org.Name, org.URLKey)
 }
 
 func cleanup() {
@@ -726,10 +901,16 @@ func cleanup() {
 	if offlineAPIServer != nil {
 		offlineAPIServer.Close()
 	}
-	if mountPoint != "" {
-		os.RemoveAll(mountPoint)
-	}
-	if stateDir != "" {
-		os.RemoveAll(stateDir)
+	// Say so when removal fails rather than swallowing it: the usual cause is a
+	// lazy-detached mount still attached at this instant, and a silent failure
+	// here is how leftovers accumulated unnoticed. sweepAbandonedTestDirs picks
+	// up whatever survives, on a later run.
+	for _, dir := range []string{mountPoint, stateDir} {
+		if dir == "" {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("Warning: could not remove %s: %v (a later run will sweep it)", dir, err)
+		}
 	}
 }

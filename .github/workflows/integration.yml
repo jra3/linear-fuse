@@ -66,11 +66,18 @@ jobs:
       # -timeout matches `make integration-tests-rw`: the live suite's setup gate
       # spends up to a third of it waiting for the cold-start full sync, and the
       # job's own timeout-minutes must stay above the total.
+      # LINEARFS_TEST_TEAM names the team this job may write to, and setup FAILS if
+      # the key's workspace has no such team. CI cannot read the developer's .env,
+      # so without it the job would accept whatever workspace the secret happens to
+      # authenticate to and create issues and projects there — which is how a local
+      # run came to mutate a real work workspace whose TST team merely existed.
+      # Change this when the test workspace changes; a mismatch is meant to be loud.
       - name: Run integration tests (with writes)
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEARFS_LIVE_API: "1"
           LINEARFS_WRITE_TESTS: "1"
+          LINEARFS_TEST_TEAM: "FUS"
         run: go test -v -timeout 25m ./internal/integration/...
 
       - name: Cleanup on failure
