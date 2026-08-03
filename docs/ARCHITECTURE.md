@@ -536,7 +536,11 @@ building blocks:
   `collectionTrio` + `createFileNode` — the writable-collection kit: the trio
   guarantees every writable directory serves `_create`/`.error`/`.last`
   uniformly, and `_create` uses a per-open file handle so each
-  open-write-close cycle creates exactly one item.
+  open-write-close cycle creates exactly one item. `collectionDir` sits above
+  them, owning the item-file surface (Readdir/Lookup/Unlink/Create) the four
+  dynamic collections share — including the classification a name gets there: an
+  item `.md`, its read-only `.meta` shadow, a trio surface, or an editor's
+  scratch temp file (see the write flow).
 - `ino(kind, id)` — one FNV-based inode namespace, stable across remounts.
 - `nodeRefresher` — a re-looked-up node re-reads fresh entity data (go-fuse
   keeps the first node per inode), with a load-bearing conflict rule: **a dirty
@@ -599,7 +603,17 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `marshal`. Editor save-via-rename (temp file + `rename`) is caught by a
    scratch node and routed through the same path (`atomicwrite.go`,
    `renamesave.go`); the flush itself pins the written bytes for the re-Lookup
-   that path forces (`authoredPins`, armed in `editFlush`).
+   that path forces (`authoredPins`, armed in `editFlush`). **Every directory
+   holding an editable `.md` accepts that dance** — the three entity directories
+   and the four dynamic collections — because no editor and neither Claude Code
+   tool writes in place; a directory that rejects the temp-file create fails a
+   save at its first syscall, before any of the failure model below is reachable
+   (#145, #438). `renameSave` owns the tail (EXDEV → scratch lookup → resolve →
+   flush → adopt-on-`{0,EIO}` → consume → invalidate) and delegates only *where a
+   save may land*: `onlyFileTarget` for an entity directory's one writable file,
+   `collectionDir.itemFileTarget` for a collection, where an existing `{name}.md`
+   is a replace and a new one is a create — the same two outcomes, through the
+   same closures, that the directory's named `Create` has.
 2. The fs layer **resolves names to IDs** (status→stateId, assignee
    email→userId, labels→labelIds, project/milestone/cycle/parent→IDs). A local
    catalog miss self-heals: a typed unknown-name error triggers exactly **one**

@@ -115,11 +115,19 @@ func (n *DocsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	return n.collection().unlink(ctx, name)
 }
 
-// Rename renames a document by changing its title on Linear. The whole rename
-// tail — special-name/cross-dir guards, name parsing, find, mutate, persist gate,
-// and kernel re-coherence of the .md and its .meta twin — lives in commitRename;
-// this handler is the document-specific spec.
+// Rename covers the two different operations a rename in docs/ can be. Renaming
+// a SCRATCH temp file is an editor's atomic save: its buffered bytes are written
+// onto the destination document (renameSave, #438). Renaming a DOCUMENT is a
+// retitle on Linear; that tail — special-name/cross-dir guards, name parsing,
+// find, mutate, persist gate, and kernel re-coherence of the .md and its .meta
+// twin — lives in commitRename, and this handler is its document-specific spec.
 func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	c := n.collection()
+	if c.isScratch(name) {
+		// The destination's filename seeds the title when the save creates a new
+		// document, exactly as a named Create does.
+		return c.renameSave(ctx, name, newParent, newName, n.createDocument(newName))
+	}
 	return commitRename(ctx, n.lfs, name, newParent, newName, renameSpec[api.Document]{
 		kind:   "document",
 		errKey: collectionErrorKey("docs", n.parentID()),

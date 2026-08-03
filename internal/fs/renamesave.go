@@ -42,48 +42,61 @@ type renameSink interface {
 	InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64)
 }
 
-// renameSaveSpec describes the per-entity parts of an atomic save. Everything
-// entity-specific lives in these fields and closures; the tail itself is
-// entity-neutral.
+// renameSaveSpec describes the per-directory parts of an atomic save. Everything
+// directory-specific lives in these fields and closures; the tail itself is
+// neutral.
 type renameSaveSpec struct {
-	// targetName is the one writable file in the directory ("issue.md",
-	// "project.md", "initiative.md") — the only rename destination a scratch
-	// buffer has somewhere to persist to.
-	targetName string
-	// errKey identifies the entity's .error file for the wrong-target message
-	// (the entity ID).
-	errKey string
-	// dirIno is the entity directory's inode. The EXDEV same-directory check
-	// and the rename invalidation both key off it.
+	// dirIno is the directory's inode. The EXDEV same-directory check and the
+	// rename invalidation both key off it.
 	dirIno uint64
-	// fileIno is the canonical file's inode, dropped after a persisted save so
-	// the file re-Looks-up to a fresh node instead of serving the spent scratch
-	// inode go-fuse moved into place.
-	fileIno uint64
 	// scratch reports the buffered contents of the scratch file named name, a
 	// closure that marks that scratch node consumed, and whether name refers to
 	// a scratch file this filesystem created. scratchRenameBytes(dir, name) in
 	// production; a seam so the tail is testable without an inode tree. The tail
 	// calls consume only on a persisted save (see renameSave).
 	scratch func(name string) (content []byte, consume func(), ok bool)
-	// flush routes the scratch bytes through the entity file's normal edit path:
-	// construct a transient file node with a dirty editBuffer and Flush it
-	// (frontmatter validation, read-your-writes verification, .error handling,
-	// cache invalidation, and the serve-your-own-writes pin — see editFlush). The
-	// closure captures the transient node so adopt can read the flushed entity
-	// back.
+	// target resolves the destination name to the write that persists the
+	// scratch bytes, or refuses it with an errno (and an .error explaining
+	// where a save CAN land — the resolver owns that message, because what is
+	// writable is exactly what varies between directories). It takes both names
+	// so the refusal can describe the whole rejected rename.
+	//
+	// The two resolvers: onlyFileTarget for the entity directories, which hold
+	// one writable file each, and collectionDir.itemFileTarget for the dynamic
+	// collections (docs/, comments/, labels/), where any {name}.md is a
+	// destination — an existing item to overwrite, or a new one to create.
+	target func(ctx context.Context, oldName, newName string) (renameSaveTarget, syscall.Errno)
+}
+
+// renameSaveTarget is a resolved save destination: where the buffered bytes go,
+// and what the tail must re-cohere once they land.
+type renameSaveTarget struct {
+	// flush routes the scratch bytes through the destination's normal write
+	// path — for an existing file, a transient file node with a dirty
+	// editBuffer, Flushed (frontmatter validation, read-your-writes
+	// verification, .error handling, cache invalidation, and the
+	// serve-your-own-writes pin — see editFlush); for a name that names no
+	// entity yet, the collection's create trigger.
 	flush func(ctx context.Context, content []byte) syscall.Errno
 	// adopt stores the flushed node's fresh entity on the directory node so the
 	// canonical file re-renders the persisted content. Called exactly when the
-	// write reached Linear — flush errno 0 or EIO (see renameSave).
+	// write reached Linear — flush errno 0 or EIO (see renameSave). Nil where
+	// the directory node caches no entity for the destination: a collection item
+	// is re-read from SQLite, not held on the collection node.
 	adopt func()
+	// fileIno is the destination file's inode, dropped after a persisted save so
+	// the file re-Looks-up to a fresh node instead of serving the spent scratch
+	// inode go-fuse moved into place. Zero means "nothing to drop here": a save
+	// that CREATES an item has no prior inode, and a collection item's inode is
+	// already in its editFlush coherence list.
+	fileIno uint64
 }
 
 // renameSave persists an editor's atomic save: when a scratch temp file is
-// renamed onto spec.targetName, its buffered bytes are written through the same
-// path a direct in-place edit uses. The canonical file is the only writable
-// file in the directory, so renames onto any other target — or of the canonical
-// files themselves — are rejected.
+// renamed onto a name spec.target accepts, its buffered bytes are written
+// through the same path a direct in-place edit uses. Renames of anything that
+// is not a scratch file — the canonical .md files themselves — are rejected
+// here; which destinations are writable is the target resolver's call.
 func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.InodeEmbedder, newName string, spec renameSaveSpec) syscall.Errno {
 	// The atomic-save pattern keeps the temp file a sibling of the canonical file.
 	if newParent.EmbeddedInode().StableAttr().Ino != spec.dirIno {
@@ -97,14 +110,14 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		return syscall.ENOTSUP
 	}
 
-	if newName != spec.targetName {
-		// A scratch file only has somewhere to persist when renamed onto the one
-		// editable file in this directory.
-		sink.SetWriteError(spec.errKey, fmt.Sprintf("Operation: rename %s -> %s\nError: only %s is writable in this directory; save your changes onto %s (atomic save-via-rename onto %s is supported).", name, newName, spec.targetName, spec.targetName, spec.targetName))
-		return syscall.ENOTSUP
+	target, errno := spec.target(ctx, name, newName)
+	if errno != 0 {
+		// Nowhere to persist to. The resolver has already said why in .error;
+		// the scratch stays usable (unconsumed) so a corrected rename can follow.
+		return errno
 	}
 
-	errno := spec.flush(ctx, content)
+	errno = target.flush(ctx, content)
 
 	if errno == 0 || errno == syscall.EIO {
 		// Adopt on EIO too: Flush returns EIO only on a fatal read-your-writes
@@ -118,18 +131,45 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 		// the spent node moved over the canonical name fails loud (ESTALE)
 		// instead of silently accepting writes it can no longer persist — that
 		// ESTALE drives the VFS to re-Lookup the real node.
-		spec.adopt()
+		if target.adopt != nil {
+			target.adopt()
+		}
 		consume()
 		// Serve-your-own-writes (#379) needs no work here: the flush above armed
-		// the pin under spec.fileIno if — and only if — it committed a clean write
+		// the pin under the destination's inode if — and only if — it committed a clean write
 		// (editFlush, #381), which is already before the invalidation that forces
 		// the re-Lookup seeding from it. This tail used to arm the pin itself, off
 		// a `committed` flag the flush closure reported back, because errno alone
 		// cannot tell a real write from a save that resolved to no changes. Inside
 		// editFlush that distinction is just the `proceed` it already has, and one
 		// pin site is what lets a later in-place edit supersede this save's pin.
-		sink.InvalidateRenamed(spec.dirIno, name, newName, spec.fileIno)
+		sink.InvalidateRenamed(spec.dirIno, name, newName, target.fileIno)
 	}
 
 	return errno
+}
+
+// onlyFileTarget is the renameSaveSpec.target resolver for a directory holding
+// exactly ONE writable file — the three entity directories (issues/{ID},
+// projects/{slug}, initiatives/{slug}). Its resolve method accepts that file and
+// nothing else, so a save aimed anywhere else is refused with ENOTSUP and an
+// .error naming where the save CAN land.
+type onlyFileTarget struct {
+	sink   errorSink
+	errKey string // the entity's .error key (the entity ID)
+	// name is the one writable file ("issue.md", "project.md",
+	// "initiative.md") — the only destination a scratch buffer has somewhere to
+	// persist to.
+	name    string
+	fileIno uint64
+	flush   func(ctx context.Context, content []byte) syscall.Errno
+	adopt   func()
+}
+
+func (t onlyFileTarget) resolve(_ context.Context, oldName, newName string) (renameSaveTarget, syscall.Errno) {
+	if newName != t.name {
+		t.sink.SetWriteError(t.errKey, fmt.Sprintf("Operation: rename %s -> %s\nError: only %s is writable in this directory; save your changes onto %s (atomic save-via-rename onto %s is supported).", oldName, newName, t.name, t.name, t.name))
+		return renameSaveTarget{}, syscall.ENOTSUP
+	}
+	return renameSaveTarget{flush: t.flush, adopt: t.adopt, fileIno: t.fileIno}, 0
 }

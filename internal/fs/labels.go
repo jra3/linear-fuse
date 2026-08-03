@@ -93,11 +93,18 @@ func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	return n.collection().unlink(ctx, name)
 }
 
-// Rename renames a label by changing its name on Linear. The whole rename tail —
-// special-name/cross-dir guards, name parsing, find, mutate, persist gate, and
-// kernel re-coherence of the .md and its .meta twin — lives in commitRename; this
-// handler is the label-specific spec.
+// Rename covers the two different operations a rename in labels/ can be.
+// Renaming a SCRATCH temp file is an editor's atomic save: its buffered bytes
+// are written onto the destination label (renameSave, #438). Renaming a LABEL
+// changes its name on Linear; that tail — special-name/cross-dir guards, name
+// parsing, find, mutate, persist gate, and kernel re-coherence of the .md and
+// its .meta twin — lives in commitRename, and this handler is its label-specific
+// spec.
 func (n *LabelsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	c := n.collection()
+	if c.isScratch(name) {
+		return c.renameSave(ctx, name, newParent, newName, n.createLabel)
+	}
 	return commitRename(ctx, n.lfs, name, newParent, newName, renameSpec[api.Label]{
 		kind:   "label",
 		errKey: collectionErrorKey("labels", n.teamID),

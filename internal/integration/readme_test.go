@@ -56,6 +56,18 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		}
 	}
 
+	// Atomic save (#438): every editor and the Edit/Write tools save by writing a
+	// temp file and renaming it over the target, and the README has to teach the
+	// two things that path's failures depend on — that the SAVE happens at the
+	// rename, and that an unrenamed scratch file is DISCARDED rather than
+	// created. Without the second, "echo x > docs/notes.txt saved nothing" reads
+	// as a filesystem bug instead of a documented contract.
+	for _, want := range []string{"<atomic_save>", "SCRATCH", "DISCARDED", "at the RENAME"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q (atomic-save contract)", want)
+		}
+	}
+
 	// The project/initiative external-link surface (#249): the README must teach
 	// the links/ directory and its "URL [label]" write contract, and the *.link
 	// files must really be read-only (a documented write-only/read-only surface
@@ -162,10 +174,12 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	// reads. A collection's .error is explicitly not assumed empty by this suite
 	// (see TestErrorFileExposedOnWritableSurfaces).
 	//
-	// Emptying goes through O_TRUNC rather than the atomic-rename helper: docs/
-	// does not accept a scratch temp file (#389), and O_TRUNC is deterministic
-	// here anyway — the truncate is a real setattr the kernel cannot serve from
-	// cache, so the close-time Flush always runs and hands back its errno.
+	// Emptying goes through O_TRUNC rather than the atomic-rename helper because
+	// O_TRUNC is deterministic here: the truncate is a real setattr the kernel
+	// cannot serve from cache, so the close-time Flush always runs and hands back
+	// its errno. (docs/ does accept a scratch temp file now — #438 — so the
+	// rename path would work too; it just proves less about THIS guard, which
+	// lives on the shared edit-flush shell either way.)
 	//
 	// The bytes are read before and after, which does double duty. It pins the
 	// other half of the README's promise — the file KEEPS ITS CURRENT CONTENTS,

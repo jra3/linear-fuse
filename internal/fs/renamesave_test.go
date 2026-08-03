@@ -44,23 +44,28 @@ type recordingRenameSpec struct {
 	adoptCalls   int
 }
 
-func newRecordingRenameSpec(scratchOK bool, flushErrno syscall.Errno) *recordingRenameSpec {
+func newRecordingRenameSpec(sink renameSink, scratchOK bool, flushErrno syscall.Errno) *recordingRenameSpec {
 	r := &recordingRenameSpec{}
 	r.spec = renameSaveSpec{
-		targetName: "issue.md",
-		errKey:     "issue-1",
-		dirIno:     0, // matches the zero-value renameParent inode
-		fileIno:    99,
+		dirIno: 0, // matches the zero-value renameParent inode
 		scratch: func(name string) ([]byte, func(), bool) {
 			r.scratchCalls++
 			return []byte("scratch bytes"), func() { r.consumeCalls++ }, scratchOK
 		},
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
-			r.flushCalls++
-			r.flushContent = content
-			return flushErrno
-		},
-		adopt: func() { r.adoptCalls++ },
+		// The entity-directory resolver, the one production shape with a fixed
+		// target; the collection resolver is covered in collectiondir_test.go.
+		target: onlyFileTarget{
+			sink:    sink,
+			errKey:  "issue-1",
+			name:    "issue.md",
+			fileIno: 99,
+			flush: func(ctx context.Context, content []byte) syscall.Errno {
+				r.flushCalls++
+				r.flushContent = content
+				return flushErrno
+			},
+			adopt: func() { r.adoptCalls++ },
+		}.resolve,
 	}
 	return r
 }
@@ -94,7 +99,7 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := &renameRecorder{}
-			rec := newRecordingRenameSpec(true, tc.flushErrno)
+			rec := newRecordingRenameSpec(sink, true, tc.flushErrno)
 
 			errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
 				&renameParent{}, "issue.md", rec.spec)
@@ -132,7 +137,7 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 
 func TestRenameSave_WrongTarget(t *testing.T) {
 	sink := &renameRecorder{}
-	rec := newRecordingRenameSpec(true, 0)
+	rec := newRecordingRenameSpec(sink, true, 0)
 
 	errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
 		&renameParent{}, "notes.md", rec.spec)
@@ -162,7 +167,7 @@ func TestRenameSave_WrongTarget(t *testing.T) {
 
 func TestRenameSave_CrossDirectory(t *testing.T) {
 	sink := &renameRecorder{}
-	rec := newRecordingRenameSpec(true, 0)
+	rec := newRecordingRenameSpec(sink, true, 0)
 	// The zero-value parent inode has ino 0; a nonzero dirIno makes the rename
 	// cross-directory.
 	rec.spec.dirIno = 7
@@ -187,7 +192,7 @@ func TestRenameSave_NotAScratchFile(t *testing.T) {
 	sink := &renameRecorder{}
 	// e.g. an attempt to rename issue.md itself: the canonical files aren't
 	// renamable, and no .error is recorded (there is nothing to persist).
-	rec := newRecordingRenameSpec(false, 0)
+	rec := newRecordingRenameSpec(sink, false, 0)
 
 	errno := renameSave(context.Background(), sink, "issue.md",
 		&renameParent{}, "renamed.md", rec.spec)

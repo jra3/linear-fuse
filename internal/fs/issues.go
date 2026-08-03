@@ -405,7 +405,7 @@ func (n *IssueDirectoryNode) Create(ctx context.Context, name string, flags uint
 	if n.lfs.debug {
 		log.Printf("Create scratch file in %s: %s", issue.Identifier, name)
 	}
-	return newScratchInode(ctx, &n.BaseNode, issueDirIno(issue.ID), name, out)
+	return newScratchInode(ctx, n.lfs, n, issueDirIno(issue.ID), name, out)
 }
 
 // Rename persists an editor's atomic save: a scratch temp file renamed onto
@@ -420,20 +420,23 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 
 	var fileNode *IssueFileNode
 	return renameSave(ctx, n.lfs, name, newParent, newName, renameSaveSpec{
-		targetName: "issue.md",
-		errKey:     issue.ID,
-		dirIno:     n.EmbeddedInode().StableAttr().Ino,
-		fileIno:    issueIno(issue.ID),
-		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(n, oldName) },
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
-			fileNode = &IssueFileNode{
-				BaseNode:   BaseNode{lfs: n.lfs},
-				issue:      issue,
-				editBuffer: editBuffer{content: content, dirty: true},
-			}
-			return fileNode.Flush(ctx, nil)
-		},
-		adopt: func() { n.setEntity(fileNode.issue) },
+		dirIno:  n.EmbeddedInode().StableAttr().Ino,
+		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(n, oldName) },
+		target: onlyFileTarget{
+			sink:    n.lfs,
+			errKey:  issue.ID,
+			name:    "issue.md",
+			fileIno: issueIno(issue.ID),
+			flush: func(ctx context.Context, content []byte) syscall.Errno {
+				fileNode = &IssueFileNode{
+					BaseNode:   BaseNode{lfs: n.lfs},
+					issue:      issue,
+					editBuffer: editBuffer{content: content, dirty: true},
+				}
+				return fileNode.Flush(ctx, nil)
+			},
+			adopt: func() { n.setEntity(fileNode.issue) },
+		}.resolve,
 	})
 }
 

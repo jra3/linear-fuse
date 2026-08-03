@@ -168,18 +168,21 @@ func scratchIno(parentIno uint64, name string) uint64 {
 
 // newScratchInode builds the in-memory scratch inode a directory's Create
 // handler returns for an editor's atomic-save temp file. parentIno is the
-// directory's inode (used only to derive a stable, collision-free scratch ino).
-func newScratchInode(ctx context.Context, parent *BaseNode, parentIno uint64, name string, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
-	node := &scratchFileNode{BaseNode: BaseNode{lfs: parent.lfs}}
+// directory's inode (used only to derive a stable, collision-free scratch ino);
+// parent is the directory node the scratch inode is built under, taken as a bare
+// InodeEmbedder so the dynamic collections (collectionDir, which holds one) can
+// mint scratch files too, not just the entity directories with their *BaseNode.
+func newScratchInode(ctx context.Context, lfs *LinearFS, parent fs.InodeEmbedder, parentIno uint64, name string, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	node := &scratchFileNode{BaseNode: BaseNode{lfs: lfs}}
 	out.Attr.Mode = 0644 | syscall.S_IFREG
-	out.Attr.Uid = parent.lfs.uid
-	out.Attr.Gid = parent.lfs.gid
+	out.Attr.Uid = lfs.uid
+	out.Attr.Gid = lfs.gid
 	out.Attr.Size = 0
 	// Short timeouts: the scratch file is transient and should not linger in the
 	// kernel cache after the rename consumes it.
 	out.SetAttrTimeout(time.Second)
 	out.SetEntryTimeout(time.Second)
-	inode := parent.NewInode(ctx, node, fs.StableAttr{
+	inode := parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{
 		Mode: syscall.S_IFREG,
 		Ino:  scratchIno(parentIno, name),
 	})

@@ -161,7 +161,7 @@ func (i *InitiativeNode) Create(ctx context.Context, name string, flags uint32, 
 	if i.lfs.debug {
 		log.Printf("Create scratch file in initiative %s: %s", i.entity().Name, name)
 	}
-	return newScratchInode(ctx, &i.BaseNode, i.EmbeddedInode().StableAttr().Ino, name, out)
+	return newScratchInode(ctx, i.lfs, i, i.EmbeddedInode().StableAttr().Ino, name, out)
 }
 
 // Rename persists an editor's atomic save: a scratch temp file renamed onto
@@ -176,21 +176,24 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 
 	var fileNode *InitiativeInfoNode
 	return renameSave(ctx, i.lfs, name, newParent, newName, renameSaveSpec{
-		targetName: "initiative.md",
-		errKey:     initiative.ID,
-		dirIno:     i.EmbeddedInode().StableAttr().Ino,
-		fileIno:    initiativeInfoIno(initiative.ID),
-		scratch:    func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
-		flush: func(ctx context.Context, content []byte) syscall.Errno {
-			fileNode = &InitiativeInfoNode{
-				BaseNode:     BaseNode{lfs: i.lfs},
-				initiative:   initiative,
-				initiativeID: initiative.ID,
-				editBuffer:   editBuffer{content: content, dirty: true},
-			}
-			return fileNode.Flush(ctx, nil)
-		},
-		adopt: func() { i.setEntity(fileNode.initiative) },
+		dirIno:  i.EmbeddedInode().StableAttr().Ino,
+		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
+		target: onlyFileTarget{
+			sink:    i.lfs,
+			errKey:  initiative.ID,
+			name:    "initiative.md",
+			fileIno: initiativeInfoIno(initiative.ID),
+			flush: func(ctx context.Context, content []byte) syscall.Errno {
+				fileNode = &InitiativeInfoNode{
+					BaseNode:     BaseNode{lfs: i.lfs},
+					initiative:   initiative,
+					initiativeID: initiative.ID,
+					editBuffer:   editBuffer{content: content, dirty: true},
+				}
+				return fileNode.Flush(ctx, nil)
+			},
+			adopt: func() { i.setEntity(fileNode.initiative) },
+		}.resolve,
 	})
 }
 

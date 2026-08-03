@@ -314,6 +314,32 @@ _create is a write-only trigger file (like /proc/sysrq-trigger):
 - For docs/, prefer named files: echo "x" > docs/"Title.md"
 </_create_behavior>
 
+<atomic_save>
+Editors and the Edit/Write tools never write a file in place: they create a
+sibling temp file, write it, then rename(2) it over the target. That works in
+every directory holding an editable .md — the entity dirs (issue.md, project.md,
+initiative.md) and the collections (comments/, docs/, labels/, milestones/).
+
+- A name that is not an item filename — issue.md.tmp.1234, docs/notes.md.tmp.99,
+  swap files, editor backups — is accepted as an in-memory SCRATCH file. It is
+  never sent to Linear and never appears in a listing.
+- The save happens at the RENAME, not at the write: renaming the scratch file
+  onto the editable .md writes it through that file's normal save path, with the
+  same validation, .error, and read-back.
+- A scratch file that is never renamed is DISCARDED (rm of one always succeeds).
+  So: echo text > docs/notes.txt saves NOTHING — write to docs/"Title.md".
+- In a collection the rename target picks the operation: an existing <name>.md
+  REPLACES that item, a new <name>.md CREATES one — the same two outcomes
+  echo text > docs/"Title.md" has, including that a created item is then listed
+  under the filename Linear's stored fields derive, not the one you saved as.
+  Read the sibling .last for it.
+- A rename anywhere else is refused (ENOTSUP/EINVAL) and .error names where the
+  save CAN land. The scratch file survives a refusal, so a corrected rename
+  still saves it.
+- Renaming an ITEM is a different operation: in docs/ and labels/ it retitles the
+  entity on Linear; comments/ and milestones/ do not support it (ENOTSUP).
+</atomic_save>
+
 <validation_errors>
 Every writable directory has a .error feedback file. After a failed write,
 cat the .error next to the file (or _create) you wrote to see what went wrong:
@@ -406,8 +432,13 @@ LISTING DIRECTORIES:
 - ls output shows symlinks; follow them with Read to get content
 
 EDITING FILES:
-- Use the Edit tool to modify issue.md, project.md, initiative.md frontmatter
+- Use the Edit tool to modify any editable .md — issue.md, project.md,
+  initiative.md, and the collection items (comments/, docs/, labels/,
+  milestones/)
 - The Edit tool works correctly because it reads then writes (unlike raw editors on _create)
+- Atomic save (write a temp file, rename it over the target) is supported in
+  every directory holding an editable .md, so the Edit/Write tools, vim, and VS
+  Code all save normally. See <atomic_save> for what the temp file is
 - After editing, changes sync to Linear immediately
 - A save reads back byte-for-byte right away, but Linear normalizes markdown when
   it STORES a body — it collapses blank runs, flips bullet markers, and can move

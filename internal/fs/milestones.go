@@ -21,6 +21,8 @@ type MilestonesNode struct {
 var _ fs.NodeReaddirer = (*MilestonesNode)(nil)
 var _ fs.NodeLookuper = (*MilestonesNode)(nil)
 var _ fs.NodeUnlinker = (*MilestonesNode)(nil)
+var _ fs.NodeCreater = (*MilestonesNode)(nil)
+var _ fs.NodeRenamer = (*MilestonesNode)(nil)
 var _ fs.NodeGetattrer = (*MilestonesNode)(nil)
 
 func (n *MilestonesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -92,6 +94,26 @@ func (n *MilestonesNode) buildMilestone(ctx context.Context, name string, m api.
 
 func (n *MilestonesNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	return n.collection().unlink(ctx, name)
+}
+
+// Create is what makes milestones/ editable by an editor at all: every editor
+// and the Claude Code Edit/Write tools save by writing a sibling temp file and
+// renaming it over the target, and without a Create handler go-fuse rejects that
+// first syscall with a misleading EROFS on an rw mount (#145, #438). Named .md
+// creates ride along, on the same trigger _create uses.
+func (n *MilestonesNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	return n.collection().create(ctx, name, flags, out, n.createMilestone)
+}
+
+// Rename exists for one operation: an editor's atomic save (renameSave, #438).
+// A milestone file itself is not renamable — rename its `name:` field instead,
+// which is what the sibling collections' Rename does under the hood.
+func (n *MilestonesNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	c := n.collection()
+	if !c.isScratch(name) {
+		return syscall.ENOTSUP
+	}
+	return c.renameSave(ctx, name, newParent, newName, n.createMilestone)
 }
 
 // milestoneFilename returns the filename for a milestone. safeName is the final

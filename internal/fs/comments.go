@@ -25,6 +25,7 @@ var _ fs.NodeReaddirer = (*CommentsNode)(nil)
 var _ fs.NodeLookuper = (*CommentsNode)(nil)
 var _ fs.NodeCreater = (*CommentsNode)(nil)
 var _ fs.NodeUnlinker = (*CommentsNode)(nil)
+var _ fs.NodeRenamer = (*CommentsNode)(nil)
 var _ fs.NodeGetattrer = (*CommentsNode)(nil)
 
 func (n *CommentsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -91,6 +92,21 @@ func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 func (n *CommentsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	return n.collection().create(ctx, name, flags, out, n.createComment)
+}
+
+// Rename exists for one operation: an editor's atomic save, where a scratch temp
+// file is renamed onto a comment .md and its bytes are written through that
+// comment's edit path (renameSave, #438). A comment file itself is not
+// renamable — its name is derived from creation order and date, not from
+// anything a user can set — so renaming one is ENOTSUP rather than a retitle
+// (the sibling collections' Rename does retitle, because their names ARE the
+// entity's).
+func (n *CommentsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	c := n.collection()
+	if !c.isScratch(name) {
+		return syscall.ENOTSUP
+	}
+	return c.renameSave(ctx, name, newParent, newName, n.createComment)
 }
 
 // CommentNode represents a single comment file (read-write)
