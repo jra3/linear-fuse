@@ -162,6 +162,23 @@ the `LINEAR_API_KEY` env path is the escape hatch and is unaffected. The
 mountpoint itself stays `0755` — the FUSE mount is owner-only regardless
 (AllowOther is never set), so tightening it is cosmetic.
 
+**A developer checkout holds a second copy of the secret.** `.env` in the repo
+root is the local home for live-test credentials (`LINEAR_API_KEY`,
+`LINEARFS_TEST_TEAM`); the live make targets source it into the recipe's own
+shell (`set -a; . ./.env; set +a`) and refuse to run without it. Three properties
+keep it from becoming a leak. It is gitignored, so it cannot be committed — the
+one control that actually matters, since a key in git history outlives any
+chmod. It is deliberately *not* `~/.config/linearfs/env`, which is the systemd
+unit's `EnvironmentFile`: a throwaway-workspace test key placed there would
+silently repoint the running mount, so the split is a correctness boundary as
+much as a security one. And **nothing chmods it** — `internal/atrest` covers
+artifacts LinearFS *writes*, and this file is created by hand, so a default
+`umask` leaves it `0644` and world-readable to P3 (observed in practice). Unlike
+`config.yaml` there is no load-time mode refusal, because the reader is `make`,
+not `internal/config`. Treat `chmod 600 .env` as the developer's job; the same
+caveat applies to any shell that `export`s the key, whose value is visible in
+`/proc/<pid>/environ` to its owner alone but lands in shell history if typed.
+
 ### TB4 — Build & release (P4)
 
 The path from source to running binary: the release artifacts goreleaser
@@ -209,7 +226,20 @@ along with the secret is open in #386.
 Locally the same credential reaches the same suite through `make
 integration-tests-ro` (live, reads only), `make integration-tests-rw` (live,
 CREATES AND MODIFIES REAL LINEAR DATA), and `make integration-tests` (both, in
-that order); the default `make test` needs no key and touches no network. The
+that order); the default `make test` needs no key and touches no network. Those
+targets read the key out of `.env` and never name it in a recipe line, which
+closes two P3 reads that the earlier `LINEAR_API_KEY=$(LINEAR_API_KEY) go test …`
+prefix left open: make echoes recipe lines with variables already expanded, so
+the raw key was printed into every terminal scrollback and CI log, and it sat in
+the test process's `argv` for the length of a run — up to 25 minutes of `ps` for
+any other local user. The emptiness guard reads `$$LINEAR_API_KEY` (the shell's
+own environment, sourced from `.env` a statement earlier) rather than expanding a
+make variable, so the value never enters a command string at all; `bench-dirs`,
+which still takes its key from the ambient environment, guards the same way for
+the same reason. Passing the key as a make-level argument (`make
+integration-tests-rw LINEAR_API_KEY=…`) re-opens both reads against `make`'s own
+process and your shell history, and is now inert besides — `.env` overrides it.
+`CONTRIBUTING.md` documents the `.env` form instead. The
 read-only target is read-only by enforcement, not convention: the write-contract
 guards that write through the mount now skip under a live key (`skipIfLiveAPI`),
 so a `-ro` run cannot leak a probe issue into the workspace. #395 widened the set

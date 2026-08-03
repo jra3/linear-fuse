@@ -52,10 +52,18 @@ budget-hungry. Run live mode through the make targets rather than by hand — th
 the `-timeout` the live suite's cold-start sync gate needs (see the integration-test notes
 in [`CLAUDE.md`](CLAUDE.md)):
 
+The live targets take their credentials from `.env` (gitignored; copy `.env.example`),
+not from your shell and not from a `make VAR=value` argument. Both of those are the wrong
+source: an exported `LINEAR_API_KEY` is normally the key for the workspace you actually
+work in, and a make-level variable additionally lands in your shell history and in this
+`make` process's own `argv`, where any other local user can read it out of `ps`.
+
 ```bash
-go test ./internal/integration/...             # fixtures (default, no key)
-make integration-tests-ro LINEAR_API_KEY=xxx   # live API, READS ONLY
-make integration-tests-rw LINEAR_API_KEY=xxx   # live API + writes: CREATES AND MODIFIES REAL LINEAR DATA
+go test ./internal/integration/...    # fixtures (default, no key)
+
+cp .env.example .env                  # then fill in the TEST workspace's key + team
+make integration-tests-ro             # live API, READS ONLY
+make integration-tests-rw             # live API + writes: CREATES AND MODIFIES REAL LINEAR DATA
 ```
 
 ## The testing philosophy (important)

@@ -103,7 +103,7 @@ coverage-html: coverage
 	go tool cover -html=coverage.out
 
 bench-dirs: build
-	@if [ -z "$(LINEAR_API_KEY)" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
+	@if [ -z "$$LINEAR_API_KEY" ]; then echo "LINEAR_API_KEY required"; exit 1; fi
 	./scripts/bench-dirs.sh
 
 # Default mount point (~ expands in shell context)
