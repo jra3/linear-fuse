@@ -5,7 +5,7 @@ import "fmt"
 // queryTeams drains: this is the sync worker's root fetch, and Linear
 // silently caps a connection without first: at 50 nodes — a 51st team would
 // have silently truncated the whole sync.
-const queryTeams = `
+var queryTeams = `
 query Teams($after: String) {
   teams(first: 50, after: $after) {
     pageInfo { hasNextPage endCursor }
@@ -26,11 +26,25 @@ query Teams($after: String) {
       defaultIssueEstimate
       issueEstimationAllowZero
       issueEstimationExtended
-      defaultTemplateForMembers { id name description type }
-      defaultTemplateForNonMembers { id name description type }
-      defaultProjectTemplate { id name description type }
+      defaultTemplateForMembers { ...TemplateFields }
+      defaultTemplateForNonMembers { ...TemplateFields }
+      defaultProjectTemplate { ...TemplateFields }
     }
   }
+}
+` + templateFieldsFragment
+
+// TemplateFields is the shared projection for a team's default templates —
+// three edges of the same query, which is exactly where an inlined copy drifts.
+// templateData is deliberately absent: it describes a whole prefilled entity,
+// which would be a content surface of its own rather than a line of team
+// metadata (see api.Template).
+const templateFieldsFragment = `
+fragment TemplateFields on Template {
+  id
+  name
+  description
+  type
 }
 `
 

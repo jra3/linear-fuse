@@ -104,13 +104,14 @@ teams/{KEY}/
                                      whether triage intercepts it, and the scale
                                      "estimate:" is denominated in ("estimation" is
                                      that scale; "default_estimate" is the value, and
-                                     the estimate_* keys are omitted entirely when
-                                     estimation is "notUsed") —
+                                     "default_estimate" plus the estimate_* keys are
+                                     omitted entirely when estimation is "notUsed") —
                                      read it before creating issues. An absent
                                      "defaults" block means not-yet-synced, not
                                      "all off". "templates" names the team's default
                                      templates (issue / issue_non_member / project),
-                                     each as name+id only, never the template body]
+                                     each as name, id, and "description" when the
+                                     template sets one — never the template body]
   project-labels.md                 [symlink to ../../project-labels.md]
   parent                            [symlink to ../{PARENT_KEY}; listed only for a sub-team]
   subteams/{KEY}                    [symlinks to sub-team dirs; teams/ itself stays flat,

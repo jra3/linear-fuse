@@ -5,15 +5,42 @@ import "time"
 // Fixture functions return map[string]any for JSON encoding.
 // This avoids import cycles with the api package.
 
-// FixtureTeam returns a test team as a map.
+// FixtureTeam returns a test team as a map. The issue-creation defaults and
+// template edges are carried here, not just in the Go-struct fixtures, because
+// they are the only place the wire end is observable: every other layer is
+// seeded from the store, so a dropped selection or a mistyped json tag would
+// pass the whole suite (see TestGetTeamsDecodesIssueDefaultsAndTemplates).
 func FixtureTeam() map[string]any {
 	return map[string]any{
-		"id":        "team-123",
-		"key":       "TST",
-		"name":      "Test Team",
-		"icon":      "team",
-		"createdAt": time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		"updatedAt": time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		"id":                           "team-123",
+		"key":                          "TST",
+		"name":                         "Test Team",
+		"description":                  "The team the tests run against",
+		"icon":                         "team",
+		"createdAt":                    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		"updatedAt":                    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+		"defaultIssueState":            FixtureState("unstarted"),
+		"triageEnabled":                true,
+		"triageIssueState":             FixtureState("backlog"),
+		"requirePriorityToLeaveTriage": false,
+		"issueEstimationType":          "fibonacci",
+		"defaultIssueEstimate":         2.0,
+		"issueEstimationAllowZero":     false,
+		"issueEstimationExtended":      true,
+		"defaultTemplateForMembers":    FixtureTemplate("member", "Bug report", "issue"),
+		"defaultTemplateForNonMembers": FixtureTemplate("non-member", "Support request", "issue"),
+		"defaultProjectTemplate":       FixtureTemplate("project", "Project kickoff", "project"),
+	}
+}
+
+// FixtureTemplate returns a test template as a map. templateData is absent on
+// purpose: the query does not select it (see TemplateFields).
+func FixtureTemplate(id, name, templateType string) map[string]any {
+	return map[string]any{
+		"id":          "template-" + id,
+		"name":        name,
+		"description": "Template " + name,
+		"type":        templateType,
 	}
 }
 
