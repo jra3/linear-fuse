@@ -339,6 +339,7 @@ Available fragments:
 - `ProjectUpdateFields` / `InitiativeUpdateFields` - Status-update fields (query + create)
 - `UserFields` - User fields wherever whole users are listed (team members + drain page, workspace users + drain page, viewer); assignees/owners keep narrower inline sets
 - `CycleFields` - Cycle fields (combined team metadata query + drain page)
+- `TemplateFields` - Template identity for a team's default templates (`defaultTemplateForMembers` / `defaultTemplateForNonMembers` / `defaultProjectTemplate` on the teams query); `templateData` is deliberately not selected — a prefilled entity would be a content surface, not team metadata
 - `InitiativeFields` - Initiative scalar fields (workspace query + drain page, single-initiative query, lean-cycle initiatives probe); the nested projects connection stays inline per query (page sizes differ; the probe deliberately selects none)
 
 A combined query and its drain-page twin MUST project through the same

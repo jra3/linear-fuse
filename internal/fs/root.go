@@ -98,7 +98,20 @@ Mount point: %s (all paths below are relative to this mount point)
 
 <directory_structure>
 teams/{KEY}/
-  team.md, states.md, labels.md     [read-only metadata; team.md names parent/subteams]
+  team.md, states.md, labels.md     [read-only metadata; team.md carries the team
+                                     description, names parent/subteams, and under
+                                     "defaults" gives the state a new issue opens in,
+                                     whether triage intercepts it, and the scale
+                                     "estimate:" is denominated in ("estimation" is
+                                     that scale; "default_estimate" is the value, and
+                                     "default_estimate" plus the estimate_* keys are
+                                     omitted entirely when estimation is "notUsed") —
+                                     read it before creating issues. An absent
+                                     "defaults" block means not-yet-synced, not
+                                     "all off". "templates" names the team's default
+                                     templates (issue / issue_non_member / project),
+                                     each as name, id, and "description" when the
+                                     template sets one — never the template body]
   project-labels.md                 [symlink to ../../project-labels.md]
   parent                            [symlink to ../{PARENT_KEY}; listed only for a sub-team]
   subteams/{KEY}                    [symlinks to sub-team dirs; teams/ itself stays flat,

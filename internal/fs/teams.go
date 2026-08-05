@@ -303,6 +303,19 @@ func teamMarkdown(team api.Team, children []api.Team, childrenErr error) []byte 
 		"created": team.CreatedAt.Format(time.RFC3339),
 		"updated": team.UpdatedAt.Format(time.RFC3339),
 	}
+	// Omitted rather than emitted empty when the team never set one, following
+	// labelsMarkdown: absence reads as "unset", where "" would read as "set to
+	// nothing". Linear's Team.description is nullable for exactly that reason.
+	if team.Description != "" {
+		fm["description"] = team.Description
+	}
+	defaults, defaultsBody := teamDefaults(team)
+	if defaults != nil {
+		fm["defaults"] = defaults
+	}
+	if templates := teamTemplates(team); templates != nil {
+		fm["templates"] = templates
+	}
 
 	hierarchy := ""
 	if team.Parent != nil {
@@ -326,13 +339,118 @@ func teamMarkdown(team api.Team, children []api.Team, childrenErr error) []byte 
 		hierarchy += fmt.Sprintf("- **Sub-teams:** %s (`subteams/`)\n", strings.Join(keys, ", "))
 	}
 
+	// The description is prose, so it is rendered as prose under the H1 — where
+	// Linear's own UI puts it — as well as in frontmatter, the same
+	// both-places disclosure the hierarchy already gets.
+	description := ""
+	if team.Description != "" {
+		description = "\n" + team.Description + "\n"
+	}
+
 	body := fmt.Sprintf(`
 # %s
-
+%s
 - **Key:** %s
 - **ID:** %s
-%s`, team.Name, team.Key, team.ID, hierarchy)
+%s%s`, team.Name, description, team.Key, team.ID, hierarchy, defaultsBody)
 	return renderWithFrontmatter(fm, body)
+}
+
+// teamDefaults renders the team's issue-creation defaults as a frontmatter map
+// and the matching body section. These answer the questions a WRITER has and
+// the rest of team.md does not: which state a new issue opens in, whether
+// triage will intercept it, and — the load-bearing one — what scale `estimate:`
+// is denominated in, which is otherwise discoverable only by guessing and
+// reading .error.
+//
+// Returns (nil, "") when the settings are unknown, which is NOT the same as a
+// team that has them all switched off. IssueEstimationType is the sentinel:
+// Linear types it String! and always returns one of its named scales, so empty
+// means this row predates the settings sync (see api.Team). Rendering
+// `triage: false` there would be a confident answer to a question never asked —
+// the same failure the sub-team load guards against with childrenErr.
+func teamDefaults(team api.Team) (map[string]any, string) {
+	if team.IssueEstimationType == "" {
+		return nil, ""
+	}
+
+	fm := map[string]any{
+		"triage":                   team.TriageEnabled,
+		"triage_requires_priority": team.RequirePriorityToLeaveTriage,
+		"estimation":               team.IssueEstimationType,
+	}
+	// "estimation" is the SCALE, "default_estimate" the VALUE; the latter is
+	// spelled apart from the former so a machine reader cannot mistake one for
+	// the other. Under "notUsed" the whole estimate_* cluster is omitted so the
+	// frontmatter says what the body already says — estimates are off — rather
+	// than publishing a default and a zero-policy for a scale that has no values.
+	if team.IssueEstimationType != "notUsed" {
+		fm["default_estimate"] = team.DefaultIssueEstimate
+		fm["estimate_allow_zero"] = team.IssueEstimationAllowZero
+		fm["estimate_extended"] = team.IssueEstimationExtended
+	}
+
+	body := "\n## Issue defaults\n\n"
+	if team.DefaultIssueState != nil {
+		fm["issue_state"] = team.DefaultIssueState.Name
+		body += fmt.Sprintf("- **New issues open in:** %s\n", team.DefaultIssueState.Name)
+	}
+	switch {
+	case team.TriageEnabled && team.TriageIssueState != nil:
+		fm["triage_state"] = team.TriageIssueState.Name
+		body += fmt.Sprintf("- **Triage:** enabled — issues opened by non-members land in %s\n",
+			team.TriageIssueState.Name)
+	case team.TriageEnabled:
+		body += "- **Triage:** enabled\n"
+	default:
+		body += "- **Triage:** disabled\n"
+	}
+	if team.TriageEnabled && team.RequirePriorityToLeaveTriage {
+		body += "- **Leaving triage:** requires a priority\n"
+	}
+	// "notUsed" is Linear's spelling of "this team does not estimate", so it is
+	// reported as such rather than as a scale whose values an agent would then
+	// try to guess.
+	if team.IssueEstimationType == "notUsed" {
+		body += "- **Estimates:** not used by this team\n"
+	} else {
+		body += fmt.Sprintf("- **Estimates:** %s scale, default %g", team.IssueEstimationType, team.DefaultIssueEstimate)
+		if team.IssueEstimationAllowZero {
+			body += ", zero allowed"
+		}
+		if team.IssueEstimationExtended {
+			body += ", extended range"
+		}
+		body += "\n"
+	}
+	return fm, body
+}
+
+// teamTemplates renders the templates the team applies by default, as
+// name+id pairs. The template BODY is deliberately not here: templateData is a
+// whole prefilled entity, which would be a content surface of its own rather
+// than a line of metadata (see api.Template). Returns nil when the team sets
+// none, so the key is omitted rather than emitted empty.
+func teamTemplates(team api.Team) map[string]any {
+	templates := map[string]any{}
+	for key, tmpl := range map[string]*api.Template{
+		"issue":            team.DefaultTemplateForMembers,
+		"issue_non_member": team.DefaultTemplateForNonMembers,
+		"project":          team.DefaultProjectTemplate,
+	} {
+		if tmpl == nil {
+			continue
+		}
+		entry := map[string]any{"name": tmpl.Name, "id": tmpl.ID}
+		if tmpl.Description != "" {
+			entry["description"] = tmpl.Description
+		}
+		templates[key] = entry
+	}
+	if len(templates) == 0 {
+		return nil
+	}
+	return templates
 }
 
 // statesMarkdown renders the states.md content for a team's workflow states.

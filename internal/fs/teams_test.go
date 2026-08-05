@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -166,5 +167,220 @@ func TestTeamHierarchyChildrenLoadFailure(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "error loading sub-teams") {
 		t.Errorf("team.md is silent about the failed sub-team load:\n%s", content)
+	}
+}
+
+// TestTeamDescriptionRender pins the team description on both surfaces it is
+// disclosed through — frontmatter (machine-read) and the body prose under the
+// H1 (where Linear's own UI puts it) — and the absent case, which must OMIT
+// the key rather than emit an empty one: "" would read as "set to nothing",
+// where Linear's Team.description is nullable precisely to say "never set".
+//
+// The description is remote free text, so it is also the frontmatter injection
+// surface the catalogs already guard: a colon, a quote, or a leading `-` must
+// survive as a value, not restructure the YAML.
+func TestTeamDescriptionRender(t *testing.T) {
+	t.Parallel()
+
+	t.Run("present", func(t *testing.T) {
+		t.Parallel()
+		team := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering",
+			Description: "Onboarding Pod: https://example.invalid/p?a=1&b=2"}
+
+		content := teamMarkdown(team, nil, nil)
+		doc, err := marshal.Parse(content)
+		if err != nil {
+			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+		}
+		if got := doc.Frontmatter["description"]; got != team.Description {
+			t.Errorf("description = %v, want %q", got, team.Description)
+		}
+		if !strings.Contains(doc.Body, team.Description) {
+			t.Errorf("team.md body does not carry the description:\n%s", doc.Body)
+		}
+		// The H1 stays the team name — the description is prose beneath it,
+		// not a replacement for the heading.
+		if !strings.Contains(doc.Body, "# Engineering") {
+			t.Errorf("team.md body lost its H1:\n%s", doc.Body)
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		t.Parallel()
+		team := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering"}
+
+		doc, err := marshal.Parse(teamMarkdown(team, nil, nil))
+		if err != nil {
+			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+		}
+		if got, ok := doc.Frontmatter["description"]; ok {
+			t.Errorf("description key present as %#v for a team that never set one; want omitted", got)
+		}
+	})
+
+	t.Run("hostile", func(t *testing.T) {
+		t.Parallel()
+		hostile := "desc: \"quoted\"\nkey: injected"
+		team := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering", Description: hostile}
+
+		doc, err := marshal.Parse(teamMarkdown(team, nil, nil))
+		if err != nil {
+			t.Fatalf("hostile description broke the frontmatter: %v", err)
+		}
+		if got := doc.Frontmatter["description"]; got != hostile {
+			t.Errorf("description round-tripped to %#v, want %#v", got, hostile)
+		}
+		if got := doc.Frontmatter["key"]; got != "ENG" {
+			t.Errorf("description injected a frontmatter key: key = %v, want ENG", got)
+		}
+	})
+}
+
+// TestTeamDefaultsRender pins the issue-creation defaults, and above all the
+// difference between "this team does not estimate" and "nobody has asked yet".
+// A team row written before the settings sync has zero-valued settings, and
+// rendering those verbatim would tell a writer that triage is off and the
+// estimate scale is "" — a confident answer to a question never asked.
+func TestTeamDefaultsRender(t *testing.T) {
+	t.Parallel()
+	base := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering"}
+
+	t.Run("known", func(t *testing.T) {
+		t.Parallel()
+		team := base
+		team.IssueEstimationType = "fibonacci"
+		team.DefaultIssueEstimate = 2
+		team.IssueEstimationAllowZero = true
+		team.TriageEnabled = true
+		team.TriageIssueState = &api.State{ID: "s-tri", Name: "Triage", Type: "triage"}
+		team.RequirePriorityToLeaveTriage = true
+		team.DefaultIssueState = &api.State{ID: "s-todo", Name: "Todo", Type: "unstarted"}
+
+		doc, err := marshal.Parse(teamMarkdown(team, nil, nil))
+		if err != nil {
+			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+		}
+		defaults, ok := doc.Frontmatter["defaults"].(map[string]any)
+		if !ok {
+			t.Fatalf("defaults = %#v, want a map", doc.Frontmatter["defaults"])
+		}
+		for key, want := range map[string]any{
+			"issue_state":              "Todo",
+			"triage":                   true,
+			"triage_state":             "Triage",
+			"triage_requires_priority": true,
+			"estimation":               "fibonacci",
+			"estimate_allow_zero":      true,
+			"estimate_extended":        false,
+		} {
+			if got := defaults[key]; got != want {
+				t.Errorf("defaults[%q] = %#v, want %#v", key, got, want)
+			}
+		}
+		// The default VALUE is spelled default_estimate, not estimate, so it
+		// cannot be misread as estimation (the scale) two characters away.
+		if got := fmt.Sprint(defaults["default_estimate"]); got != "2" {
+			t.Errorf("defaults[\"default_estimate\"] = %v, want 2", defaults["default_estimate"])
+		}
+		if got, ok := defaults["estimate"]; ok {
+			t.Errorf("defaults[\"estimate\"] = %#v; the key is default_estimate", got)
+		}
+		// The estimate scale is the whole point: a writer that cannot read it
+		// discovers the team's units by guessing and reading .error.
+		if !strings.Contains(doc.Body, "fibonacci") {
+			t.Errorf("body does not name the estimate scale:\n%s", doc.Body)
+		}
+		if !strings.Contains(doc.Body, "Triage") {
+			t.Errorf("body does not name the triage state:\n%s", doc.Body)
+		}
+	})
+
+	t.Run("unknown settings omit the block", func(t *testing.T) {
+		t.Parallel()
+		doc, err := marshal.Parse(teamMarkdown(base, nil, nil))
+		if err != nil {
+			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+		}
+		if got, ok := doc.Frontmatter["defaults"]; ok {
+			t.Errorf("defaults = %#v for an unsynced team; want the key omitted", got)
+		}
+		if strings.Contains(doc.Body, "Issue defaults") {
+			t.Errorf("body claims defaults it does not know:\n%s", doc.Body)
+		}
+	})
+
+	t.Run("estimates not used", func(t *testing.T) {
+		t.Parallel()
+		team := base
+		team.IssueEstimationType = "notUsed"
+
+		doc, err := marshal.Parse(teamMarkdown(team, nil, nil))
+		if err != nil {
+			t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+		}
+		// Known-and-off still renders: the block is present, and says so.
+		defaults, ok := doc.Frontmatter["defaults"].(map[string]any)
+		if !ok {
+			t.Fatalf("defaults = %#v, want a map for a synced team", doc.Frontmatter["defaults"])
+		}
+		if got := defaults["estimation"]; got != "notUsed" {
+			t.Errorf("estimation = %#v, want notUsed", got)
+		}
+		if !strings.Contains(doc.Body, "not used by this team") {
+			t.Errorf("body does not say estimates are unused:\n%s", doc.Body)
+		}
+		if got := defaults["triage"]; got != false {
+			t.Errorf("triage = %#v, want false (known-off, not omitted)", got)
+		}
+		// The frontmatter must agree with the prose: a team that does not
+		// estimate publishes no default, no zero-policy, and no extended range.
+		for _, key := range []string{"default_estimate", "estimate_allow_zero", "estimate_extended"} {
+			if got, ok := defaults[key]; ok {
+				t.Errorf("defaults[%q] = %#v under estimation notUsed; want the key omitted", key, got)
+			}
+		}
+	})
+}
+
+// TestTeamTemplatesRender pins the default templates: name and id, no
+// templateData, and the key omitted entirely for a team that sets none.
+func TestTeamTemplatesRender(t *testing.T) {
+	t.Parallel()
+	team := api.Team{ID: "team-1", Key: "ENG", Name: "Engineering",
+		IssueEstimationType:       "linear",
+		DefaultTemplateForMembers: &api.Template{ID: "t1", Name: "Bug: report", Description: "For defects"},
+		DefaultProjectTemplate:    &api.Template{ID: "t2", Name: "Standard project"},
+	}
+
+	doc, err := marshal.Parse(teamMarkdown(team, nil, nil))
+	if err != nil {
+		t.Fatalf("team.md render is not parseable YAML frontmatter: %v", err)
+	}
+	templates, ok := doc.Frontmatter["templates"].(map[string]any)
+	if !ok {
+		t.Fatalf("templates = %#v, want a map", doc.Frontmatter["templates"])
+	}
+	issue, _ := templates["issue"].(map[string]any)
+	if got := issue["name"]; got != "Bug: report" {
+		t.Errorf("issue template name = %#v, want %q (a colon must survive as a value)", got, "Bug: report")
+	}
+	if got := issue["id"]; got != "t1" {
+		t.Errorf("issue template id = %#v, want t1", got)
+	}
+	if got := issue["description"]; got != "For defects" {
+		t.Errorf("issue template description = %#v, want %q", got, "For defects")
+	}
+	// A template the team does not set is absent, not empty.
+	if got, ok := templates["issue_non_member"]; ok {
+		t.Errorf("issue_non_member = %#v for a team that sets none; want omitted", got)
+	}
+
+	bare := api.Team{ID: "team-2", Key: "OPS", Name: "Ops", IssueEstimationType: "linear"}
+	doc, err = marshal.Parse(teamMarkdown(bare, nil, nil))
+	if err != nil {
+		t.Fatalf("team.md render for a team with no templates: %v", err)
+	}
+	if got, ok := doc.Frontmatter["templates"]; ok {
+		t.Errorf("templates = %#v for a team that sets none; want the key omitted", got)
 	}
 }

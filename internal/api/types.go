@@ -6,12 +6,18 @@ import (
 )
 
 type Team struct {
-	ID        string    `json:"id"`
-	Key       string    `json:"key"`
-	Name      string    `json:"name"`
-	Icon      string    `json:"icon"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Description is Linear's Team.description — the free text shown under the
+	// team name in the UI. Nullable on the wire; a team that has never set one
+	// decodes to "". Not carried on the Parent edge: the wire selects only
+	// identity fields there and stitchParents does not backfill it, so a
+	// parent's description is read from its own team.md, never through a child.
+	Description string    `json:"description"`
+	Icon        string    `json:"icon"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 	// Parent is the sub-team edge (Linear's Team.parent). Only the ID survives
 	// the DB round-trip; the repo read stitches Key/Name from the teams it
 	// already loaded, and never fills the parent's own Parent — one level, so
@@ -24,6 +30,41 @@ type Team struct {
 	// connection (verified against the live API) — so selecting it would take
 	// whatever the server chose to return with no pageInfo to check.
 	Parent *Team `json:"parent,omitempty"`
+
+	// Issue-creation defaults and templates. These are settings, not content:
+	// nothing queries by them and they exist so a writer can find out what the
+	// team will DO with an issue it creates — which state it lands in, whether
+	// triage intercepts it, and what values `estimate:` legally accepts.
+	//
+	// IssueEstimationType doubles as the "settings are known" sentinel: Linear
+	// types it String! (non-null, one of notUsed/exponential/fibonacci/linear/
+	// tShirt), so a team that has been through a sync always has a non-empty
+	// value. Empty means NOT SYNCED YET, not "no estimates" — the renderers
+	// gate the whole block on it rather than emit a confident `triage: false`
+	// for a team they have simply never asked about.
+	DefaultIssueState            *State  `json:"defaultIssueState,omitempty"`
+	TriageEnabled                bool    `json:"triageEnabled"`
+	TriageIssueState             *State  `json:"triageIssueState,omitempty"`
+	RequirePriorityToLeaveTriage bool    `json:"requirePriorityToLeaveTriage"`
+	IssueEstimationType          string  `json:"issueEstimationType"`
+	DefaultIssueEstimate         float64 `json:"defaultIssueEstimate"`
+	IssueEstimationAllowZero     bool    `json:"issueEstimationAllowZero"`
+	IssueEstimationExtended      bool    `json:"issueEstimationExtended"`
+
+	DefaultTemplateForMembers    *Template `json:"defaultTemplateForMembers,omitempty"`
+	DefaultTemplateForNonMembers *Template `json:"defaultTemplateForNonMembers,omitempty"`
+	DefaultProjectTemplate       *Template `json:"defaultProjectTemplate,omitempty"`
+}
+
+// Template is the identity of a Linear template a team defaults to. Only the
+// identifying fields are selected: templateData is a JSON blob describing a
+// whole prefilled entity, and rendering it would be a content surface of its
+// own rather than a line of team metadata.
+type Template struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Type        string `json:"type"`
 }
 
 type Issue struct {

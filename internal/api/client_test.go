@@ -154,6 +154,125 @@ func TestGetTeamsDecodesParentEdge(t *testing.T) {
 	}
 }
 
+// TestGetTeamsDecodesIssueDefaultsAndTemplates covers the wire end of the
+// issue-creation defaults and the template edges, the same gap #435 documented
+// for parent: the Teams query must SELECT them and the response must decode
+// into the matching Team fields. No other test can see either half — every
+// other layer is seeded from the store, so it passes whether or not the query
+// ever asked. The two halves fail differently and both silently: a misspelled
+// selection makes Linear reject the whole Teams query and aborts the sync
+// cycle, while a wrong json tag leaves IssueEstimationType empty, which is the
+// renderers' "not synced yet" sentinel — so every team.md would drop its
+// defaults block rather than report anything wrong.
+func TestGetTeamsDecodesIssueDefaultsAndTemplates(t *testing.T) {
+	t.Parallel()
+	mock := testutil.NewMockLinearServer()
+	defer mock.Close()
+
+	mock.SetResponse("Teams", testutil.TeamsResponse(testutil.FixtureTeam()))
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(mock.URL())
+
+	teams, err := client.GetTeams(context.Background())
+	if err != nil {
+		t.Fatalf("GetTeams failed: %v", err)
+	}
+	if len(teams) != 1 {
+		t.Fatalf("expected 1 team, got %d", len(teams))
+	}
+	team := teams[0]
+
+	call := mock.LastCall()
+	if call == nil {
+		t.Fatal("no query recorded")
+	}
+	// Only the team's own selection set, so a dropped team-level "description"
+	// cannot be masked by the one TemplateFields selects.
+	teamSelection, fragment, found := strings.Cut(call.Query, "fragment TemplateFields on Template")
+	if !found {
+		t.Fatalf("Teams query does not project templates through TemplateFields:\n%s", call.Query)
+	}
+	if !strings.Contains(fragment, "description") {
+		t.Errorf("TemplateFields does not select description:\n%s", fragment)
+	}
+	for _, field := range []string{
+		"description",
+		"defaultIssueState",
+		"triageEnabled",
+		"triageIssueState",
+		"requirePriorityToLeaveTriage",
+		"issueEstimationType",
+		"defaultIssueEstimate",
+		"issueEstimationAllowZero",
+		"issueEstimationExtended",
+		"defaultTemplateForMembers",
+		"defaultTemplateForNonMembers",
+		"defaultProjectTemplate",
+	} {
+		if !strings.Contains(teamSelection, field) {
+			t.Errorf("Teams query does not select %s:\n%s", field, call.Query)
+		}
+	}
+
+	if team.Description != "The team the tests run against" {
+		t.Errorf("Description = %q, want the fixture's description", team.Description)
+	}
+	if team.DefaultIssueState == nil {
+		t.Error("DefaultIssueState decoded nil — a writer cannot learn where a new issue lands")
+	} else if team.DefaultIssueState.Name != "Todo" || team.DefaultIssueState.Type != "unstarted" {
+		t.Errorf("DefaultIssueState = %+v, want {Name:Todo Type:unstarted}", team.DefaultIssueState)
+	}
+	if !team.TriageEnabled {
+		t.Error("TriageEnabled = false, want true")
+	}
+	if team.TriageIssueState == nil {
+		t.Error("TriageIssueState decoded nil")
+	} else if team.TriageIssueState.Name != "Backlog" {
+		t.Errorf("TriageIssueState.Name = %q, want Backlog", team.TriageIssueState.Name)
+	}
+	if team.RequirePriorityToLeaveTriage {
+		t.Error("RequirePriorityToLeaveTriage = true, want false")
+	}
+	// The sentinel: empty here means "never synced" to every renderer, so a
+	// tag that fails to decode disables the defaults block workspace-wide.
+	if team.IssueEstimationType != "fibonacci" {
+		t.Errorf("IssueEstimationType = %q, want fibonacci", team.IssueEstimationType)
+	}
+	if team.DefaultIssueEstimate != 2 {
+		t.Errorf("DefaultIssueEstimate = %v, want 2", team.DefaultIssueEstimate)
+	}
+	if team.IssueEstimationAllowZero {
+		t.Error("IssueEstimationAllowZero = true, want false")
+	}
+	if !team.IssueEstimationExtended {
+		t.Error("IssueEstimationExtended = false, want true")
+	}
+
+	for _, tc := range []struct {
+		edge string
+		got  *Template
+		id   string
+		name string
+		typ  string
+	}{
+		{"defaultTemplateForMembers", team.DefaultTemplateForMembers, "template-member", "Bug report", "issue"},
+		{"defaultTemplateForNonMembers", team.DefaultTemplateForNonMembers, "template-non-member", "Support request", "issue"},
+		{"defaultProjectTemplate", team.DefaultProjectTemplate, "template-project", "Project kickoff", "project"},
+	} {
+		if tc.got == nil {
+			t.Errorf("%s decoded nil", tc.edge)
+			continue
+		}
+		if tc.got.ID != tc.id || tc.got.Name != tc.name || tc.got.Type != tc.typ {
+			t.Errorf("%s = %+v, want {ID:%s Name:%s Type:%s}", tc.edge, tc.got, tc.id, tc.name, tc.typ)
+		}
+		if tc.got.Description != "Template "+tc.name {
+			t.Errorf("%s.Description = %q, want the fixture's description", tc.edge, tc.got.Description)
+		}
+	}
+}
+
 // TestGetProjectUpdatesDrainsPages proves the updates read drains past the
 // old implicit 50-cap: updates accumulate over a project's lifetime and the
 // SWR refresh is upsert-only, so a capped read silently froze completeness.

@@ -1655,7 +1655,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 const listSubteams = `-- name: ListSubteams :many
-SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id FROM teams WHERE parent_id = ? ORDER BY key
+SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id, description, data FROM teams WHERE parent_id = ? ORDER BY key
 `
 
 // ListSubteams reads the sub-team edge in the inverse direction: the children
@@ -1679,6 +1679,8 @@ func (q *Queries) ListSubteams(ctx context.Context, parentID sql.NullString) ([]
 			&i.UpdatedAt,
 			&i.SyncedAt,
 			&i.ParentID,
+			&i.Description,
+			&i.Data,
 		); err != nil {
 			return nil, err
 		}
@@ -2291,7 +2293,7 @@ func (q *Queries) ListTeamUnassignedIssues(ctx context.Context, teamID string) (
 
 const listTeams = `-- name: ListTeams :many
 
-SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id FROM teams ORDER BY name
+SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id, description, data FROM teams ORDER BY name
 `
 
 // Teams queries
@@ -2313,6 +2315,8 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 			&i.UpdatedAt,
 			&i.SyncedAt,
 			&i.ParentID,
+			&i.Description,
+			&i.Data,
 		); err != nil {
 			return nil, err
 		}
@@ -3781,8 +3785,8 @@ func (q *Queries) UpsertSyncSchedule(ctx context.Context, arg UpsertSyncSchedule
 }
 
 const upsertTeam = `-- name: UpsertTeam :exec
-INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id, description, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     key = excluded.key,
     name = excluded.name,
@@ -3790,18 +3794,22 @@ ON CONFLICT(id) DO UPDATE SET
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     synced_at = excluded.synced_at,
-    parent_id = excluded.parent_id
+    parent_id = excluded.parent_id,
+    description = excluded.description,
+    data = excluded.data
 `
 
 type UpsertTeamParams struct {
-	ID        string         `json:"id"`
-	Key       string         `json:"key"`
-	Name      string         `json:"name"`
-	Icon      sql.NullString `json:"icon"`
-	CreatedAt sql.NullTime   `json:"created_at"`
-	UpdatedAt sql.NullTime   `json:"updated_at"`
-	SyncedAt  time.Time      `json:"synced_at"`
-	ParentID  sql.NullString `json:"parent_id"`
+	ID          string         `json:"id"`
+	Key         string         `json:"key"`
+	Name        string         `json:"name"`
+	Icon        sql.NullString `json:"icon"`
+	CreatedAt   sql.NullTime   `json:"created_at"`
+	UpdatedAt   sql.NullTime   `json:"updated_at"`
+	SyncedAt    time.Time      `json:"synced_at"`
+	ParentID    sql.NullString `json:"parent_id"`
+	Description sql.NullString `json:"description"`
+	Data        []byte         `json:"data"`
 }
 
 func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
@@ -3814,6 +3822,8 @@ func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
 		arg.UpdatedAt,
 		arg.SyncedAt,
 		arg.ParentID,
+		arg.Description,
+		arg.Data,
 	)
 	return err
 }

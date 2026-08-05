@@ -18,12 +18,34 @@ var (
 // FixtureAPITeam returns a test team.
 func FixtureAPITeam() api.Team {
 	return api.Team{
-		ID:        "team-1",
-		Key:       "TST",
-		Name:      "Test Team",
-		Icon:      "team",
-		CreatedAt: fixtureTime,
-		UpdatedAt: fixtureTime,
+		ID:   "team-1",
+		Key:  "TST",
+		Name: "Test Team",
+		// Set here and deliberately NOT on FixtureAPISubteam, so the offline
+		// suite covers both a team that has a description and one that never
+		// set one (the frontmatter key is omitted, not emitted empty).
+		Description: "The test team: for fixtures",
+		Icon:        "team",
+		CreatedAt:   fixtureTime,
+		UpdatedAt:   fixtureTime,
+		// Issue-creation defaults. Set here and NOT on FixtureAPISubteam, so
+		// the offline suite covers a team whose settings are known and one
+		// whose are not — the two are rendered differently on purpose, and a
+		// fixture set that only ever exercised the known case would let the
+		// "unknown" path rot untested.
+		DefaultIssueState:            &api.State{ID: "state-todo", Name: "Todo", Type: "unstarted"},
+		TriageEnabled:                true,
+		TriageIssueState:             &api.State{ID: "state-triage", Name: "Triage", Type: "triage"},
+		RequirePriorityToLeaveTriage: true,
+		IssueEstimationType:          "fibonacci",
+		DefaultIssueEstimate:         2,
+		IssueEstimationAllowZero:     true,
+		DefaultTemplateForMembers: &api.Template{
+			ID: "tmpl-bug", Name: "Bug report", Description: "For defects", Type: "issue",
+		},
+		DefaultProjectTemplate: &api.Template{
+			ID: "tmpl-proj", Name: "Standard project", Type: "project",
+		},
 	}
 }
 

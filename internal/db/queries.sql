@@ -133,8 +133,8 @@ SELECT * FROM teams ORDER BY name;
 SELECT * FROM teams WHERE parent_id = ? ORDER BY key;
 
 -- name: UpsertTeam :exec
-INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id, description, data)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     key = excluded.key,
     name = excluded.name,
@@ -142,7 +142,9 @@ ON CONFLICT(id) DO UPDATE SET
     created_at = excluded.created_at,
     updated_at = excluded.updated_at,
     synced_at = excluded.synced_at,
-    parent_id = excluded.parent_id;
+    parent_id = excluded.parent_id,
+    description = excluded.description,
+    data = excluded.data;
 
 -- Full-text search queries are handled with raw SQL (FTS5 not supported by sqlc)
 -- See internal/db/search.go for FTS implementation

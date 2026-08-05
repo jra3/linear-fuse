@@ -289,7 +289,10 @@ Error: invalid priority "critical": must be none, low, medium, high, or urgent
 
 **Validated fields:** status, assignee, labels, priority, project, milestone, cycle, parent
 
-**Reference files:** Check `states.md` for valid workflow states, `labels.md` for valid labels.
+**Reference files:** Check `states.md` for valid workflow states, `labels.md` for valid labels,
+and `team.md` for the team's issue-creation defaults — the state new issues open in, whether triage
+intercepts them, and the estimation scale `estimate:` is denominated in (its `defaults` block is
+absent when the team's settings haven't synced yet, which is not the same as "all off").
 
 The `.error` file is cleared on successful writes, with one exception: a save whose
 body Linear reformatted server-side leaves an informational note there ("saved, but

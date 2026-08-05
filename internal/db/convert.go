@@ -115,10 +115,21 @@ func DBIssuesToAPIIssues(issues []Issue) ([]api.Issue, error) {
 // APITeamToDBTeam converts an api.Team to db.UpsertTeamParams. parent_id comes
 // from the team's own Parent edge (Linear's Team.parent); a top-level team
 // stores NULL.
+//
+// The settings nothing queries by (issue-creation defaults, default templates)
+// ride along in `data` rather than in a column apiece. A marshal failure — which
+// a struct of scalars and pointers cannot actually produce — stores NULL rather
+// than a half-blob, because NULL is the value the read path already understands
+// as "settings unknown". This is why the signature returns no error: there is
+// no failure mode that leaves the row saying something untrue.
 func APITeamToDBTeam(team api.Team) UpsertTeamParams {
 	var parentID sql.NullString
 	if team.Parent != nil {
 		parentID = sql.NullString{String: team.Parent.ID, Valid: team.Parent.ID != ""}
+	}
+	data, err := json.Marshal(team)
+	if err != nil {
+		data = nil
 	}
 	return UpsertTeamParams{
 		ID:   team.ID,
@@ -133,23 +144,44 @@ func APITeamToDBTeam(team api.Team) UpsertTeamParams {
 			Time:  team.UpdatedAt,
 			Valid: !team.UpdatedAt.IsZero(),
 		},
-		SyncedAt: Now(),
-		ParentID: parentID,
+		SyncedAt:    Now(),
+		ParentID:    parentID,
+		Description: sql.NullString{String: team.Description, Valid: team.Description != ""},
+		Data:        data,
 	}
 }
 
 // DBTeamToAPITeam converts a db.Team to api.Team. Parent comes strictly from
 // the parent_id column, so only the ID is populated here — the repo read
 // stitches Key/Name over it from the teams it already loaded.
+//
+// The settings come from `data`, and the columns are layered back OVER the
+// decoded blob, never under it: the columns are what UpsertTeam maintains, so
+// where the two disagree — a row migrated by an older build, a blob written
+// before a rename — the column is the current value. Parent is re-derived from
+// parent_id for the same reason, discarding whatever wire parent the blob
+// carried. An empty or corrupt blob leaves the settings zero-valued, which
+// api.Team.IssueEstimationType == "" reports to the renderers as "unknown".
 func DBTeamToAPITeam(team Team) api.Team {
-	t := api.Team{
-		ID:        team.ID,
-		Key:       team.Key,
-		Name:      team.Name,
-		Icon:      team.Icon.String,
-		CreatedAt: team.CreatedAt.Time,
-		UpdatedAt: team.UpdatedAt.Time,
+	var t api.Team
+	if len(team.Data) > 0 {
+		// A blob that will not decode is discarded whole rather than partially
+		// applied: json.Unmarshal populates fields up to the error, so keeping
+		// the remains would mean rendering settings from a torn record.
+		if err := json.Unmarshal(team.Data, &t); err != nil {
+			t = api.Team{}
+		}
 	}
+
+	t.ID = team.ID
+	t.Key = team.Key
+	t.Name = team.Name
+	t.Description = team.Description.String
+	t.Icon = team.Icon.String
+	t.CreatedAt = team.CreatedAt.Time
+	t.UpdatedAt = team.UpdatedAt.Time
+
+	t.Parent = nil
 	if team.ParentID.Valid && team.ParentID.String != "" {
 		t.Parent = &api.Team{ID: team.ParentID.String}
 	}
