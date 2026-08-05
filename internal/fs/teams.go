@@ -378,9 +378,16 @@ func teamDefaults(team api.Team) (map[string]any, string) {
 		"triage":                   team.TriageEnabled,
 		"triage_requires_priority": team.RequirePriorityToLeaveTriage,
 		"estimation":               team.IssueEstimationType,
-		"estimate":                 team.DefaultIssueEstimate,
-		"estimate_allow_zero":      team.IssueEstimationAllowZero,
-		"estimate_extended":        team.IssueEstimationExtended,
+	}
+	// "estimation" is the SCALE, "default_estimate" the VALUE; the latter is
+	// spelled apart from the former so a machine reader cannot mistake one for
+	// the other. Under "notUsed" the whole estimate_* cluster is omitted so the
+	// frontmatter says what the body already says — estimates are off — rather
+	// than publishing a default and a zero-policy for a scale that has no values.
+	if team.IssueEstimationType != "notUsed" {
+		fm["default_estimate"] = team.DefaultIssueEstimate
+		fm["estimate_allow_zero"] = team.IssueEstimationAllowZero
+		fm["estimate_extended"] = team.IssueEstimationExtended
 	}
 
 	body := "\n## Issue defaults\n\n"

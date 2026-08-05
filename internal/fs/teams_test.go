@@ -2,6 +2,7 @@ package fs
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -270,10 +271,19 @@ func TestTeamDefaultsRender(t *testing.T) {
 			"triage_requires_priority": true,
 			"estimation":               "fibonacci",
 			"estimate_allow_zero":      true,
+			"estimate_extended":        false,
 		} {
 			if got := defaults[key]; got != want {
 				t.Errorf("defaults[%q] = %#v, want %#v", key, got, want)
 			}
+		}
+		// The default VALUE is spelled default_estimate, not estimate, so it
+		// cannot be misread as estimation (the scale) two characters away.
+		if got := fmt.Sprint(defaults["default_estimate"]); got != "2" {
+			t.Errorf("defaults[\"default_estimate\"] = %v, want 2", defaults["default_estimate"])
+		}
+		if got, ok := defaults["estimate"]; ok {
+			t.Errorf("defaults[\"estimate\"] = %#v; the key is default_estimate", got)
 		}
 		// The estimate scale is the whole point: a writer that cannot read it
 		// discovers the team's units by guessing and reading .error.
@@ -321,6 +331,13 @@ func TestTeamDefaultsRender(t *testing.T) {
 		}
 		if got := defaults["triage"]; got != false {
 			t.Errorf("triage = %#v, want false (known-off, not omitted)", got)
+		}
+		// The frontmatter must agree with the prose: a team that does not
+		// estimate publishes no default, no zero-policy, and no extended range.
+		for _, key := range []string{"default_estimate", "estimate_allow_zero", "estimate_extended"} {
+			if got, ok := defaults[key]; ok {
+				t.Errorf("defaults[%q] = %#v under estimation notUsed; want the key omitted", key, got)
+			}
 		}
 	})
 }
