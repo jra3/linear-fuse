@@ -3,6 +3,7 @@ package marshal
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +108,95 @@ var issueScalarFields = []issueScalarField{
 		}
 		return "", false
 	}, true},
+}
+
+// issueEditableKeys is every frontmatter key issue.md accepts, in the order the
+// README documents them. It is derived from the one field table plus the three
+// bespoke fields, so a field added to issueScalarFields is accepted here without
+// a second edit — the key-set guard below must never be the reason a newly
+// editable field is rejected.
+var issueEditableKeys = func() []string {
+	keys := make([]string, 0, len(issueScalarFields)+3)
+	for _, f := range issueScalarFields {
+		keys = append(keys, f.yamlKey)
+	}
+	return append(keys, "priority", "labels", "estimate")
+}()
+
+// issueEditableKeySet is issueEditableKeys as a lookup, built once: the guard
+// runs on every issue write, and the list is fixed at init.
+var issueEditableKeySet = func() map[string]bool {
+	set := make(map[string]bool, len(issueEditableKeys))
+	for _, k := range issueEditableKeys {
+		set[k] = true
+	}
+	return set
+}()
+
+// issueMetaKeys are the server-managed keys IssueMetaToMarkdown renders into
+// issue.meta. They are not editable anywhere, but they are RECOGNIZED: a writer
+// who names one gets told where the field actually lives instead of "unknown
+// field", and the create path ignores them outright (see checkIssueFrontmatter).
+var issueMetaKeys = map[string]bool{
+	"id": true, "identifier": true, "url": true, "created": true,
+	"updated": true, "creator": true, "branch": true, "started": true,
+	"completed": true, "canceled": true, "archived": true, "links": true,
+	"relations": true,
+}
+
+// checkIssueFrontmatter rejects frontmatter keys issue.md does not accept (#426).
+// Before this guard, an unrecognized key took a third path the failure model does
+// not have: the write was accepted, no mutation was sent, and the key vanished on
+// the next fresh render — so a typo (`assigne:`, `teem:`) read as a successful
+// edit. Every key must now be applied or named in .error; nothing is dropped.
+//
+// ignoreMeta splits the two callers. On an update, naming a server-managed field
+// is a mistake worth reporting — the writer thinks they are editing something
+// they are not. On create, it is not: a spec assembled from a rendered issue.md
+// plus its issue.meta carries fields the server assigns at birth, and ignoring
+// them is the meaningful reading (pinned by TestMarkdownToIssueCreate). A key
+// that is in neither set has no meaning on either path.
+func checkIssueFrontmatter(fm map[string]any, ignoreMeta bool) *FieldError {
+	var unknown, readOnly []string
+	for k := range fm {
+		switch {
+		case issueEditableKeySet[k]:
+		case issueMetaKeys[k]:
+			if !ignoreMeta {
+				readOnly = append(readOnly, k)
+			}
+		default:
+			unknown = append(unknown, k)
+		}
+	}
+	// Sorted so a document with several bad keys reports the same field every
+	// time — a .error that changes between identical writes is not a contract.
+	sort.Strings(unknown)
+	sort.Strings(readOnly)
+
+	accepts := "issue.md accepts: " + strings.Join(issueEditableKeys, ", ") + "."
+	switch {
+	case len(unknown) > 0:
+		return &FieldError{
+			Field:   unknown[0],
+			Message: "unknown field. " + accepts + alsoNamed("unrecognized", unknown[1:]) + alsoNamed("read-only", readOnly),
+		}
+	case len(readOnly) > 0:
+		return &FieldError{
+			Field:   readOnly[0],
+			Message: "read-only field: it is server-managed and lives in the issue.meta sidecar. " + accepts + alsoNamed("read-only", readOnly[1:]),
+		}
+	}
+	return nil
+}
+
+// alsoNamed appends the remaining bad keys to a field error's message, so one
+// rejected write names every key a writer has to fix rather than one per retry.
+func alsoNamed(kind string, keys []string) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	return ` (also ` + kind + `: "` + strings.Join(keys, `", "`) + `")`
 }
 
 // IssueToMarkdown converts a Linear issue to the editable-only markdown surface
@@ -246,6 +336,14 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 	update := make(map[string]any)
 	fm := doc.Frontmatter
 
+	// Key-set guard first: a document naming a field issue.md does not accept is
+	// rejected whole, before any field is applied. Half-applying it would be the
+	// worse failure — the writer's other edits would land while the one they
+	// misspelled silently did not (#426).
+	if ferr := checkIssueFrontmatter(fm, false); ferr != nil {
+		return nil, ferr
+	}
+
 	// Every editable field is coerced to its scalar form (ScalarToString) before
 	// comparison so a wrong-typed-but-meaningful value — an unquoted `due:` that
 	// parsed as time.Time, a numeric `title:`/`cycle:`, a quoted `estimate: "3"` —
@@ -326,8 +424,10 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 // create-input map for a brand-new issue. Unlike MarkdownToIssueUpdate it emits
 // every present editable field (there is no "original" to diff against), with
 // relational fields as human names for resolveIssueUpdate to turn into IDs. The
-// body becomes the description. Unknown / read-only keys are ignored tolerantly.
-// teamId is added by the caller. Returns an error only for an invalid priority.
+// body becomes the description. Read-only (issue.meta) keys are ignored
+// tolerantly; an unrecognized key is a *FieldError (#426).
+// teamId is added by the caller. Returns an error for an invalid priority or a
+// key issue.md does not accept.
 func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	doc, err := Parse(content)
 	if err != nil {
@@ -336,12 +436,21 @@ func MarkdownToIssueCreate(content []byte) (map[string]any, error) {
 	fm := doc.Frontmatter
 	create := make(map[string]any)
 
+	// Key-set guard: server-managed keys are ignored here (a spec pasted from a
+	// rendered issue carries them), but a key in neither set is a typo and is
+	// rejected — an issue created with `assigne:` would otherwise be born
+	// unassigned with nothing said about it (#426).
+	if ferr := checkIssueFrontmatter(fm, true); ferr != nil {
+		return nil, ferr
+	}
+
 	// Scalar fields, table-driven. There is no original to diff against, so every
 	// present, non-empty value is emitted under its apiKey (relational names
 	// resolved to IDs downstream). Values are coerced via ScalarToString so a
 	// wrong-typed-but-meaningful value — a bare `due: 2026-02-01` (time.Time), a
 	// numeric name (`cycle: 42`) — is applied, not silently dropped (#148); a
-	// missing key coerces to "" and is skipped, and unknown keys are ignored.
+	// missing key coerces to "" and is skipped, and the read-only keys the guard
+	// above let through are not in the table, so they never reach the input.
 	for _, f := range issueScalarFields {
 		if s := ScalarToString(fm[f.yamlKey]); s != "" {
 			create[f.apiKey] = s

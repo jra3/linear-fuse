@@ -250,6 +250,17 @@ cycle: "Sprint 42"
 ---
 Description body (editable)
 
+That list is EXHAUSTIVE and enforced: a frontmatter key issue.md does not
+accept fails the whole write with EINVAL, and .error names the key and lists
+the accepted ones. Nothing partially applies. This covers the two ways to name
+a field that isn't there — a misspelling (assigne:, priorty:, teem:) and a
+server-managed field, which is read-only and lives in issue.meta (id,
+identifier, url, created, updated, branch, links, relations, …). So a write
+that returns 0 applied every key you wrote; there is no third outcome where a
+key is accepted and dropped. (issues/_create is deliberately laxer in one way:
+it IGNORES the read-only keys, so a spec pasted from a rendered issue.md +
+issue.meta still creates. A misspelled key is rejected there too.)
+
 Quote any value that starts with a YAML indicator ([ ] { } * & ! | > %% @ #
 , or a leading -), or YAML reads it as structure and the write fails — e.g.
 title: "[1] Verify" not title: [1] Verify. On failure .error names the field
@@ -390,6 +401,10 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
 
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
+- A frontmatter key issue.md does not accept — a typo, or a server-managed field
+  that lives in issue.meta -> EINVAL, and .error names the key plus the accepted
+  ones. The document is rejected WHOLE: none of its other keys apply either, so
+  fix the key and write the whole document back.
 - An EMPTIED editable file (0 bytes, or only whitespace) -> EINVAL, and NOTHING is
   written. An empty document has no fields, so applying it would clear every
   removable field at once instead of the one you meant. The file KEEPS ITS CURRENT

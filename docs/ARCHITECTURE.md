@@ -464,12 +464,20 @@ than silently treated as body text.
   milestone, label, project, and initiative variants; history is render-only
   (`history.md` is read-only). `Render` builds frontmatter documents for the
   generated catalog files too.
-- **Declarative issue fields:** the editable scalar issue fields (title, status,
-  assignee, due, parent, project, milestone, cycle) are defined once in the
-  `issueScalarFields` table; render, diff-update, and create each iterate it
+- **Declarative issue fields:** the editable scalar issue fields (title, team,
+  status, assignee, due, parent, project, milestone, cycle) are defined once in
+  the `issueScalarFields` table; render, diff-update, and create each iterate it
   rather than hand-coding the field per path, so adding a field is a one-row
   change and the render/parse/mapping paths cannot drift. Priority, estimate, and
   labels keep bespoke coercion (they are not homogeneous scalars).
+- **Closed key set:** issue.md's accepted keys are exactly that table plus the
+  three bespoke fields, and a document naming anything else is rejected whole as
+  a `FieldError` — a key is applied or reported, never accepted and dropped
+  (#426). The accepted-key list is derived from the table, so a new editable
+  field is admitted by the guard without a second edit. The keys `issue.meta`
+  renders are recognized rather than unknown: an update reports them as
+  read-only and names the sidecar; a create ignores them, so a spec assembled
+  from a rendered issue plus its meta still creates.
 - **Partial updates:** `MarkdownToIssueUpdate` diffs against the original and
   returns only changed fields.
 - **Field clearing:** a deleted frontmatter line becomes an explicit `nil`/`[]`

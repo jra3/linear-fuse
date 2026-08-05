@@ -100,6 +100,15 @@ func TestEditFlushNoChangeClearsDirtyNoCommit(t *testing.T) {
 	if len(sink.invalidated) != 0 {
 		t.Errorf("invalidated %v on a no-op, want none", sink.invalidated)
 	}
+	// A no-op is a SUCCESS, so it retires the entity's .error (#400). Every
+	// other success path clears through commitWriteBack, which this branch
+	// returns before reaching — so without the clear here, the reason a
+	// PREVIOUS write was rejected outlives the corrected document: the writer
+	// re-reads the file, saves it back unmodified, gets 0, and .error still
+	// accuses a file that is now fine.
+	if sink.clears != 1 {
+		t.Errorf("ClearWriteError called %d times on a no-op flush, want 1 — a stale rejection would outlive the write that fixed it", sink.clears)
+	}
 }
 
 func TestEditFlushProceedCommitsAdoptsInvalidates(t *testing.T) {

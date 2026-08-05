@@ -235,6 +235,13 @@ func (n *IssuesNode) createIssue(ctx context.Context, content []byte) syscall.Er
 		func(ctx context.Context) (*api.Issue, error) {
 			spec, err := marshal.MarkdownToIssueCreate(content)
 			if err != nil {
+				// The unknown-key guard (#426) already speaks FieldError; pass it
+				// through rather than re-wrapping it as a "frontmatter" error,
+				// which would bury the key it names inside the message.
+				var ferr *FieldError
+				if errors.As(err, &ferr) {
+					return nil, ferr
+				}
 				// Normalize the marshal parse/validation error to the
 				// Field/Value/Error shape so it matches the resolver's
 				// EINVAL errors.
@@ -518,7 +525,15 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			updates, err = marshal.MarkdownToIssueUpdate(i.content, &i.issue)
 			if err != nil {
 				log.Printf("Failed to parse changes for %s: %v", i.issue.Identifier, err)
-				i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
+				// A *FieldError already names the offending field in the
+				// Field/Value/Error shape (the unknown-key guard, #426); only a
+				// bare parse failure needs the prefix to explain itself.
+				var ferr *FieldError
+				if errors.As(err, &ferr) {
+					i.lfs.SetIssueError(i.issue.ID, ferr.Detail())
+				} else {
+					i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
+				}
 				return false, syscall.EINVAL
 			}
 			if len(updates) == 0 {
