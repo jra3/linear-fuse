@@ -164,6 +164,36 @@ func migrateSchema(db *sql.DB) error {
 		}
 	}
 
+	// description carries Linear's Team.description into team.md. Same sqlc
+	// guarantee as above: an old cache appends it after parent_id, a fresh one
+	// takes schema.sql's order, and the generated SELECTs name columns either
+	// way. No index — nothing queries by it.
+	hasTeamDesc, err := tableHasColumn(db, "teams", "description")
+	if err != nil {
+		return err
+	}
+	if !hasTeamDesc {
+		if _, err := db.Exec("ALTER TABLE teams ADD COLUMN description TEXT"); err != nil {
+			return fmt.Errorf("add teams.description: %w", err)
+		}
+	}
+
+	// data carries the team settings team.md renders (issue-creation defaults,
+	// default templates). Deliberately no NOT NULL and no DEFAULT: ALTER cannot
+	// give existing rows a real blob, and a SQL-side '{}' would be stored as
+	// TEXT, which is a distinct scan problem from the NULL it was meant to
+	// avoid. Existing rows keep NULL — read as "settings unknown" — until the
+	// next team sync writes the real thing.
+	hasTeamData, err := tableHasColumn(db, "teams", "data")
+	if err != nil {
+		return err
+	}
+	if !hasTeamData {
+		if _, err := db.Exec("ALTER TABLE teams ADD COLUMN data JSON"); err != nil {
+			return fmt.Errorf("add teams.data: %w", err)
+		}
+	}
+
 	// Indexes over ALTER-added columns are created HERE, not in schema.sql,
 	// and unconditionally (IF NOT EXISTS covers both the fresh database, whose
 	// column came from schema.sql, and the just-migrated one). schema.sql runs

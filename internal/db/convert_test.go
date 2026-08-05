@@ -1575,3 +1575,97 @@ func TestOverlayColumnsWin(t *testing.T) {
 		}
 	})
 }
+
+// TestTeamSettingsRoundTrip covers the `data` blob added for the team settings
+// nothing queries by. Three invariants, in the order they bite:
+//
+//  1. the settings survive api.Team → row → api.Team at all;
+//  2. a row from before the column (data NULL) reads back as UNKNOWN rather
+//     than as a team with triage off and no estimate scale;
+//  3. where a column and the blob disagree, the COLUMN wins — it is what
+//     UpsertTeam maintains, and the blob may be a build older than a rename.
+func TestTeamSettingsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	team := api.Team{
+		ID: "team-1", Key: "TST", Name: "Test Team",
+		Description:                  "desc",
+		Parent:                       &api.Team{ID: "team-parent", Key: "PAR", Name: "Parent"},
+		DefaultIssueState:            &api.State{ID: "s1", Name: "Todo", Type: "unstarted"},
+		TriageEnabled:                true,
+		TriageIssueState:             &api.State{ID: "s2", Name: "Triage", Type: "triage"},
+		RequirePriorityToLeaveTriage: true,
+		IssueEstimationType:          "fibonacci",
+		DefaultIssueEstimate:         3,
+		IssueEstimationAllowZero:     true,
+		DefaultTemplateForMembers:    &api.Template{ID: "t1", Name: "Bug report"},
+	}
+
+	params := APITeamToDBTeam(team)
+	row := Team{
+		ID: params.ID, Key: params.Key, Name: params.Name, Icon: params.Icon,
+		CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt,
+		SyncedAt: params.SyncedAt, ParentID: params.ParentID,
+		Description: params.Description, Data: params.Data,
+	}
+
+	got := DBTeamToAPITeam(row)
+	if got.IssueEstimationType != "fibonacci" || got.DefaultIssueEstimate != 3 {
+		t.Errorf("estimation = %q/%v, want fibonacci/3", got.IssueEstimationType, got.DefaultIssueEstimate)
+	}
+	if !got.TriageEnabled || !got.RequirePriorityToLeaveTriage || !got.IssueEstimationAllowZero {
+		t.Errorf("boolean settings lost in the round trip: %+v", got)
+	}
+	if got.DefaultIssueState == nil || got.DefaultIssueState.Name != "Todo" {
+		t.Errorf("DefaultIssueState = %+v, want Todo", got.DefaultIssueState)
+	}
+	if got.TriageIssueState == nil || got.TriageIssueState.Name != "Triage" {
+		t.Errorf("TriageIssueState = %+v, want Triage", got.TriageIssueState)
+	}
+	if got.DefaultTemplateForMembers == nil || got.DefaultTemplateForMembers.Name != "Bug report" {
+		t.Errorf("DefaultTemplateForMembers = %+v, want Bug report", got.DefaultTemplateForMembers)
+	}
+	// The parent is re-derived from parent_id, so the blob's wire parent — which
+	// carried Key and Name — must not survive as a second, staler copy.
+	if got.Parent == nil || got.Parent.ID != "team-parent" {
+		t.Fatalf("Parent = %+v, want the parent_id edge", got.Parent)
+	}
+	if got.Parent.Key != "" || got.Parent.Name != "" {
+		t.Errorf("Parent = %+v; want ID only (stitchParents fills the rest)", got.Parent)
+	}
+
+	t.Run("row predating the column reads as unknown", func(t *testing.T) {
+		t.Parallel()
+		old := Team{ID: "team-2", Key: "OLD", Name: "Old Team"} // Data nil, as ALTER leaves it
+		got := DBTeamToAPITeam(old)
+		if got.IssueEstimationType != "" {
+			t.Errorf("IssueEstimationType = %q, want \"\" — the sentinel the renderers read as unknown", got.IssueEstimationType)
+		}
+		if got.Key != "OLD" {
+			t.Errorf("Key = %q; a NULL blob must not cost the row its columns", got.Key)
+		}
+	})
+
+	t.Run("corrupt blob is discarded whole", func(t *testing.T) {
+		t.Parallel()
+		got := DBTeamToAPITeam(Team{ID: "team-3", Key: "BAD", Name: "Bad", Data: []byte(`{"triageEnabled":true,`)})
+		if got.TriageEnabled {
+			t.Error("a torn blob was partially applied; want it discarded whole")
+		}
+		if got.Key != "BAD" {
+			t.Errorf("Key = %q, want BAD", got.Key)
+		}
+	})
+
+	t.Run("columns win over the blob", func(t *testing.T) {
+		t.Parallel()
+		stale := APITeamToDBTeam(api.Team{ID: "team-4", Key: "OLDKEY", Name: "Old Name", Description: "old desc"})
+		got := DBTeamToAPITeam(Team{
+			ID: "team-4", Key: "NEWKEY", Name: "New Name",
+			Description: toNullString(strPtr("new desc")), Data: stale.Data,
+		})
+		if got.Key != "NEWKEY" || got.Name != "New Name" || got.Description != "new desc" {
+			t.Errorf("blob overrode the columns: %+v", got)
+		}
+	})
+}

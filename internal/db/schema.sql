@@ -79,7 +79,19 @@ CREATE TABLE IF NOT EXISTS teams (
     -- Sub-team edge (Linear's Team.parent). NULL for a top-level team. The
     -- inverse (children) is a query over this column, never a stored second
     -- copy. Declared last to match where migrateSchema's ALTER appends it.
-    parent_id TEXT
+    parent_id TEXT,
+    -- Free text shown under the team name in Linear's UI; rendered into
+    -- team.md. ALTER-added, so it follows parent_id in migrated-DB order.
+    description TEXT,
+    -- Full API response, holding the settings nothing queries by: the
+    -- issue-creation defaults and default templates team.md renders. The
+    -- Unlike every other table's `data`, this one is NULLABLE, and there is no
+    -- SQL-side default: it is ALTER-added, so rows written by an older build
+    -- carry no blob until the next team sync, and NULL is the honest way to
+    -- say their settings are unknown (see api.Team.IssueEstimationType) rather
+    -- than assert a team's triage is off because nobody has asked yet. Reading
+    -- a NULL takes the []byte override in sqlc.yaml.
+    data JSON
 );
 
 -- NOTE: idx_teams_parent is created by migrateSchema, not here. An index over

@@ -9,3 +9,13 @@ sql:
         out: "internal/db"
         emit_json_tags: true
         emit_empty_slices: true
+        overrides:
+          # teams.data is the one nullable JSON column (it was ALTER-added, so
+          # rows from an older build have no blob). sqlc's default for a JSON
+          # column is json.RawMessage, which scans neither a NULL nor the TEXT
+          # a SQL-side default would produce; plain []byte scans both, taking
+          # NULL as nil — the value the read path reads as "settings unknown".
+          - column: "teams.data"
+            go_type:
+              type: "byte"
+              slice: true

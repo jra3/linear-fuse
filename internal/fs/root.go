@@ -98,7 +98,13 @@ Mount point: %s (all paths below are relative to this mount point)
 
 <directory_structure>
 teams/{KEY}/
-  team.md, states.md, labels.md     [read-only metadata; team.md names parent/subteams]
+  team.md, states.md, labels.md     [read-only metadata; team.md carries the team
+                                     description, names parent/subteams, and under
+                                     "defaults" gives the state a new issue opens in,
+                                     whether triage intercepts it, and the scale
+                                     "estimate:" is denominated in — read it before
+                                     creating issues. An absent "defaults" block means
+                                     not-yet-synced, not "all off"]
   project-labels.md                 [symlink to ../../project-labels.md]
   parent                            [symlink to ../{PARENT_KEY}; listed only for a sub-team]
   subteams/{KEY}                    [symlinks to sub-team dirs; teams/ itself stays flat,

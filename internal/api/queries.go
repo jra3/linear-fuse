@@ -13,10 +13,22 @@ query Teams($after: String) {
       id
       key
       name
+      description
       icon
       createdAt
       updatedAt
       parent { id key name }
+      defaultIssueState { id name type }
+      triageEnabled
+      triageIssueState { id name type }
+      requirePriorityToLeaveTriage
+      issueEstimationType
+      defaultIssueEstimate
+      issueEstimationAllowZero
+      issueEstimationExtended
+      defaultTemplateForMembers { id name description type }
+      defaultTemplateForNonMembers { id name description type }
+      defaultProjectTemplate { id name description type }
     }
   }
 }

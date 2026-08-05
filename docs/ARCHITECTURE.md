@@ -340,7 +340,15 @@ Design conventions:
 - **Hybrid storage:** queryable fields are extracted into indexed columns
   (`team_id`, `state_id`, `updated_at`, …) while the full API response is kept in
   a `data JSON` column. Avoids joins (names stored alongside IDs) and keeps the
-  schema stable as Linear's API grows.
+  schema stable as Linear's API grows. Where a row has both, **the column is
+  authoritative and is layered back over the decoded blob** — the columns are
+  what the upserts maintain, so a blob written by an older build cannot resurrect
+  a stale value (`DBTeamToAPITeam`). `teams.data` is the one NULLABLE `data`
+  column: it was `ALTER`-added, so pre-existing rows have no blob, and NULL is
+  read as *settings unknown* rather than as a team whose triage is off (the
+  sentinel is `api.Team.IssueEstimationType`, which Linear types non-null). It
+  also carries a `[]byte` override in `sqlc.yaml`, because the default
+  `json.RawMessage` cannot scan a NULL.
 - **`synced_at` everywhere** for staleness detection; issues additionally carry
   `detail_synced_at`, stamped only when a detail batch persisted cleanly.
 - **Hierarchy edges are stored once,** as a `parent_id` column on the child

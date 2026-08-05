@@ -310,14 +310,16 @@ type SyncSchedule struct {
 }
 
 type Team struct {
-	ID        string         `json:"id"`
-	Key       string         `json:"key"`
-	Name      string         `json:"name"`
-	Icon      sql.NullString `json:"icon"`
-	CreatedAt sql.NullTime   `json:"created_at"`
-	UpdatedAt sql.NullTime   `json:"updated_at"`
-	SyncedAt  time.Time      `json:"synced_at"`
-	ParentID  sql.NullString `json:"parent_id"`
+	ID          string         `json:"id"`
+	Key         string         `json:"key"`
+	Name        string         `json:"name"`
+	Icon        sql.NullString `json:"icon"`
+	CreatedAt   sql.NullTime   `json:"created_at"`
+	UpdatedAt   sql.NullTime   `json:"updated_at"`
+	SyncedAt    time.Time      `json:"synced_at"`
+	ParentID    sql.NullString `json:"parent_id"`
+	Description sql.NullString `json:"description"`
+	Data        []byte         `json:"data"`
 }
 
 type TeamMember struct {
