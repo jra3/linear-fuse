@@ -1602,12 +1602,10 @@ func TestTeamSettingsRoundTrip(t *testing.T) {
 	}
 
 	params := APITeamToDBTeam(team)
-	row := Team{
-		ID: params.ID, Key: params.Key, Name: params.Name, Icon: params.Icon,
-		CreatedAt: params.CreatedAt, UpdatedAt: params.UpdatedAt,
-		SyncedAt: params.SyncedAt, ParentID: params.ParentID,
-		Description: params.Description, Data: params.Data,
-	}
+	// The row sqlc reads back is field-identical to the upsert params, so the
+	// round trip is a conversion — a column added to one but not the other
+	// fails to compile here rather than silently dropping out of the test.
+	row := Team(params)
 
 	got := DBTeamToAPITeam(row)
 	if got.IssueEstimationType != "fibonacci" || got.DefaultIssueEstimate != 3 {

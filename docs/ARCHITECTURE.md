@@ -340,10 +340,8 @@ Design conventions:
 - **Hybrid storage:** queryable fields are extracted into indexed columns
   (`team_id`, `state_id`, `updated_at`, …) while the full API response is kept in
   a `data JSON` column. Avoids joins (names stored alongside IDs) and keeps the
-  schema stable as Linear's API grows. Where a row has both, **the column is
-  authoritative and is layered back over the decoded blob** — the columns are
-  what the upserts maintain, so a blob written by an older build cannot resurrect
-  a stale value (`DBTeamToAPITeam`). `teams.data` is the one NULLABLE `data`
+  schema stable as Linear's API grows. Which of the two wins on read is the
+  hydrate-then-overlay rule below. `teams.data` is the one NULLABLE `data`
   column: it was `ALTER`-added, so pre-existing rows have no blob, and NULL is
   read as *settings unknown* rather than as a team whose triage is off (the
   sentinel is `api.Team.IssueEstimationType`, which Linear types non-null). It
@@ -362,11 +360,16 @@ Design conventions:
   drop-and-recreate fallback below and discarding the user's cache instead of
   migrating it (#432 tracks the missing guard).
 - **Hydrate-then-overlay:** for entities with extracted columns (states,
-  labels, users, cycles, milestones, …), reverse converters unmarshal the
+  labels, users, cycles, teams, milestones, …), reverse converters unmarshal the
   `data` blob first, then overlay the columns — so no field is silently
   dropped, and a corrupt blob degrades to column-backed values instead of
-  poisoning a listing. Entities whose blob is the whole row (issues, projects,
-  comments, …) pure-unmarshal and propagate a parse error instead.
+  poisoning a listing. **The column is authoritative**: it is what the upserts
+  maintain, so a blob written by an older build cannot resurrect a stale value,
+  and a hierarchy edge is re-derived from its own column rather than adopted
+  from the blob (`DBTeamToAPITeam` rebuilds `Parent` from `parent_id`, so a
+  stale blob cannot become a second copy of the edge). Entities whose blob is
+  the whole row (issues, projects, comments, …) pure-unmarshal and propagate a
+  parse error instead.
 - **Concurrency posture:** the Sync Worker and the FUSE write handlers write
   the same file concurrently. Safety rests on connection pragmas carried in the
   **DSN** — WAL journal mode, `busy_timeout(5000)`, foreign keys — so every
