@@ -82,18 +82,6 @@ type APIClient interface {
 // batch is ever rejected again, this constant is the first suspect.
 const detailsBatchSize = 10
 
-// Budget thresholds for rate limit awareness.
-// Detail batches (~2001 complexity each) are expensive; we defer them when budget is tight.
-const (
-	budgetSkipSyncPct    = 80.0 // Skip entire sync cycle when budget exceeds this
-	budgetDeferDetailPct = 70.0 // Defer detail batches to pending_detail_sync above this
-)
-
-// BudgetReporter provides rate limit budget information.
-type BudgetReporter interface {
-	BudgetSnapshot() (count int, pct float64)
-}
-
 // CatchUpModeToggler controls the repo staleness threshold during large syncs.
 type CatchUpModeToggler interface {
 	SetCatchUpMode(active bool)
@@ -124,7 +112,6 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
-	budget   BudgetReporter     // optional: for rate limit budget logging
 	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
 	idRecon  IssueIDReconciler  // optional: the hourly issue-ID reconcile sweep (#245)
 	cycle    atomic.Int64       // sync-cycle counter; rotates the team order
@@ -138,11 +125,6 @@ type Worker struct {
 	now       func() time.Time
 	newTimer  func(d time.Duration) (<-chan time.Time, func() bool)
 	newTicker func(d time.Duration) (<-chan time.Time, func())
-
-	// Rate limit tracking for issue details sync
-	rateLimitMu     sync.RWMutex
-	rateLimitedAt   time.Time
-	rateLimitExpiry time.Time
 }
 
 // Config holds configuration for the sync worker
@@ -191,11 +173,6 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 		newTimer:         realNewTimer,
 		newTicker:        realNewTicker,
 	}
-}
-
-// SetBudgetReporter sets the rate limit budget reporter for enhanced logging.
-func (w *Worker) SetBudgetReporter(b BudgetReporter) {
-	w.budget = b
 }
 
 // SetCatchUpModeToggler sets the repo reference for toggling catch-up mode
@@ -385,17 +362,6 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// the signature of budget-gated skipping.
 	start := w.now()
 	defer func() { w.metrics.recordCycle(w.now().Sub(start), mode) }()
-
-	// Skip entire sync cycle when budget is critically high
-	if w.budgetExceeds(budgetSkipSyncPct) {
-		count, pct := 0, 0.0
-		if w.budget != nil {
-			count, pct = w.budget.BudgetSnapshot()
-		}
-		log.Printf("[sync] skipping sync cycle: budget at %d requests (%.0f%%), threshold %.0f%%",
-			count, pct, budgetSkipSyncPct)
-		return nil
-	}
 
 	// H-5: Drain any issues that were queued during a previous rate-limit backoff
 	w.drainPendingDetailSync(ctx)
@@ -1252,49 +1218,12 @@ func isRateLimitError(err error) bool {
 	return api.IsRateLimited(err)
 }
 
-// budgetExceeds returns true if the current hourly budget usage exceeds the given threshold.
-// Returns false if no budget reporter is configured.
-func (w *Worker) budgetExceeds(pct float64) bool {
-	if w.budget == nil {
-		return false
-	}
-	_, usage := w.budget.BudgetSnapshot()
-	return usage > pct
-}
-
-// isRateLimited returns true if we're currently rate limited for issue details
-func (w *Worker) isRateLimited() bool {
-	w.rateLimitMu.RLock()
-	defer w.rateLimitMu.RUnlock()
-	return w.now().Before(w.rateLimitExpiry)
-}
-
-// setRateLimited marks that we've hit a rate limit. The backoff consults
-// the client's rate budget: RateLimitResetAt is the server-reported window
-// reset (parsed from the per-axis millisecond headers), so the pause ends
-// when the budget actually refills; the fixed 15-minute backoff is only the
-// fallback for a reset the server never told us about.
-func (w *Worker) setRateLimited() {
-	w.rateLimitMu.Lock()
-	defer w.rateLimitMu.Unlock()
-	w.rateLimitedAt = w.now()
-
-	// Use the budget's server-provided reset time if it's in the future
-	backoff := 15 * time.Minute
-	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(w.now()) {
-		backoff = resetAt.Sub(w.now()) + 5*time.Second // 5s buffer past the reset
-	}
-	w.rateLimitExpiry = w.rateLimitedAt.Add(backoff)
-
-	if w.budget != nil {
-		count, pct := w.budget.BudgetSnapshot()
-		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s, budget: %d requests this hour, %.0f%%)",
-			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second), count, pct)
-	} else {
-		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s)",
-			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second))
-	}
-}
+// coldStartBackoff is how long probeBudget delays the first cycle after a
+// RATELIMITED probe when the response carried no usable reset. It mirrors the
+// budget's own rateLimitedFallbackBackoff, which bounds admit's lockout for
+// the same headerless case — this worker-side copy only decides when to START
+// working, never whether a request may go.
+const coldStartBackoff = 15 * time.Minute
 
 // probeBudget is the cold-start probe: before the worker's first sync cycle
 // it fires one cheap viewer query so the client's rate budget is seeded from
@@ -1306,9 +1235,13 @@ func (w *Worker) setRateLimited() {
 // (~1-2 complexity points) and dual-purpose: /my needs it anyway.
 //
 // If the probe itself reports RATELIMITED, the account is already exhausted:
-// mark the worker rate-limited (the backoff honors the budget's
-// server-reported reset, which this very response's headers just seeded) and
-// sleep until the backoff expires instead of bursting into the wall. Any
+// sleep until the window resets instead of bursting into the wall. The wait
+// honors the budget's server-reported reset (which this very response's
+// headers just seeded), falling back to coldStartBackoff when the response
+// carried none. This is a SCHEDULING decision — when to start working — not
+// an admission one: admit already refuses every request until the budget
+// refills (snapExhaustedLocked), so a missing wait would be correct but
+// wasteful, not unsafe. Any
 // other probe failure (network down, auth) is logged and sync proceeds —
 // those failures repeat identically in syncAllTeams and are handled there,
 // and the budget stays conservative once the first response does land.
@@ -1325,12 +1258,11 @@ func (w *Worker) probeBudget(ctx context.Context) bool {
 		return true
 	}
 
-	w.setRateLimited()
-	w.rateLimitMu.RLock()
-	expiry := w.rateLimitExpiry
-	w.rateLimitMu.RUnlock()
-
-	wait := expiry.Sub(w.now())
+	wait := coldStartBackoff
+	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(w.now()) {
+		wait = resetAt.Sub(w.now()) + 5*time.Second // 5s buffer past the reset
+	}
+	expiry := w.now().Add(wait)
 	log.Printf("[sync] budget probe RATELIMITED; delaying sync start %s (until %s)",
 		wait.Round(time.Second), expiry.Format(time.RFC3339))
 	if wait <= 0 {
@@ -1394,8 +1326,8 @@ func (w *Worker) deferDetailIssues(ctx context.Context, issues []issueRef) {
 }
 
 // syncDetails is the single entry point for issue-detail syncing
-// (comments/documents/attachments/relations). It owns every gate — budget,
-// rate-limited before the fetch, rate-limited mid-fetch, fetch failure —
+// (comments/documents/attachments/relations). It owns every gate — deferred by
+// the admission ladder, rate-limited mid-fetch, any other fetch failure —
 // fetches the batch in one API call, persists per issue through
 // reconcile.PersistIssueDetails, and returns a per-issue outcome ledger.
 //
@@ -1415,16 +1347,11 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 		return detailOutcome{deferred: issues, gated: true}
 	}
 
-	// Gate 1: budget too tight for detail fetches this cycle.
-	if w.budgetExceeds(budgetDeferDetailPct) {
-		return deferAll()
-	}
-
-	// Gate 2 (H-5): already rate limited — defer so the issues survive the backoff.
-	if w.isRateLimited() {
-		return deferAll()
-	}
-
+	// There is no pre-fetch budget gate: the admission ladder decides, at the
+	// moment of the call, on both axes and in priority order (detail fetches
+	// hold the largest reserve, so they stop first). A worker-side threshold
+	// could only re-decide that on one axis, worse — see Gate 1 below for
+	// where the ladder's answer arrives.
 	ids := make([]string, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
@@ -1440,19 +1367,25 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
 	if err != nil {
 		if api.IsDeferred(err) {
-			// Gate 3a: our OWN admission ladder deferred this batch — a local,
+			// Gate 1: our OWN admission ladder deferred this batch — a local,
 			// minute-scale condition that clears next cycle, NOT the server rate
-			// limiting us. Skip this cycle (the issues survive in the pending
-			// queue) WITHOUT the long setRateLimited pause (#257).
+			// limiting us. Skip this cycle; the issues survive in the pending
+			// queue and the next cycle asks again (#257: a local defer must
+			// never cost the hour-long pause a server 429 warrants — now
+			// structural, since the worker holds no pause at all).
 			log.Printf("[sync] detail batch deferred by budget ladder, retrying next cycle: %v", err)
 			return deferAll()
 		}
 		if isRateLimitError(err) {
-			// Gate 3: server rate limited mid-fetch.
-			w.setRateLimited()
+			// Gate 2: server rate limited mid-fetch. No worker-side pause: the
+			// response's headers already snapped both budget axes to zero with
+			// a future reset, so admit refuses every request — including the
+			// next cycle's batch, which lands back here at Gate 1 — until the
+			// window refills.
+			log.Printf("[sync] detail batch rate limited by server, deferring %d issues: %v", len(issues), err)
 			return deferAll()
 		}
-		// Gate 4: any other fetch failure. Deferring (not just logging) keeps
+		// Gate 3: any other fetch failure. Deferring (not just logging) keeps
 		// the worker-side retry for team-sync-sourced issues, which otherwise
 		// exist nowhere but this call's arguments.
 		log.Printf("[sync] batch fetch details failed, deferring %d issues: %v", len(issues), err)

@@ -13,6 +13,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -88,8 +89,9 @@ func outcomeValue(t *testing.T, rm metricdata.ResourceMetrics, outcome string) i
 
 // TestSyncDetailsRecordsOutcomes: one clean and one unclean issue through
 // syncDetails land as detail_outcomes datapoints — synced for the stamped
-// issue, deferred for the re-enqueued one — and a whole-batch gate (budget)
-// folds its deferrals into the same series.
+// issue, deferred for the re-enqueued one — and a whole-batch gate (the
+// admission ladder refusing the fetch) folds its deferrals into the same
+// series.
 func TestSyncDetailsRecordsOutcomes(t *testing.T) {
 	reader := withTestMeter(t)
 	store := openTestStore(t)
@@ -121,8 +123,8 @@ func TestSyncDetailsRecordsOutcomes(t *testing.T) {
 		t.Errorf("detail_outcomes{outcome=deferred} = %d, want 1", got)
 	}
 
-	// Gate path: budget over the defer threshold defers the whole batch.
-	worker.SetBudgetReporter(&mockBudgetReporter{count: 2000, pct: 90})
+	// Gate path: the ladder refuses the fetch, deferring the whole batch.
+	mock.detailsErr = fmt.Errorf("query IssueDetailsBatch deferred by budget ladder (detail reserve): %w", api.ErrDeferred)
 	gated := worker.syncDetails(ctx, []issueRef{
 		{ID: "issue-g1", Identifier: "TST-3"},
 		{ID: "issue-g2", Identifier: "TST-4"},

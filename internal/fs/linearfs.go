@@ -306,7 +306,6 @@ func (lfs *LinearFS) EnableSQLiteCache(dbPath string) error {
 	// it merely derives its ctx from the mount lifetime now, so Close's
 	// cancel aborts a mid-flight sync cycle before Stop is even called.
 	lfs.syncWorker = sync.NewWorker(lfs.client, store, sync.DefaultConfig())
-	lfs.syncWorker.SetBudgetReporter(lfs.client)
 	lfs.syncWorker.SetCatchUpModeToggler(lfs.repo)
 	lfs.syncWorker.SetIssueIDReconciler(lfs.repo)
 	lfs.syncWorker.Start(lfs.lifeCtx)
