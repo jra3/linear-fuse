@@ -333,11 +333,10 @@ staleness is bounded at `len(teams)` cycles.
   both axes and in priority order (detail fetches hold the largest reserve, so
   they stop first). A refusal arrives as `api.ErrDeferred`/`ErrBudget`, and the
   worker's job is what to do with it: detail batches go to the
-  `pending_detail_sync` table and drain in later cycles, and a refused
+  `pending_detail_sync` table and drain in later cycles, a refused
   skeleton-tier drain withholds the full-cycle stamp, and a refused team
   metadata drain degrades to that team's cheap projects probe (above).
-  `syncDetails`
-  returns a `detailOutcome` ledger (synced / deferred / gated) and stamps
+  `syncDetails` returns a `detailOutcome` ledger (synced / deferred / gated) and stamps
   `detail_synced_at` only for issues whose details persisted cleanly. A server
   429 needs no worker-side pause either: the response snaps both budget axes to
   zero with a future reset, so `admit` refuses until the window refills.

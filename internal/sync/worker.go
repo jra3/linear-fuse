@@ -391,7 +391,9 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		w.metrics.recordCycle(w.now().Sub(start), mode, outcome)
 	}()
 
-	// H-5: Drain any issues that were queued during a previous rate-limit backoff
+	// H-5: Drain any issues an earlier cycle could not fetch details for —
+	// deferred by the admission ladder, rate limited by the server, or a
+	// failed fetch (see syncDetails' gates).
 	w.drainPendingDetailSync(ctx)
 
 	// First, sync workspace-level entities (full cycles only — the workspace
@@ -1374,8 +1376,9 @@ type issueRef struct {
 // everything else (re-enqueued to pending_detail_sync, NOT stamped, NOT
 // dequeued).
 // gated=true means conditions preclude further detail syncing this cycle —
-// budget too tight, rate-limited, or a failed fetch — so a batching loop
-// (drainPendingDetailSync) should stop rather than burn more batches.
+// deferred by the admission ladder, rate limited by the server mid-fetch, or
+// a failed fetch — so a batching loop (drainPendingDetailSync) should stop
+// rather than burn more batches.
 type detailOutcome struct {
 	synced   []issueRef
 	deferred []issueRef

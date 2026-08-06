@@ -1781,7 +1781,8 @@ promoted ctx or hand it to a goroutine. It collapsed
 `checkRateLimitHeaders`, the inline `Tokens() < 2` write-reserve gate, the
 `linearHourlyLimit` constant, and the token-count `LowBudget`;
 `Client.LowBudget`/`RateLimitResetAt` now delegate to it (paginate's
-`ErrBudget` gate and the worker's backoff consult real budget state), and the
+`ErrBudget` gate and the worker's cold-start wait consult real budget
+state), and the
 micro-burst `rate.Limiter` survives only as a spike smoother re-sized from
 the observed request limit. The injected clock (`now func() time.Time`) is
 the test seam: `ratebudget_test.go` drives the ladder, reconcile, semaphore,
@@ -1811,10 +1812,15 @@ the first response lands. The **cold-start probe** closes that hole:
 `GetViewer` (now on the worker's `APIClient` interface) synchronously at the
 top of `run()`, so the probe's headers seed the budget strictly before the
 first `syncAllTeams` issues expensive work. A `RATELIMITED` probe (account
-already exhausted) marks the worker rate-limited — the backoff honors the
-budget's reset, seeded by that very response — and sleeps until expiry
-before starting sync (interruptible by ctx/Stop); any other probe failure
-logs and proceeds. Probe sequencing and the delay path are unit-tested in
+already exhausted) sleeps until the budget's server-reported reset + 5s,
+seeded by that very response (falling back to `coldStartBackoff` = 15m when
+the response carried none — deliberately the same value as the budget's own
+`rateLimitedFallbackBackoff`, kept separate because this one decides when to
+START working, never whether a request may go), before starting sync
+(interruptible by ctx/Stop); any other probe failure logs and proceeds. It is
+a SCHEDULING decision, not an admission one — `admit` already refuses every
+request until the window refills, so a missing wait would be wasteful, not
+unsafe. Probe sequencing and the delay path are unit-tested in
 `worker_test.go` (`TestProbe*`); the client-level seed-then-defer wiring in
 `client_test.go` (`TestViewerProbeSeedsBudget`).
 
