@@ -73,6 +73,18 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		t.Error("README's issue.md template does not document the editable team: field")
 	}
 
+	// The exhaustive-key rule (#426): issue.md rejects a key it does not accept
+	// rather than dropping it. The doc has to say so, because the behavior it
+	// replaced — accept, apply nothing, and lose the key on the next render —
+	// is what an agent will otherwise assume from a 0 exit. "EXHAUSTIVE" pins the
+	// claim; "no third outcome" pins its consequence, which is the part that
+	// makes a successful write trustworthy.
+	for _, want := range []string{"EXHAUSTIVE", "no third outcome"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q (unknown-frontmatter-key contract)", want)
+		}
+	}
+
 	// Atomic save (#438): every editor and the Edit/Write tools save by writing a
 	// temp file and renaming it over the target, and the README has to teach the
 	// two things that path's failures depend on — that the SAVE happens at the

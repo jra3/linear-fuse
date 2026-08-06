@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -273,5 +274,73 @@ func TestEmptyWriteDoesNotCorrupt(t *testing.T) {
 	}
 	if strings.TrimSpace(fresh.Description) != strings.TrimSpace(originalBody) {
 		t.Errorf("description = %q after a rejected empty write, want the original %q", fresh.Description, originalBody)
+	}
+}
+
+// TestUnknownFrontmatterKeyIsRejected is the #426 guard at the mount: a key
+// issue.md does not accept must fail the save with EINVAL and name itself in
+// .error. It ran the other way before — exit 0, empty .error, no mutation, and
+// the key gone on the next fresh render — so a typo'd `teem:`/`assigne:` read as
+// a successful edit, which is the one outcome the failure model has no room for.
+//
+// No mode guard: the rejection happens in marshal, before any resolution or
+// mutation, so the write is inert under a live key too — nothing is created,
+// nothing is changed, and the issue comes from someIssueDir rather than a seeded
+// row. The save goes through a temp-file rename because that is the path editors
+// and the Claude Code Write tool take, and the only one whose verdict is
+// synchronous (a raw O_TRUNC write can be served from a primed page cache and
+// never reach Flush at all).
+func TestUnknownFrontmatterKeyIsRejected(t *testing.T) {
+	dir := someIssueDir(t)
+	path := filepath.Join(dir, "issue.md")
+	errPath := filepath.Join(dir, ".error")
+
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read issue.md: %v", err)
+	}
+	// Best-effort restore for the early-exit paths; the success path restores
+	// explicitly below and asserts what the restore does to .error.
+	defer func() { _ = claudeToolAtomicSave(t, path, orig) }()
+
+	const typo = "teem"
+	bad := append([]byte("---\n"+typo+": SPY\n"), bytes.TrimPrefix(orig, []byte("---\n"))...)
+
+	werr := claudeToolAtomicSave(t, path, bad)
+	if !errors.Is(werr, syscall.EINVAL) {
+		t.Fatalf("saving issue.md with an unknown %q key returned %v, want EINVAL — an unrecognized key must not read as a successful edit", typo, werr)
+	}
+
+	data := readFileUntilContains(t, errPath, typo, errorVisibilityWait)
+	if !strings.Contains(string(data), typo) {
+		t.Fatalf(".error must name the rejected key %q, got: %q", typo, data)
+	}
+	// The remedy has to travel with the complaint: an agent that only reads
+	// .error should learn which keys the file does accept.
+	if !strings.Contains(string(data), "issue.md accepts:") {
+		t.Errorf(".error names the bad key but not the accepted fields, so the writer has to guess: %q", data)
+	}
+
+	// The rejected document must not have partially applied: the file still
+	// reads as it did before the save.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("re-read issue.md after the rejected save: %v", err)
+	}
+	if !bytes.Equal(after, orig) {
+		t.Errorf("issue.md changed after a rejected save:\nbefore:\n%s\nafter:\n%s", orig, after)
+	}
+
+	// Saving the file back unmodified is the recovery an agent performs after
+	// reading .error, and it must retire the complaint (#400). The write changes
+	// nothing, so it sends no mutation — but it is still a success, and a
+	// success clears .error. Until this landed, the accusation outlived the
+	// document it was about: the next reader saw a valid file with a populated
+	// .error and no way to tell it was stale.
+	if werr := claudeToolAtomicSave(t, path, orig); werr != nil {
+		t.Fatalf("restoring the original bytes failed: %v", werr)
+	}
+	if data, _ := os.ReadFile(errPath); strings.TrimSpace(string(data)) != "" {
+		t.Errorf(".error still holds the rejection after a faithful no-op re-save: %q", data)
 	}
 }

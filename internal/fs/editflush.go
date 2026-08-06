@@ -206,7 +206,15 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 		return errno
 	}
 	if !proceed {
-		// Nothing changed.
+		// Nothing changed — but this IS a successful write, so it clears the
+		// entity's .error like any other (#400). Without the clear, a document
+		// rejected once (an unknown key, an unresolvable name) left its reason
+		// standing after the writer re-read the file and saved it back
+		// unmodified: the file was valid, the write returned 0, and .error still
+		// accused it. The contract is "success clears it", and a no-op is a
+		// success — every other success path clears through commitWriteBack,
+		// which this branch returns before reaching.
+		sink.ClearWriteError(spec.writeBack.errKey)
 		eb.dirty = false
 		return 0
 	}

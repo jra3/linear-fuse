@@ -1,10 +1,12 @@
 package integration
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -607,6 +609,18 @@ func TestWriteContractEditVerifiesOffline(t *testing.T) {
 
 // noopByteStable writes an editable file's exact bytes back and asserts the
 // re-read frontmatter is byte-identical (no self-mutation) and .error is empty.
+//
+// It SEEDS the .error first (#400). The emptiness check used to read whatever
+// .error happened to hold, which for a freshly mounted fixture is nothing — so
+// it asserted the ambient state of a shared mount, not the transition. It
+// passed for years while `editFlush`'s no-op branch never cleared anything, and
+// failed only when another test left a rejected write's .error on the same
+// entity. Seeding makes the assertion mean "the no-op write CLEARED it".
+//
+// The seed is an empty write, because that is the one rejection every editable
+// file shares: an emptied document is refused (EINVAL) with the reason in
+// .error, and the buffer is RESTORED rather than left dirty — so the file this
+// helper is about to rewrite still holds its own bytes.
 func noopByteStable(t *testing.T, filePath, dirPath string) {
 	t.Helper()
 	orig, err := os.ReadFile(filePath)
@@ -616,6 +630,17 @@ func noopByteStable(t *testing.T, filePath, dirPath string) {
 	if frontmatterOf(string(orig)) == "" {
 		t.Fatalf("%s has no frontmatter block — byte-stability check would be vacuous", filepath.Base(filePath))
 	}
+
+	errPath := filepath.Join(dirPath, ".error")
+	if werr := claudeToolAtomicSave(t, filePath, nil); !errors.Is(werr, syscall.EINVAL) {
+		t.Fatalf("%s: emptying the file returned %v, want EINVAL — the seed for the .error-clearing check did not happen",
+			filepath.Base(filePath), werr)
+	}
+	if data, _ := os.ReadFile(errPath); strings.TrimSpace(string(data)) == "" {
+		t.Fatalf("%s: .error is empty after a refused empty write, so the check below cannot observe a clear",
+			filepath.Base(filePath))
+	}
+
 	claudeToolWrite(t, filePath, orig) // fails the test if close/commit errors
 
 	after, err := readFileWithRetry(filePath, defaultWaitTime)

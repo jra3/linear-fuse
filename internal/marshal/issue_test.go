@@ -1144,3 +1144,178 @@ func TestMarkdownToIssueUpdateTeam(t *testing.T) {
 		})
 	}
 }
+
+// TestMarkdownToIssueUpdateRejectsUnrecognizedKey pins the #426 contract: a key
+// issue.md does not accept is a rejected write, not an accepted one that quietly
+// applies nothing. Before this, an unknown key took a third path the failure
+// model has no room for — exit 0, empty .error, no mutation, and the key gone on
+// the next fresh render — so `teem: SPY` read as a successful team move.
+func TestMarkdownToIssueUpdateRejectsUnrecognizedKey(t *testing.T) {
+	t.Parallel()
+	original := &api.Issue{
+		ID: "issue-1", Identifier: "AGT-5", Title: "Original",
+		Team:  &api.Team{ID: "team-agt", Key: "AGT", Name: "Agents"},
+		State: api.State{ID: "state-1", Name: "Todo"},
+	}
+
+	cases := []struct {
+		name        string
+		content     string
+		wantField   string
+		wantMessage []string // substrings the .error must carry
+	}{
+		{
+			name:        "typo'd editable key",
+			content:     "---\ntitle: Original\nassigne: alice@example.com\n---\nbody",
+			wantField:   "assigne",
+			wantMessage: []string{"unknown field", "assignee"}, // the list names the real key
+		},
+		{
+			name:      "wholly unknown key",
+			content:   "---\ntitle: Original\nfoo: bar\n---\nbody",
+			wantField: "foo",
+			// The accepted-field list is the whole remedy: it tells the writer
+			// what they may have meant without a second failed write.
+			wantMessage: []string{"unknown field", "issue.md accepts:", "title", "cycle"},
+		},
+		{
+			name:      "several unknown keys are all named",
+			content:   "---\ntitle: Original\nzeta: 1\nteem: SPY\n---\nbody",
+			wantField: "teem", // sorted, so the reported field is stable
+			// One rejected write must name every key to fix; otherwise a writer
+			// with two typos pays two round trips to learn about them.
+			wantMessage: []string{"unknown field", `also unrecognized: "zeta"`},
+		},
+		{
+			name:      "server-managed key says where the field lives",
+			content:   "---\ntitle: Original\nidentifier: AGT-5\n---\nbody",
+			wantField: "identifier",
+			// Recognized-but-read-only is a different mistake from a typo: the
+			// writer named a real field, just not one issue.md owns.
+			wantMessage: []string{"read-only field", "issue.meta"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			update, err := MarkdownToIssueUpdate([]byte(tc.content), original)
+			if err == nil {
+				t.Fatalf("MarkdownToIssueUpdate accepted %q, want a rejection (update: %v)", tc.content, update)
+			}
+			if update != nil {
+				t.Errorf("rejected write returned a non-nil update %v — nothing may be applied from a rejected document", update)
+			}
+			ferr, ok := err.(*FieldError)
+			if !ok {
+				t.Fatalf("error is %T, want *FieldError so .error renders Field/Value/Error and fs maps it to EINVAL", err)
+			}
+			if ferr.Field != tc.wantField {
+				t.Errorf("FieldError.Field = %q, want %q", ferr.Field, tc.wantField)
+			}
+			for _, want := range tc.wantMessage {
+				if !strings.Contains(ferr.Message, want) {
+					t.Errorf("message %q does not carry %q", ferr.Message, want)
+				}
+			}
+		})
+	}
+}
+
+// TestMarkdownToIssueCreateRejectsUnrecognizedKey covers the create half of the
+// same contract. The split is deliberate: _create IGNORES server-managed keys
+// (a spec pasted from a rendered issue.md + issue.meta carries them, and the
+// server assigns those fields at birth — TestMarkdownToIssueCreate pins that),
+// but a key in neither set is a typo, and an issue born unassigned because of
+// `assigne:` is exactly the silent drop #426 is about.
+func TestMarkdownToIssueCreateRejectsUnrecognizedKey(t *testing.T) {
+	t.Parallel()
+
+	if _, err := MarkdownToIssueCreate([]byte("---\ntitle: New\nassigne: alice@example.com\n---\nbody")); err == nil {
+		t.Error("MarkdownToIssueCreate accepted a typo'd key, want a rejection")
+	} else if ferr, ok := err.(*FieldError); !ok {
+		t.Errorf("error is %T, want *FieldError", err)
+	} else if ferr.Field != "assigne" {
+		t.Errorf("FieldError.Field = %q, want %q", ferr.Field, "assigne")
+	}
+
+	// Read-only keys stay tolerated here — this is the one place the two paths
+	// differ, so it is asserted rather than left to the other test's fixture.
+	if _, err := MarkdownToIssueCreate([]byte("---\ntitle: New\nid: from-a-pasted-meta\nurl: https://linear.app/x\n---\nbody")); err != nil {
+		t.Errorf("MarkdownToIssueCreate rejected server-managed keys: %v — create ignores them by design", err)
+	}
+}
+
+// TestRenderedIssueSurvivesTheKeyGuard is the round-trip safety net for the
+// guard: every key IssueToMarkdown renders must be a key MarkdownToIssueUpdate
+// accepts. A guard that rejects the file the filesystem itself produced would
+// make a no-op re-save fail, which is a worse bug than the one it fixes.
+func TestRenderedIssueSurvivesTheKeyGuard(t *testing.T) {
+	t.Parallel()
+	dueDate := "2026-02-01"
+	estimate := 5.0
+	issue := &api.Issue{
+		ID: "issue-1", Identifier: "ENG-1", Title: "Everything set",
+		Description:      "body",
+		Team:             &api.Team{ID: "team-1", Key: "ENG", Name: "Engineering"},
+		State:            api.State{ID: "state-1", Name: "Todo"},
+		Assignee:         &api.User{ID: "u1", Email: "alice@example.com"},
+		Priority:         2,
+		Labels:           api.Labels{Nodes: []api.Label{{ID: "l1", Name: "bug"}}},
+		DueDate:          &dueDate,
+		Estimate:         &estimate,
+		Parent:           &api.ParentIssue{ID: "p1", Identifier: "ENG-100"},
+		Project:          &api.Project{ID: "pr1", Name: "Q1 Launch"},
+		ProjectMilestone: &api.ProjectMilestone{ID: "m1", Name: "Phase 1"},
+		Cycle:            &api.IssueCycle{ID: "c1", Name: "Sprint 42"},
+	}
+
+	md, err := IssueToMarkdown(issue)
+	if err != nil {
+		t.Fatalf("IssueToMarkdown: %v", err)
+	}
+	if _, err := MarkdownToIssueUpdate(md, issue); err != nil {
+		t.Fatalf("the guard rejected a rendered issue.md — a no-op re-save would now fail: %v\n%s", err, md)
+	}
+}
+
+// TestIssueMetaKeysCoverTheRenderedSidecar keeps issueMetaKeys complete by
+// rendering rather than by memory: a field added to IssueMetaToMarkdown must be
+// RECOGNIZED by the guard, or naming it in issue.md reports "unknown field"
+// when the honest answer is "read-only, it lives in issue.meta".
+func TestIssueMetaKeysCoverTheRenderedSidecar(t *testing.T) {
+	t.Parallel()
+	baseTime := time.Date(2026, 1, 15, 10, 30, 0, 0, time.UTC)
+	started, completed, canceled, archived := baseTime, baseTime, baseTime, baseTime
+	issue := &api.Issue{
+		ID: "issue-1", Identifier: "ENG-1", Title: "Everything set",
+		URL:         "https://linear.app/team/issue/ENG-1",
+		BranchName:  "eng-1-everything-set",
+		Creator:     &api.User{ID: "u1", Email: "alice@example.com"},
+		CreatedAt:   baseTime,
+		UpdatedAt:   baseTime,
+		StartedAt:   &started,
+		CompletedAt: &completed,
+		CanceledAt:  &canceled,
+		ArchivedAt:  &archived,
+		Relations: api.IssueRelations{Nodes: []api.IssueRelation{
+			{Type: "blocks", RelatedIssue: &api.ParentIssue{ID: "issue-2", Identifier: "ENG-2"}},
+		}},
+	}
+	md, err := IssueMetaToMarkdown(issue, api.Attachment{ID: "a1", Title: "PR", URL: "https://example.com", SourceType: "github"})
+	if err != nil {
+		t.Fatalf("IssueMetaToMarkdown: %v", err)
+	}
+
+	doc, err := Parse(md)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(doc.Frontmatter) < 10 {
+		t.Fatalf("meta render produced only %d keys — the fixture stopped populating fields", len(doc.Frontmatter))
+	}
+	for key := range doc.Frontmatter {
+		if !issueMetaKeys[key] {
+			t.Errorf("issue.meta renders %q but issueMetaKeys does not list it — writing it to issue.md would report 'unknown field' instead of naming the sidecar", key)
+		}
+	}
+}
