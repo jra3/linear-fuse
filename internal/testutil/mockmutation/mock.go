@@ -68,6 +68,40 @@ type Client struct {
 	// phantom). Default (no entry) falls back to the store, matching what the real
 	// API would return for an in-sync entity.
 	liveLinkOverride map[string][]api.EntityExternalLink
+	// updates records every entity update the fake received, in order. It is the
+	// one thing the edit maps above cannot express: they hold the RESULT of the
+	// writes that happened, so a write that never happened is indistinguishable
+	// from one that persisted the same value. A test that needs to assert a
+	// mutation was SENT reads this (#415).
+	updates []UpdateCall
+}
+
+// UpdateCall is one recorded update the fake received on an entity that exposes
+// an editable canonical .md.
+type UpdateCall struct {
+	Kind string  // "issue" | "project" | "initiative"
+	ID   string  // the entity's ID
+	Body *string // the body/description the mutation carried; nil if it carried none
+}
+
+// Updates returns, in order, every issue/project/initiative update the fake
+// received. A save that reached Linear appears here; a save a handler decided
+// was a no-op does NOT — which is what makes a silently dropped write assertable
+// offline, where the stored value alone cannot tell the two apart (#415).
+func (c *Client) Updates() []UpdateCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]UpdateCall(nil), c.updates...)
+}
+
+// recordUpdateLocked appends one update to the audit log. Callers hold c.mu.
+func (c *Client) recordUpdateLocked(kind, id string, body *string) {
+	var copied *string
+	if body != nil {
+		b := *body
+		copied = &b
+	}
+	c.updates = append(c.updates, UpdateCall{Kind: kind, ID: id, Body: copied})
 }
 
 // Option configures a Client.
@@ -292,6 +326,9 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	}
 	if v, ok := input["description"].(string); ok {
 		iss.Description = c.reformat(v)
+		c.recordUpdateLocked("issue", issueID, &v)
+	} else {
+		c.recordUpdateLocked("issue", issueID, nil)
 	}
 	// Overlay the editable scalar frontmatter fields the issue Flush can send, so
 	// the verify getter reads them back — mirroring CreateIssue's field handling.
@@ -471,6 +508,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	proj := c.currentProjectLocked(ctx, projectID)
+	c.recordUpdateLocked("project", projectID, input.Content)
 	if input.Name != nil {
 		proj.Name = *input.Name
 	}
@@ -555,6 +593,7 @@ func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, inpu
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	init := c.currentInitiativeLocked(ctx, initiativeID)
+	c.recordUpdateLocked("initiative", initiativeID, input.Content)
 	if input.Name != nil {
 		init.Name = *input.Name
 	}

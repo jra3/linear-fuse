@@ -271,10 +271,7 @@ func (p *ProjectNode) manifest() *dirManifest {
 	// project.meta: read-through from the freshest project so an edit to
 	// project.md is reflected here.
 	m.metaFile("project.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		proj := project
-		if projs, err := lfs.repo.GetTeamProjects(ctx, team.ID); err == nil {
-			proj = freshestByID(projs, project.ID, func(p api.Project) string { return p.ID }, project)
-		}
+		proj := lfs.freshestProject(ctx, project)
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
 		return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
 	})
@@ -323,16 +320,20 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	return renameSave(ctx, p.lfs, name, newParent, newName, renameSaveSpec{
 		dirIno:  p.EmbeddedInode().StableAttr().Ino,
 		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(p, oldName) },
-		target: onlyFileTarget{
+		target: onlyFileTarget[api.Project]{
 			sink:    p.lfs,
 			errKey:  project.ID,
 			name:    "project.md",
 			fileIno: projectInfoIno(project.ID),
-			flush: func(ctx context.Context, content []byte) syscall.Errno {
+			// The save diffs against the freshest persisted project, not the
+			// snapshot captured above: an in-place save commits through
+			// ProjectInfoNode and leaves this directory node's copy stale (#415).
+			baseline: func(ctx context.Context) api.Project { return p.lfs.freshestProject(ctx, project) },
+			flush: func(ctx context.Context, base api.Project, content []byte) syscall.Errno {
 				fileNode = &ProjectInfoNode{
 					BaseNode:   BaseNode{lfs: p.lfs},
 					team:       team,
-					project:    project,
+					project:    base,
 					editBuffer: editBuffer{content: content, dirty: true},
 				}
 				return fileNode.Flush(ctx, nil)

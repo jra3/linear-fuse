@@ -437,15 +437,19 @@ func (n *IssueDirectoryNode) Rename(ctx context.Context, name string, newParent 
 	return renameSave(ctx, n.lfs, name, newParent, newName, renameSaveSpec{
 		dirIno:  n.EmbeddedInode().StableAttr().Ino,
 		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(n, oldName) },
-		target: onlyFileTarget{
+		target: onlyFileTarget[api.Issue]{
 			sink:    n.lfs,
 			errKey:  issue.ID,
 			name:    "issue.md",
 			fileIno: issueIno(issue.ID),
-			flush: func(ctx context.Context, content []byte) syscall.Errno {
+			// The save diffs against the freshest persisted issue, not the
+			// snapshot captured above: an in-place save commits through
+			// IssueFileNode and leaves this directory node's copy stale (#415).
+			baseline: func(ctx context.Context) api.Issue { return n.lfs.freshestIssue(ctx, issue) },
+			flush: func(ctx context.Context, base api.Issue, content []byte) syscall.Errno {
 				fileNode = &IssueFileNode{
 					BaseNode:   BaseNode{lfs: n.lfs},
-					issue:      issue,
+					issue:      base,
 					editBuffer: editBuffer{content: content, dirty: true},
 				}
 				return fileNode.Flush(ctx, nil)

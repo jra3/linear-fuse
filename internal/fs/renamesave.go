@@ -154,7 +154,12 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 // projects/{slug}, initiatives/{slug}). Its resolve method accepts that file and
 // nothing else, so a save aimed anywhere else is refused with ENOTSUP and an
 // .error naming where the save CAN land.
-type onlyFileTarget struct {
+//
+// E is the entity type the directory carries (api.Issue, api.Project,
+// api.Initiative). It is a type parameter for one reason: the baseline below has
+// to be an entity, and making the caller name which one is what stops a call
+// site from quietly skipping it.
+type onlyFileTarget[E any] struct {
 	sink   errorSink
 	errKey string // the entity's .error key (the entity ID)
 	// name is the one writable file ("issue.md", "project.md",
@@ -162,14 +167,49 @@ type onlyFileTarget struct {
 	// persist to.
 	name    string
 	fileIno uint64
-	flush   func(ctx context.Context, content []byte) syscall.Errno
-	adopt   func()
+	// baseline returns the entity the incoming bytes must be diffed against: the
+	// freshest PERSISTED copy, read at save time, not the snapshot the directory
+	// node captured whenever it was built.
+	//
+	// This is the whole of #415. Every editable file's Flush decides what to send
+	// by diffing the written document against the entity its node carries, and
+	// the transient node this save flushes through is built here. Handed the
+	// directory node's snapshot, that diff answers a question nobody asked —
+	// "does this differ from what the entity looked like when this directory node
+	// was built" — and an in-place save (which commits through the FILE node and
+	// leaves the directory's copy untouched) makes the two disagree. Restoring the
+	// body an in-place save had replaced then diffed as unchanged: no mutation,
+	// no .error, success returned, write lost.
+	//
+	// Reading through at save time is also what the sibling resolver already does
+	// — collectionDir.itemFileTarget resolves its destination out of a fresh
+	// listing (collectiondir.go) — and what the read side does for the same reason
+	// (the <entity>.meta closures re-read rather than serve their snapshot). The
+	// entity directories were the one place still diffing against a captured copy.
+	//
+	// The closure owns its own staleness fallback: a store that cannot serve the
+	// entity yields the caller's snapshot, which is strictly no worse than the
+	// behaviour this replaced.
+	baseline func(ctx context.Context) E
+	// flush builds the transient file node from base and writes content through
+	// it. base is baseline's result, never the caller's captured snapshot.
+	flush func(ctx context.Context, base E, content []byte) syscall.Errno
+	adopt func()
 }
 
-func (t onlyFileTarget) resolve(_ context.Context, oldName, newName string) (renameSaveTarget, syscall.Errno) {
+func (t onlyFileTarget[E]) resolve(_ context.Context, oldName, newName string) (renameSaveTarget, syscall.Errno) {
 	if newName != t.name {
 		t.sink.SetWriteError(t.errKey, fmt.Sprintf("Operation: rename %s -> %s\nError: only %s is writable in this directory; save your changes onto %s (atomic save-via-rename onto %s is supported).", oldName, newName, t.name, t.name, t.name))
 		return renameSaveTarget{}, syscall.ENOTSUP
 	}
-	return renameSaveTarget{flush: t.flush, adopt: t.adopt, fileIno: t.fileIno}, 0
+	return renameSaveTarget{
+		// The baseline is read HERE, inside the flush, rather than at resolve
+		// time: it must be the freshest copy at the moment the bytes are written,
+		// and resolve runs before renameSave has decided the save will proceed.
+		flush: func(ctx context.Context, content []byte) syscall.Errno {
+			return t.flush(ctx, t.baseline(ctx), content)
+		},
+		adopt:   t.adopt,
+		fileIno: t.fileIno,
+	}, 0
 }

@@ -128,10 +128,23 @@ The three entity directories that accept this (issue/project/initiative) each
 ended their Rename handler with the same hand-copied tail: same-directory check
 (`EXDEV`) → scratch-buffer lookup (`ENOTSUP` for non-scratch names — the
 canonical files aren't renamable) → target-name guard (`.error` names the one
-writable target, `ENOTSUP`) → flush the bytes through the file's normal edit
-path (a transient file node with a dirty edit buffer, so frontmatter
-validation, read-your-writes verification, and `.error` handling all apply) →
-**adopt + consume + `InvalidateRenamed`, all on {0, EIO}**. The adopt-on-EIO
+writable target, `ENOTSUP`) → read the **save baseline** → flush the bytes
+through the file's normal edit path (a transient file node with a dirty edit
+buffer, so frontmatter validation, read-your-writes verification, and `.error`
+handling all apply) → **adopt + consume + `InvalidateRenamed`, all on {0, EIO}**.
+The **save baseline** is the entity that transient node is built from, and
+therefore the value every `Flush` diffs the written document against to decide
+*what to send*. It is re-read from SQLite at save time
+(`onlyFileTarget.baseline` → `freshestIssue`/`freshestProject`/
+`freshestInitiative`, `freshentity.go`), never taken from the directory node's
+captured entity: that copy goes stale the moment anything else writes — an
+in-place save adopts onto the FILE node and upserts SQLite, the sync worker
+writes SQLite alone, and neither pushes back down to the directory. Diffed
+against a stale baseline, a save that restores what an in-place save replaced
+reads as no change — no mutation sent, success returned, write lost (#415). The
+sibling resolver reaches the same rule from the other side: a collection
+resolves its destination out of a freshly fetched listing, and the `<entity>.meta`
+read closures re-read for the same reason. The adopt-on-EIO
 line is the policy, now written once: `Flush` returns `EIO` only on a fatal
 read-your-writes divergence, by which point the write has already reached
 Linear — refusing to adopt would keep serving stale content while `.error`

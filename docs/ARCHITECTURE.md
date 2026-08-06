@@ -142,7 +142,12 @@ Two rules govern the whole design:
    only talks to Linear — it never writes SQLite. The FUSE write handlers
    (`Flush`, `Mkdir`, `_create`, `rm`/`rmdir`) are responsible for upserting the
    result into — or, after a delete, forgetting the row from — SQLite and
-   invalidating kernel caches so the next read sees fresh data.
+   invalidating kernel caches so the next read sees fresh data. An edit reads on
+   the way in as well as out — it resolves names to IDs against the catalogs
+   (which may escalate to a refresh, see `resolveWithRefresh`), and it reads the
+   **baseline** it diffs the written document against, which decides what the
+   mutation carries. The baseline read is local-only, never a network
+   escalation (#415).
 
 This decoupling is deliberate: ingest (Sync Worker → SQLite) and serve
 (SQLite → Repository → FUSE) are separate concerns, joined only by the database.
@@ -643,7 +648,18 @@ a layer above the commit-tail primitives) and no telemetry (matching
    save may land*: `onlyFileTarget` for an entity directory's one writable file,
    `collectionDir.itemFileTarget` for a collection, where an existing `{name}.md`
    is a replace and a new one is a create — the same two outcomes, through the
-   same closures, that the directory's named `Create` has.
+   same closures, that the directory's named `Create` has. **Both resolvers read
+   their subject through at save time, never from a captured snapshot**: the
+   collection resolves the destination out of a fresh listing, and
+   `onlyFileTarget.baseline` re-reads the entity from SQLite
+   (`freshestIssue`/`freshestProject`/`freshestInitiative`, `freshentity.go`)
+   before building the transient file node. That baseline is what every `Flush`
+   diffs the written document against to decide *what to send*, and a directory
+   node's copy goes stale the moment anything else writes the entity — an
+   in-place save adopts onto the FILE node and upserts SQLite, the sync worker
+   writes SQLite alone, and neither pushes back down to the directory. Diffed
+   against a stale baseline, a save that restores what an in-place save replaced
+   reads as no change: no mutation sent, success returned, write lost (#415).
 2. The fs layer **resolves names to IDs** (team key→teamId, status→stateId,
    assignee email→userId, labels→labelIds, project/milestone/cycle/parent→IDs).
    **Ordering is load-bearing** in `resolveIssueUpdate`: `team` resolves FIRST,

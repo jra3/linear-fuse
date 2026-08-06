@@ -36,12 +36,14 @@ type renameParent struct{ fs.Inode }
 
 // recordingRenameSpec builds a spec whose closures record their calls.
 type recordingRenameSpec struct {
-	spec         renameSaveSpec
-	scratchCalls int
-	consumeCalls int
-	flushCalls   int
-	flushContent []byte
-	adoptCalls   int
+	spec          renameSaveSpec
+	scratchCalls  int
+	consumeCalls  int
+	flushCalls    int
+	flushContent  []byte
+	flushBaseline string
+	baselineCalls int
+	adoptCalls    int
 }
 
 func newRecordingRenameSpec(sink renameSink, scratchOK bool, flushErrno syscall.Errno) *recordingRenameSpec {
@@ -54,20 +56,72 @@ func newRecordingRenameSpec(sink renameSink, scratchOK bool, flushErrno syscall.
 		},
 		// The entity-directory resolver, the one production shape with a fixed
 		// target; the collection resolver is covered in collectiondir_test.go.
-		target: onlyFileTarget{
+		// The entity here is a bare string standing in for api.Issue et al — the
+		// tail is entity-neutral, so the type only has to be something the
+		// baseline can return and the flush can observe.
+		target: onlyFileTarget[string]{
 			sink:    sink,
 			errKey:  "issue-1",
 			name:    "issue.md",
 			fileIno: 99,
-			flush: func(ctx context.Context, content []byte) syscall.Errno {
+			baseline: func(ctx context.Context) string {
+				r.baselineCalls++
+				return "fresh entity"
+			},
+			flush: func(ctx context.Context, base string, content []byte) syscall.Errno {
 				r.flushCalls++
 				r.flushContent = content
+				r.flushBaseline = base
 				return flushErrno
 			},
 			adopt: func() { r.adoptCalls++ },
 		}.resolve,
 	}
 	return r
+}
+
+// TestOnlyFileTarget_FlushesAgainstTheFreshBaseline pins #415's fix at the seam:
+// the entity the transient file node is built from comes from the baseline
+// closure, read when the save runs — NOT from whatever the directory node
+// captured when it was built. Every editable file's Flush decides what to send by
+// diffing the written document against the entity its node carries, so handing it
+// a stale one drops real writes silently (see freshentity.go).
+//
+// It also pins WHEN the read happens: not at resolve time, which runs on rejected
+// saves too, but inside the flush, on the path that is about to write.
+func TestOnlyFileTarget_FlushesAgainstTheFreshBaseline(t *testing.T) {
+	sink := &renameRecorder{}
+	rec := newRecordingRenameSpec(sink, true, 0)
+
+	errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
+		&renameParent{}, "issue.md", rec.spec)
+
+	if errno != 0 {
+		t.Fatalf("errno = %v, want 0", errno)
+	}
+	if rec.baselineCalls != 1 {
+		t.Errorf("baseline reads = %d, want exactly 1 per save", rec.baselineCalls)
+	}
+	if rec.flushBaseline != "fresh entity" {
+		t.Errorf("flush diffed against %q, want the baseline closure's value — a save built "+
+			"from the directory node's captured snapshot silently drops writes (#415)", rec.flushBaseline)
+	}
+}
+
+// TestOnlyFileTarget_RejectedSaveReadsNoBaseline: a save aimed at a name the
+// directory does not accept never reaches a write, so it must not spend a read
+// looking one up. The rejection is decided from the name alone.
+func TestOnlyFileTarget_RejectedSaveReadsNoBaseline(t *testing.T) {
+	sink := &renameRecorder{}
+	rec := newRecordingRenameSpec(sink, true, 0)
+
+	if errno := renameSave(context.Background(), sink, "issue.md.tmp.1",
+		&renameParent{}, "notes.md", rec.spec); errno != syscall.ENOTSUP {
+		t.Fatalf("errno = %v, want ENOTSUP", errno)
+	}
+	if rec.baselineCalls != 0 {
+		t.Errorf("baseline reads = %d on a rejected save, want 0", rec.baselineCalls)
+	}
 }
 
 func TestRenameSave_FlushOutcomes(t *testing.T) {

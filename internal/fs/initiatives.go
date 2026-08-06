@@ -127,10 +127,7 @@ func (i *InitiativeNode) manifest() *dirManifest {
 	// initiative.meta: read-through from the freshest initiative so an edit to
 	// initiative.md is reflected here.
 	m.metaFile("initiative.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		init := initiative
-		if inits, err := lfs.repo.GetInitiatives(ctx); err == nil {
-			init = freshestByID(inits, initiative.ID, func(i api.Initiative) string { return i.ID }, initiative)
-		}
+		init := lfs.freshestInitiative(ctx, initiative)
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
 		return node.metaContent(), init.UpdatedAt, init.CreatedAt
 	})
@@ -178,16 +175,20 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 	return renameSave(ctx, i.lfs, name, newParent, newName, renameSaveSpec{
 		dirIno:  i.EmbeddedInode().StableAttr().Ino,
 		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
-		target: onlyFileTarget{
+		target: onlyFileTarget[api.Initiative]{
 			sink:    i.lfs,
 			errKey:  initiative.ID,
 			name:    "initiative.md",
 			fileIno: initiativeInfoIno(initiative.ID),
-			flush: func(ctx context.Context, content []byte) syscall.Errno {
+			// The save diffs against the freshest persisted initiative, not the
+			// snapshot captured above: an in-place save commits through
+			// InitiativeInfoNode and leaves this directory node's copy stale (#415).
+			baseline: func(ctx context.Context) api.Initiative { return i.lfs.freshestInitiative(ctx, initiative) },
+			flush: func(ctx context.Context, base api.Initiative, content []byte) syscall.Errno {
 				fileNode = &InitiativeInfoNode{
 					BaseNode:     BaseNode{lfs: i.lfs},
-					initiative:   initiative,
-					initiativeID: initiative.ID,
+					initiative:   base,
+					initiativeID: base.ID,
 					editBuffer:   editBuffer{content: content, dirty: true},
 				}
 				return fileNode.Flush(ctx, nil)
