@@ -93,17 +93,29 @@ func TestSubteamSymlinksResolve(t *testing.T) {
 // must name exactly the entries the symlinks provide, and every name must
 // resolve. It runs in every mode — offline the fixture's TST/SUB edge gives it
 // substance, live it audits the real hierarchy.
+//
+// It also reports how much hierarchy it actually found (#435). Every assertion
+// below is inside a per-team conditional, so on a workspace with no sub-team at
+// all the test passes having compared nothing — which is indistinguishable, in a
+// run log, from a workspace whose hierarchy checks out. That matters here more
+// than usual: `parent` is a live-only field (nothing offline sends queryTeams to
+// Linear), so a live green is the ONLY evidence the selection populates, and a
+// vacuous green is not that evidence. Offline the fixture guarantees the TST/SUB
+// edge, so zero edges is a broken fixture and fails; live it skips, naming the
+// flat workspace, so the run says "not verified here" instead of "verified".
 func TestTeamHierarchyFrontmatterMatchesLinks(t *testing.T) {
 	entries, err := os.ReadDir(teamsPath())
 	if err != nil {
 		t.Fatalf("read teams: %v", err)
 	}
 
+	teams, edges := 0, 0
 	for _, e := range entries {
 		if !e.IsDir() || isControlFile(e.Name()) {
 			continue
 		}
 		teamKey := e.Name()
+		teams++
 
 		data, err := os.ReadFile(teamInfoPath(teamKey))
 		if err != nil {
@@ -125,6 +137,7 @@ func TestTeamHierarchyFrontmatterMatchesLinks(t *testing.T) {
 		case fmParent == "" && linkErr == nil:
 			t.Errorf("%s has a parent symlink (-> %s) but team.md names no parent", teamKey, linkTarget)
 		case fmParent != "" && linkErr == nil:
+			edges++
 			if want := "../" + fmParent; linkTarget != want {
 				t.Errorf("%s/parent -> %q, but team.md says parent is %q (want %q)", teamKey, linkTarget, fmParent, want)
 			}
@@ -156,5 +169,20 @@ func TestTeamHierarchyFrontmatterMatchesLinks(t *testing.T) {
 				t.Errorf("%s/subteams/ lists %q, but team.md does not name it", teamKey, key)
 			}
 		}
+		edges += len(listed)
 	}
+
+	// What the run got, always — a green with 0 edges is a different claim from
+	// a green with 7, and only one of them is evidence about `parent`.
+	t.Logf("audited %d teams, %d parent/sub-team edges", teams, edges)
+	if edges > 0 || t.Failed() {
+		return
+	}
+	if !liveAPIMode {
+		t.Fatal("no parent/sub-team edge in the fixture workspace: the seeded TST/SUB edge is gone, " +
+			"so every assertion here is unreachable and this test guards nothing")
+	}
+	t.Skipf("workspace has %d teams and no sub-team: the hierarchy assertions never ran, so this run "+
+		"is NOT evidence that queryTeams' parent selection populates (#435). Point a live read-only run "+
+		"at a workspace with a real sub-team to verify it.", teams)
 }
