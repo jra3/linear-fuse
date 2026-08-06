@@ -357,11 +357,29 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 // diet exists to stop, so a partial failure waits for the next window.
 func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
-	// invoked it (run's initial sync, the ticker, SyncNow). A budget-skipped
-	// cycle records its ~0s duration too — a burst of near-zero samples IS
-	// the signature of budget-gated skipping.
+	// invoked it (run's initial sync, the ticker, SyncNow). Full cycles also
+	// carry their outcome, so a cycle that could not drain is one series
+	// rather than an inference across two meters.
+	//
+	// deferred/failed classify this cycle's skeleton-tier drains. deferred
+	// wins when both happen: it is the condition that withholds the stamp,
+	// and that is what the outcome is for.
 	start := w.now()
-	defer func() { w.metrics.recordCycle(w.now().Sub(start), mode) }()
+	deferred, failed := false, false
+	defer func() {
+		outcome := cycleOutcome("") // lean cycles run no drain and never stamp
+		if mode == cycleFull {
+			switch {
+			case deferred:
+				outcome = cycleDeferred
+			case failed:
+				outcome = cycleFailed
+			default:
+				outcome = cycleComplete
+			}
+		}
+		w.metrics.recordCycle(w.now().Sub(start), mode, outcome)
+	}()
 
 	// H-5: Drain any issues that were queued during a previous rate-limit backoff
 	w.drainPendingDetailSync(ctx)
@@ -370,14 +388,19 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// drain is one of the two fetch classes the lean cycle exists to skip).
 	// Lean cycles run the cheap initiatives probe instead, which escalates
 	// to the same workspace sync only when something actually changed.
-	// deferred tracks whether any skeleton-tier drain this cycle was refused by
-	// the admission ladder. A full cycle that could not drain has not earned
-	// its stamp — see the conditional stamp at the bottom of this function.
-	deferred := false
+	// A full cycle that could not drain has not earned its stamp — see the
+	// conditional stamp at the bottom of this function.
+	classify := func(err error) {
+		if api.IsDeferred(err) {
+			deferred = true
+			return
+		}
+		failed = true
+	}
 	if mode == cycleFull {
 		if err := w.syncWorkspace(ctx); err != nil {
 			log.Printf("[sync] workspace sync failed: %v", err)
-			deferred = deferred || api.IsDeferred(err)
+			classify(err)
 			// Continue with teams even if workspace sync fails
 		}
 	} else {
@@ -387,6 +410,7 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// Sync teams list
 	teams, err := w.client.GetTeams(ctx)
 	if err != nil {
+		classify(err)
 		return fmt.Errorf("get teams: %w", err)
 	}
 
@@ -420,7 +444,7 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		if mode == cycleFull {
 			if err := w.syncTeamMetadata(ctx, team); err != nil {
 				log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
-				deferred = deferred || api.IsDeferred(err)
+				classify(err)
 			}
 		} else {
 			if err := w.probeTeamProjects(ctx, team); err != nil {
