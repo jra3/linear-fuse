@@ -215,6 +215,15 @@ Operational guards:
   interactive tier — the fs render closures thread the FUSE handler ctx for
   exactly this — with a documented never-store rule: a promoted ctx is minted at
   the moment of the call, never kept on a struct or handed to a goroutine.
+  **This is the only admission governor.** No caller re-decides admission from
+  its own threshold: the sync worker states intent (its ops' tiers) and reacts
+  to the answer. The module has two entry points sharing one arithmetic —
+  `admit` at send time, and `low()` as the preflight that refuses an expensive
+  combined query or a multi-page drain *before* page one is burned and
+  discarded. A second governor is not merely redundant, it is wrong: a
+  threshold outside this module can only watch one axis, and the axis that
+  empties in practice is complexity (measured live 2026-07-10: complexity 85%
+  used while requests sat at 2–5%).
 - **Circuit breaker** (`circuitbreaker.go`): after 5 consecutive network errors,
   opens for 30s to stop wasting budget during an outage, then lets one half-open
   probe through. A clock-injected state machine behind `allow()`/`recordFailure()`/
@@ -234,7 +243,8 @@ Operational guards:
   pagination `ErrBudget`) is deliberately *excluded* from `IsRateLimited`: a
   server rate limit warrants a long pause until the window resets, but a local
   admission-ladder defer clears next cycle, so the sync worker skips-this-cycle
-  on a defer instead of entering the hour-long rate-limit backoff (#257).
+  on a defer instead of entering the hour-long rate-limit backoff (#257 — now
+  structural: the worker holds no backoff of its own to enter).
 
 **Consumed by:** Sync Worker (reads), Repository (SWR refreshes and its
 reconcile pass), LinearFS (mutations plus the interactive-tier synchronous
@@ -268,9 +278,26 @@ keeping links fresh, and cannot be "optimized away".
 
 Scheduling is persisted in the **`sync_schedule`** key/value table: the
 full-cycle cadence stamp, per-team probe watermarks, and the issue-ID-reconcile
-stamp — all stamp-on-completion (a budget-skipped or failed pass doesn't
-stamp) and restart-safe (a restart mid-window starts lean; no full-cycle
-storm).
+stamp — all stamp-on-completion and restart-safe (a restart mid-window starts
+lean; no full-cycle storm).
+
+"Completion" for the full-cycle stamp is **deliberately asymmetric**: a cycle
+whose workspace or team-metadata drain was refused by the admission ladder
+(`api.IsDeferred`) does **not** stamp, so the full sync stays due and retries as
+soon as the budget admits it. A drain that failed for any *other* reason
+(network, GraphQL, one team's permissions) stamps as normal. The reason is
+cost: a deferral is refused at the `LowBudget` preflight before the query is
+paid for, so retrying every cycle is nearly free and the condition clears at the
+window reset; a real failure pays full price per attempt, and withholding on it
+would pin the worker in the expensive full mode for the duration of the outage.
+The distinction is observable — `linearfs.sync.cycle_duration{mode=full,
+outcome=complete|deferred|failed}`, where the per-series sample count is the
+signal, since the histogram's default second-scale buckets cannot separate a
+~0s deferred cycle from a healthy one.
+
+This bound is load-bearing rather than cosmetic: prunes are licensed
+exclusively by complete drains, so stamping a starved cycle would stretch the
+metadata deletion/staleness bound by a whole full-cycle interval, silently.
 
 Each cycle, in order: drain the `pending_detail_sync` queue → workspace or
 probe → teams list → per-team (metadata or probe, then issues) → the issue-ID
@@ -286,17 +313,24 @@ staleness is bounded at `len(teams)` cycles.
 - **Detail batching:** comments/docs/attachments/relations are fetched 10 issues
   at a time (`GetIssueDetailsBatch`); 15 exceeded Linear's 10k per-query
   complexity cap.
-- **Rate-limit aware:** at 80% hourly budget the whole cycle is skipped; at 70%
-  (or after any rate-limit response) detail fetches are deferred into the
-  `pending_detail_sync` table and drained in later cycles. `syncDetails` returns
-  a `detailOutcome` ledger (synced / deferred / gated) and stamps
-  `detail_synced_at` only for issues whose details persisted cleanly.
+- **Rate-limit aware — by reacting, not by deciding:** the worker holds no
+  budget thresholds and no rate-limit backoff of its own. Every fetch is
+  admitted or refused by the rate budget's ladder at the moment of the call, on
+  both axes and in priority order (detail fetches hold the largest reserve, so
+  they stop first). A refusal arrives as `api.ErrDeferred`/`ErrBudget`, and the
+  worker's job is what to do with it: detail batches go to the
+  `pending_detail_sync` table and drain in later cycles, and a refused
+  skeleton-tier drain withholds the full-cycle stamp (above). `syncDetails`
+  returns a `detailOutcome` ledger (synced / deferred / gated) and stamps
+  `detail_synced_at` only for issues whose details persisted cleanly. A server
+  429 needs no worker-side pause either: the response snaps both budget axes to
+  zero with a future reset, so `admit` refuses until the window refills.
 - **Catch-up mode:** when a single team's incremental sync changes >50 issues,
   it relaxes the Repository's staleness threshold (5 min → 30 min) for the
   remainder of that team's sync, so on-demand refreshes don't duplicate work the
   worker is already doing.
-- **Clock seam:** the worker's scheduling and backoff — cycle cadence, interval
-  checks, rate-limit expiry, probe waits — go through injected `now` /
+- **Clock seam:** the worker's scheduling — cycle cadence, interval checks, the
+  cold-start probe's wait — goes through injected `now` /
   `newTimer` / `newTicker` fields (`clock.go`); no bare `time.Now`/`time.Sleep`
   in the worker, so tests never sleep. (Persisted row timestamps use `db.Now()`,
   outside the seam — see `internal/db`.)
@@ -835,11 +869,16 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   background sync meet in one inode. Generated files opt out entirely: they
   render on every read (`FOPEN_DIRECT_IO`). The ingest side never invalidates;
   remote edits become visible when the 60s/30s kernel timeouts expire.
-- **Rate budget is the scarce resource:** the client's dual-axis budget, the
-  worker's lean cycles / cold-start probe / 80%-skip / 70%-defer thresholds /
-  team rotation, and the tiered reserves all exist to keep the mount responsive
-  within Linear's complexity budget. Writes always win; user-blocking reads
-  jump the ladder via `WithInteractive`.
+- **Rate budget is the scarce resource, and it has exactly one governor:**
+  admission is `ratebudget.admit`'s decision alone — dual-axis, tiered, with
+  reserve floors — reached through `admit` at send time or the `low()`
+  preflight before an expensive drain. Everything else shapes *demand* rather
+  than deciding admission: the worker's lean cycles, cold-start probe, team
+  rotation, and detail batching reduce what is asked for; the pending-detail
+  queue and the withheld full-cycle stamp are what it does with a refusal.
+  Writes always win; user-blocking reads jump the ladder via `WithInteractive`.
+  A caller that re-derives its own threshold is a bug, not a safety net: it can
+  only see one axis, and requests is not the axis that empties.
 - **Staleness coordination:** `synced_at` + `detail_synced_at` columns, the SWR
   coordinator, the worker's incremental cursor + persisted `sync_schedule`
   watermarks, and catch-up mode all coordinate so the worker and on-demand

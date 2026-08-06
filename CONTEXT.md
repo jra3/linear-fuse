@@ -1441,10 +1441,16 @@ takes the `refreshKind` and mints the dedup key itself — and
 The single entry point for issue-detail syncing (`internal/sync/worker.go`):
 `syncDetails(ctx, []issueRef) detailOutcome` merged the old
 `deferDetailIssues`/`syncOrDeferDetailBatch`/`syncIssueDetailsBatch` trio so
-**all the gates live in one place** — budget (`budgetDeferDetailPct`),
-rate-limited before the fetch, rate-limited mid-fetch, and any other fetch
-failure (which used to log-and-return, silently dropping the worker-side
-retry for team-sync-sourced issues; now it defers like the rest). A gate
+**all the gates live in one place** — three now, all of them REACTIONS to
+the fetch rather than predictions before it: deferred by the admission
+ladder (`api.IsDeferred`), rate-limited by the server mid-fetch, and any
+other fetch failure (which used to log-and-return, silently dropping the
+worker-side retry for team-sync-sourced issues; now it defers like the
+rest). The two pre-fetch gates that used to lead this list — the
+`budgetDeferDetailPct` threshold and the worker's own rate-limit pause —
+were deleted with the second governor: the ladder decides admission on both
+axes at the moment of the call, and a server 429 snaps both budget axes to
+zero, so `admit` refuses the next batch without a worker-side pause. A gate
 defers the whole batch to `pending_detail_sync` and returns `gated=true`,
 which the now-thin `drainPendingDetailSync` loop breaks on (re-deferring an
 already-pending issue merely re-stamps its `QueuedAt`). The return is a
@@ -1512,10 +1518,10 @@ in-memory counter: `nextCycleMode` reads the `sync_schedule` row keyed
 store populates exactly as fast as before) or ≥ `Config.FullSyncInterval`
 (default 10m) old; `SyncNow` bypasses the decision and is always full. Only
 a full cycle that ran to completion stamps the row (with `w.now()`, through
-the clock seam) — a budget-skipped or `GetTeams`-failed cycle does not, so
-the full sync stays due rather than silently stretching the staleness
-bound; conversely a restart mid-window reads the fresh persisted stamp and
-starts lean (no redundant full-cycle storm). `sync_schedule(key, last_run)`
+the clock seam) — see "Cycle completeness" below for what completion means
+and why it is asymmetric — so the full sync stays due rather than silently
+stretching the staleness bound; conversely a restart mid-window reads the
+fresh persisted stamp and starts lean (no redundant full-cycle storm). `sync_schedule(key, last_run)`
 is deliberately a generic key/value schedule table: later diet slices hang
 probe watermarks and the hourly ID-reconcile key off the same table. Cycle
 mode is observable as the `mode` attribute on
@@ -1523,8 +1529,44 @@ mode is observable as the `mode` attribute on
 counter). Tested at the worker's API-client seam
 (`worker_test.go` "Lean/Full Cycle Taxonomy"): scripted multi-cycle
 sequences on the fake clock assert per-cycle op windows (`opsDuring`), the
-restart case runs a second Worker over the same store, and the budget-skip
-case asserts the stamp was withheld.
+restart case runs a second Worker over the same store, and the
+starved-cycle case asserts the stamp was withheld.
+
+### Cycle completeness (`cycleOutcome`, complete/deferred/failed)
+What "a full cycle that ran to completion" means, and the one thing the
+worker still decides about the rate budget. `syncCycle` classifies every
+skeleton-tier drain failure (`syncWorkspace`, each `syncTeamMetadata`, the
+`GetTeams` early return) as **deferred** (`api.IsDeferred` — the admission
+ladder or the `LowBudget` preflight refused it) or **failed** (anything
+else), and stamps `ScheduleKeyFullCycle` only when nothing was deferred.
+Deferred wins over failed when both happen, because deferred is the
+condition that decides the stamp.
+
+The asymmetry is the point. Prunes are licensed exclusively by complete
+drains, so the metadata deletion/staleness bound IS the full-cycle
+interval, and a starved-but-stamped cycle stretches that bound by a whole
+interval with nothing to show for it. Withholding is safe for a deferral —
+refused at the preflight *before* the query is paid for, and self-clearing
+at the window reset — and unsafe for a real failure, which pays full price
+per attempt: withholding there would pin the worker in the expensive full
+mode for the length of the outage, converting a partial failure into
+permanent maximum budget consumption. So a failed drain stamps and logs,
+exactly as before.
+
+This replaced the deleted `budgetSkipSyncPct` gate, which protected the
+stamp only as a side effect of its early return, and only on the requests
+axis — i.e. never, under real (complexity) pressure. Predicting starvation
+from a percentage became observing it from the outcomes.
+
+Observable as the `outcome` attribute on `linearfs.sync.cycle_duration`,
+full cycles only (a lean cycle runs no drain and never stamps, so an
+outcome would assert something no code checks). Three values, not two,
+because `failed` stamps anyway — folding it into `complete` would hide the
+accepted risk. Read the per-series **count**, not the buckets: nothing sets
+bucket bounds, so the SDK defaults (`{0,5,10,25,…}`) apply to values
+recorded in seconds and a ~0s deferred cycle shares a bucket with a healthy
+one. `outcome` is in `summaryAttrKeys` and `mode` is not, so the always-on
+journald line splits by outcome for free.
 
 ### Projects probe (`probeTeamProjects`, lean cycles)
 The lean cycle's replacement for the per-team projects drain
@@ -1637,12 +1679,14 @@ them to the real clock via `realNow`/`realNewTimer`/`realNewTicker` in
 calls and stay), the same greppable discipline as the ino namespace's
 no-bare-hashes rule — `grep 'time\.\(Now\|Since\|Until\|NewTimer\|NewTicker\|Sleep\|After\)'
 internal/sync/worker.go` must return nothing. What the seam bought
-(`worker_test.go`, all with zero real waiting): `isRateLimited` flipping as
-the fake clock crosses expiry, `setRateLimited`'s exact backoff arithmetic
-(no more ±2s tolerance windows), `probeBudget`'s RATELIMITED delay — assert
-the exact requested wait on the fake timer, fire it to resume, or close
-stopCh to interrupt — and the run loop's cadence (feed a tick on the fake
-ticker channel, a sync cycle fires). The fake (`fakeClock` in
+(`worker_test.go`, all with zero real waiting): `probeBudget`'s RATELIMITED
+delay and its exact backoff arithmetic — server reset + 5s, else
+`coldStartBackoff`, asserted on the fake timer with no ±2s tolerance window
+— firing that timer to resume or closing stopCh to interrupt, the scripted
+lean/full cycle cadence, and the run loop's ticker (feed a tick on the fake
+ticker channel, a sync cycle fires). That probe delay is now the worker's
+ONLY timing decision about rate limits: the `setRateLimited`/`isRateLimited`
+pause it also used to cover was deleted with the second governor. The fake (`fakeClock` in
 `worker_test.go`) is a mutex'd time plus recorded timer/ticker channels; its
 buffered `timerSet` doubles as the handshake that the worker has parked on
 the timer, which is what replaced the old `time.Sleep` grace periods.
@@ -1715,10 +1759,17 @@ metrics design): `snapshot()` — one read under the existing mutex, no new
 locks — feeds the `linearfs.budget.*` observable gauges; `admit` records the
 `decisions` counter where the verdict resolves (and a settled `rateLimited`
 records its own `ratelimited` decision); reconcile records
-`linearfs.api.complexity` at the ONE place `X-Complexity` is parsed. The
-worker's `BudgetReporter` is now `Client.BudgetSnapshot`, computed from the
-requests axis (`limit − remaining`, server truth) — the deleted APIStats'
-local rolling window is gone.
+`linearfs.api.complexity` at the ONE place `X-Complexity` is parsed.
+`Client.BudgetSnapshot` (requests axis, `limit − remaining`, server truth)
+survives only as the client's own log line: the worker's `BudgetReporter`
+seam and the two thresholds that read it were deleted, because a
+requests-axis percentage cannot govern a workload that saturates
+complexity (measured live 2026-07-10: complexity 85% used, requests 2–5%),
+and because a second governor cannot express the ladder's priority order at
+all. **`admit` is the only admission decision** — reached at send time, or
+through `low()` as the preflight that refuses before page one is burned.
+Everything outside this module shapes demand or reacts to a refusal; see
+"Cycle completeness".
 
 An unseen axis doesn't gate, so a fresh process would burst un-gated before
 the first response lands. The **cold-start probe** closes that hole:
@@ -1772,8 +1823,9 @@ outcome/decision/tier/axis/… — `op` is projected away and the collided
 series merged); the full-cardinality data is the JSONL export's job. Phase 3
 completed the set with the budget's consumers, so leak and leaker share one
 view: `linearfs.sync.cycle_duration` (one sample per `syncAllTeams` cycle,
-budget-skipped cycles included — a burst of ~0s samples IS the skip
-signature), `.detail_outcomes{outcome=synced|deferred}` (the `syncDetails`
+carrying `mode` and — full cycles only — `outcome`, whose per-series count
+is the starved-cycle signal; see "Cycle completeness"),
+`.detail_outcomes{outcome=synced|deferred}` (the `syncDetails`
 ledger; gate paths fold in, every issue counted exactly once),
 `.prunes{collection}` (recorded inside `reconcile.Collection` when a prune
 actually executes — the attribute is the new `CollectionSpec.Kind` closed
