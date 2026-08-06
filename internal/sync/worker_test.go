@@ -93,6 +93,8 @@ type mockAPIClient struct {
 	projectsByTeam      map[string][]api.Project // teamID -> projects
 	membersByTeam       map[string][]api.User    // teamID -> members
 	users               []api.User
+	workspaceErr        error // if set, GetWorkspace fails with this (cycle-completeness tests)
+	teamMetadataErr     error // if set, GetTeamMetadata fails with this (cycle-completeness tests)
 	initiatives         []api.Initiative
 	initiativesProbeErr error // if set, GetInitiativesProbe fails with this (probe-error tests)
 	projectLabels       []api.ProjectLabel
@@ -203,6 +205,9 @@ func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cu
 
 func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*api.TeamMetadata, error) {
 	m.recordOp("GetTeamMetadata")
+	if m.teamMetadataErr != nil {
+		return nil, m.teamMetadataErr
+	}
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -256,6 +261,9 @@ func (m *mockAPIClient) GetTeamProjectsNewestPage(ctx context.Context, teamID st
 
 func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, error) {
 	m.recordOp("GetWorkspace")
+	if m.workspaceErr != nil {
+		return nil, m.workspaceErr
+	}
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -1708,6 +1716,68 @@ func TestRestartHonorsPersistedFullCycleTimestamp(t *testing.T) {
 		})
 		assertCycleOps(t, "restart mid-window", ops, false)
 	})
+}
+
+// TestStarvedFullCycleLeavesFullCycleDue: a full cycle whose skeleton-tier
+// drains were refused by the admission ladder drained nothing, so it must not
+// stamp the persisted timestamp. Prunes are licensed exclusively by complete
+// drains — stamping a starved cycle would stretch the metadata staleness bound
+// by a whole full-sync interval, silently. The still-due full cycle fires again
+// as soon as the budget admits it.
+func TestStarvedFullCycleLeavesFullCycleDue(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, _ := cycleTestWorker(t, store)
+	// The LowBudget preflight's refusal, as GetWorkspace/GetTeamMetadata
+	// report it: declined before the query was paid for.
+	mock.workspaceErr = fmt.Errorf("workspace: %w", api.ErrBudget)
+	mock.teamMetadataErr = fmt.Errorf("team metadata team-1: %w", api.ErrBudget)
+
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("starved cycle: %v", err)
+	}
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("GetSyncSchedule after starved cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
+	}
+
+	// Budget recovers — the still-due full cycle fires, and now stamps.
+	mock.workspaceErr, mock.teamMetadataErr = nil, nil
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("recovered cycle: %v", err)
+		}
+	})
+	assertCycleOps(t, "first recovered cycle", ops, true)
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); err != nil {
+		t.Errorf("GetSyncSchedule after recovered cycle: %v, want a stamp", err)
+	}
+}
+
+// TestFailedFullCycleStillStamps pins the deliberate asymmetry: a NON-budget
+// failure stamps as before. Withholding on it would pin the worker in the
+// expensive full mode for as long as the failure lasts, paying full price per
+// attempt — a partial outage must not become permanent maximum spend. Only a
+// deferral, which is refused before the query is paid for and clears at the
+// window reset, is cheap enough to retry indefinitely.
+func TestFailedFullCycleStillStamps(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, _ := cycleTestWorker(t, store)
+	mock.workspaceErr = errors.New("boom: internal server error")
+	mock.teamMetadataErr = errors.New("boom: internal server error")
+
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("failed-drain cycle: %v", err)
+	}
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); err != nil {
+		t.Errorf("GetSyncSchedule after failed-drain cycle: %v, want a stamp (only deferrals withhold)", err)
+	}
 }
 
 // =============================================================================

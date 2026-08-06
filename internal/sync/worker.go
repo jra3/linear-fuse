@@ -370,9 +370,14 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// drain is one of the two fetch classes the lean cycle exists to skip).
 	// Lean cycles run the cheap initiatives probe instead, which escalates
 	// to the same workspace sync only when something actually changed.
+	// deferred tracks whether any skeleton-tier drain this cycle was refused by
+	// the admission ladder. A full cycle that could not drain has not earned
+	// its stamp — see the conditional stamp at the bottom of this function.
+	deferred := false
 	if mode == cycleFull {
 		if err := w.syncWorkspace(ctx); err != nil {
 			log.Printf("[sync] workspace sync failed: %v", err)
+			deferred = deferred || api.IsDeferred(err)
 			// Continue with teams even if workspace sync fails
 		}
 	} else {
@@ -415,6 +420,7 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		if mode == cycleFull {
 			if err := w.syncTeamMetadata(ctx, team); err != nil {
 				log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
+				deferred = deferred || api.IsDeferred(err)
 			}
 		} else {
 			if err := w.probeTeamProjects(ctx, team); err != nil {
@@ -431,20 +437,36 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 
 	// Scheduled issue-ID reconcile sweep: rides the cycle (any speed) and
 	// runs only when its persisted hourly schedule says it's due. Placed
-	// after the team loop so a budget-skipped or teams-fetch-failed cycle
-	// (the early returns above) leaves the sweep due too.
+	// after the team loop so a teams-fetch-failed cycle (the early return
+	// above) leaves the sweep due too.
 	w.maybeReconcileIssueIDs(ctx)
 
-	// A full cycle that ran to completion stamps the persisted schedule so
-	// the next fullSyncInterval's worth of cycles run lean. Stamped through
-	// the clock seam: the next cycle's nextCycleMode compares against w.now().
-	if mode == cycleFull {
+	// A full cycle stamps the persisted schedule so the next
+	// fullSyncInterval's worth of cycles run lean — but ONLY if its drains
+	// were not refused by the admission ladder. Prunes are licensed
+	// exclusively by complete drains, so the metadata deletion/staleness bound
+	// IS the full-cycle interval; a cycle whose workspace and metadata fetches
+	// were all deferred drained nothing, and stamping it would stretch that
+	// bound silently by a whole interval.
+	//
+	// Only DEFERRALS withhold the stamp, not failures in general — asymmetric
+	// on purpose. A deferral is refused at the LowBudget preflight before the
+	// query is paid for, so retrying next cycle is nearly free and the
+	// condition clears on its own at the window reset. A real failure (network,
+	// GraphQL error, one team's permissions) pays full price per attempt, and
+	// withholding on it would pin the worker in the expensive mode for as long
+	// as the failure lasts — turning a partial outage into permanent maximum
+	// budget consumption. Those stamp and log, as before; the recorded cycle
+	// outcome tells the two apart.
+	if mode == cycleFull && !deferred {
 		if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
 			Key:     ScheduleKeyFullCycle,
 			LastRun: w.now(),
 		}); err != nil {
 			log.Printf("[sync] persist full-cycle timestamp failed: %v", err)
 		}
+	} else if mode == cycleFull {
+		log.Printf("[sync] full cycle deferred by the budget ladder; leaving the full sync due (no stamp)")
 	}
 
 	w.mu.Lock()
