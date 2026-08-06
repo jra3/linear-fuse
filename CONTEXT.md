@@ -606,6 +606,13 @@ the kernel may forget everything and the test passes vacuously) and its
 reused node (pin the team dir, upsert the team row, expiry, fresh team.md +
 dir mtime).
 
+**The seam fires on re-Lookup and nowhere else**, so a node the kernel has not
+re-looked-up still carries the entity it was built with: a write through the
+entity's own file node adopts onto the FILE node, the sync worker writes SQLite
+alone, and neither pushes down to the directory. That is why a save re-reads its
+own **save baseline** rather than trusting a directory node's snapshot — see
+[[rename-save]] (#415).
+
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are
 constructed — the non-symlink complement to Symlink views (`symlinkNode`), and
