@@ -134,17 +134,23 @@ buffer, so frontmatter validation, read-your-writes verification, and `.error`
 handling all apply) → **adopt + consume + `InvalidateRenamed`, all on {0, EIO}**.
 The **save baseline** is the entity that transient node is built from, and
 therefore the value every `Flush` diffs the written document against to decide
-*what to send*. It is re-read from SQLite at save time
-(`onlyFileTarget.baseline` → `freshestIssue`/`freshestProject`/
-`freshestInitiative`, `freshentity.go`), never taken from the directory node's
-captured entity: that copy goes stale the moment anything else writes — an
-in-place save adopts onto the FILE node and upserts SQLite, the sync worker
-writes SQLite alone, and neither pushes back down to the directory. Diffed
-against a stale baseline, a save that restores what an in-place save replaced
-reads as no change — no mutation sent, success returned, write lost (#415). The
-sibling resolver reaches the same rule from the other side: a collection
-resolves its destination out of a freshly fetched listing, and the `<entity>.meta`
-read closures re-read for the same reason. The adopt-on-EIO
+*what to send*. It is the **directory node's own entity** — the same copy the
+canonical `.md`'s render came from, deliberately. An absent frontmatter key
+means *clear this field*, so a baseline fresher than the entity the document was
+rendered from clears every field the writer never saw (measured: a byte-for-byte
+identical re-save of `issue.md` emitting `estimate: nil`). One entity behind both
+makes saving back what you read a genuine no-op, and a deliberate edit send only
+the field it changed.
+
+What keeps that entity fresh is [[adopt-up]] — the write path pushing to it. A
+committed edit through the canonical file adopts onto the FILE node and then
+propagates up to the directory node (`adoptup.go`). Before that, an in-place save
+left the directory's copy stale, and the next atomic save diffed against a
+pre-write entity: a save restoring what the in-place save had replaced read as no
+change — no mutation, success returned, write lost (#415). Staleness the write
+path did NOT cause (a sync-worker update) is deliberately left to the read path's
+refresh, because there render and baseline stay on one entity and a save-back
+stays a no-op rather than a revert. The adopt-on-EIO
 line is the policy, now written once: `Flush` returns `EIO` only on a fatal
 read-your-writes divergence, by which point the write has already reached
 Linear — refusing to adopt would keep serving stale content while `.error`
@@ -609,9 +615,33 @@ dir mtime).
 **The seam fires on re-Lookup and nowhere else**, so a node the kernel has not
 re-looked-up still carries the entity it was built with: a write through the
 entity's own file node adopts onto the FILE node, the sync worker writes SQLite
-alone, and neither pushes down to the directory. That is why a save re-reads its
-own **save baseline** rather than trusting a directory node's snapshot — see
-[[rename-save]] (#415).
+alone, and neither pushes down to the directory. [[adopt-up]] closes the first of
+those from the write side; the second is left to this seam on purpose (#415).
+
+### Adopt up (`adoptUp`)
+The write-side counterpart to the refresh seam: a committed edit through a
+canonical `.md` pushes its fresh entity **up** to the directory node that built
+the file (`adoptup.go`). The three entity directories render every child from one
+cached entity — the `.md`'s content and, because the atomic-save path builds its
+transient node from it, the [[rename-save]] **save baseline** — so the two must
+stay the same entity. An absent frontmatter key means *clear this field*, and a
+document diffed against a fresher entity than it was rendered from clears every
+field the writer never saw.
+
+That leaves "what makes the entity fresh?", and the answer is direction: the
+write path pushes to it rather than the read path reaching around it. Without
+that push an in-place save left the directory holding its pre-write copy, so the
+next atomic save diffed against a pre-write entity and a save restoring what the
+in-place save had replaced sent no mutation at all (#415). Staleness a write did
+not cause stays the refresh seam's job — there render and baseline are equally
+stale, so a save-back is a no-op rather than a revert.
+
+A related trap the same invariant exposes: a field whose "absent" and "present"
+forms are not mirror images never converges. Linear stores a cleared `estimate`
+as `0`, not null, so while the render emitted the key for any non-nil pointer and
+the diff read any non-nil pointer as clearable, every save of a document written
+before the clear re-sent the clear (`hasEstimate`, `internal/marshal/issue.go`).
+Render and diff must answer "does this field have a value?" with one predicate.
 
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are

@@ -21,12 +21,19 @@ import (
 // directory node's copy untouched.
 //
 // So the next atomic save — temp file renamed over the canonical .md, which is
-// how vim, VS Code and the Claude Edit tool all write — used to build its
-// transient file node from that stale snapshot and diff against it. Restoring the
-// body the in-place save replaced then diffed "the value I am writing" against
-// "the value from before the write I am undoing", concluded nothing had changed,
-// and sent NO mutation while returning success. A silent lost write, on the
-// canonical file of an entity, from two ordinary save styles in sequence.
+// how vim, VS Code and the Claude Edit tool all write — built its transient file
+// node from that stale snapshot and diffed against it. Restoring the body the
+// in-place save replaced then diffed "the value I am writing" against "the value
+// from before the write I am undoing", concluded nothing had changed, and sent NO
+// mutation while returning success. A silent lost write, on the canonical file of
+// an entity, from two ordinary save styles in sequence.
+//
+// The fix is adoptUp (adoptup.go): the committed in-place save propagates its
+// fresh entity up to the directory node, so the baseline tracks our own writes.
+// Deliberately NOT by reading the baseline through to SQLite — that decouples it
+// from the entity the document was rendered from, and since an absent
+// frontmatter key means "clear this field", it clears every field the writer
+// never saw (measured: an identical re-save emitting `estimate: nil`).
 //
 // The test below pins both halves of what that costs, because they need
 // different evidence:

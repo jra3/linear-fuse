@@ -262,7 +262,7 @@ func (p *ProjectNode) manifest() *dirManifest {
 		// Built with the fresh render; newFileInode swaps in the bytes an earlier
 		// save pinned under this inode when one is still standing, for every
 		// editable file in one place (authoredpin.go, #379/#387).
-		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project}
+		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project, adoptUp: p.setEntity}
 		content := node.generateContent(ctx)
 		node.content = content
 		return node, content, 0
@@ -271,7 +271,10 @@ func (p *ProjectNode) manifest() *dirManifest {
 	// project.meta: read-through from the freshest project so an edit to
 	// project.md is reflected here.
 	m.metaFile("project.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		proj := lfs.freshestProject(ctx, project)
+		proj := project
+		if projs, err := lfs.repo.GetTeamProjects(ctx, team.ID); err == nil {
+			proj = freshestByID(projs, project.ID, func(p api.Project) string { return p.ID }, project)
+		}
 		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: proj}
 		return node.metaContent(), proj.UpdatedAt, proj.CreatedAt
 	})
@@ -320,20 +323,16 @@ func (p *ProjectNode) Rename(ctx context.Context, name string, newParent fs.Inod
 	return renameSave(ctx, p.lfs, name, newParent, newName, renameSaveSpec{
 		dirIno:  p.EmbeddedInode().StableAttr().Ino,
 		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(p, oldName) },
-		target: onlyFileTarget[api.Project]{
+		target: onlyFileTarget{
 			sink:    p.lfs,
 			errKey:  project.ID,
 			name:    "project.md",
 			fileIno: projectInfoIno(project.ID),
-			// The save diffs against the freshest persisted project, not the
-			// snapshot captured above: an in-place save commits through
-			// ProjectInfoNode and leaves this directory node's copy stale (#415).
-			baseline: func(ctx context.Context) api.Project { return p.lfs.freshestProject(ctx, project) },
-			flush: func(ctx context.Context, base api.Project, content []byte) syscall.Errno {
+			flush: func(ctx context.Context, content []byte) syscall.Errno {
 				fileNode = &ProjectInfoNode{
 					BaseNode:   BaseNode{lfs: p.lfs},
 					team:       team,
-					project:    base,
+					project:    project,
 					editBuffer: editBuffer{content: content, dirty: true},
 				}
 				return fileNode.Flush(ctx, nil)
@@ -358,6 +357,10 @@ type ProjectInfoNode struct {
 	editBuffer
 	team    api.Team
 	project api.Project
+	// adoptUp pushes a committed edit's fresh project to the directory node that
+	// built this one, so the directory's entity — the baseline the atomic-save
+	// path diffs against — tracks our own writes (adoptup.go, #415).
+	adoptUp entityAdopter[api.Project]
 }
 
 var _ fs.NodeGetattrer = (*ProjectInfoNode)(nil)
@@ -520,7 +523,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				return append(edit.divergences("project", fresh.Name, fresh.Content), labels.divergences(fresh.LabelIds)...)
 			},
 		},
-		adopt:     func(fresh *api.Project) { p.project = *fresh },
+		adopt:     func(fresh *api.Project) { p.project = *fresh; p.adoptUp.adopt(*fresh) },
 		restore:   func() []byte { return p.generateContent(ctx) },
 		coherence: []uint64{projectInfoIno(p.project.ID), metaIno(p.project.ID)}, // project.meta reflects the edit
 		pinIno:    projectInfoIno(p.project.ID),                                  // project.md's Lookup seeds from the pin

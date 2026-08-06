@@ -118,7 +118,8 @@ func (i *InitiativeNode) manifest() *dirManifest {
 		// Built with the fresh render; newFileInode swaps in the bytes an earlier
 		// save pinned under this inode when one is still standing, for every
 		// editable file in one place (authoredpin.go, #379/#387).
-		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID}
+		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID,
+			adoptUp: i.setEntity}
 		content := node.generateContent()
 		node.content = content
 		return node, content, 0
@@ -127,7 +128,10 @@ func (i *InitiativeNode) manifest() *dirManifest {
 	// initiative.meta: read-through from the freshest initiative so an edit to
 	// initiative.md is reflected here.
 	m.metaFile("initiative.meta", func(ctx context.Context) ([]byte, time.Time, time.Time) {
-		init := lfs.freshestInitiative(ctx, initiative)
+		init := initiative
+		if inits, err := lfs.repo.GetInitiatives(ctx); err == nil {
+			init = freshestByID(inits, initiative.ID, func(i api.Initiative) string { return i.ID }, initiative)
+		}
 		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: init, initiativeID: init.ID}
 		return node.metaContent(), init.UpdatedAt, init.CreatedAt
 	})
@@ -175,20 +179,16 @@ func (i *InitiativeNode) Rename(ctx context.Context, name string, newParent fs.I
 	return renameSave(ctx, i.lfs, name, newParent, newName, renameSaveSpec{
 		dirIno:  i.EmbeddedInode().StableAttr().Ino,
 		scratch: func(oldName string) ([]byte, func(), bool) { return scratchRenameBytes(i, oldName) },
-		target: onlyFileTarget[api.Initiative]{
+		target: onlyFileTarget{
 			sink:    i.lfs,
 			errKey:  initiative.ID,
 			name:    "initiative.md",
 			fileIno: initiativeInfoIno(initiative.ID),
-			// The save diffs against the freshest persisted initiative, not the
-			// snapshot captured above: an in-place save commits through
-			// InitiativeInfoNode and leaves this directory node's copy stale (#415).
-			baseline: func(ctx context.Context) api.Initiative { return i.lfs.freshestInitiative(ctx, initiative) },
-			flush: func(ctx context.Context, base api.Initiative, content []byte) syscall.Errno {
+			flush: func(ctx context.Context, content []byte) syscall.Errno {
 				fileNode = &InitiativeInfoNode{
 					BaseNode:     BaseNode{lfs: i.lfs},
-					initiative:   base,
-					initiativeID: base.ID,
+					initiative:   initiative,
+					initiativeID: initiative.ID,
 					editBuffer:   editBuffer{content: content, dirty: true},
 				}
 				return fileNode.Flush(ctx, nil)
@@ -213,6 +213,10 @@ type InitiativeInfoNode struct {
 	editBuffer
 	initiative   api.Initiative
 	initiativeID string
+	// adoptUp pushes a committed edit's fresh initiative to the directory node
+	// that built this one, so the directory's entity — the baseline the
+	// atomic-save path diffs against — tracks our own writes (adoptup.go, #415).
+	adoptUp entityAdopter[api.Initiative]
 
 	// Write buffer and cached content
 }
@@ -355,7 +359,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				return edit.divergences("initiative", fresh.Name, fresh.Content)
 			},
 		},
-		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh },
+		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh; i.adoptUp.adopt(*fresh) },
 		restore: func() []byte { return i.generateContent() },
 		// initiative.md, its meta, and the projects/ listing.
 		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},
