@@ -348,13 +348,23 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 // workspace and team-metadata fetches entirely and runs only the (cheap)
 // teams list, each team's projects change-detection probe (upsert-only, see
 // probeTeamProjects), and each team's incremental issues sync; nothing prunes
-// in a lean cycle beyond what the issues path always did. A full cycle that runs
-// to completion stamps the persisted last-full-cycle timestamp; a
-// budget-skipped or teams-fetch-failed cycle returns early and does not, so
-// the full sync stays due. A cycle whose workspace or per-team metadata sync
-// fails partway DOES stamp (those failures log-and-continue): retrying the
-// full drains every 2 minutes under budget pressure is the burn pattern the
-// diet exists to stop, so a partial failure waits for the next window.
+// in a lean cycle beyond what the issues path always did.
+//
+// A full cycle stamps the persisted last-full-cycle timestamp unless one of
+// its skeleton-tier drains was DEFERRED by the admission ladder
+// (api.IsDeferred), which leaves the full sync due. The rule is asymmetric on
+// purpose: a non-budget failure (network, GraphQL, one team's permissions)
+// log-and-continues and stamps exactly as before, because withholding there
+// would pin the worker in the expensive full mode for the length of an outage.
+// A teams-fetch failure returns early and never reaches the stamp at all.
+//
+// A deferred drain also falls back to that drain's lean-cycle probe — the
+// initiatives probe for a deferred syncWorkspace, the projects probe for a
+// deferred syncTeamMetadata, per team. The probes do not go through the
+// LowBudget preflight, so there is a band where they still admit while the
+// drains are refused; without the fallback, staying in full mode across the
+// budget window would leave projects/initiatives with no change detection at
+// all.
 func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
 	// invoked it (run's initial sync, the ticker, SyncNow). Full cycles also
@@ -390,18 +400,30 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// to the same workspace sync only when something actually changed.
 	// A full cycle that could not drain has not earned its stamp — see the
 	// conditional stamp at the bottom of this function.
-	classify := func(err error) {
+	classify := func(err error) bool {
 		if api.IsDeferred(err) {
 			deferred = true
-			return
+			return true
 		}
 		failed = true
+		return false
+	}
+	// A deferred drain degrades to that drain's lean-cycle probe rather than
+	// to nothing: the withheld stamp keeps the worker in full mode for the
+	// rest of the budget window, and the probes admit in a band where the
+	// drains do not (they bypass the LowBudget preflight).
+	probeProjects := func(team api.Team) {
+		if err := w.probeTeamProjects(ctx, team); err != nil {
+			log.Printf("[sync] projects probe %s failed: %v", team.Key, err)
+		}
 	}
 	if mode == cycleFull {
 		if err := w.syncWorkspace(ctx); err != nil {
 			log.Printf("[sync] workspace sync failed: %v", err)
-			classify(err)
 			// Continue with teams even if workspace sync fails
+			if classify(err) {
+				w.probeInitiatives(ctx)
+			}
 		}
 	} else {
 		w.probeInitiatives(ctx)
@@ -437,19 +459,21 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		// Sync team metadata (states, labels, cycles, projects, members) —
 		// full cycles only, the other fetch class the lean cycle skips. A
 		// lean cycle runs the cheap projects change-detection probe instead
-		// (#243): the full cycle's complete drain covers projects anyway (and
+		// (#243): a full cycle's complete drain covers projects anyway (and
 		// is what licenses their prunes), so the probe would be a redundant
-		// page there. Probe failures log-and-continue like the metadata sync:
-		// the issues sync still runs and the next cycle probes again.
+		// page there — unless THAT team's drain was deferred, in which case
+		// the probe is the only projects freshness this team gets. Probe
+		// failures log-and-continue like the metadata sync: the issues sync
+		// still runs and the next cycle probes again.
 		if mode == cycleFull {
 			if err := w.syncTeamMetadata(ctx, team); err != nil {
 				log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
-				classify(err)
+				if classify(err) {
+					probeProjects(team)
+				}
 			}
 		} else {
-			if err := w.probeTeamProjects(ctx, team); err != nil {
-				log.Printf("[sync] projects probe %s failed: %v", team.Key, err)
-			}
+			probeProjects(team)
 		}
 
 		// Sync team issues
@@ -1311,9 +1335,6 @@ func (w *Worker) probeBudget(ctx context.Context) bool {
 	expiry := w.now().Add(wait)
 	log.Printf("[sync] budget probe RATELIMITED; delaying sync start %s (until %s)",
 		wait.Round(time.Second), expiry.Format(time.RFC3339))
-	if wait <= 0 {
-		return true
-	}
 	timer, stopTimer := w.newTimer(wait)
 	defer stopTimer()
 	select {

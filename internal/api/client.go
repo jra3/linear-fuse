@@ -420,10 +420,12 @@ func (c *Client) RateLimitResetAt() time.Time {
 
 // BudgetSnapshot reports hourly request usage as (requests used, percent of
 // limit), from the budget's server-reported requests axis — (0, 0) until the
-// first response has been observed. It satisfies the sync worker's
-// BudgetReporter seam, the role the deleted APIStats' local rolling window
-// used to play, now on server truth (so it also counts other consumers of
-// the same API key).
+// first response has been observed. It is the client's own log line, on
+// server truth (so it also counts other consumers of the same API key), and
+// nothing else: it reads ONE axis, so it cannot govern admission for a
+// complexity-bound workload. That is ratebudget.admit's job alone — the sync
+// worker's BudgetReporter seam that used to read this was deleted with the
+// second governor.
 func (c *Client) BudgetSnapshot() (count int, pct float64) {
 	_, rq := c.budget.snapshot()
 	if !rq.seen || rq.limit <= 0 {

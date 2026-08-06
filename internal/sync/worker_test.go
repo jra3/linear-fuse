@@ -1548,6 +1548,10 @@ func containsOp(ops []string, op string) bool {
 // probe redundant there), a lean cycle issues neither but runs the projects
 // change-detection probe instead; every non-skipped cycle issues GetTeams
 // (the cheap team enumeration the issues sync needs either way).
+//
+// Only valid for a full cycle whose drains LANDED: a deferred drain falls back
+// to the probe (see TestStarvedFullCycleFallsBackToProbes), which is precisely
+// the case this helper's probe assertion would read as a lean cycle.
 func assertCycleOps(t *testing.T, label string, ops []string, wantFull bool) {
 	t.Helper()
 	if !containsOp(ops, "GetTeams") {
@@ -1756,12 +1760,56 @@ func TestStarvedFullCycleLeavesFullCycleDue(t *testing.T) {
 	}
 }
 
+// TestStarvedFullCycleFallsBackToProbes: withholding the stamp keeps the
+// worker in full mode for the rest of the budget window, which would otherwise
+// leave projects and initiatives with NO change detection at all — full mode
+// skips the probes, and its drains are the ones being refused. The probes do
+// not go through the LowBudget preflight (GetInitiativesProbe → fetchNodes,
+// GetTeamProjectsNewestPage → fetchConn, both admitted at their measured ~1K
+// cost against the preflight's 10000 default), so there is a band where they
+// still fit. Per deferred drain, not per cycle: a team whose metadata landed
+// does not pay for a redundant probe.
+//
+// Not parallel: it installs a meter provider (see metrics_test.go).
+func TestStarvedFullCycleFallsBackToProbes(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, _ := cycleTestWorker(t, store)
+	mock.workspaceErr = fmt.Errorf("workspace: %w", api.ErrBudget)
+	mock.teamMetadataErr = fmt.Errorf("team metadata team-1: %w", api.ErrBudget)
+
+	ops := opsDuring(mock, func() {
+		if err := worker.syncCycle(ctx, cycleFull); err != nil {
+			t.Fatalf("starved full cycle: %v", err)
+		}
+	})
+	for _, op := range []string{"GetInitiativesProbe", "GetTeamProjectsNewestPage"} {
+		if !containsOp(ops, op) {
+			t.Errorf("ops = %v, want %s (a deferred drain falls back to its own probe)", ops, op)
+		}
+	}
+
+	// The fallback changes neither the stamp rule nor the outcome.
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("GetSyncSchedule after starved cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
+	}
+	if got := cycleOutcomeCount(t, collectMetrics(t, reader), "full", "deferred"); got != 1 {
+		t.Errorf("cycle_duration{mode=full,outcome=deferred} count = %d, want 1", got)
+	}
+}
+
 // TestFailedFullCycleStillStamps pins the deliberate asymmetry: a NON-budget
 // failure stamps as before. Withholding on it would pin the worker in the
 // expensive full mode for as long as the failure lasts, paying full price per
 // attempt — a partial outage must not become permanent maximum spend. Only a
 // deferral, which is refused before the query is paid for and clears at the
 // window reset, is cheap enough to retry indefinitely.
+//
+// It also gets no probe fallback: the probe fallback exists because the stamp
+// was withheld, and this cycle stamped.
 func TestFailedFullCycleStillStamps(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -1772,11 +1820,18 @@ func TestFailedFullCycleStillStamps(t *testing.T) {
 	mock.workspaceErr = errors.New("boom: internal server error")
 	mock.teamMetadataErr = errors.New("boom: internal server error")
 
-	if err := worker.syncAllTeams(ctx); err != nil {
-		t.Fatalf("failed-drain cycle: %v", err)
-	}
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("failed-drain cycle: %v", err)
+		}
+	})
 	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); err != nil {
 		t.Errorf("GetSyncSchedule after failed-drain cycle: %v, want a stamp (only deferrals withhold)", err)
+	}
+	for _, op := range []string{"GetInitiativesProbe", "GetTeamProjectsNewestPage"} {
+		if containsOp(ops, op) {
+			t.Errorf("ops = %v, want no %s (a non-budget failure stamps, so it needs no fallback)", ops, op)
+		}
 	}
 }
 

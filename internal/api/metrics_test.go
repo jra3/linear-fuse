@@ -310,9 +310,9 @@ func TestBudgetDecisionsCounter(t *testing.T) {
 	}
 }
 
-// TestClientBudgetSnapshot: the sync worker's BudgetReporter, now on server
+// TestClientBudgetSnapshot: the client's own requests-axis log line, on server
 // truth — zero until the requests axis has been seen, then
-// (limit-remaining, percent).
+// (limit-remaining, percent). It governs nothing; admission is admit's alone.
 func TestClientBudgetSnapshot(t *testing.T) {
 	client := NewClient("test-key")
 
