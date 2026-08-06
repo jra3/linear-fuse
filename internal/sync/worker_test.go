@@ -1549,9 +1549,10 @@ func containsOp(ops []string, op string) bool {
 // change-detection probe instead; every non-skipped cycle issues GetTeams
 // (the cheap team enumeration the issues sync needs either way).
 //
-// Only valid for a full cycle whose drains LANDED: a deferred drain falls back
-// to the probe (see TestStarvedFullCycleFallsBackToProbes), which is precisely
-// the case this helper's probe assertion would read as a lean cycle.
+// Only valid for a full cycle whose drains LANDED: a deferred metadata drain
+// falls back to the projects probe (see
+// TestStarvedFullCycleFallsBackToProjectsProbe), which is precisely the case
+// this helper's probe assertion would read as a lean cycle.
 func assertCycleOps(t *testing.T, label string, ops []string, wantFull bool) {
 	t.Helper()
 	if !containsOp(ops, "GetTeams") {
@@ -1760,18 +1761,23 @@ func TestStarvedFullCycleLeavesFullCycleDue(t *testing.T) {
 	}
 }
 
-// TestStarvedFullCycleFallsBackToProbes: withholding the stamp keeps the
-// worker in full mode for the rest of the budget window, which would otherwise
-// leave projects and initiatives with NO change detection at all — full mode
-// skips the probes, and its drains are the ones being refused. The probes do
-// not go through the LowBudget preflight (GetInitiativesProbe → fetchNodes,
-// GetTeamProjectsNewestPage → fetchConn, both admitted at their measured ~1K
-// cost against the preflight's 10000 default), so there is a band where they
-// still fit. Per deferred drain, not per cycle: a team whose metadata landed
-// does not pay for a redundant probe.
+// TestStarvedFullCycleFallsBackToProjectsProbe: withholding the stamp keeps
+// the worker in full mode for the rest of the budget window, which would
+// otherwise leave projects with NO change detection at all — full mode skips
+// the probe, and its drains are the ones being refused. The probe does not go
+// through the LowBudget preflight (GetTeamProjectsNewestPage → fetchConn,
+// admitted at its measured ~1K cost against the preflight's 10000 default), so
+// there is a band where it still fits, and it persists what it fetches. Per
+// deferred drain, not per cycle: a team whose metadata landed does not pay for
+// a redundant probe.
+//
+// The initiatives probe gets NO such fallback, and that asymmetry is the
+// assertion: it persists nothing of its own, escalating only to the
+// syncWorkspace that was just refused, so firing it here would spend a request
+// on a signal nothing can act on.
 //
 // Not parallel: it installs a meter provider (see metrics_test.go).
-func TestStarvedFullCycleFallsBackToProbes(t *testing.T) {
+func TestStarvedFullCycleFallsBackToProjectsProbe(t *testing.T) {
 	reader := withTestMeter(t)
 	store := openTestStore(t)
 	defer store.Close()
@@ -1786,10 +1792,11 @@ func TestStarvedFullCycleFallsBackToProbes(t *testing.T) {
 			t.Fatalf("starved full cycle: %v", err)
 		}
 	})
-	for _, op := range []string{"GetInitiativesProbe", "GetTeamProjectsNewestPage"} {
-		if !containsOp(ops, op) {
-			t.Errorf("ops = %v, want %s (a deferred drain falls back to its own probe)", ops, op)
-		}
+	if !containsOp(ops, "GetTeamProjectsNewestPage") {
+		t.Errorf("ops = %v, want GetTeamProjectsNewestPage (a deferred metadata drain falls back to its probe)", ops)
+	}
+	if containsOp(ops, "GetInitiativesProbe") {
+		t.Errorf("ops = %v, want no GetInitiativesProbe (it escalates only to the refused syncWorkspace)", ops)
 	}
 
 	// The fallback changes neither the stamp rule nor the outcome.
@@ -1808,8 +1815,8 @@ func TestStarvedFullCycleFallsBackToProbes(t *testing.T) {
 // deferral, which is refused before the query is paid for and clears at the
 // window reset, is cheap enough to retry indefinitely.
 //
-// It also gets no probe fallback: the probe fallback exists because the stamp
-// was withheld, and this cycle stamped.
+// It also gets no projects-probe fallback: that fallback exists because the
+// stamp was withheld, and this cycle stamped.
 func TestFailedFullCycleStillStamps(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)

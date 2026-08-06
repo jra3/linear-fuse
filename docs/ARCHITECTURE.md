@@ -301,17 +301,20 @@ metadata deletion/staleness bound by a whole full-cycle interval, silently.
 
 The withheld stamp also keeps the worker in full mode for the rest of the
 budget window, and full mode is what skips the change-detection probes — so a
-deferred drain **falls back to that drain's probe** (`probeInitiatives` for
-`syncWorkspace`, `probeTeamProjects` for a team's `syncTeamMetadata`, decided
-per drain, not per cycle). The probes are the one fetch class that does not go
-through the `LowBudget` preflight, so they still admit at their ~1K cost in the
-band where a drain priced at the preflight's default is refused; without the
-fallback a starved window would run neither. A *failed* drain gets no fallback
-— it stamped, so the following cycles are lean and probe anyway.
+deferred `syncTeamMetadata` **falls back to that team's `probeTeamProjects`**
+(per drain, not per cycle). The probe does not go through the `LowBudget`
+preflight, so it still admits at its ~1K cost in the band where a drain priced
+at the preflight's default is refused, and it upserts what it fetches; without
+the fallback a starved window would restore no projects data at all. A deferred
+`syncWorkspace` gets no matching initiatives fallback: `probeInitiatives`
+persists nothing itself and can only escalate to the `syncWorkspace` just
+refused, so it would buy a change signal nothing can act on. A *failed* drain
+gets no fallback either — it stamped, so the following cycles are lean and
+probe anyway.
 
 Each cycle, in order: drain the `pending_detail_sync` queue → workspace drain
-(or, lean/deferred, the initiatives probe) → teams list → per-team (metadata
-drain, or — lean/deferred — the projects probe, then issues) → the issue-ID
+(or, lean, the initiatives probe) → teams list → per-team (metadata drain, or
+— lean/deferred — the projects probe, then issues) → the issue-ID
 reconcile sweep when due (hourly, all-or-nothing per team, and mutually
 exclusive with the repo's reactive reconcile via a CAS). Teams are synced in an
 order **rotated by a per-cycle counter**, so mid-cycle budget deferrals rotate
@@ -331,8 +334,9 @@ staleness is bounded at `len(teams)` cycles.
   they stop first). A refusal arrives as `api.ErrDeferred`/`ErrBudget`, and the
   worker's job is what to do with it: detail batches go to the
   `pending_detail_sync` table and drain in later cycles, and a refused
-  skeleton-tier drain withholds the full-cycle stamp and degrades to that
-  drain's cheap change-detection probe (above). `syncDetails`
+  skeleton-tier drain withholds the full-cycle stamp, and a refused team
+  metadata drain degrades to that team's cheap projects probe (above).
+  `syncDetails`
   returns a `detailOutcome` ledger (synced / deferred / gated) and stamps
   `detail_synced_at` only for issues whose details persisted cleanly. A server
   429 needs no worker-side pause either: the response snaps both budget axes to
@@ -887,8 +891,8 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   preflight before an expensive drain. Everything else shapes *demand* rather
   than deciding admission: the worker's lean cycles, cold-start probe, team
   rotation, and detail batching reduce what is asked for; the pending-detail
-  queue, the withheld full-cycle stamp, and the probe fallback that stamp
-  triggers are what it does with a refusal.
+  queue, the withheld full-cycle stamp, and the projects-probe fallback that
+  stamp triggers are what it does with a refusal.
   Writes always win; user-blocking reads jump the ladder via `WithInteractive`.
   A caller that re-derives its own threshold is a bug, not a safety net: it can
   only see one axis, and requests is not the axis that empties.

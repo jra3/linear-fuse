@@ -1530,10 +1530,10 @@ counter). Tested at the worker's API-client seam
 (`worker_test.go` "Lean/Full Cycle Taxonomy"): scripted multi-cycle
 sequences on the fake clock assert per-cycle op windows (`opsDuring`), the
 restart case runs a second Worker over the same store, and the
-starved-cycle case asserts the stamp was withheld and the probe fallback
-fired. The probes are the lean cycle's work, with one exception: a full
-cycle whose drain was deferred runs that drain's probe instead (see "Cycle
-completeness").
+starved-cycle case asserts the stamp was withheld and the projects-probe
+fallback fired. The probes are the lean cycle's work, with one exception: a
+full cycle whose per-team metadata drain was deferred runs that team's
+projects probe instead (see "Cycle completeness").
 
 ### Cycle completeness (`cycleOutcome`, complete/deferred/failed)
 What "a full cycle that ran to completion" means, and the one thing the
@@ -1560,19 +1560,25 @@ Withholding has a cost the stamp rule has to pay for: the stamp is also what
 selects the next cycle's mode, so a withheld stamp keeps the worker in FULL
 mode for the rest of the budget window — and full mode is the mode that
 skips the change-detection probes. Left alone, a starved window would do
-neither the drains (refused) nor the probes (skipped), and
-projects/initiatives freshness would go dark until the window reset. So a
-deferred drain **falls back to that drain's lean-cycle probe**:
-`probeInitiatives` for a deferred `syncWorkspace`, `probeTeamProjects` for a
-deferred `syncTeamMetadata`, decided per drain rather than per cycle (a team
-whose metadata landed does not pay for a redundant probe). The fallback fits
-precisely because the probes are the one fetch class that does NOT go through
-the `LowBudget` preflight (`GetInitiativesProbe` → `fetchNodes`,
-`GetTeamProjectsNewestPage` → `fetchConn` — both reach `admit` directly at
-their measured ~1K cost, where the preflight prices a drain at
-`defaultPredictedCost` = 10000), so there is a real band where the probes
-admit while every skeleton-tier drain is refused. A **failed** drain gets no
-fallback: it stamped, so the next cycles are lean and probe anyway.
+neither the drains (refused) nor the probes (skipped), and **projects**
+freshness would go dark until the window reset. So a deferred
+`syncTeamMetadata` **falls back to that team's `probeTeamProjects`**, decided
+per drain rather than per cycle (a team whose metadata landed does not pay for
+a redundant probe). The fallback fits precisely because the probe does NOT go
+through the `LowBudget` preflight (`GetTeamProjectsNewestPage` → `fetchConn`
+reaches `admit` directly at its measured ~1K cost, where the preflight prices a
+drain at `defaultPredictedCost` = 10000), so there is a real band where it
+admits while every skeleton-tier drain is refused — and it upserts what it
+fetches, so what it restores is data, not just a signal.
+
+A deferred `syncWorkspace` gets **no** matching initiatives fallback, and the
+asymmetry is deliberate: `probeInitiatives` persists nothing of its own — its
+only action on a detected change is `syncWorkspace`, the call just refused,
+which cannot become admissible inside the same window (an axis holds its
+`remaining` until `resetAt`) — so it would spend a request per full cycle to
+buy a change signal nothing can act on, under exactly the condition where
+requests are scarce. A **failed** drain gets no fallback either: it stamped, so
+the next cycles are lean and probe anyway.
 
 This replaced the deleted `budgetSkipSyncPct` gate, which protected the
 stamp only as a side effect of its early return, and only on the requests
@@ -1659,7 +1665,7 @@ Sweep": real `SQLiteRepository` over the test store, mock drain, fake clock)
 and at the repo seam (partial-drain per-team all-or-nothing, pending-guard
 mutual exclusion).
 
-### Initiatives probe (`probeInitiatives`, lean cycles + deferred workspace drain)
+### Initiatives probe (`probeInitiatives`, lean cycles)
 Lean cycles detect initiative changes with a scalars-only probe
 (`internal/sync/worker.go` `probeInitiatives`, #244 — slice 3 of #238):
 `GetInitiativesProbe` fetches the newest 5 initiatives by `updatedAt`
@@ -1683,11 +1689,11 @@ unlinking a project bumps NEITHER `Initiative.updatedAt` nor
 invisible to the probe — link freshness is bounded by the full cycle
 (`FullSyncInterval`, default 10m), the PRD's accepted fallback; scalar
 changes (rename/status/description/targetDate/owner) are probe-visible at
-the lean cadence. A full cycle whose `syncWorkspace` was DEFERRED runs this
-probe too (see "Cycle completeness"): the probe admits where the drain's
-`LowBudget` preflight refused, so the change signal survives the starved
-window even when the escalation it triggers is refused again. Outcomes are
-observable as `linearfs.sync.probe_outcomes{kind=initiatives,
+the lean cadence. Lean cycles only — a full cycle whose `syncWorkspace` was
+deferred does NOT fall back to this probe the way the projects probe does
+(see "Cycle completeness"): everything this probe can do on a detected
+change is `syncWorkspace`, which is the call that was just refused. Outcomes
+are observable as `linearfs.sync.probe_outcomes{kind=initiatives,
 outcome=unchanged|changed|error}`; a probe or escalation failure logs and
 the cycle continues. Wire shape guarded at the mock server
 (`internal/api/initiatives_probe_test.go`); behavior at the worker seam

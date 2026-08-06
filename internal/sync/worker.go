@@ -358,13 +358,13 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 // would pin the worker in the expensive full mode for the length of an outage.
 // A teams-fetch failure returns early and never reaches the stamp at all.
 //
-// A deferred drain also falls back to that drain's lean-cycle probe — the
-// initiatives probe for a deferred syncWorkspace, the projects probe for a
-// deferred syncTeamMetadata, per team. The probes do not go through the
-// LowBudget preflight, so there is a band where they still admit while the
-// drains are refused; without the fallback, staying in full mode across the
-// budget window would leave projects/initiatives with no change detection at
-// all.
+// A deferred syncTeamMetadata also falls back to that team's lean-cycle
+// projects probe. The probe does not go through the LowBudget preflight, so
+// there is a band where it still admits while the drains are refused; without
+// the fallback, staying in full mode across the budget window would leave
+// projects with no change detection at all. There is deliberately NO matching
+// initiatives fallback — probeInitiatives persists nothing itself, so it would
+// buy a signal nothing can act on. See the deferred workspace branch.
 func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
 	// invoked it (run's initial sync, the ticker, SyncNow). Full cycles also
@@ -408,10 +408,12 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		failed = true
 		return false
 	}
-	// A deferred drain degrades to that drain's lean-cycle probe rather than
-	// to nothing: the withheld stamp keeps the worker in full mode for the
-	// rest of the budget window, and the probes admit in a band where the
-	// drains do not (they bypass the LowBudget preflight).
+	// A deferred team-metadata drain degrades to that team's lean-cycle
+	// projects probe rather than to nothing: the withheld stamp keeps the
+	// worker in full mode for the rest of the budget window, and the probe
+	// admits in a band where the drain does not (it bypasses the LowBudget
+	// preflight) — and it persists what it fetches, so the fallback really is
+	// projects freshness.
 	probeProjects := func(team api.Team) {
 		if err := w.probeTeamProjects(ctx, team); err != nil {
 			log.Printf("[sync] projects probe %s failed: %v", team.Key, err)
@@ -420,10 +422,18 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	if mode == cycleFull {
 		if err := w.syncWorkspace(ctx); err != nil {
 			log.Printf("[sync] workspace sync failed: %v", err)
-			// Continue with teams even if workspace sync fails
-			if classify(err) {
-				w.probeInitiatives(ctx)
-			}
+			// Continue with teams even if workspace sync fails.
+			//
+			// A deferral gets NO initiatives-probe fallback, deliberately —
+			// this is where the two probes stop being symmetric.
+			// probeInitiatives persists nothing of its own: its only action on
+			// a detected change is syncWorkspace, the call just refused, and
+			// that refusal cannot clear inside this window (the axis holds its
+			// remaining until resetAt). So the fallback would spend one probe
+			// request per full cycle for the rest of the window to buy a
+			// change signal nothing can act on — under exactly the condition
+			// where requests are scarce.
+			classify(err)
 		}
 	} else {
 		w.probeInitiatives(ctx)
