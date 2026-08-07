@@ -1320,37 +1320,38 @@ func TestIssueMetaKeysCoverTheRenderedSidecar(t *testing.T) {
 	}
 }
 
-// TestClearedEstimateConverges pins the idempotency of a cleared estimate.
-// Linear stores a clear as 0, not null, so "does this issue have an estimate?"
-// has to answer the same way on both sides of the round trip — the render that
-// decides whether to emit the key, and the diff that decides whether an absent
-// key means "remove it".
+// TestClearedEstimateConverges pins the idempotency of a cleared estimate: a
+// clear must be a value the round trip can represent, so the save after it is a
+// no-op rather than the same clear again.
 //
-// When both asked `!= nil`, they disagreed about a pointer to 0: the render
-// emitted `estimate: 0` while the diff read it as an estimate to clear. A
-// document written before the clear — which the serve-your-own-writes pin makes
-// an ordinary thing to be holding — then re-sent `estimate: nil` on every later
-// save, forever. It surfaced as an editor's byte-for-byte no-op re-save emitting
-// a mutation, which is the shape #415 is about: a save whose diff is computed
-// against something other than what the document was rendered from.
+// Zero is deliberately NOT treated as "no estimate" on either side. Linear teams
+// can permit zero-point estimates (issueEstimationAllowZero, rendered into
+// team.md as estimate_allow_zero), so a `0` is a value a reader must be able to
+// see and a writer must be able to keep. Both directions therefore ask the same
+// question — is the pointer nil? — which is what makes a clear settle: it stores
+// null, the next render emits no key, and the next diff finds nothing to remove.
+//
+// A backend (or a test double) that answered a clear with `0` instead of null
+// would break that convergence, which is why the mock mutator models a clear as
+// nil — see TestClearedEstimateRoundTripsAsNil in internal/testutil/mockmutation.
 func TestClearedEstimateConverges(t *testing.T) {
 	cleared := 0.0
 	real := 5.0
 
-	t.Run("a zero estimate is not rendered", func(t *testing.T) {
+	t.Run("a zero estimate is rendered", func(t *testing.T) {
 		out, err := IssueToMarkdown(&api.Issue{Title: "T", Estimate: &cleared})
 		if err != nil {
 			t.Fatalf("render: %v", err)
 		}
-		if strings.Contains(string(out), "estimate:") {
-			t.Errorf("a cleared (0) estimate was rendered as a key; an unestimated issue must "+
-				"look unestimated, or the next save re-clears it:\n%s", out)
+		if !strings.Contains(string(out), "estimate: 0") {
+			t.Errorf("a zero-point estimate was not rendered; a team that allows them would "+
+				"find the value invisible on the mount:\n%s", out)
 		}
 	})
 
-	t.Run("no key against a zero estimate is no change", func(t *testing.T) {
+	t.Run("no key against a cleared (nil) estimate is no change", func(t *testing.T) {
 		update, err := MarkdownToIssueUpdate([]byte("---\ntitle: T\n---\nbody\n"),
-			&api.Issue{Title: "T", Description: "body", Estimate: &cleared})
+			&api.Issue{Title: "T", Description: "body"})
 		if err != nil {
 			t.Fatalf("diff: %v", err)
 		}

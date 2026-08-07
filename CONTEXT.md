@@ -139,8 +139,9 @@ canonical `.md`'s render came from, deliberately. An absent frontmatter key
 means *clear this field*, so a baseline fresher than the entity the document was
 rendered from clears every field the writer never saw (measured: a byte-for-byte
 identical re-save of `issue.md` emitting `estimate: nil`). One entity behind both
-makes saving back what you read a genuine no-op, and a deliberate edit send only
-the field it changed.
+makes saving back what you read a genuine no-op — while nothing else writes in
+between; see [[adopt-up]] for what two concurrent writers get — and a deliberate
+edit send only the field it changed.
 
 What keeps that entity fresh is [[adopt-up]] — the write path pushing to it. A
 committed edit through the canonical file adopts onto the FILE node and then
@@ -636,12 +637,25 @@ in-place save had replaced sent no mutation at all (#415). Staleness a write did
 not cause stays the refresh seam's job — there render and baseline are equally
 stale, so a save-back is a no-op rather than a revert.
 
+**The no-op guarantee is conditional**, and the condition is worth naming: it
+holds while nothing else writes between the read and the save. Two writers make
+it **last-writer-wins**. A reads `issue.md` rendered from E0; B saves it in place
+setting a field A's copy has no key for, adopting E1 up; A's later atomic save is
+diffed against E1, and an absent key means *clear this field*, so B's value goes.
+Before adopt-up that save diffed against E0 and left B's field alone. The trade
+is deliberate: what it replaces is a SINGLE writer's save being silently dropped
+(#415) — no mutation, no `.error`, success returned. A clobbered field is visible
+in the entity's history and recoverable; a write that never happened while
+reporting that it did is neither.
+
 A related trap the same invariant exposes: a field whose "absent" and "present"
-forms are not mirror images never converges. Linear stores a cleared `estimate`
-as `0`, not null, so while the render emitted the key for any non-nil pointer and
-the diff read any non-nil pointer as clearable, every save of a document written
-before the clear re-sent the clear (`hasEstimate`, `internal/marshal/issue.go`).
-Render and diff must answer "does this field have a value?" with one predicate.
+forms are not mirror images never converges. Render and diff must answer "does
+this field have a value?" with the same predicate — `estimate` renders the key
+for a non-nil pointer and clears on an absent key for a non-nil pointer, so a
+clear that stores null settles on the next save. It is also why the mock mutator
+models a clear as null rather than `0`: a double that answers a clear with a
+value makes the clear re-send itself forever, and the non-convergence looks like
+a production bug (`internal/testutil/mockmutation`).
 
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are

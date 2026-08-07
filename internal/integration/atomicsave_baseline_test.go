@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/fs"
 	"github.com/jra3/linear-fuse/internal/marshal"
 	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
@@ -47,11 +48,21 @@ import (
 //     "Reads immediately afterwards show the new content (the pin serves the
 //     written bytes), so it looks like it worked."
 
-// pinWindowWait is how long to wait for the serve-your-own-writes pin to lapse
-// so a read is answered from what actually PERSISTED. It must exceed
-// internal/fs's pinTTL (10s), which this package cannot import. One wait covers
-// every surface in the test, so the cost is paid once rather than per surface.
-const pinWindowWait = 11 * time.Second
+// testPinTTL is the serve-your-own-writes window this test runs the mount with,
+// installed via fs.SetTestPinTTL. The production pinTTL is 10s and unexported —
+// waiting it out would put an 11-second sleep in the default offline suite, two
+// orders of magnitude longer than anything else here — so the test shortens the
+// real value rather than duplicating it. pinWindowWait is then derived from what
+// was actually installed, so the two cannot drift apart.
+//
+// It is still a genuine lapse: the pin is armed with this deadline and expires
+// on its own, exactly as the production one does.
+const testPinTTL = 250 * time.Millisecond
+
+// pinWindowWait is how long to wait for that window to close so a read is
+// answered from what actually PERSISTED. One wait covers every surface in the
+// test, so the cost is paid once rather than per surface.
+const pinWindowWait = testPinTTL + 250*time.Millisecond
 
 // atomicSaveBaselineCase is one editable canonical .md and the mock-update kind
 // its saves must produce.
@@ -118,6 +129,9 @@ func withBody(t *testing.T, orig []byte, body string) []byte {
 func TestOffline_AtomicSaveAfterInPlaceSaveSendsItsMutation(t *testing.T) {
 	skipIfLiveAPI(t, "asserts what the MOCK mutator received; live has no such audit log, "+
 		"and the sequence would leave real edits behind")
+	// Registered before every other cleanup so it restores LAST (t.Cleanup is
+	// LIFO): the fixture-restoring saves below still run inside the short window.
+	t.Cleanup(fs.SetTestPinTTL(testPinTTL))
 	mock := enableMockMutations(t)
 
 	initiativeDir, err := firstInitiativeDir()

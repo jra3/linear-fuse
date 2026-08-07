@@ -336,12 +336,25 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	if _, ok := input["priority"]; ok {
 		iss.Priority = intVal(input, "priority")
 	}
-	if _, ok := input["estimate"]; ok {
-		est := float64(intVal(input, "estimate"))
-		iss.Estimate = &est
+	// A clear arrives as a present key with a nil value (MarkdownToIssueUpdate),
+	// and the fake has to model it as the absence of a value, not as a zero one:
+	// manufacturing `&0` here would make a cleared estimate read back as a real
+	// zero-point estimate — a value Linear can genuinely hold when a team allows
+	// them — and the fake would then be the only reason a round trip diverged.
+	if v, ok := input["estimate"]; ok {
+		if v == nil {
+			iss.Estimate = nil
+		} else {
+			est := float64(intVal(input, "estimate"))
+			iss.Estimate = &est
+		}
 	}
-	if due, ok := input["dueDate"].(string); ok {
-		iss.DueDate = &due
+	if v, ok := input["dueDate"]; ok {
+		if due, isStr := v.(string); isStr {
+			iss.DueDate = &due
+		} else if v == nil {
+			iss.DueDate = nil
+		}
 	}
 	if sid, ok := input["stateId"].(string); ok && sid != "" {
 		iss.State = api.State{ID: sid, Name: c.stateName(ctx, sid)}

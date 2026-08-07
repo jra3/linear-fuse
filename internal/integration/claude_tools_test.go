@@ -806,11 +806,12 @@ func TestClearProjectBodyIsRejectedLegibly(t *testing.T) {
 		t.Fatalf("render project.md with a body: %v", err)
 	}
 	// Both saves take the SAME atomic-rename path, which is now a stylistic
-	// choice rather than a requirement: the rename's Flush re-reads its baseline
-	// from SQLite at save time (#415), so a truncate+write seed would leave the
-	// clear diffing against the seeded body too. It used to diff against the
-	// directory node's pre-seed snapshot, which made the clear read as no change
-	// — no mutation, and nothing for the verdict below to be about.
+	// choice rather than a requirement: a committed in-place save adopts its
+	// fresh entity up into the directory node the rename's Flush diffs against
+	// (adoptup.go, #415), so a truncate+write seed would leave the clear diffing
+	// against the seeded body too. It used to diff against the directory node's
+	// pre-seed snapshot, which made the clear read as no change — no mutation,
+	// and nothing for the verdict below to be about.
 	if err := claudeToolAtomicSave(t, path, withBody); err != nil {
 		t.Fatalf("seed a body via atomic save: %v", err)
 	}

@@ -231,7 +231,7 @@ func IssueToMarkdown(issue *api.Issue) ([]byte, error) {
 		fm["labels"] = labels
 	}
 
-	if hasEstimate(issue.Estimate) {
+	if issue.Estimate != nil {
 		fm["estimate"] = *issue.Estimate
 	}
 
@@ -389,7 +389,7 @@ func MarkdownToIssueUpdate(content []byte, original *api.Issue) (map[string]any,
 				update["estimate"] = newEstimate
 			}
 		}
-	} else if hasEstimate(original.Estimate) {
+	} else if original.Estimate != nil {
 		update["estimate"] = nil // removed
 	}
 
@@ -551,19 +551,6 @@ func coercePriority(v any) (n int, ok bool, err error) {
 		return 0, false, fmt.Errorf("must be a name (none|low|medium|high|urgent) or a number 0-4")
 	}
 }
-
-// hasEstimate reports whether an issue carries an estimate at all. Zero is NOT
-// an estimate: Linear stores a cleared estimate as 0 rather than null, so a
-// pointer to 0 means "unestimated" exactly as nil does.
-//
-// One predicate for both directions is the point. When the render asked
-// `!= nil` and the diff asked `!= nil` too, clearing an estimate never
-// converged: the clear stored 0, and every later save of a document written
-// before it — which the serve-your-own-writes pin makes an ordinary thing to
-// hold — saw "no key here, a value there" and re-sent the same clear. A write
-// that keeps re-issuing itself is a write that never settles, and offline it
-// surfaced as an editor's no-op re-save emitting a mutation (#415).
-func hasEstimate(e *float64) bool { return e != nil && *e != 0 }
 
 // coerceEstimate normalizes an estimate frontmatter value to an int. It accepts
 // int, float (truncated), or a numeric string (`estimate: "3"`). ok is false for

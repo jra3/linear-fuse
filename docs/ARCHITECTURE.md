@@ -145,7 +145,8 @@ Two rules govern the whole design:
    invalidating kernel caches so the next read sees fresh data. A committed edit
    also pushes its fresh entity **up** to the directory node that built the file
    (`adoptUp`), so the entity a later save diffs against tracks our own writes
-   (#415).
+   (#415) — which makes concurrent edits of one canonical `.md`
+   last-writer-wins (see the `renameSave` note below).
 
 This decoupling is deliberate: ingest (Sync Worker → SQLite) and serve
 (SQLite → Repository → FUSE) are separate concerns, joined only by the database.
@@ -657,7 +658,11 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `adoptup.go`), not the read path reaching around it. Before that, an in-place
    save left the directory's copy stale and a later atomic save restoring what it
    replaced read as no change — no mutation, success returned, write lost
-   (#415).
+   (#415). The consequence to know: "saving back what you read is a no-op" holds
+   only while nothing else writes in between. Two writers are
+   **last-writer-wins** — a save diffed against an entity another writer just
+   adopted up clears the fields its own document has no key for. That is the
+   deliberate trade against the silently dropped write above.
 2. The fs layer **resolves names to IDs** (team key→teamId, status→stateId,
    assignee email→userId, labels→labelIds, project/milestone/cycle/parent→IDs).
    **Ordering is load-bearing** in `resolveIssueUpdate`: `team` resolves FIRST,

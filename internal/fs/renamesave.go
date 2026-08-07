@@ -163,8 +163,9 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 // a save clears every field the writer never saw (a measured instance: an
 // `estimate` set after the node was built, wiped by a byte-for-byte identical
 // re-save). Keeping the render and the baseline on one entity makes saving back
-// what you read a genuine no-op, and a deliberate edit send only the field it
-// changed.
+// what you read a genuine no-op — while nothing else writes in between; two
+// writers are last-writer-wins, see adoptup.go — and a deliberate edit send only
+// the field it changed.
 //
 // What keeps that entity fresh is the write path pushing to it, not the read
 // path reaching around it: a committed edit through the canonical file adopts

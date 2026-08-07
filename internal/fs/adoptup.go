@@ -38,6 +38,21 @@ package fs
 // is a no-op rather than a revert of fields the writer never saw. The staleness
 // itself is the read path's problem, not something a write should silently
 // resolve by clearing data.
+//
+// The no-op guarantee is therefore conditional, and worth stating plainly: it
+// holds only while nothing else writes between the read and the save. Two
+// writers make it last-writer-wins. A reads issue.md rendered from E0; B saves
+// the file in place, setting a field A's copy has no key for, and adopts E1 up
+// here; A then saves its buffer, which is now diffed against E1 — and an absent
+// key means "clear this field", so B's value goes. Before adopt-up, A's save
+// diffed against E0 and left B's field alone.
+//
+// That is a deliberate trade, not an oversight. The alternative it replaces is
+// worse and not concurrent at all: a SINGLE writer saving a file back through
+// the two ordinary save styles in sequence had the write silently dropped
+// (#415) — no mutation, no .error, success returned. Clobbering a field a
+// concurrent writer set is visible in the entity's history and recoverable;
+// a write that never happened while reporting that it did is neither.
 
 // entityAdopter is the write-side half of that contract: the file node calls it
 // with the entity a committed edit produced, and the directory node it came from
