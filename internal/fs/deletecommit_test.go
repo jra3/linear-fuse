@@ -6,6 +6,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/jra3/linear-fuse/internal/api"
 )
 
 // fakeDeleteSink records every interaction the delete tail can have. It
@@ -99,6 +101,7 @@ func TestCommitDelete_Classification(t *testing.T) {
 	}{
 		{"rate limit is EAGAIN", errors.New("rate limit exceeded"), syscall.EAGAIN, "rate-limited"},
 		{"deadline is EAGAIN", context.DeadlineExceeded, syscall.EAGAIN, "retry"},
+		{"usage limit is EDQUOT", &api.GraphQLError{Message: "usage limit exceeded"}, syscall.EDQUOT, "plan/usage limit"},
 		{"anything else is EIO", errors.New("boom"), syscall.EIO, "boom"},
 	}
 	for _, tc := range cases {

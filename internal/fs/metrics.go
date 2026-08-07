@@ -77,6 +77,8 @@ func outcomeForErrno(errno syscall.Errno) string {
 		return "enoent"
 	case syscall.EMSGSIZE:
 		return "emsgsize"
+	case syscall.EDQUOT:
+		return "edquot"
 	case syscall.EPERM:
 		return "eperm"
 	case syscall.EACCES:

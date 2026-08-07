@@ -1,12 +1,18 @@
 package integration
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/jra3/linear-fuse/internal/api"
+	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
 
 // These tests exercise the create/archive/rename/delete FUSE write paths
@@ -627,4 +633,53 @@ func mustReadDir(t *testing.T, dir string) []os.DirEntry {
 		t.Fatalf("readdir %s: %v", dir, err)
 	}
 	return entries
+}
+
+// quotaMutator is the mock mutation client with CreateIssue failing the way a
+// workspace over its plan limit does. The error is verbatim what the first live
+// dispatch of the write suite hit on 42 of its 45 creates (#409).
+type quotaMutator struct {
+	*mockmutation.Client
+}
+
+func (q quotaMutator) CreateIssue(ctx context.Context, input map[string]any) (*api.Issue, error) {
+	return nil, &api.GraphQLError{Message: "usage limit exceeded"}
+}
+
+// TestOffline_QuotaRejectionIsLegible is the end-to-end half of #409: it asserts
+// the userspace surface a caller actually sees when the workspace is over its
+// plan limit — the errno mkdir returns, and the wording of .error.
+//
+// The bug it pins is that neither of the two errnos this used to produce told
+// the truth. EINVAL ("invalid argument") blames the caller's input for a name
+// that was fine and had worked minutes earlier; EIO ("input/output error") reads
+// as a backend hiccup and invites the retry that mkdirIssueWithRetry then spends
+// ~34s and five real mutations on. EDQUOT is self-diagnosing, and .error carries
+// the only thing the errno cannot: that waiting will not clear it.
+func TestOffline_QuotaRejectionIsLegible(t *testing.T) {
+	skipIfLiveAPI(t, "fixture-mode: needs the injected mutator to model Linear's plan-quota rejection; live the workspace is not over quota and this mkdir would create a real issue")
+	enableMockMutations(t)
+
+	lfs.InjectTestMutationClient(quotaMutator{mockmutation.New(
+		mockmutation.WithTeamKey(testTeamKey),
+		mockmutation.WithStore(lfs.GetStore()),
+	)})
+	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
+
+	err := os.Mkdir(filepath.Join(issuesPath(testTeamKey), "Quota Wall Probe"), 0o755)
+	if !errors.Is(err, syscall.EDQUOT) {
+		t.Fatalf("mkdir under a plan-limit rejection = %v, want EDQUOT (%q)", err, syscall.EDQUOT)
+	}
+
+	reason, rerr := os.ReadFile(issuesErrorPath(testTeamKey))
+	if rerr != nil {
+		t.Fatalf("read issues/.error: %v", rerr)
+	}
+	// The errno says "quota"; only .error can say WHICH limit, that nothing was
+	// written, and that retrying is futile.
+	for _, want := range []string{"plan/usage limit", "did NOT take effect", "will NOT help", "usage limit exceeded"} {
+		if !strings.Contains(string(reason), want) {
+			t.Errorf(".error = %q, missing %q", reason, want)
+		}
+	}
 }

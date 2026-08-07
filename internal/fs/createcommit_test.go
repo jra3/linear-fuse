@@ -146,6 +146,15 @@ func TestCommitCreate_Classification(t *testing.T) {
 			wantIn:    "did not take effect",
 		},
 		{
+			// #409, using the exact error observed in the first live write
+			// dispatch — where it failed 42 of 45 creates while reading as either
+			// bad input or a backend fault, never as a quota.
+			name:      "usage limit is EDQUOT naming the plan limit",
+			err:       &api.GraphQLError{Message: "usage limit exceeded"},
+			wantErrno: syscall.EDQUOT,
+			wantIn:    "plan/usage limit",
+		},
+		{
 			name:      "anything else is EIO carrying the cause",
 			err:       errors.New("boom"),
 			wantErrno: syscall.EIO,
@@ -172,7 +181,8 @@ func TestCommitCreate_Classification(t *testing.T) {
 				t.Errorf(".error = %q, want it to contain %q", sink.setMsg, tc.wantIn)
 			}
 			if !strings.Contains(sink.setMsg, "Operation: create ent") &&
-				(tc.wantErrno == syscall.EAGAIN || tc.wantErrno == syscall.EIO) {
+				(tc.wantErrno == syscall.EAGAIN || tc.wantErrno == syscall.EIO ||
+					tc.wantErrno == syscall.EDQUOT) {
 				t.Errorf(".error = %q, want the op name in API-failure messages", sink.setMsg)
 			}
 			// A clean failure appends one countable outcome to .last (#370),

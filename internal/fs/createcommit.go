@@ -188,11 +188,16 @@ func unconfirmedReflectionMsg(op string, r WriteResult, err error) string {
 // site (issue/comment/label/document/milestone flushes and renames, the
 // project/initiative scalar+reconcile paths): bad input -> EINVAL, a field
 // over its length cap -> EMSGSIZE, missing reference -> ENOENT, transient ->
-// EAGAIN, backend failure -> EIO — either way the reason lands in .error, and
-// the errno itself hints where a specific one exists. Rate-limit/not-found and
-// too-long detection delegate to
-// the api package's predicates (api.IsRateLimited via retryableCreateErr,
-// api.IsNotFound via the delete tail's remoteAlreadyGone, api.IsFieldTooLong).
+// EAGAIN, the workspace over its plan limit -> EDQUOT, backend failure -> EIO —
+// either way the reason lands in .error, and the errno itself hints where a
+// specific one exists. Rate-limit/not-found, too-long and usage-limit detection
+// delegate to the api package's predicates (api.IsRateLimited via
+// retryableCreateErr, api.IsNotFound via the delete tail's remoteAlreadyGone,
+// api.IsFieldTooLong, api.IsUsageLimited).
+//
+// Arm ORDER carries meaning: the arms that classify on a condition Linear does
+// not reliably tag (usage limit, length cap) sit above the userError gate, so
+// their errno does not depend on a server-set bit. See #409.
 func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {
@@ -214,6 +219,24 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 		}
 		return "Operation: " + op + "\nError: the request was rate-limited or deferred before it was sent, so the operation did not take effect. Wait a few seconds and retry.", syscall.EAGAIN
 	}
+	// A workspace over its plan/usage limit is neither the caller's bad input nor
+	// a backend fault — it is a capacity wall. EDQUOT makes the errno itself the
+	// hint (cf. EMSGSIZE below), and this arm sits ABOVE the userError gate
+	// deliberately: whether Linear tags this rejection userError is unobserved
+	// (#409), so classifying on the CONDITION rather than on the tag is what makes
+	// the errno deterministic either way.
+	if api.IsUsageLimited(err) {
+		return "Operation: " + op + "\nError: this workspace is over a plan/usage limit, so the operation did NOT take effect. Retrying will NOT help until the workspace has room — archive or delete entities, or raise the workspace's plan limit, then retry. Linear said: " + serverDetail(err), syscall.EDQUOT
+	}
+	// A length-cap rejection is a size error, not merely malformed input:
+	// EMSGSIZE makes the errno itself a hint (the reason still lands in .error).
+	// Also above the userError gate, and for the same reason: the two cases
+	// api.IsFieldTooLong documents — a cap phrasing carried only in
+	// UserPresentableMessage, and one arriving as a plain HTTP-400 envelope —
+	// reach us with the tag unset, and used to fall through to EIO.
+	if api.IsFieldTooLong(err) {
+		return "Operation: " + op + "\nError: " + serverDetail(err), syscall.EMSGSIZE
+	}
 	// A structured Linear input rejection (userError: true) is the caller's
 	// bad input, not a backend failure: EINVAL, preferring the server's
 	// user-presentable message over its terse internal one (live example:
@@ -221,17 +244,25 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	// vs internal "labelIds contain parent labels").
 	var gqlErr *api.GraphQLError
 	if errors.As(err, &gqlErr) && gqlErr.UserError {
-		msg := gqlErr.UserPresentableMessage
-		if msg == "" {
-			msg = gqlErr.Message
-		}
-		// A length-cap rejection is a size error, not merely malformed input:
-		// EMSGSIZE makes the errno itself a hint (the reason still lands in
-		// .error). See api.IsFieldTooLong.
-		if api.IsFieldTooLong(err) {
-			return "Operation: " + op + "\nError: " + msg, syscall.EMSGSIZE
-		}
-		return "Operation: " + op + "\nError: " + msg, syscall.EINVAL
+		return "Operation: " + op + "\nError: " + serverDetail(err), syscall.EINVAL
 	}
 	return "Operation: " + op + "\nError: " + err.Error(), syscall.EIO
+}
+
+// serverDetail renders the most caller-useful text Linear supplied: its
+// user-presentable message where it set one, else the terse internal message,
+// else the raw error. It exists for the arms that classify on the CONDITION
+// rather than on the userError tag — those cannot assume the tag is set, so they
+// cannot reach for the message the way the EINVAL arm historically did.
+func serverDetail(err error) string {
+	var gqlErr *api.GraphQLError
+	if errors.As(err, &gqlErr) {
+		if gqlErr.UserPresentableMessage != "" {
+			return gqlErr.UserPresentableMessage
+		}
+		if gqlErr.Message != "" {
+			return gqlErr.Message
+		}
+	}
+	return err.Error()
 }

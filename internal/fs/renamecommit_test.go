@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/jra3/linear-fuse/internal/api"
 )
 
 // fakeRenameEntity is a synthetic entity so the commitRename tail can be
@@ -212,6 +214,18 @@ func TestCommitRename_Contract(t *testing.T) {
 			wantMutate:      true,
 			wantSets:        1,
 			wantErrSubstr:   "gone",
+			wantInvalidates: 0,
+		},
+		{
+			name:            "7d mutate usage-limit is EDQUOT",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			mutErr:          &api.GraphQLError{Message: "usage limit exceeded"},
+			wantErrno:       syscall.EDQUOT,
+			wantFind:        true,
+			wantMutate:      true,
+			wantSets:        1,
+			wantErrSubstr:   "plan/usage limit",
 			wantInvalidates: 0,
 		},
 		{

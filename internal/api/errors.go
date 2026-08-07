@@ -43,14 +43,15 @@ func IsOutcomeUnknown(err error) bool { return errors.Is(err, ErrInFlight) }
 // Error predicates: the package-level classification of Linear API failures.
 //
 // Every layer above the client (fs mutation handlers, the repo's orphan
-// defense, the sync worker's backoff) needs to answer the same two questions
-// about an error — "was that a rate limit?" and "does the entity no longer
-// exist?" — and each used to answer with its own substring sniff, so the
-// checks drifted (different substrings, different case handling). These two
-// predicates are the single owners. Both prefer the structured *GraphQLError
-// (errors.As, so wrapping is transparent) and keep the message fallbacks for
-// errors that never carried the type: HTTP-level failures are plain
-// fmt.Errorf strings carrying Linear's error envelope verbatim.
+// defense, the sync worker's backoff) needs to ask the same questions about an
+// error — "was that a rate limit?", "does the entity no longer exist?" — and
+// each used to answer with its own substring sniff, so the checks drifted
+// (different substrings, different case handling). Each predicate here is the
+// single owner of its question, and layers above the client delegate to it
+// rather than sniffing substrings themselves. All of them prefer the structured
+// *GraphQLError (errors.As, so wrapping is transparent) and keep the message
+// fallbacks for errors that never carried the type: HTTP-level failures are
+// plain fmt.Errorf strings carrying Linear's error envelope verbatim.
 
 // IsRateLimited reports whether err is Linear telling us the account's
 // request or complexity budget is exhausted. Structured check first: Linear
@@ -80,6 +81,41 @@ func IsRateLimited(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "RATELIMITED") ||
 		strings.Contains(strings.ToLower(msg), "rate limit")
+}
+
+// IsUsageLimited reports whether err is Linear refusing the mutation because the
+// WORKSPACE is over a plan/usage limit — a capacity wall, not a request budget.
+// It is deliberately distinct from IsRateLimited: a rate limit clears when the
+// window resets, so waiting is the fix, whereas no amount of waiting clears a
+// plan limit. Only archiving/deleting entities or raising the plan does, which
+// is why classifyMutationErr maps this to EDQUOT rather than to the retryable
+// EAGAIN (#409).
+//
+// The check is message-shaped because Linear's extensions.code for this
+// rejection has never been observed — the only recorded instance is the bare
+// string "usage limit exceeded". If a code is ever captured, add a structured
+// check in first position, matching IsRateLimited's structured-first layering.
+// The substring is "usage limit" alone: "limit exceeded" would swallow "rate
+// limit exceeded", while the full "usage limit exceeded" would miss a rewording
+// like "workspace usage limit reached".
+func IsUsageLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	// A server rate limit is NOT a plan wall. The typed check takes precedence so
+	// a future widening of IsRateLimited's message fallback cannot land a request
+	// budget in the arm that tells the caller waiting will not help.
+	if IsRateLimited(err) {
+		return false
+	}
+	has := func(s string) bool {
+		return strings.Contains(strings.ToLower(s), "usage limit")
+	}
+	var gqlErr *GraphQLError
+	if errors.As(err, &gqlErr) && (has(gqlErr.Message) || has(gqlErr.UserPresentableMessage)) {
+		return true
+	}
+	return has(err.Error())
 }
 
 // IsNotFound reports whether err is Linear's "Entity not found" rejection —

@@ -169,9 +169,18 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 	// The create tail unified the failure model and closed the .last gap: the
 	// README must document EAGAIN/ENOENT/EMSGSIZE alongside EINVAL/EIO, and must
 	// not resurrect the "attachments and relations don't report to .last" carve-out.
-	for _, want := range []string{"EAGAIN", "ENOENT", "EMSGSIZE"} {
+	for _, want := range []string{"EAGAIN", "ENOENT", "EMSGSIZE", "EDQUOT"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README failure model does not mention %q", want)
+		}
+	}
+	// #409: EDQUOT is only worth a new errno if the bullet says what to DO. A bare
+	// "-> EDQUOT" would leave an agent exactly where "invalid argument" left it,
+	// and the one thing that distinguishes it from the EAGAIN above is that
+	// retrying is futile.
+	for _, want := range []string{"plan/usage limit", "will NOT help"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README documents EDQUOT without its next action: missing %q", want)
 		}
 	}
 	if strings.Contains(readme, "instead surface the result") {

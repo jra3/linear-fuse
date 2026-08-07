@@ -412,6 +412,10 @@ Failure model (every writable surface follows this contract):
   document back. To clear one field, omit that field's key and keep the rest.
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
+- The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
+  write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
+  the workspace has room: archive or delete entities, or raise the plan limit.
+  .error carries what Linear reported.
 - Rate-limited, deferred, or interrupted -> EAGAIN, retry shortly. Read .error to
   see WHICH: a request refused before it was sent "did not take effect" and is
   safe to retry blindly; one "interrupted after it was sent" has an UNKNOWN

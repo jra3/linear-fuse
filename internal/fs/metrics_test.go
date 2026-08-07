@@ -74,9 +74,13 @@ func TestOutcomeForErrno(t *testing.T) {
 		syscall.EAGAIN:   "eagain",
 		syscall.ENOENT:   "enoent",
 		syscall.EMSGSIZE: "emsgsize",
+		syscall.EDQUOT:   "edquot",
 		syscall.EPERM:    "eperm",
 		syscall.EACCES:   "eacces",
-		syscall.ENOSPC:   "other",
+		// ENOSPC stays the unlisted-errno sentinel: it is deliberately NOT the
+		// quota label (EDQUOT is), because the local SQLite store sits on a real
+		// disk that can return ENOSPC for its own reasons.
+		syscall.ENOSPC: "other",
 	}
 	for errno, want := range cases {
 		if got := outcomeForErrno(errno); got != want {

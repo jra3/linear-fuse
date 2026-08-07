@@ -180,7 +180,8 @@ The **deep module** that owns the invariant tail of every create (`_create` writ
 `mkdir`), the create path's counterpart to the WriteBack tail: run the caller's
 `mutate` closure (parse → build input → call the mutation seam) → classify failure
 (**`FieldError`** → `EINVAL`, unknown reference → `ENOENT`, retryable/rate-limited →
-`EAGAIN`, other API failure → `EIO`; the reason renders to `.error`) → on success
+`EAGAIN`, workspace over plan limit → `EDQUOT`, other API failure → `EIO`; the
+reason renders to `.error`) → on success
 clear `.error`, record the new identity in `.last`, persist to SQLite (non-fatal),
 and apply the kernel-cache coherence policy. `InvalidateCreated` on the collection
 dir is guaranteed by the module — a spec cannot forget it; per-entity internal-cache
@@ -195,13 +196,17 @@ The classifier (`classifyMutationErr`) is the single owner of that failure
 model, shared by the create and delete tails **and every edit-mutation site**
 (issue/comment/label/document/milestone flushes and renames, the project/
 initiative scalar+reconcile paths — the flushes/renames used to bypass it with
-a flat `EIO`, violating the README's documented contract). Rate-limit and
-not-found detection are the api package's predicates (`api.IsRateLimited` —
-structural `GraphQLError.Code == "RATELIMITED"` plus message fallbacks, and
-deliberately excluding the client-side "circuit breaker" transient, which
-stays a `retryableCreateErr` concern; `api.IsNotFound` — the "Entity not
-found" rejection), the single owners the client's GraphQL-errors branch, the
-sync worker's backoff, and the repo's orphan defense also delegate to.
+a flat `EIO`, violating the README's documented contract). Rate-limit,
+not-found and usage-limit detection are the api package's predicates
+(`api.IsRateLimited` — structural `GraphQLError.Code == "RATELIMITED"` plus
+message fallbacks, and deliberately excluding the client-side "circuit breaker"
+transient, which stays a `retryableCreateErr` concern; `api.IsNotFound` — the
+"Entity not found" rejection; `api.IsUsageLimited` — a workspace over its plan
+limit, disjoint from `IsRateLimited` because no wait clears it), the single
+owners the client's GraphQL-errors branch, the sync worker's backoff, and the
+repo's orphan defense also delegate to. Arm order matters: the arms keyed on a
+condition Linear does not reliably tag (`EDQUOT`, `EMSGSIZE`) sit above the
+`userError` gate so their errno never depends on a server-set bit (#409).
 
 For status updates the front half is the shared `marshal.MarkdownToStatusUpdate`
 (one parser for both project and initiative updates — see [[entity-parse]]): an
