@@ -228,22 +228,29 @@ func sweepAbandonedTestDirs() {
 // out an expiry derive their wait from the mount's actual policy instead of a
 // literal that can drift from it.
 //
-// They are the PRODUCTION defaults, deliberately, and that costs the offline
-// suite ~60s: the two timeout-driven revalidation tests must wait out a real 30s
-// entry timeout, because the expiry belongs to the kernel and runs on the
-// kernel's clock — no injected clock can bring it forward, so shortening the
-// timeout is the only lever (fs.WithKernelCacheTimeouts exists for it).
+// They are SHORT, and that is the whole reason the offline suite runs in ~6s
+// rather than ~65s: the two timeout-driven revalidation tests wait out a real
+// expiry, and the expiry belongs to the kernel and runs on the kernel's clock —
+// no injected clock can bring it forward, so shortening the timeout
+// (fs.WithKernelCacheTimeouts) is the only lever there has ever been.
 //
-// Shortening was tried and REVERTED: at 1s and at 5s,
-// TestRemoteUpdateVisibleAfterKernelRevalidation becomes order-dependent — it
-// passes alone and fails roughly one run in three inside the full suite, with
-// issue.md never refreshing even after 10s of polling. Something earlier in the
-// suite leaves the node unable to refresh, and until that is understood a fast
-// suite here would mean a flaky one. See the ticket; the plumbing is in place
-// for when it is.
+// Shortening was tried once before and REVERTED, on the reading that
+// TestRemoteUpdateVisibleAfterKernelRevalidation had become order-dependent —
+// passing alone, failing about one run in three in the full suite, with
+// issue.md apparently never refreshing. That diagnosis was wrong, and #414 is
+// the correction: three sites in issues.go handed issue directories a HARDCODED
+// 30s entry timeout instead of the mount's, so this constant governed nothing
+// below teams/{KEY}/issues/. Every "failure" was simply a test whose wait budget
+// (this timeout + a 10s poll) fell short of the 30s that was actually in force —
+// which is also why it looked order-dependent rather than constant. Raise the
+// poll to 90s against the old code and it passes in 30.5s, every time.
+//
+// So: if these are ever shortened further and a revalidation test starts
+// failing, suspect another site pinning its own timeout before suspecting the
+// refresh path.
 const (
-	fixtureAttrTimeout  = fs.DefaultAttrTimeout
-	fixtureEntryTimeout = fs.DefaultEntryTimeout
+	fixtureAttrTimeout  = 1 * time.Second
+	fixtureEntryTimeout = 1 * time.Second
 )
 
 // kernelRevalidationWait bounds the poll below. It is a timeout, not a delay:
