@@ -35,7 +35,7 @@ func newSyncMetrics() syncMetrics {
 	return syncMetrics{
 		cycleDuration: telemetry.MustFloat64Histogram(m, "linearfs.sync.cycle_duration",
 			metric.WithUnit("s"),
-			metric.WithDescription("Duration of one sync cycle, by mode (lean|full); budget-skipped cycles record ~0")),
+			metric.WithDescription("Duration of one sync cycle, by mode (lean|full) and — full cycles only — outcome (complete|deferred|failed)")),
 		detailOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.detail_outcomes",
 			metric.WithDescription("Issues leaving syncDetails' per-issue ledger, by outcome (synced|deferred)")),
 		probeOutcomes: telemetry.MustInt64Counter(m, "linearfs.sync.probe_outcomes",
@@ -62,13 +62,38 @@ const (
 	probeKindInitiatives  = "initiatives"
 )
 
+// Cycle outcome vocabulary: what a FULL cycle's skeleton-tier drains did, and
+// therefore whether it stamped its schedule. Lean cycles carry no outcome —
+// they run no drain and never stamp, so "complete" would assert something no
+// code checks.
+//
+// The three values exist because the stamp rule is asymmetric (see the
+// conditional stamp in syncCycle): cycleDeferred withholds the stamp,
+// cycleFailed does NOT. A two-value vocabulary would have to record a
+// failed-but-stamped cycle as "complete", which is false — and that cycle is
+// precisely the one worth watching, since it is the accepted risk of the
+// asymmetry.
+type cycleOutcome string
+
+const (
+	cycleComplete cycleOutcome = "complete" // every drain landed; stamped
+	cycleDeferred cycleOutcome = "deferred" // a drain was refused by the admission ladder; NOT stamped
+	cycleFailed   cycleOutcome = "failed"   // a drain failed for a non-budget reason; stamped anyway
+)
+
 // recordCycle records one sync cycle's duration, attributed with the cycle's
 // mode (lean|full) — the histogram's per-mode sample counts double as the
 // cycle-mode counter, so lean/full cadence is visible without a second
-// instrument.
-func (sm syncMetrics) recordCycle(d time.Duration, mode cycleMode) {
-	sm.cycleDuration.Record(context.Background(), d.Seconds(),
-		metric.WithAttributes(attribute.String("mode", string(mode))))
+// instrument. Full cycles carry their outcome on the same principle: the
+// per-outcome sample count IS the starved-cycle counter, and the always-on
+// journald summary already projects "outcome" (it does not project "mode"), so
+// a deferred cycle surfaces there without any change to the exporter.
+func (sm syncMetrics) recordCycle(d time.Duration, mode cycleMode, outcome cycleOutcome) {
+	attrs := []attribute.KeyValue{attribute.String("mode", string(mode))}
+	if outcome != "" {
+		attrs = append(attrs, attribute.String("outcome", string(outcome)))
+	}
+	sm.cycleDuration.Record(context.Background(), d.Seconds(), metric.WithAttributes(attrs...))
 }
 
 // recordDetailOutcomes counts issues leaving syncDetails' ledger. Every issue

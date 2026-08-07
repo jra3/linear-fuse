@@ -82,18 +82,6 @@ type APIClient interface {
 // batch is ever rejected again, this constant is the first suspect.
 const detailsBatchSize = 10
 
-// Budget thresholds for rate limit awareness.
-// Detail batches (~2001 complexity each) are expensive; we defer them when budget is tight.
-const (
-	budgetSkipSyncPct    = 80.0 // Skip entire sync cycle when budget exceeds this
-	budgetDeferDetailPct = 70.0 // Defer detail batches to pending_detail_sync above this
-)
-
-// BudgetReporter provides rate limit budget information.
-type BudgetReporter interface {
-	BudgetSnapshot() (count int, pct float64)
-}
-
 // CatchUpModeToggler controls the repo staleness threshold during large syncs.
 type CatchUpModeToggler interface {
 	SetCatchUpMode(active bool)
@@ -124,7 +112,6 @@ type Worker struct {
 	mu       sync.RWMutex
 	running  bool
 	lastSync time.Time
-	budget   BudgetReporter     // optional: for rate limit budget logging
 	catchUp  CatchUpModeToggler // optional: controls repo staleness during catch-up
 	idRecon  IssueIDReconciler  // optional: the hourly issue-ID reconcile sweep (#245)
 	cycle    atomic.Int64       // sync-cycle counter; rotates the team order
@@ -138,11 +125,6 @@ type Worker struct {
 	now       func() time.Time
 	newTimer  func(d time.Duration) (<-chan time.Time, func() bool)
 	newTicker func(d time.Duration) (<-chan time.Time, func())
-
-	// Rate limit tracking for issue details sync
-	rateLimitMu     sync.RWMutex
-	rateLimitedAt   time.Time
-	rateLimitExpiry time.Time
 }
 
 // Config holds configuration for the sync worker
@@ -191,11 +173,6 @@ func NewWorker(client APIClient, store *db.Store, cfg Config) *Worker {
 		newTimer:         realNewTimer,
 		newTicker:        realNewTicker,
 	}
-}
-
-// SetBudgetReporter sets the rate limit budget reporter for enhanced logging.
-func (w *Worker) SetBudgetReporter(b BudgetReporter) {
-	w.budget = b
 }
 
 // SetCatchUpModeToggler sets the repo reference for toggling catch-up mode
@@ -371,43 +348,94 @@ func (w *Worker) syncAllTeams(ctx context.Context) error {
 // workspace and team-metadata fetches entirely and runs only the (cheap)
 // teams list, each team's projects change-detection probe (upsert-only, see
 // probeTeamProjects), and each team's incremental issues sync; nothing prunes
-// in a lean cycle beyond what the issues path always did. A full cycle that runs
-// to completion stamps the persisted last-full-cycle timestamp; a
-// budget-skipped or teams-fetch-failed cycle returns early and does not, so
-// the full sync stays due. A cycle whose workspace or per-team metadata sync
-// fails partway DOES stamp (those failures log-and-continue): retrying the
-// full drains every 2 minutes under budget pressure is the burn pattern the
-// diet exists to stop, so a partial failure waits for the next window.
+// in a lean cycle beyond what the issues path always did.
+//
+// A full cycle stamps the persisted last-full-cycle timestamp unless one of
+// its skeleton-tier drains was DEFERRED by the admission ladder
+// (api.IsDeferred), which leaves the full sync due. The rule is asymmetric on
+// purpose: a non-budget failure (network, GraphQL, one team's permissions)
+// log-and-continues and stamps exactly as before, because withholding there
+// would pin the worker in the expensive full mode for the length of an outage.
+// A teams-fetch failure returns early and never reaches the stamp at all.
+//
+// A deferred syncTeamMetadata also falls back to that team's lean-cycle
+// projects probe. The probe does not go through the LowBudget preflight, so
+// there is a band where it still admits while the drains are refused; without
+// the fallback, staying in full mode across the budget window would leave
+// projects with no change detection at all. There is deliberately NO matching
+// initiatives fallback — probeInitiatives persists nothing itself, so it would
+// buy a signal nothing can act on. See the deferred workspace branch.
 func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// One linearfs.sync.cycle_duration sample per cycle, whichever caller
-	// invoked it (run's initial sync, the ticker, SyncNow). A budget-skipped
-	// cycle records its ~0s duration too — a burst of near-zero samples IS
-	// the signature of budget-gated skipping.
+	// invoked it (run's initial sync, the ticker, SyncNow). Full cycles also
+	// carry their outcome, so a cycle that could not drain is one series
+	// rather than an inference across two meters.
+	//
+	// deferred/failed classify this cycle's skeleton-tier drains. deferred
+	// wins when both happen: it is the condition that withholds the stamp,
+	// and that is what the outcome is for.
 	start := w.now()
-	defer func() { w.metrics.recordCycle(w.now().Sub(start), mode) }()
-
-	// Skip entire sync cycle when budget is critically high
-	if w.budgetExceeds(budgetSkipSyncPct) {
-		count, pct := 0, 0.0
-		if w.budget != nil {
-			count, pct = w.budget.BudgetSnapshot()
+	deferred, failed := false, false
+	defer func() {
+		outcome := cycleOutcome("") // lean cycles run no drain and never stamp
+		if mode == cycleFull {
+			switch {
+			case deferred:
+				outcome = cycleDeferred
+			case failed:
+				outcome = cycleFailed
+			default:
+				outcome = cycleComplete
+			}
 		}
-		log.Printf("[sync] skipping sync cycle: budget at %d requests (%.0f%%), threshold %.0f%%",
-			count, pct, budgetSkipSyncPct)
-		return nil
-	}
+		w.metrics.recordCycle(w.now().Sub(start), mode, outcome)
+	}()
 
-	// H-5: Drain any issues that were queued during a previous rate-limit backoff
+	// H-5: Drain any issues an earlier cycle could not fetch details for —
+	// deferred by the admission ladder, rate limited by the server, or a
+	// failed fetch (see syncDetails' gates).
 	w.drainPendingDetailSync(ctx)
 
 	// First, sync workspace-level entities (full cycles only — the workspace
 	// drain is one of the two fetch classes the lean cycle exists to skip).
 	// Lean cycles run the cheap initiatives probe instead, which escalates
 	// to the same workspace sync only when something actually changed.
+	// A full cycle that could not drain has not earned its stamp — see the
+	// conditional stamp at the bottom of this function.
+	classify := func(err error) bool {
+		if api.IsDeferred(err) {
+			deferred = true
+			return true
+		}
+		failed = true
+		return false
+	}
+	// A deferred team-metadata drain degrades to that team's lean-cycle
+	// projects probe rather than to nothing: the withheld stamp keeps the
+	// worker in full mode for the rest of the budget window, and the probe
+	// admits in a band where the drain does not (it bypasses the LowBudget
+	// preflight) — and it persists what it fetches, so the fallback really is
+	// projects freshness.
+	probeProjects := func(team api.Team) {
+		if err := w.probeTeamProjects(ctx, team); err != nil {
+			log.Printf("[sync] projects probe %s failed: %v", team.Key, err)
+		}
+	}
 	if mode == cycleFull {
 		if err := w.syncWorkspace(ctx); err != nil {
 			log.Printf("[sync] workspace sync failed: %v", err)
-			// Continue with teams even if workspace sync fails
+			// Continue with teams even if workspace sync fails.
+			//
+			// A deferral gets NO initiatives-probe fallback, deliberately —
+			// this is where the two probes stop being symmetric.
+			// probeInitiatives persists nothing of its own: its only action on
+			// a detected change is syncWorkspace, the call just refused, and
+			// that refusal cannot clear inside this window (the axis holds its
+			// remaining until resetAt). So the fallback would spend one probe
+			// request per full cycle for the rest of the window to buy a
+			// change signal nothing can act on — under exactly the condition
+			// where requests are scarce.
+			classify(err)
 		}
 	} else {
 		w.probeInitiatives(ctx)
@@ -416,6 +444,7 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	// Sync teams list
 	teams, err := w.client.GetTeams(ctx)
 	if err != nil {
+		classify(err)
 		return fmt.Errorf("get teams: %w", err)
 	}
 
@@ -442,18 +471,21 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 		// Sync team metadata (states, labels, cycles, projects, members) —
 		// full cycles only, the other fetch class the lean cycle skips. A
 		// lean cycle runs the cheap projects change-detection probe instead
-		// (#243): the full cycle's complete drain covers projects anyway (and
+		// (#243): a full cycle's complete drain covers projects anyway (and
 		// is what licenses their prunes), so the probe would be a redundant
-		// page there. Probe failures log-and-continue like the metadata sync:
-		// the issues sync still runs and the next cycle probes again.
+		// page there — unless THAT team's drain was deferred, in which case
+		// the probe is the only projects freshness this team gets. Probe
+		// failures log-and-continue like the metadata sync: the issues sync
+		// still runs and the next cycle probes again.
 		if mode == cycleFull {
 			if err := w.syncTeamMetadata(ctx, team); err != nil {
 				log.Printf("[sync] sync team %s metadata failed: %v", team.Key, err)
+				if classify(err) {
+					probeProjects(team)
+				}
 			}
 		} else {
-			if err := w.probeTeamProjects(ctx, team); err != nil {
-				log.Printf("[sync] projects probe %s failed: %v", team.Key, err)
-			}
+			probeProjects(team)
 		}
 
 		// Sync team issues
@@ -465,20 +497,36 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 
 	// Scheduled issue-ID reconcile sweep: rides the cycle (any speed) and
 	// runs only when its persisted hourly schedule says it's due. Placed
-	// after the team loop so a budget-skipped or teams-fetch-failed cycle
-	// (the early returns above) leaves the sweep due too.
+	// after the team loop so a teams-fetch-failed cycle (the early return
+	// above) leaves the sweep due too.
 	w.maybeReconcileIssueIDs(ctx)
 
-	// A full cycle that ran to completion stamps the persisted schedule so
-	// the next fullSyncInterval's worth of cycles run lean. Stamped through
-	// the clock seam: the next cycle's nextCycleMode compares against w.now().
-	if mode == cycleFull {
+	// A full cycle stamps the persisted schedule so the next
+	// fullSyncInterval's worth of cycles run lean — but ONLY if its drains
+	// were not refused by the admission ladder. Prunes are licensed
+	// exclusively by complete drains, so the metadata deletion/staleness bound
+	// IS the full-cycle interval; a cycle whose workspace and metadata fetches
+	// were all deferred drained nothing, and stamping it would stretch that
+	// bound silently by a whole interval.
+	//
+	// Only DEFERRALS withhold the stamp, not failures in general — asymmetric
+	// on purpose. A deferral is refused at the LowBudget preflight before the
+	// query is paid for, so retrying next cycle is nearly free and the
+	// condition clears on its own at the window reset. A real failure (network,
+	// GraphQL error, one team's permissions) pays full price per attempt, and
+	// withholding on it would pin the worker in the expensive mode for as long
+	// as the failure lasts — turning a partial outage into permanent maximum
+	// budget consumption. Those stamp and log, as before; the recorded cycle
+	// outcome tells the two apart.
+	if mode == cycleFull && !deferred {
 		if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
 			Key:     ScheduleKeyFullCycle,
 			LastRun: w.now(),
 		}); err != nil {
 			log.Printf("[sync] persist full-cycle timestamp failed: %v", err)
 		}
+	} else if mode == cycleFull {
+		log.Printf("[sync] full cycle deferred by the budget ladder; leaving the full sync due (no stamp)")
 	}
 
 	w.mu.Lock()
@@ -1252,49 +1300,12 @@ func isRateLimitError(err error) bool {
 	return api.IsRateLimited(err)
 }
 
-// budgetExceeds returns true if the current hourly budget usage exceeds the given threshold.
-// Returns false if no budget reporter is configured.
-func (w *Worker) budgetExceeds(pct float64) bool {
-	if w.budget == nil {
-		return false
-	}
-	_, usage := w.budget.BudgetSnapshot()
-	return usage > pct
-}
-
-// isRateLimited returns true if we're currently rate limited for issue details
-func (w *Worker) isRateLimited() bool {
-	w.rateLimitMu.RLock()
-	defer w.rateLimitMu.RUnlock()
-	return w.now().Before(w.rateLimitExpiry)
-}
-
-// setRateLimited marks that we've hit a rate limit. The backoff consults
-// the client's rate budget: RateLimitResetAt is the server-reported window
-// reset (parsed from the per-axis millisecond headers), so the pause ends
-// when the budget actually refills; the fixed 15-minute backoff is only the
-// fallback for a reset the server never told us about.
-func (w *Worker) setRateLimited() {
-	w.rateLimitMu.Lock()
-	defer w.rateLimitMu.Unlock()
-	w.rateLimitedAt = w.now()
-
-	// Use the budget's server-provided reset time if it's in the future
-	backoff := 15 * time.Minute
-	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(w.now()) {
-		backoff = resetAt.Sub(w.now()) + 5*time.Second // 5s buffer past the reset
-	}
-	w.rateLimitExpiry = w.rateLimitedAt.Add(backoff)
-
-	if w.budget != nil {
-		count, pct := w.budget.BudgetSnapshot()
-		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s, budget: %d requests this hour, %.0f%%)",
-			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second), count, pct)
-	} else {
-		log.Printf("[sync] rate limited, pausing issue details sync until %s (backoff=%s)",
-			w.rateLimitExpiry.Format(time.RFC3339), backoff.Round(time.Second))
-	}
-}
+// coldStartBackoff is how long probeBudget delays the first cycle after a
+// RATELIMITED probe when the response carried no usable reset. It mirrors the
+// budget's own rateLimitedFallbackBackoff, which bounds admit's lockout for
+// the same headerless case — this worker-side copy only decides when to START
+// working, never whether a request may go.
+const coldStartBackoff = 15 * time.Minute
 
 // probeBudget is the cold-start probe: before the worker's first sync cycle
 // it fires one cheap viewer query so the client's rate budget is seeded from
@@ -1306,9 +1317,13 @@ func (w *Worker) setRateLimited() {
 // (~1-2 complexity points) and dual-purpose: /my needs it anyway.
 //
 // If the probe itself reports RATELIMITED, the account is already exhausted:
-// mark the worker rate-limited (the backoff honors the budget's
-// server-reported reset, which this very response's headers just seeded) and
-// sleep until the backoff expires instead of bursting into the wall. Any
+// sleep until the window resets instead of bursting into the wall. The wait
+// honors the budget's server-reported reset (which this very response's
+// headers just seeded), falling back to coldStartBackoff when the response
+// carried none. This is a SCHEDULING decision — when to start working — not
+// an admission one: admit already refuses every request until the budget
+// refills (snapExhaustedLocked), so a missing wait would be correct but
+// wasteful, not unsafe. Any
 // other probe failure (network down, auth) is logged and sync proceeds —
 // those failures repeat identically in syncAllTeams and are handled there,
 // and the budget stays conservative once the first response does land.
@@ -1325,17 +1340,13 @@ func (w *Worker) probeBudget(ctx context.Context) bool {
 		return true
 	}
 
-	w.setRateLimited()
-	w.rateLimitMu.RLock()
-	expiry := w.rateLimitExpiry
-	w.rateLimitMu.RUnlock()
-
-	wait := expiry.Sub(w.now())
+	wait := coldStartBackoff
+	if resetAt := w.client.RateLimitResetAt(); !resetAt.IsZero() && resetAt.After(w.now()) {
+		wait = resetAt.Sub(w.now()) + 5*time.Second // 5s buffer past the reset
+	}
+	expiry := w.now().Add(wait)
 	log.Printf("[sync] budget probe RATELIMITED; delaying sync start %s (until %s)",
 		wait.Round(time.Second), expiry.Format(time.RFC3339))
-	if wait <= 0 {
-		return true
-	}
 	timer, stopTimer := w.newTimer(wait)
 	defer stopTimer()
 	select {
@@ -1365,8 +1376,9 @@ type issueRef struct {
 // everything else (re-enqueued to pending_detail_sync, NOT stamped, NOT
 // dequeued).
 // gated=true means conditions preclude further detail syncing this cycle —
-// budget too tight, rate-limited, or a failed fetch — so a batching loop
-// (drainPendingDetailSync) should stop rather than burn more batches.
+// deferred by the admission ladder, rate limited by the server mid-fetch, or
+// a failed fetch — so a batching loop (drainPendingDetailSync) should stop
+// rather than burn more batches.
 type detailOutcome struct {
 	synced   []issueRef
 	deferred []issueRef
@@ -1394,8 +1406,8 @@ func (w *Worker) deferDetailIssues(ctx context.Context, issues []issueRef) {
 }
 
 // syncDetails is the single entry point for issue-detail syncing
-// (comments/documents/attachments/relations). It owns every gate — budget,
-// rate-limited before the fetch, rate-limited mid-fetch, fetch failure —
+// (comments/documents/attachments/relations). It owns every gate — deferred by
+// the admission ladder, rate-limited mid-fetch, any other fetch failure —
 // fetches the batch in one API call, persists per issue through
 // reconcile.PersistIssueDetails, and returns a per-issue outcome ledger.
 //
@@ -1415,16 +1427,11 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 		return detailOutcome{deferred: issues, gated: true}
 	}
 
-	// Gate 1: budget too tight for detail fetches this cycle.
-	if w.budgetExceeds(budgetDeferDetailPct) {
-		return deferAll()
-	}
-
-	// Gate 2 (H-5): already rate limited — defer so the issues survive the backoff.
-	if w.isRateLimited() {
-		return deferAll()
-	}
-
+	// There is no pre-fetch budget gate: the admission ladder decides, at the
+	// moment of the call, on both axes and in priority order (detail fetches
+	// hold the largest reserve, so they stop first). A worker-side threshold
+	// could only re-decide that on one axis, worse — see Gate 1 below for
+	// where the ladder's answer arrives.
 	ids := make([]string, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
@@ -1440,19 +1447,25 @@ func (w *Worker) syncDetails(ctx context.Context, issues []issueRef) detailOutco
 	detailsMap, err := w.client.GetIssueDetailsBatch(ctx, ids)
 	if err != nil {
 		if api.IsDeferred(err) {
-			// Gate 3a: our OWN admission ladder deferred this batch — a local,
+			// Gate 1: our OWN admission ladder deferred this batch — a local,
 			// minute-scale condition that clears next cycle, NOT the server rate
-			// limiting us. Skip this cycle (the issues survive in the pending
-			// queue) WITHOUT the long setRateLimited pause (#257).
+			// limiting us. Skip this cycle; the issues survive in the pending
+			// queue and the next cycle asks again (#257: a local defer must
+			// never cost the hour-long pause a server 429 warrants — now
+			// structural, since the worker holds no pause at all).
 			log.Printf("[sync] detail batch deferred by budget ladder, retrying next cycle: %v", err)
 			return deferAll()
 		}
 		if isRateLimitError(err) {
-			// Gate 3: server rate limited mid-fetch.
-			w.setRateLimited()
+			// Gate 2: server rate limited mid-fetch. No worker-side pause: the
+			// response's headers already snapped both budget axes to zero with
+			// a future reset, so admit refuses every request — including the
+			// next cycle's batch, which lands back here at Gate 1 — until the
+			// window refills.
+			log.Printf("[sync] detail batch rate limited by server, deferring %d issues: %v", len(issues), err)
 			return deferAll()
 		}
-		// Gate 4: any other fetch failure. Deferring (not just logging) keeps
+		// Gate 3: any other fetch failure. Deferring (not just logging) keeps
 		// the worker-side retry for team-sync-sourced issues, which otherwise
 		// exist nowhere but this call's arguments.
 		log.Printf("[sync] batch fetch details failed, deferring %d issues: %v", len(issues), err)

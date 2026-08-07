@@ -585,6 +585,13 @@ func TestWriteContractEditVerifiesOffline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read project.md: %v", err)
 	}
+	// test-project/project.md is shared mount state and the whole point here is
+	// that the edit PERSISTS — so with no restore it persists into every test
+	// that runs after this one, which is order-dependence rather than a passing
+	// suite. Both peers that edit this same file (projectlabels_test.go) already
+	// restore it this way. Registered after enableMockMutations so LIFO cleanup
+	// order writes back while the mock mutator is still injected.
+	t.Cleanup(func() { _ = writeProjectMD(t, projMD, string(orig)) })
 
 	// Append a marker to the body (the project description) and save.
 	marker := "verify-seam-marker-847"

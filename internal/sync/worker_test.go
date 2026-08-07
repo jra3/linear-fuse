@@ -19,16 +19,6 @@ import (
 	"github.com/jra3/linear-fuse/internal/repo"
 )
 
-// mockBudgetReporter implements BudgetReporter for testing
-type mockBudgetReporter struct {
-	count int
-	pct   float64
-}
-
-func (m *mockBudgetReporter) BudgetSnapshot() (int, float64) {
-	return m.count, m.pct
-}
-
 // fakeClock drives the Worker's clock seam (now/newTimer/newTicker) in tests
 // — the worker-side analogue of ratebudget_test.go's fakeClock, plus recorded
 // timer/ticker channels the test fires explicitly. The time is mutex'd
@@ -103,6 +93,8 @@ type mockAPIClient struct {
 	projectsByTeam      map[string][]api.Project // teamID -> projects
 	membersByTeam       map[string][]api.User    // teamID -> members
 	users               []api.User
+	workspaceErr        error // if set, GetWorkspace fails with this (cycle-completeness tests)
+	teamMetadataErr     error // if set, GetTeamMetadata fails with this (cycle-completeness tests)
 	initiatives         []api.Initiative
 	initiativesProbeErr error // if set, GetInitiativesProbe fails with this (probe-error tests)
 	projectLabels       []api.ProjectLabel
@@ -113,6 +105,7 @@ type mockAPIClient struct {
 	simulateError       error
 	rateLimitResetAt    time.Time                    // M-3: configurable reset time for adaptive backoff tests
 	detailsByIssue      map[string]*api.IssueDetails // issueID -> canned details for GetIssueDetailsBatch
+	detailsErr          error                        // if set, GetIssueDetailsBatch fails with this (ladder-deferral tests)
 	detailsCalls        int32                        // number of GetIssueDetailsBatch calls (incl. failed ones)
 	onDetailsBatch      func()                       // if set, runs inside GetIssueDetailsBatch (simulates writes racing the fetch)
 	onTeamMetadata      func()                       // if set, runs inside GetTeamMetadata (simulates writes racing the fetch)
@@ -212,6 +205,9 @@ func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cu
 
 func (m *mockAPIClient) GetTeamMetadata(ctx context.Context, teamID string) (*api.TeamMetadata, error) {
 	m.recordOp("GetTeamMetadata")
+	if m.teamMetadataErr != nil {
+		return nil, m.teamMetadataErr
+	}
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -265,6 +261,9 @@ func (m *mockAPIClient) GetTeamProjectsNewestPage(ctx context.Context, teamID st
 
 func (m *mockAPIClient) GetWorkspace(ctx context.Context) (*api.WorkspaceData, error) {
 	m.recordOp("GetWorkspace")
+	if m.workspaceErr != nil {
+		return nil, m.workspaceErr
+	}
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -310,6 +309,9 @@ func (m *mockAPIClient) GetProjectLabels(ctx context.Context) ([]api.ProjectLabe
 
 func (m *mockAPIClient) GetIssueDetailsBatch(ctx context.Context, issueIDs []string) (map[string]*api.IssueDetails, error) {
 	atomic.AddInt32(&m.detailsCalls, 1)
+	if m.detailsErr != nil {
+		return nil, m.detailsErr
+	}
 	if m.simulateError != nil {
 		return nil, m.simulateError
 	}
@@ -998,11 +1000,10 @@ func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
 		t.Errorf("expected 2 pending issues, got %d", len(pending))
 	}
 
-	// Clear the simulated error and reset the rate-limit expiry so the drain runs
+	// Clear the simulated error so the drain runs. Nothing else to reset: the
+	// worker holds no rate-limit state of its own — the budget's own window
+	// governs, and this mock never reports one.
 	mock.simulateError = nil
-	worker.rateLimitMu.Lock()
-	worker.rateLimitExpiry = time.Time{}
-	worker.rateLimitMu.Unlock()
 
 	// Drain the pending queue
 	worker.drainPendingDetailSync(ctx)
@@ -1019,9 +1020,14 @@ func TestPendingDetailSyncQueueAndDrain(t *testing.T) {
 
 // TestDeferredDetailBatchDoesNotRateLimit is the #257 regression guard: when the
 // detail-batch fetch fails with a LOCAL budget deferral (api.ErrDeferred), the
-// worker must skip this cycle (queue the issues) WITHOUT entering the long
-// server-rate-limit backoff. Before the fix, the deferral message matched
+// worker must skip this cycle (queue the issues) and be able to retry on the
+// very next cycle. Before the fix, the deferral message matched
 // api.IsRateLimited and the worker paused detail sync for a full hour.
+//
+// The pause is now gone entirely — admission is the budget's decision alone —
+// so the guarantee is structural rather than conditional. What this test still
+// pins is the observable half: a deferred batch leaves NO worker state that
+// suppresses the retry.
 func TestDeferredDetailBatchDoesNotRateLimit(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -1042,10 +1048,6 @@ func TestDeferredDetailBatchDoesNotRateLimit(t *testing.T) {
 	if !outcome.gated {
 		t.Error("a deferred fetch should gate the outcome (issues survive in the pending queue)")
 	}
-	// The crux: a LOCAL defer must NOT set the server-rate-limit pause.
-	if worker.isRateLimited() {
-		t.Error("worker entered the rate-limit backoff on a local budget deferral (#257 regression)")
-	}
 
 	// The issues must still be queued for the next cycle (same as a rate limit).
 	pending, err := store.Queries().ListPendingDetailSync(ctx)
@@ -1054,6 +1056,16 @@ func TestDeferredDetailBatchDoesNotRateLimit(t *testing.T) {
 	}
 	if len(pending) != 2 {
 		t.Errorf("pending = %d, want 2 (deferred issues must survive)", len(pending))
+	}
+
+	// The crux (#257): the very next attempt must fetch again rather than sit
+	// out a backoff. With the ladder no longer refusing, the same issues sync.
+	mock.simulateError = nil
+	mock.detailsByIssue["issue-1"] = &api.IssueDetails{}
+	mock.detailsByIssue["issue-2"] = &api.IssueDetails{}
+	if next := worker.syncDetails(ctx, issues); next.gated || len(next.synced) != 2 {
+		t.Errorf("next cycle after a local defer: gated=%v synced=%d; want gated=false synced=2 (a local defer must not suppress the retry)",
+			next.gated, len(next.synced))
 	}
 }
 
@@ -1253,90 +1265,6 @@ func TestDetailsSyncPrunesStaleDocsAndAttachments(t *testing.T) {
 	}
 }
 
-// TestSetRateLimitedAdaptiveBackoff verifies M-3: when the API client reports a non-zero
-// future RateLimitResetAt(), setRateLimited() uses that time (+ 5s buffer) instead of the
-// 15-min default. The pinned fake clock makes the arithmetic exact — no tolerance window.
-func TestSetRateLimitedAdaptiveBackoff(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-
-	clock := newFakeClock()
-	mock := newMockAPIClient()
-	serverResetAt := clock.now().Add(30 * time.Minute)
-	mock.rateLimitResetAt = serverResetAt
-
-	worker := NewWorker(mock, store, Config{Interval: time.Hour})
-	clock.install(worker)
-
-	worker.setRateLimited()
-
-	if want := serverResetAt.Add(5 * time.Second); !worker.rateLimitExpiry.Equal(want) {
-		t.Errorf("rateLimitExpiry = %v, want exactly %v (server reset + 5s buffer)", worker.rateLimitExpiry, want)
-	}
-}
-
-// TestSetRateLimitedFallback verifies M-3: with no usable server reset —
-// zero (never reported) or already past — setRateLimited() falls back to the
-// 15-minute fixed backoff, exactly, on the pinned fake clock.
-func TestSetRateLimitedFallback(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]func(now time.Time) time.Time{
-		"zero reset": func(time.Time) time.Time { return time.Time{} },
-		"past reset": func(now time.Time) time.Time { return now.Add(-time.Minute) },
-	}
-	for name, resetAt := range cases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			store := openTestStore(t)
-			defer store.Close()
-
-			clock := newFakeClock()
-			mock := newMockAPIClient()
-			mock.rateLimitResetAt = resetAt(clock.now())
-
-			worker := NewWorker(mock, store, Config{Interval: time.Hour})
-			clock.install(worker)
-
-			worker.setRateLimited()
-
-			if want := clock.now().Add(15 * time.Minute); !worker.rateLimitExpiry.Equal(want) {
-				t.Errorf("rateLimitExpiry = %v, want exactly %v (the 15-minute fallback)", worker.rateLimitExpiry, want)
-			}
-		})
-	}
-}
-
-// TestIsRateLimitedFlipsWhenClockCrossesExpiry: the seam's most basic win —
-// isRateLimited() is a pure now-vs-expiry comparison, so advancing the fake
-// clock across rateLimitExpiry must flip it false with zero real waiting.
-func TestIsRateLimitedFlipsWhenClockCrossesExpiry(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-
-	clock := newFakeClock()
-	mock := newMockAPIClient() // zero reset → the 15-minute fallback backoff
-	worker := NewWorker(mock, store, Config{Interval: time.Hour})
-	clock.install(worker)
-
-	worker.setRateLimited()
-	if !worker.isRateLimited() {
-		t.Fatal("isRateLimited() = false immediately after setRateLimited()")
-	}
-
-	clock.advance(15*time.Minute - time.Second)
-	if !worker.isRateLimited() {
-		t.Error("isRateLimited() = false one second before expiry, want true")
-	}
-
-	clock.advance(2 * time.Second)
-	if worker.isRateLimited() {
-		t.Error("isRateLimited() = true after the clock crossed expiry, want false")
-	}
-}
-
 // =============================================================================
 // Cold-Start Budget Probe Tests
 // =============================================================================
@@ -1377,10 +1305,12 @@ func TestProbeSeedsBudgetBeforeFirstSync(t *testing.T) {
 }
 
 // TestProbeRateLimitedDelaysSyncStart verifies the exhausted-account path:
-// when the probe itself reports RATELIMITED, the worker marks itself
-// rate-limited (honoring the budget's server-reported reset) and delays the
-// entire sync start instead of bursting into the wall — and shutdown during
-// that delay exits cleanly without firing a post-stop sync cycle.
+// when the probe itself reports RATELIMITED, the worker delays the entire sync
+// start (honoring the budget's server-reported reset) instead of bursting into
+// the wall — and shutdown during that delay exits cleanly without firing a
+// post-stop sync cycle. The delay is the worker's ONLY remaining rate-limit
+// decision, and it is a scheduling one: whether a request may go is the
+// budget's call alone.
 func TestProbeRateLimitedDelaysSyncStart(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
@@ -1412,14 +1342,63 @@ func TestProbeRateLimitedDelaysSyncStart(t *testing.T) {
 	if got := atomic.LoadInt32(&mock.getTeamsCalls); got != 0 {
 		t.Errorf("GetTeams calls during rate-limited probe delay = %d, want 0", got)
 	}
-	if !worker.isRateLimited() {
-		t.Error("worker should report rate-limited after a RATELIMITED probe")
-	}
 
 	// Stop must interrupt the delay; no sync cycle may fire on the way out.
 	worker.Stop()
 	if order := mock.callOrder(); len(order) != 1 || order[0] != "GetViewer" {
 		t.Errorf("call order after stop = %v, want just the probe [GetViewer]", order)
+	}
+}
+
+// TestProbeRateLimitedBackoffArithmetic pins the cold-start delay exactly, on
+// the pinned fake clock — the assertions that used to live on setRateLimited
+// (M-3), ported to the one place that still computes a wait. A usable
+// server-reported reset wins; zero or already-past falls back to
+// coldStartBackoff, the bound the budget applies to its own headerless case.
+func TestProbeRateLimitedBackoffArithmetic(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		resetAt func(now time.Time) time.Time
+		want    func(now time.Time) time.Duration
+	}{
+		"server reset wins": {
+			resetAt: func(now time.Time) time.Time { return now.Add(30 * time.Minute) },
+			want:    func(time.Time) time.Duration { return 30*time.Minute + 5*time.Second },
+		},
+		"zero reset falls back": {
+			resetAt: func(time.Time) time.Time { return time.Time{} },
+			want:    func(time.Time) time.Duration { return coldStartBackoff },
+		},
+		"past reset falls back": {
+			resetAt: func(now time.Time) time.Time { return now.Add(-time.Minute) },
+			want:    func(time.Time) time.Duration { return coldStartBackoff },
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := openTestStore(t)
+			defer store.Close()
+
+			clock := newFakeClock()
+			mock := newMockAPIClient()
+			mock.viewerErr = errors.New("GraphQL error: RATELIMITED: rate limit exceeded")
+			mock.rateLimitResetAt = tc.resetAt(clock.now())
+
+			worker := NewWorker(mock, store, Config{Interval: time.Hour})
+			clock.install(worker)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			worker.Start(ctx)
+			// Nothing fires the fake timer, so the worker parks here; the
+			// requested duration is the assertion.
+			if got, want := <-clock.timerSet, tc.want(clock.now()); got != want {
+				t.Errorf("probe delay = %v, want exactly %v", got, want)
+			}
+			worker.Stop()
+		})
 	}
 }
 
@@ -1446,9 +1425,6 @@ func TestProbeFailureProceeds(t *testing.T) {
 
 	if atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
 		t.Fatal("sync never proceeded past a non-rate-limit probe failure")
-	}
-	if worker.isRateLimited() {
-		t.Error("a non-rate-limit probe failure must not mark the worker rate-limited")
 	}
 }
 
@@ -1572,6 +1548,11 @@ func containsOp(ops []string, op string) bool {
 // probe redundant there), a lean cycle issues neither but runs the projects
 // change-detection probe instead; every non-skipped cycle issues GetTeams
 // (the cheap team enumeration the issues sync needs either way).
+//
+// Only valid for a full cycle whose drains LANDED: a deferred metadata drain
+// falls back to the projects probe (see
+// TestStarvedFullCycleFallsBackToProjectsProbe), which is precisely the case
+// this helper's probe assertion would read as a lean cycle.
 func assertCycleOps(t *testing.T, label string, ops []string, wantFull bool) {
 	t.Helper()
 	if !containsOp(ops, "GetTeams") {
@@ -1742,40 +1723,123 @@ func TestRestartHonorsPersistedFullCycleTimestamp(t *testing.T) {
 	})
 }
 
-// TestBudgetSkippedCycleLeavesFullCycleDue: a budget-skipped cycle runs
-// nothing, so it must not stamp the persisted timestamp — the full sync stays
-// due and fires on the next unblocked cycle rather than silently stretching
-// the metadata staleness bound.
-func TestBudgetSkippedCycleLeavesFullCycleDue(t *testing.T) {
+// TestStarvedFullCycleLeavesFullCycleDue: a full cycle whose skeleton-tier
+// drains were refused by the admission ladder drained nothing, so it must not
+// stamp the persisted timestamp. Prunes are licensed exclusively by complete
+// drains — stamping a starved cycle would stretch the metadata staleness bound
+// by a whole full-sync interval, silently. The still-due full cycle fires again
+// as soon as the budget admits it.
+func TestStarvedFullCycleLeavesFullCycleDue(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 	ctx := context.Background()
 
 	worker, mock, _ := cycleTestWorker(t, store)
-	budget := &mockBudgetReporter{count: 1300, pct: 87.0} // >80% — skip
-	worker.SetBudgetReporter(budget)
+	// The LowBudget preflight's refusal, as GetWorkspace/GetTeamMetadata
+	// report it: declined before the query was paid for.
+	mock.workspaceErr = fmt.Errorf("workspace: %w", api.ErrBudget)
+	mock.teamMetadataErr = fmt.Errorf("team metadata team-1: %w", api.ErrBudget)
+
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("starved cycle: %v", err)
+	}
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("GetSyncSchedule after starved cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
+	}
+
+	// Budget recovers — the still-due full cycle fires, and now stamps.
+	mock.workspaceErr, mock.teamMetadataErr = nil, nil
+	ops := opsDuring(mock, func() {
+		if err := worker.syncAllTeams(ctx); err != nil {
+			t.Fatalf("recovered cycle: %v", err)
+		}
+	})
+	assertCycleOps(t, "first recovered cycle", ops, true)
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); err != nil {
+		t.Errorf("GetSyncSchedule after recovered cycle: %v, want a stamp", err)
+	}
+}
+
+// TestStarvedFullCycleFallsBackToProjectsProbe: withholding the stamp keeps
+// the worker in full mode for the rest of the budget window, which would
+// otherwise leave projects with NO change detection at all — full mode skips
+// the probe, and its drains are the ones being refused. The probe does not go
+// through the LowBudget preflight (GetTeamProjectsNewestPage → fetchConn,
+// admitted at its measured ~1K cost against the preflight's 10000 default), so
+// there is a band where it still fits, and it persists what it fetches. Per
+// deferred drain, not per cycle: a team whose metadata landed does not pay for
+// a redundant probe.
+//
+// The initiatives probe gets NO such fallback, and that asymmetry is the
+// assertion: it persists nothing of its own, escalating only to the
+// syncWorkspace that was just refused, so firing it here would spend a request
+// on a signal nothing can act on.
+//
+// Not parallel: it installs a meter provider (see metrics_test.go).
+func TestStarvedFullCycleFallsBackToProjectsProbe(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, _ := cycleTestWorker(t, store)
+	mock.workspaceErr = fmt.Errorf("workspace: %w", api.ErrBudget)
+	mock.teamMetadataErr = fmt.Errorf("team metadata team-1: %w", api.ErrBudget)
+
+	ops := opsDuring(mock, func() {
+		if err := worker.syncCycle(ctx, cycleFull); err != nil {
+			t.Fatalf("starved full cycle: %v", err)
+		}
+	})
+	if !containsOp(ops, "GetTeamProjectsNewestPage") {
+		t.Errorf("ops = %v, want GetTeamProjectsNewestPage (a deferred metadata drain falls back to its probe)", ops)
+	}
+	if containsOp(ops, "GetInitiativesProbe") {
+		t.Errorf("ops = %v, want no GetInitiativesProbe (it escalates only to the refused syncWorkspace)", ops)
+	}
+
+	// The fallback changes neither the stamp rule nor the outcome.
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("GetSyncSchedule after starved cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
+	}
+	if got := cycleOutcomeCount(t, collectMetrics(t, reader), "full", "deferred"); got != 1 {
+		t.Errorf("cycle_duration{mode=full,outcome=deferred} count = %d, want 1", got)
+	}
+}
+
+// TestFailedFullCycleStillStamps pins the deliberate asymmetry: a NON-budget
+// failure stamps as before. Withholding on it would pin the worker in the
+// expensive full mode for as long as the failure lasts, paying full price per
+// attempt — a partial outage must not become permanent maximum spend. Only a
+// deferral, which is refused before the query is paid for and clears at the
+// window reset, is cheap enough to retry indefinitely.
+//
+// It also gets no projects-probe fallback: that fallback exists because the
+// stamp was withheld, and this cycle stamped.
+func TestFailedFullCycleStillStamps(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	worker, mock, _ := cycleTestWorker(t, store)
+	mock.workspaceErr = errors.New("boom: internal server error")
+	mock.teamMetadataErr = errors.New("boom: internal server error")
 
 	ops := opsDuring(mock, func() {
 		if err := worker.syncAllTeams(ctx); err != nil {
-			t.Fatalf("budget-skipped cycle: %v", err)
+			t.Fatalf("failed-drain cycle: %v", err)
 		}
 	})
-	if len(ops) != 0 {
-		t.Errorf("budget-skipped cycle issued ops %v, want none", ops)
+	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); err != nil {
+		t.Errorf("GetSyncSchedule after failed-drain cycle: %v, want a stamp (only deferrals withhold)", err)
 	}
-	if _, err := store.Queries().GetSyncSchedule(ctx, ScheduleKeyFullCycle); !errors.Is(err, sql.ErrNoRows) {
-		t.Errorf("GetSyncSchedule after skipped cycle: err = %v, want sql.ErrNoRows (no stamp)", err)
-	}
-
-	// Budget recovers — the still-due full cycle fires.
-	budget.count, budget.pct = 100, 10.0
-	ops = opsDuring(mock, func() {
-		if err := worker.syncAllTeams(ctx); err != nil {
-			t.Fatalf("unblocked cycle: %v", err)
+	for _, op := range []string{"GetInitiativesProbe", "GetTeamProjectsNewestPage"} {
+		if containsOp(ops, op) {
+			t.Errorf("ops = %v, want no %s (a non-budget failure stamps, so it needs no fallback)", ops, op)
 		}
-	})
-	assertCycleOps(t, "first unblocked cycle", ops, true)
+	}
 }
 
 // =============================================================================
@@ -2023,61 +2087,20 @@ func TestIssueIDReconcileScheduleHonoredAcrossRestart(t *testing.T) {
 // Budget Gate Tests
 // =============================================================================
 
-func TestSyncAllTeamsSkipsWhenBudgetExceeded(t *testing.T) {
+// TestSyncDetailsDefersWhenLadderRefuses: the admission ladder — not a
+// worker-side threshold — decides that a detail batch is too expensive right
+// now. Its refusal arrives as api.ErrDeferred from the fetch, and the whole
+// batch must land in pending_detail_sync with the outcome gated so a draining
+// loop stops.
+func TestSyncDetailsDefersWhenLadderRefuses(t *testing.T) {
 	t.Parallel()
 	store := openTestStore(t)
 	defer store.Close()
 
 	mock := newMockAPIClient()
-	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
-
-	cfg := Config{Interval: 1 * time.Hour} // won't tick
-	worker := NewWorker(mock, store, cfg)
-	worker.SetBudgetReporter(&mockBudgetReporter{count: 1300, pct: 87.0}) // >80%
-
-	err := worker.syncAllTeams(context.Background())
-	if err != nil {
-		t.Fatalf("syncAllTeams should succeed (skip), got: %v", err)
-	}
-
-	// GetTeams should NOT have been called since we skipped
-	if atomic.LoadInt32(&mock.getTeamsCalls) != 0 {
-		t.Errorf("expected 0 GetTeams calls when budget exceeded, got %d", mock.getTeamsCalls)
-	}
-}
-
-func TestSyncAllTeamsProceedsWhenBudgetOK(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-
-	mock := newMockAPIClient()
-	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
-
+	mock.detailsErr = fmt.Errorf("query IssueDetailsBatch deferred by budget ladder (detail reserve): %w", api.ErrDeferred)
 	cfg := Config{Interval: 1 * time.Hour}
 	worker := NewWorker(mock, store, cfg)
-	worker.SetBudgetReporter(&mockBudgetReporter{count: 500, pct: 33.0}) // <80%
-
-	_ = worker.syncAllTeams(context.Background())
-
-	if atomic.LoadInt32(&mock.getTeamsCalls) == 0 {
-		t.Error("expected GetTeams to be called when budget is OK")
-	}
-}
-
-// TestSyncDetailsDefersWhenBudgetHigh: the budget gate — above the defer
-// threshold, syncDetails must not spend an API call; the whole batch lands in
-// pending_detail_sync (deferred) and the outcome is gated so a draining loop
-// stops.
-func TestSyncDetailsDefersWhenBudgetHigh(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-
-	mock := newMockAPIClient()
-	cfg := Config{Interval: 1 * time.Hour}
-	worker := NewWorker(mock, store, cfg)
-	worker.SetBudgetReporter(&mockBudgetReporter{count: 1100, pct: 73.0}) // >70%
 
 	issues := []issueRef{
 		{ID: "issue-1", Identifier: "TST-1"},
@@ -2087,55 +2110,19 @@ func TestSyncDetailsDefersWhenBudgetHigh(t *testing.T) {
 	outcome := worker.syncDetails(context.Background(), issues)
 
 	if !outcome.gated {
-		t.Error("budget gate should report gated")
+		t.Error("a ladder deferral should report gated")
 	}
 	if len(outcome.deferred) != 2 || len(outcome.synced) != 0 {
 		t.Errorf("outcome = %d deferred / %d synced, want 2 / 0", len(outcome.deferred), len(outcome.synced))
 	}
-	if calls := atomic.LoadInt32(&mock.detailsCalls); calls != 0 {
-		t.Errorf("expected 0 GetIssueDetailsBatch calls when budget exceeded, got %d", calls)
-	}
 
-	// Should have been queued to pending_detail_sync, not API-called
+	// Should have been queued to pending_detail_sync for the next cycle.
 	pending, err := store.Queries().ListPendingDetailSync(context.Background())
 	if err != nil {
 		t.Fatalf("ListPendingDetailSync failed: %v", err)
 	}
 	if len(pending) != 2 {
 		t.Errorf("expected 2 pending detail syncs, got %d", len(pending))
-	}
-}
-
-func TestSyncDetailsSyncsWhenBudgetOK(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-
-	mock := newMockAPIClient()
-	cfg := Config{Interval: 1 * time.Hour}
-	worker := NewWorker(mock, store, cfg)
-	worker.SetBudgetReporter(&mockBudgetReporter{count: 300, pct: 20.0}) // <70%
-
-	issues := []issueRef{
-		{ID: "issue-1", Identifier: "TST-1"},
-	}
-
-	outcome := worker.syncDetails(context.Background(), issues)
-
-	if outcome.gated {
-		t.Error("a clean sync should not gate")
-	}
-	if len(outcome.synced) != 1 || len(outcome.deferred) != 0 {
-		t.Errorf("outcome = %d synced / %d deferred, want 1 / 0", len(outcome.synced), len(outcome.deferred))
-	}
-
-	// Should NOT be in pending queue (was synced directly)
-	pending, err := store.Queries().ListPendingDetailSync(context.Background())
-	if err != nil {
-		t.Fatalf("ListPendingDetailSync failed: %v", err)
-	}
-	if len(pending) != 0 {
-		t.Errorf("expected 0 pending detail syncs (direct sync), got %d", len(pending))
 	}
 }
 
@@ -2368,9 +2355,6 @@ func TestSyncDetailsFetchFailureDefersAll(t *testing.T) {
 	if len(outcome.deferred) != 2 || len(outcome.synced) != 0 {
 		t.Errorf("outcome = %d deferred / %d synced, want 2 / 0", len(outcome.deferred), len(outcome.synced))
 	}
-	if worker.isRateLimited() {
-		t.Error("a non-rate-limit failure must not set the rate-limit backoff")
-	}
 
 	pending, err := store.Queries().ListPendingDetailSync(ctx)
 	if err != nil {
@@ -2419,22 +2403,6 @@ func TestDrainStopsWhenGated(t *testing.T) {
 	}
 	if len(pending) != detailsBatchSize+1 {
 		t.Errorf("pending = %d, want %d (gated batches keep their retry)", len(pending), detailsBatchSize+1)
-	}
-}
-
-func TestBudgetExceedsWithNilReporter(t *testing.T) {
-	t.Parallel()
-	store := openTestStore(t)
-	defer store.Close()
-
-	mock := newMockAPIClient()
-	cfg := Config{Interval: 1 * time.Hour}
-	worker := NewWorker(mock, store, cfg)
-	// No budget reporter set
-
-	// Should return false (safe default)
-	if worker.budgetExceeds(50.0) {
-		t.Error("budgetExceeds should return false with nil reporter")
 	}
 }
 

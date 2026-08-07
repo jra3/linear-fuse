@@ -13,6 +13,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -88,8 +89,9 @@ func outcomeValue(t *testing.T, rm metricdata.ResourceMetrics, outcome string) i
 
 // TestSyncDetailsRecordsOutcomes: one clean and one unclean issue through
 // syncDetails land as detail_outcomes datapoints — synced for the stamped
-// issue, deferred for the re-enqueued one — and a whole-batch gate (budget)
-// folds its deferrals into the same series.
+// issue, deferred for the re-enqueued one — and a whole-batch gate (the
+// admission ladder refusing the fetch) folds its deferrals into the same
+// series.
 func TestSyncDetailsRecordsOutcomes(t *testing.T) {
 	reader := withTestMeter(t)
 	store := openTestStore(t)
@@ -121,8 +123,8 @@ func TestSyncDetailsRecordsOutcomes(t *testing.T) {
 		t.Errorf("detail_outcomes{outcome=deferred} = %d, want 1", got)
 	}
 
-	// Gate path: budget over the defer threshold defers the whole batch.
-	worker.SetBudgetReporter(&mockBudgetReporter{count: 2000, pct: 90})
+	// Gate path: the ladder refuses the fetch, deferring the whole batch.
+	mock.detailsErr = fmt.Errorf("query IssueDetailsBatch deferred by budget ladder (detail reserve): %w", api.ErrDeferred)
 	gated := worker.syncDetails(ctx, []issueRef{
 		{ID: "issue-g1", Identifier: "TST-3"},
 		{ID: "issue-g2", Identifier: "TST-4"},
@@ -228,6 +230,120 @@ func TestSyncCycleDurationRecorded(t *testing.T) {
 	}
 	if len(h.DataPoints) != 1 || h.DataPoints[0].Count != 1 {
 		t.Errorf("cycle_duration datapoints = %d (count %v), want one sample", len(h.DataPoints), h.DataPoints)
+	}
+}
+
+// cycleOutcomeCount returns the cycle_duration sample count for one
+// mode+outcome series, or -1 when no such datapoint exists. The per-series
+// Count is the point of the outcome attribute: the buckets cannot separate a
+// ~0s deferred cycle from a healthy one (default bounds start at 5 — seconds
+// here), but the counts can.
+func cycleOutcomeCount(t *testing.T, rm metricdata.ResourceMetrics, mode, outcome string) uint64 {
+	t.Helper()
+	m, ok := findMetric(rm, "linearfs.sync.cycle_duration")
+	if !ok {
+		return 0
+	}
+	h, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("cycle_duration data is %T, want Histogram[float64]", m.Data)
+	}
+	for _, dp := range h.DataPoints {
+		md, mok := dp.Attributes.Value(attribute.Key("mode"))
+		o, ook := dp.Attributes.Value(attribute.Key("outcome"))
+		if mok && ook && md.AsString() == mode && o.AsString() == outcome {
+			return dp.Count
+		}
+	}
+	return 0
+}
+
+// TestCycleOutcomeRecorded: a full cycle carries what its drains did. The
+// three values are not decorative — deferred is the one that withheld the
+// stamp, and failed is the one that stamped ANYWAY (the accepted asymmetry),
+// so recording both as "complete" would hide exactly the case worth watching.
+func TestCycleOutcomeRecorded(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour, FullSyncInterval: time.Hour})
+
+	// Driven at cycleFull directly: the mode schedule is worker_test's
+	// subject, this test's is the attribute each mode carries.
+	if err := worker.syncCycle(ctx, cycleFull); err != nil {
+		t.Fatalf("complete cycle: %v", err)
+	}
+	if got := cycleOutcomeCount(t, collectMetrics(t, reader), "full", "complete"); got != 1 {
+		t.Errorf("cycle_duration{mode=full,outcome=complete} count = %d, want 1", got)
+	}
+
+	// The ladder refuses the workspace drain: deferred (and, per the stamp
+	// rule, this is the cycle that leaves the full sync due).
+	mock.workspaceErr = fmt.Errorf("workspace: %w", api.ErrBudget)
+	if err := worker.syncCycle(ctx, cycleFull); err != nil {
+		t.Fatalf("deferred cycle: %v", err)
+	}
+	if got := cycleOutcomeCount(t, collectMetrics(t, reader), "full", "deferred"); got != 1 {
+		t.Errorf("cycle_duration{mode=full,outcome=deferred} count = %d, want 1", got)
+	}
+
+	// A non-budget failure: recorded as failed, distinct from both.
+	mock.workspaceErr = errors.New("boom: internal server error")
+	if err := worker.syncCycle(ctx, cycleFull); err != nil {
+		t.Fatalf("failed cycle: %v", err)
+	}
+	rm := collectMetrics(t, reader)
+	if got := cycleOutcomeCount(t, rm, "full", "failed"); got != 1 {
+		t.Errorf("cycle_duration{mode=full,outcome=failed} count = %d, want 1", got)
+	}
+	if got := cycleOutcomeCount(t, rm, "full", "complete"); got != 1 {
+		t.Errorf("cycle_duration{mode=full,outcome=complete} count = %d, want 1 (unchanged)", got)
+	}
+}
+
+// TestLeanCycleCarriesNoOutcome: lean cycles run no skeleton-tier drain and
+// never stamp, so "complete" would assert something no code checks. The
+// attribute is absent, not defaulted.
+func TestLeanCycleCarriesNoOutcome(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.teams = []api.Team{{ID: "team-1", Key: "TST", Name: "Test"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour, FullSyncInterval: time.Hour})
+
+	// First cycle is full (fresh store) and stamps; the second runs lean.
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("full cycle: %v", err)
+	}
+	if err := worker.syncAllTeams(ctx); err != nil {
+		t.Fatalf("lean cycle: %v", err)
+	}
+
+	m, ok := findMetric(collectMetrics(t, reader), "linearfs.sync.cycle_duration")
+	if !ok {
+		t.Fatal("linearfs.sync.cycle_duration not recorded")
+	}
+	h := m.Data.(metricdata.Histogram[float64])
+	var lean int
+	for _, dp := range h.DataPoints {
+		md, _ := dp.Attributes.Value(attribute.Key("mode"))
+		if md.AsString() != "lean" {
+			continue
+		}
+		lean++
+		if _, ok := dp.Attributes.Value(attribute.Key("outcome")); ok {
+			t.Errorf("lean datapoint carries an outcome attribute: %v", dp.Attributes)
+		}
+	}
+	if lean != 1 {
+		t.Errorf("lean datapoints = %d, want 1", lean)
 	}
 }
 
