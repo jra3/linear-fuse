@@ -172,7 +172,7 @@ func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, name
 		attachment: att,
 		issueID:    n.issueID,
 	}
-	return n.newRenderInode(ctx, out, name, node, externalAttachmentIno(att.ID), 30*time.Second), 0
+	return n.newRenderInode(ctx, out, name, node, externalAttachmentIno(att.ID), n.lfs.entryTimeout()), 0
 }
 
 // EmbeddedFileNode represents a file in the /attachments/ directory

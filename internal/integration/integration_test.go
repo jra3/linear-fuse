@@ -228,28 +228,36 @@ func sweepAbandonedTestDirs() {
 // out an expiry derive their wait from the mount's actual policy instead of a
 // literal that can drift from it.
 //
-// They are SHORT, and that is the whole reason the offline suite runs in ~6s
-// rather than ~65s: the two timeout-driven revalidation tests wait out a real
-// expiry, and the expiry belongs to the kernel and runs on the kernel's clock —
-// no injected clock can bring it forward, so shortening the timeout
-// (fs.WithKernelCacheTimeouts) is the only lever there has ever been.
+// Only the ENTRY timeout is shortened, and that is the whole reason the offline
+// suite runs in ~6s rather than ~65s: the two timeout-driven revalidation tests
+// wait out a real expiry, and the expiry belongs to the kernel and runs on the
+// kernel's clock — no injected clock can bring it forward, so shortening the
+// timeout (fs.WithKernelCacheTimeouts) is the only lever there has ever been.
+//
+// The ATTR timeout deliberately stays at production's default. Shortening it
+// buys no speed — entry is the lever; attr is irrelevant to both revalidation
+// tests — and it would cost a guard: at 60s a stale page cache can only be
+// dropped by an explicit InvalidateKernelInode, so the suite's write-then-read
+// assertions prove the invalidation call rather than passing on clock expiry.
 //
 // Shortening was tried once before and REVERTED, on the reading that
 // TestRemoteUpdateVisibleAfterKernelRevalidation had become order-dependent —
 // passing alone, failing about one run in three in the full suite, with
 // issue.md apparently never refreshing. That diagnosis was wrong, and #414 is
-// the correction: three sites in issues.go handed issue directories a HARDCODED
-// 30s entry timeout instead of the mount's, so this constant governed nothing
-// below teams/{KEY}/issues/. Every "failure" was simply a test whose wait budget
-// (this timeout + a 10s poll) fell short of the 30s that was actually in force —
+// the correction: a family of Lookup/Mkdir sites handed their children a
+// HARDCODED 30s timeout instead of the mount's, so this constant governed
+// nothing beneath them — issue directories (issues.go), project and initiative
+// directories (projects.go, initiatives.go), and attachment files
+// (attachments.go). Every "failure" was simply a test whose wait budget (this
+// timeout + a 10s poll) fell short of the 30s that was actually in force —
 // which is also why it looked order-dependent rather than constant. Raise the
 // poll to 90s against the old code and it passes in 30.5s, every time.
 //
-// So: if these are ever shortened further and a revalidation test starts
-// failing, suspect another site pinning its own timeout before suspecting the
-// refresh path.
+// So: if the entry timeout is ever shortened further and a revalidation test
+// starts failing, suspect another site pinning its own timeout before
+// suspecting the refresh path.
 const (
-	fixtureAttrTimeout  = 1 * time.Second
+	fixtureAttrTimeout  = fs.DefaultAttrTimeout
 	fixtureEntryTimeout = 1 * time.Second
 )
 
