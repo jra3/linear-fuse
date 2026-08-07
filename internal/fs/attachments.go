@@ -146,8 +146,11 @@ func (n *AttachmentsNode) buildAttachment(ctx context.Context, name string, entr
 	} else {
 		out.Attr.Size = 1024 * 1024 // Placeholder for lazy-fetch
 	}
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
+	// The mount's configured bound, not a literal: a hardcode here silently
+	// overrides WithKernelCacheTimeouts for this surface, which is exactly the
+	// defect #414 fixed in the issue-directory sites.
+	out.SetAttrTimeout(n.lfs.entryTimeout())
+	out.SetEntryTimeout(n.lfs.entryTimeout())
 
 	// The bridge dedups AFTER this handler returns: push the fresh file
 	// metadata into the node it will keep (see refresh.go).

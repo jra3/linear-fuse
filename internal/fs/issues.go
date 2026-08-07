@@ -146,7 +146,7 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
-	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
+	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), n.lfs.entryTimeout()), 0
 }
 
 // looksLikeIdentifier checks if a name looks like a Linear issue identifier
@@ -219,7 +219,7 @@ func (n *IssuesNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	}
 
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
-	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
+	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), n.lfs.entryTimeout()), 0
 }
 
 // createIssue is the issues/_create surface's onFlush: writing a full issue
@@ -726,5 +726,5 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 
 	// Return the new issue as a directory node (Mkdir must return a directory)
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
-	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), 30*time.Second), 0
+	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), n.lfs.entryTimeout()), 0
 }
