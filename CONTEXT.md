@@ -141,7 +141,7 @@ rendered from clears every field the writer never saw (measured: a byte-for-byte
 identical re-save of `issue.md` emitting `estimate: nil`). One entity behind both
 makes saving back what you read a genuine no-op — while nothing else writes in
 between; see [[adopt-up]] for what two concurrent writers get — and a deliberate
-edit send only the field it changed.
+edit sends only the field it changed.
 
 What keeps that entity fresh is [[adopt-up]] — the write path pushing to it. A
 committed edit through the canonical file adopts onto the FILE node and then
@@ -657,6 +657,13 @@ models a clear as null rather than `0`: a double that answers a clear with a
 value makes the clear re-send itself forever, and the non-convergence looks like
 a production bug (`internal/testutil/mockmutation`).
 
+Regression-tested at the mount (`internal/integration/atomicsave_baseline_test.go`:
+an in-place save then an atomic save restoring what it replaced, asserted against
+what the mutator RECEIVED — `mockmutation.Client.Updates` — since the stored value
+alone cannot tell a dropped write from one that persisted the same value), and the
+convergence half in `marshal` plus the double's own contract
+(`TestClearedEstimateRoundTripsAsNil`).
+
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are
 constructed — the non-symlink complement to Symlink views (`symlinkNode`), and
@@ -742,8 +749,9 @@ and symlinks.
 ### Entity cell (`entityCell`)
 The **deep module** owning the volatile-state slot every entity-carrying
 directory node embeds: one lock-guarded field the nodeRefresher seam swaps
-when go-fuse dedups a later Lookup onto an already-known node. Before it, each of
-the ~11 regular entity nodes (`TeamNode`, `IssuesNode`, `UserNode`, `CyclesNode`,
+when go-fuse dedups a later Lookup onto an already-known node — and, on the three
+entity directories, the slot [[adopt-up]] writes from the write side too.
+Before it, each of the ~11 regular entity nodes (`TeamNode`, `IssuesNode`, `UserNode`, `CyclesNode`,
 `RecentNode`, `InitiativeNode`, `IssueDirectoryNode`, `ProjectsNode`, the three
 by/ filter nodes) hand-wrote the identical `entity()/setEntity()` lock dance, so
 the "every read/write of the entity goes under the lock" discipline was enforced
@@ -833,7 +841,10 @@ edit as a byte-for-byte success. **Arming it in the flush rather than in
 on the rename tail meant a later in-place edit left the older atomic-save bytes
 pinned, and a forget-and-re-Lookup inside the window served them — read-your-writes
 running *backwards* (#381).
-It is bounded by **time** (`pinTTL`), **not consumed by the first Lookup** — a
+It is bounded by **time** (`pinTTL()` — 10s in production, overridable in-process
+by `SetTestPinTTL` so a mount-level test can wait the window out in milliseconds
+off the same value the pin is armed from, rather than duplicating the constant),
+**not consumed by the first Lookup** — a
 client's verification is several syscalls (stat, then open+read), each able to drive
 its own Lookup after the rename invalidation, so all of them must answer alike; the
 TTL is now the outer bound on a pin outliving its truth for a *remote* reason
