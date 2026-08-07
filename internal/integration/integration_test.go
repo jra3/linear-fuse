@@ -234,24 +234,39 @@ func sweepAbandonedTestDirs() {
 // kernel's clock — no injected clock can bring it forward, so shortening the
 // timeout (fs.WithKernelCacheTimeouts) is the only lever there has ever been.
 //
-// The ATTR timeout deliberately stays at production's default. Shortening it
-// buys no speed — entry is the lever; attr is irrelevant to both revalidation
-// tests — and it would cost a guard: at 60s a stale page cache can only be
-// dropped by an explicit InvalidateKernelInode, so the suite's write-then-read
-// assertions prove the invalidation call rather than passing on clock expiry.
+// The ATTR timeout stays at production's default, but it governs only HALF the
+// mount, and the half it misses is the half this branch touched. newDirInode and
+// newFileInode (nodeattr.go) and fillRenderEntry/newRenderInode (renderfile.go)
+// each apply their SINGLE timeout argument to both SetAttrTimeout and
+// SetEntryTimeout, so every surface a node builds through lfs.entryTimeout()
+// runs at fixtureEntryTimeout for ATTR as well: issue, project and initiative
+// directories, both attachment kinds, and — through the manifest
+// IssueDirectoryNode builds with that same timeout — issue.md and its sibling
+// manifest children. What fixtureAttrTimeout actually covers is the
+// inheritTimeout surfaces: teams, cycles, my/, by/, users, and the root views.
+//
+// It is worth keeping for that half. There a stale page cache can only be
+// dropped by an explicit InvalidateKernelInode, so a write-then-read assertion
+// proves the invalidation call rather than passing on clock expiry. Do not read
+// it as a mount-wide production-like attr guard; the attr/entry coupling above
+// is why it cannot be one, and closing that gap needs an attrTimeout() accessor
+// the mount does not publish today.
 //
 // Shortening was tried once before and REVERTED, on the reading that
 // TestRemoteUpdateVisibleAfterKernelRevalidation had become order-dependent —
 // passing alone, failing about one run in three in the full suite, with
 // issue.md apparently never refreshing. That diagnosis was wrong, and #414 is
-// the correction: a family of Lookup/Mkdir sites handed their children a
-// HARDCODED 30s timeout instead of the mount's, so this constant governed
-// nothing beneath them — issue directories (issues.go), project and initiative
-// directories (projects.go, initiatives.go), and attachment files
-// (attachments.go). Every "failure" was simply a test whose wait budget (this
-// timeout + a 10s poll) fell short of the 30s that was actually in force —
-// which is also why it looked order-dependent rather than constant. Raise the
-// poll to 90s against the old code and it passes in 30.5s, every time.
+// the correction — a defect CLASS, not one file: a family of Lookup/Mkdir sites
+// handed their children a HARDCODED 30s timeout instead of the mount's, so this
+// constant governed nothing beneath them. The full set fixed: issue directories
+// (issues.go — IssuesNode.Lookup, IssuesNode.Mkdir, ChildrenNode.Mkdir), project
+// directories (projects.go — ProjectsNode.Lookup and .Mkdir), initiative
+// directories (initiatives.go — InitiativesNode.Lookup), and both attachment
+// kinds (attachments.go — embedded files and external .link files). Every
+// "failure" was simply a test whose wait budget (this timeout + a 10s poll) fell
+// short of the 30s that was actually in force — which is also why it looked
+// order-dependent rather than constant. Raise the poll to 90s against the old
+// code and it passes in 30.5s, every time.
 //
 // So: if the entry timeout is ever shortened further and a revalidation test
 // starts failing, suspect another site pinning its own timeout before

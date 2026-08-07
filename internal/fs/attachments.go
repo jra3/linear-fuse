@@ -147,8 +147,12 @@ func (n *AttachmentsNode) buildAttachment(ctx context.Context, name string, entr
 		out.Attr.Size = 1024 * 1024 // Placeholder for lazy-fetch
 	}
 	// The mount's configured bound, not a literal: a hardcode here silently
-	// overrides WithKernelCacheTimeouts for this surface, which is exactly the
-	// defect #414 fixed in the issue-directory sites.
+	// overrides WithKernelCacheTimeouts for this surface, which is the defect
+	// class #414 fixed everywhere it appeared — issue directories (issues.go:
+	// IssuesNode.Lookup/.Mkdir, ChildrenNode.Mkdir), project directories
+	// (projects.go: ProjectsNode.Lookup/.Mkdir), initiative directories
+	// (initiatives.go: InitiativesNode.Lookup), and both attachment kinds here:
+	// this embedded file and the external .link below.
 	out.SetAttrTimeout(n.lfs.entryTimeout())
 	out.SetEntryTimeout(n.lfs.entryTimeout())
 
