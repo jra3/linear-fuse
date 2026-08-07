@@ -228,22 +228,56 @@ func sweepAbandonedTestDirs() {
 // out an expiry derive their wait from the mount's actual policy instead of a
 // literal that can drift from it.
 //
-// They are the PRODUCTION defaults, deliberately, and that costs the offline
-// suite ~60s: the two timeout-driven revalidation tests must wait out a real 30s
-// entry timeout, because the expiry belongs to the kernel and runs on the
+// Only the ENTRY timeout is shortened, and that is the whole reason the offline
+// suite runs in ~6s rather than ~65s: the two timeout-driven revalidation tests
+// wait out a real expiry, and the expiry belongs to the kernel and runs on the
 // kernel's clock — no injected clock can bring it forward, so shortening the
-// timeout is the only lever (fs.WithKernelCacheTimeouts exists for it).
+// timeout (fs.WithKernelCacheTimeouts) is the only lever there has ever been.
 //
-// Shortening was tried and REVERTED: at 1s and at 5s,
-// TestRemoteUpdateVisibleAfterKernelRevalidation becomes order-dependent — it
-// passes alone and fails roughly one run in three inside the full suite, with
-// issue.md never refreshing even after 10s of polling. Something earlier in the
-// suite leaves the node unable to refresh, and until that is understood a fast
-// suite here would mean a flaky one. See the ticket; the plumbing is in place
-// for when it is.
+// The ATTR timeout stays at production's default, but it governs only HALF the
+// mount, and the half it misses is the half this branch touched. newDirInode and
+// newFileInode (nodeattr.go) and fillRenderEntry/newRenderInode (renderfile.go)
+// each apply their SINGLE timeout argument to both SetAttrTimeout and
+// SetEntryTimeout, so every surface a node builds through lfs.entryTimeout()
+// runs at fixtureEntryTimeout for ATTR as well: issue, project and initiative
+// directories, both attachment kinds, and — through the manifest
+// IssueDirectoryNode builds with that same timeout — issue.md and its sibling
+// manifest children. What fixtureAttrTimeout actually covers is the
+// inheritTimeout surfaces: teams, cycles, my/, by/, users, and the root views.
+//
+// It is worth keeping for that half. There a stale page cache can only be
+// dropped by an explicit InvalidateKernelInode, so a write-then-read assertion
+// proves the invalidation call rather than passing on clock expiry. Do not read
+// it as a mount-wide production-like attr guard; the attr/entry coupling above
+// is why it cannot be one, and closing that gap needs an attrTimeout() accessor
+// the mount does not publish today.
+//
+// Shortening was tried once before and REVERTED, on the reading that
+// TestRemoteUpdateVisibleAfterKernelRevalidation had become order-dependent —
+// passing alone, failing about one run in three in the full suite, with
+// issue.md apparently never refreshing. That diagnosis was wrong, and #414 is
+// the correction — a defect CLASS, not one file: a family of Lookup/Mkdir sites
+// handed their children a HARDCODED 30s timeout instead of the mount's, so this
+// constant governed nothing beneath them. Fixed: issue directories (issues.go —
+// IssuesNode.Lookup, IssuesNode.Mkdir, ChildrenNode.Mkdir), project directories
+// (projects.go — ProjectsNode.Lookup and .Mkdir), initiative directories
+// (initiatives.go — InitiativesNode.Lookup), and both attachment kinds
+// (attachments.go — embedded files and external .link files). NOT fixed, and so
+// still deaf to this constant: the three render-file sites that pin a literal
+// 30s — relations.go (.rel), links.go (.link on projects/initiatives) and
+// updates.go (status updates). No revalidation test walks those files (they
+// read issue.md, project.md and team.md), so the gap costs nothing here.
+// Every "failure" was simply a test whose wait budget (this timeout + a 10s
+// poll) fell short of the 30s that was actually in force — which is also why it
+// looked order-dependent rather than constant. Raise the poll to 90s against
+// the old code and it passes in 30.5s, every time.
+//
+// So: if the entry timeout is ever shortened further and a revalidation test
+// starts failing, suspect a site pinning its own timeout — one of the three
+// above, or a new one — before suspecting the refresh path.
 const (
 	fixtureAttrTimeout  = fs.DefaultAttrTimeout
-	fixtureEntryTimeout = fs.DefaultEntryTimeout
+	fixtureEntryTimeout = 1 * time.Second
 )
 
 // kernelRevalidationWait bounds the poll below. It is a timeout, not a delay:
