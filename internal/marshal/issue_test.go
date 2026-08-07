@@ -1319,3 +1319,57 @@ func TestIssueMetaKeysCoverTheRenderedSidecar(t *testing.T) {
 		}
 	}
 }
+
+// TestClearedEstimateConverges pins the idempotency of a cleared estimate: a
+// clear must be a value the round trip can represent, so the save after it is a
+// no-op rather than the same clear again.
+//
+// Zero is deliberately NOT treated as "no estimate" on either side. Linear teams
+// can permit zero-point estimates (issueEstimationAllowZero, rendered into
+// team.md as estimate_allow_zero), so a `0` is a value a reader must be able to
+// see and a writer must be able to keep. Both directions therefore ask the same
+// question — is the pointer nil? — which is what makes a clear settle: it stores
+// null, the next render emits no key, and the next diff finds nothing to remove.
+//
+// A backend (or a test double) that answered a clear with `0` instead of null
+// would break that convergence, which is why the mock mutator models a clear as
+// nil — see TestClearedEstimateRoundTripsAsNil in internal/testutil/mockmutation.
+func TestClearedEstimateConverges(t *testing.T) {
+	cleared := 0.0
+	real := 5.0
+
+	t.Run("a zero estimate is rendered", func(t *testing.T) {
+		out, err := IssueToMarkdown(&api.Issue{Title: "T", Estimate: &cleared})
+		if err != nil {
+			t.Fatalf("render: %v", err)
+		}
+		if !strings.Contains(string(out), "estimate: 0") {
+			t.Errorf("a zero-point estimate was not rendered; a team that allows them would "+
+				"find the value invisible on the mount:\n%s", out)
+		}
+	})
+
+	t.Run("no key against a cleared (nil) estimate is no change", func(t *testing.T) {
+		update, err := MarkdownToIssueUpdate([]byte("---\ntitle: T\n---\nbody\n"),
+			&api.Issue{Title: "T", Description: "body"})
+		if err != nil {
+			t.Fatalf("diff: %v", err)
+		}
+		if _, present := update["estimate"]; present {
+			t.Errorf("saving a document with no estimate against an already-cleared estimate "+
+				"emitted %#v — the clear never converges and every save re-sends it", update)
+		}
+	})
+
+	t.Run("no key against a real estimate still clears", func(t *testing.T) {
+		update, err := MarkdownToIssueUpdate([]byte("---\ntitle: T\n---\nbody\n"),
+			&api.Issue{Title: "T", Description: "body", Estimate: &real})
+		if err != nil {
+			t.Fatalf("diff: %v", err)
+		}
+		got, present := update["estimate"]
+		if !present || got != nil {
+			t.Errorf("removing the estimate key must still clear a real estimate, got %#v", update)
+		}
+	})
+}

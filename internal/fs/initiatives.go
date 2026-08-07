@@ -118,7 +118,8 @@ func (i *InitiativeNode) manifest() *dirManifest {
 		// Built with the fresh render; newFileInode swaps in the bytes an earlier
 		// save pinned under this inode when one is still standing, for every
 		// editable file in one place (authoredpin.go, #379/#387).
-		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID}
+		node := &InitiativeInfoNode{BaseNode: BaseNode{lfs: lfs}, initiative: initiative, initiativeID: initiative.ID,
+			adoptUp: i.setEntity}
 		content := node.generateContent()
 		node.content = content
 		return node, content, 0
@@ -212,6 +213,10 @@ type InitiativeInfoNode struct {
 	editBuffer
 	initiative   api.Initiative
 	initiativeID string
+	// adoptUp pushes a committed edit's fresh initiative to the directory node
+	// that built this one, so the directory's entity — the baseline the
+	// atomic-save path diffs against — tracks our own writes (adoptup.go, #415).
+	adoptUp entityAdopter[api.Initiative]
 
 	// Write buffer and cached content
 }
@@ -354,7 +359,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				return edit.divergences("initiative", fresh.Name, fresh.Content)
 			},
 		},
-		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh },
+		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh; i.adoptUp.adopt(*fresh) },
 		restore: func() []byte { return i.generateContent() },
 		// initiative.md, its meta, and the projects/ listing.
 		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},

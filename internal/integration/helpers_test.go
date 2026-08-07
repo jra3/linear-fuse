@@ -20,16 +20,22 @@ import (
 // unaffected. Tests using this must not t.Parallel() (the fake is process-global
 // on the shared mount). Extra options (e.g. WithBodyReformat) tailor the fake to
 // one test's scenario; the defaults are what every other test gets.
-func enableMockMutations(t *testing.T, opts ...mockmutation.Option) {
+//
+// It returns the fake so a test can audit what mutations actually went out
+// (Client.Updates, #415) — nil in live mode, where nothing is injected and every
+// caller is behind a skipIfLiveAPI guard anyway. Most callers ignore it.
+func enableMockMutations(t *testing.T, opts ...mockmutation.Option) *mockmutation.Client {
 	t.Helper()
 	if liveAPIMode {
-		return // live mode uses the real API; the fake would mask it
+		return nil // live mode uses the real API; the fake would mask it
 	}
-	lfs.InjectTestMutationClient(mockmutation.New(append([]mockmutation.Option{
+	mock := mockmutation.New(append([]mockmutation.Option{
 		mockmutation.WithTeamKey(testTeamKey),
 		mockmutation.WithStore(lfs.GetStore()),
-	}, opts...)...))
+	}, opts...)...)
+	lfs.InjectTestMutationClient(mock)
 	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
+	return mock
 }
 
 // isControlFile reports whether a directory entry is a virtual control/feedback

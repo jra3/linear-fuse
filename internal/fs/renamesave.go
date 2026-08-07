@@ -154,6 +154,26 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 // projects/{slug}, initiatives/{slug}). Its resolve method accepts that file and
 // nothing else, so a save aimed anywhere else is refused with ENOTSUP and an
 // .error naming where the save CAN land.
+//
+// The save baseline — the entity the transient file node is built from, and so
+// the value every Flush diffs the written document against — is the directory
+// node's own entity, deliberately. It must be the SAME entity the canonical
+// file's render came from, because an absent frontmatter key means "clear this
+// field": diffed against a fresher entity than the document was rendered from,
+// a save clears every field the writer never saw (a measured instance: an
+// `estimate` set after the node was built, wiped by a byte-for-byte identical
+// re-save). Keeping the render and the baseline on one entity makes saving back
+// what you read a genuine no-op — while nothing else writes in between; two
+// writers are last-writer-wins, see adoptup.go — and a deliberate edit sends
+// only the field it changed.
+//
+// What keeps that entity fresh is the write path pushing to it, not the read
+// path reaching around it: a committed edit through the canonical file adopts
+// onto the FILE node and then propagates up to the directory node (adoptUp, see
+// each entity's manifest). Before that propagation existed, an in-place save
+// left this snapshot stale and the next atomic save diffed against a pre-write
+// entity — so a save restoring what the in-place save had replaced read as no
+// change, sent no mutation, and reported success (#415).
 type onlyFileTarget struct {
 	sink   errorSink
 	errKey string // the entity's .error key (the entity ID)

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,7 +57,32 @@ import (
 // The TTL remains the outer bound on how long a pin can outlive its truth — a
 // write that lands in Linear and is then changed by someone else, say — but it is
 // no longer what covers a newer local write: that supersedes the pin outright.
-const pinTTL = 10 * time.Second
+const defaultPinTTL = 10 * time.Second
+
+// pinLifetime is the TTL in force, held atomically because SetTestPinTTL may
+// write it while FUSE handler goroutines read it. Production never changes it.
+var pinLifetime = func() *atomic.Int64 {
+	d := new(atomic.Int64)
+	d.Store(int64(defaultPinTTL))
+	return d
+}()
+
+func pinTTL() time.Duration { return time.Duration(pinLifetime.Load()) }
+
+// SetTestPinTTL shortens (or lengthens) the pin window and returns a function
+// restoring the previous value — a test seam, so a test that has to observe what
+// PERSISTED rather than what the client wrote can wait past the window in
+// milliseconds instead of ten seconds. It reads the same value the pin is armed
+// from, so the wait and the window cannot drift apart the way a duplicated
+// constant in a test package would.
+//
+// Only pins armed AFTER the call carry the new lifetime (a deadline is stamped
+// at PinWritten), so set it before the writes under test. The mount is
+// process-global: callers must not t.Parallel(), and must restore on cleanup.
+func SetTestPinTTL(d time.Duration) func() {
+	prev := pinLifetime.Swap(int64(d))
+	return func() { pinLifetime.Store(prev) }
+}
 
 // authoredPin is one pinned write: the exact bytes a client last wrote to the
 // file, and the deadline past which they must not be served.
@@ -97,7 +123,7 @@ func (p *authoredPins) PinWritten(fileIno uint64, content []byte) {
 	}
 	p.pins[fileIno] = authoredPin{
 		content:  append([]byte(nil), content...),
-		deadline: now.Add(pinTTL),
+		deadline: now.Add(pinTTL()),
 	}
 }
 

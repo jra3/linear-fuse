@@ -142,7 +142,11 @@ Two rules govern the whole design:
    only talks to Linear — it never writes SQLite. The FUSE write handlers
    (`Flush`, `Mkdir`, `_create`, `rm`/`rmdir`) are responsible for upserting the
    result into — or, after a delete, forgetting the row from — SQLite and
-   invalidating kernel caches so the next read sees fresh data.
+   invalidating kernel caches so the next read sees fresh data. A committed edit
+   also pushes its fresh entity **up** to the directory node that built the file
+   (`adoptUp`), so the entity a later save diffs against tracks our own writes
+   (#415) — which makes concurrent edits of one canonical `.md`
+   last-writer-wins (see the `renameSave` note below).
 
 This decoupling is deliberate: ingest (Sync Worker → SQLite) and serve
 (SQLite → Repository → FUSE) are separate concerns, joined only by the database.
@@ -545,7 +549,7 @@ than silently treated as body text.
 
 **Consumed by** `internal/fs` only. Depends on `yaml.v3` and `api` types.
 
-### `internal/fs` — the FUSE filesystem (the core, ~64 non-test files)
+### `internal/fs` — the FUSE filesystem (the core, ~65 non-test files)
 
 The serving end and the largest package, built on `go-fuse/v2`. The root struct
 `LinearFS` (`linearfs.go`) is sectioned:
@@ -692,7 +696,22 @@ a layer above the commit-tail primitives) and no telemetry (matching
    save may land*: `onlyFileTarget` for an entity directory's one writable file,
    `collectionDir.itemFileTarget` for a collection, where an existing `{name}.md`
    is a replace and a new one is a create — the same two outcomes, through the
-   same closures, that the directory's named `Create` has.
+   same closures, that the directory's named `Create` has. The entity-directory
+   resolver builds its transient file node from the **directory node's own
+   entity**, which is therefore the *save baseline* — what every `Flush` diffs
+   the written document against to decide what to send. That is deliberate and
+   load-bearing: an absent frontmatter key means *clear this field*, so a
+   baseline fresher than the entity the document was rendered from clears every
+   field the writer never saw. Render and baseline must be one entity; what keeps
+   that entity current is the write path pushing to it (`adoptUp`,
+   `adoptup.go`), not the read path reaching around it. Before that, an in-place
+   save left the directory's copy stale and a later atomic save restoring what it
+   replaced read as no change — no mutation, success returned, write lost
+   (#415). The consequence to know: "saving back what you read is a no-op" holds
+   only while nothing else writes in between. Two writers are
+   **last-writer-wins** — a save diffed against an entity another writer just
+   adopted up clears the fields its own document has no key for. That is the
+   deliberate trade against the silently dropped write above.
 2. The fs layer **resolves names to IDs** (team key→teamId, status→stateId,
    assignee email→userId, labels→labelIds, project/milestone/cycle/parent→IDs).
    **Ordering is load-bearing** in `resolveIssueUpdate`: `team` resolves FIRST,

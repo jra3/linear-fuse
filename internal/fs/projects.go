@@ -262,7 +262,7 @@ func (p *ProjectNode) manifest() *dirManifest {
 		// Built with the fresh render; newFileInode swaps in the bytes an earlier
 		// save pinned under this inode when one is still standing, for every
 		// editable file in one place (authoredpin.go, #379/#387).
-		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project}
+		node := &ProjectInfoNode{BaseNode: BaseNode{lfs: lfs}, team: team, project: project, adoptUp: p.setEntity}
 		content := node.generateContent(ctx)
 		node.content = content
 		return node, content, 0
@@ -357,6 +357,10 @@ type ProjectInfoNode struct {
 	editBuffer
 	team    api.Team
 	project api.Project
+	// adoptUp pushes a committed edit's fresh project to the directory node that
+	// built this one, so the directory's entity — the baseline the atomic-save
+	// path diffs against — tracks our own writes (adoptup.go, #415).
+	adoptUp entityAdopter[api.Project]
 }
 
 var _ fs.NodeGetattrer = (*ProjectInfoNode)(nil)
@@ -519,7 +523,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				return append(edit.divergences("project", fresh.Name, fresh.Content), labels.divergences(fresh.LabelIds)...)
 			},
 		},
-		adopt:     func(fresh *api.Project) { p.project = *fresh },
+		adopt:     func(fresh *api.Project) { p.project = *fresh; p.adoptUp.adopt(*fresh) },
 		restore:   func() []byte { return p.generateContent(ctx) },
 		coherence: []uint64{projectInfoIno(p.project.ID), metaIno(p.project.ID)}, // project.meta reflects the edit
 		pinIno:    projectInfoIno(p.project.ID),                                  // project.md's Lookup seeds from the pin

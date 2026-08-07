@@ -356,7 +356,8 @@ func (n *IssueDirectoryNode) manifest() *dirManifest {
 		// Built with the fresh render; newFileInode swaps in the bytes an earlier
 		// save pinned under this inode when one is still standing, for every
 		// editable file in one place (authoredpin.go, #379/#387).
-		node := &IssueFileNode{BaseNode: BaseNode{lfs: n.lfs}, issue: issue, editBuffer: editBuffer{content: content}}
+		node := &IssueFileNode{BaseNode: BaseNode{lfs: n.lfs}, issue: issue, editBuffer: editBuffer{content: content},
+			adoptUp: n.setEntity}
 		return node, content, 0
 	})
 
@@ -470,6 +471,10 @@ type IssueFileNode struct {
 	BaseNode
 	editBuffer
 	issue api.Issue
+	// adoptUp pushes a committed edit's fresh issue to the directory node that
+	// built this one, so the directory's entity — the baseline the atomic-save
+	// path diffs against — tracks our own writes (adoptup.go, #415).
+	adoptUp entityAdopter[api.Issue]
 
 	// Write buffer and cached content
 }
@@ -610,7 +615,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				return results
 			},
 		},
-		adopt: func(fresh *api.Issue) { i.issue = *fresh },
+		adopt: func(fresh *api.Issue) { i.issue = *fresh; i.adoptUp.adopt(*fresh) },
 		restore: func() []byte {
 			content, err := marshal.IssueToMarkdown(&i.issue)
 			if err != nil {

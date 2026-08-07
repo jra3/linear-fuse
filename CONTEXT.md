@@ -128,10 +128,30 @@ The three entity directories that accept this (issue/project/initiative) each
 ended their Rename handler with the same hand-copied tail: same-directory check
 (`EXDEV`) → scratch-buffer lookup (`ENOTSUP` for non-scratch names — the
 canonical files aren't renamable) → target-name guard (`.error` names the one
-writable target, `ENOTSUP`) → flush the bytes through the file's normal edit
-path (a transient file node with a dirty edit buffer, so frontmatter
-validation, read-your-writes verification, and `.error` handling all apply) →
-**adopt + consume + `InvalidateRenamed`, all on {0, EIO}**. The adopt-on-EIO
+writable target, `ENOTSUP`) → read the **save baseline** → flush the bytes
+through the file's normal edit path (a transient file node with a dirty edit
+buffer, so frontmatter validation, read-your-writes verification, and `.error`
+handling all apply) → **adopt + consume + `InvalidateRenamed`, all on {0, EIO}**.
+The **save baseline** is the entity that transient node is built from, and
+therefore the value every `Flush` diffs the written document against to decide
+*what to send*. It is the **directory node's own entity** — the same copy the
+canonical `.md`'s render came from, deliberately. An absent frontmatter key
+means *clear this field*, so a baseline fresher than the entity the document was
+rendered from clears every field the writer never saw (measured: a byte-for-byte
+identical re-save of `issue.md` emitting `estimate: nil`). One entity behind both
+makes saving back what you read a genuine no-op — while nothing else writes in
+between; see [[adopt-up]] for what two concurrent writers get — and a deliberate
+edit sends only the field it changed.
+
+What keeps that entity fresh is [[adopt-up]] — the write path pushing to it. A
+committed edit through the canonical file adopts onto the FILE node and then
+propagates up to the directory node (`adoptup.go`). Before that, an in-place save
+left the directory's copy stale, and the next atomic save diffed against a
+pre-write entity: a save restoring what the in-place save had replaced read as no
+change — no mutation, success returned, write lost (#415). Staleness the write
+path did NOT cause (a sync-worker update) is deliberately left to the read path's
+refresh, because there render and baseline stay on one entity and a save-back
+stays a no-op rather than a revert. The adopt-on-EIO
 line is the policy, now written once: `Flush` returns `EIO` only on a fatal
 read-your-writes divergence, by which point the write has already reached
 Linear — refusing to adopt would keep serving stale content while `.error`
@@ -593,6 +613,57 @@ the kernel may forget everything and the test passes vacuously) and its
 reused node (pin the team dir, upsert the team row, expiry, fresh team.md +
 dir mtime).
 
+**The seam fires on re-Lookup and nowhere else**, so a node the kernel has not
+re-looked-up still carries the entity it was built with: a write through the
+entity's own file node adopts onto the FILE node, the sync worker writes SQLite
+alone, and neither pushes down to the directory. [[adopt-up]] closes the first of
+those from the write side; the second is left to this seam on purpose (#415).
+
+### Adopt up (`adoptUp`)
+The write-side counterpart to the refresh seam: a committed edit through a
+canonical `.md` pushes its fresh entity **up** to the directory node that built
+the file (`adoptup.go`). The three entity directories render every child from one
+cached entity — the `.md`'s content and, because the atomic-save path builds its
+transient node from it, the [[rename-save]] **save baseline** — so the two must
+stay the same entity. An absent frontmatter key means *clear this field*, and a
+document diffed against a fresher entity than it was rendered from clears every
+field the writer never saw.
+
+That leaves "what makes the entity fresh?", and the answer is direction: the
+write path pushes to it rather than the read path reaching around it. Without
+that push an in-place save left the directory holding its pre-write copy, so the
+next atomic save diffed against a pre-write entity and a save restoring what the
+in-place save had replaced sent no mutation at all (#415). Staleness a write did
+not cause stays the refresh seam's job — there render and baseline are equally
+stale, so a save-back is a no-op rather than a revert.
+
+**The no-op guarantee is conditional**, and the condition is worth naming: it
+holds while nothing else writes between the read and the save. Two writers make
+it **last-writer-wins**. A reads `issue.md` rendered from E0; B saves it in place
+setting a field A's copy has no key for, adopting E1 up; A's later atomic save is
+diffed against E1, and an absent key means *clear this field*, so B's value goes.
+Before adopt-up that save diffed against E0 and left B's field alone. The trade
+is deliberate: what it replaces is a SINGLE writer's save being silently dropped
+(#415) — no mutation, no `.error`, success returned. A clobbered field is visible
+in the entity's history and recoverable; a write that never happened while
+reporting that it did is neither.
+
+A related trap the same invariant exposes: a field whose "absent" and "present"
+forms are not mirror images never converges. Render and diff must answer "does
+this field have a value?" with the same predicate — `estimate` renders the key
+for a non-nil pointer and clears on an absent key for a non-nil pointer, so a
+clear that stores null settles on the next save. It is also why the mock mutator
+models a clear as null rather than `0`: a double that answers a clear with a
+value makes the clear re-send itself forever, and the non-convergence looks like
+a production bug (`internal/testutil/mockmutation`).
+
+Regression-tested at the mount (`internal/integration/atomicsave_baseline_test.go`:
+an in-place save then an atomic save restoring what it replaced, asserted against
+what the mutator RECEIVED — `mockmutation.Client.Updates` — since the stored value
+alone cannot tell a dropped write from one that persisted the same value), and the
+convergence half in `marshal` plus the double's own contract
+(`TestClearedEstimateRoundTripsAsNil`).
+
 ### Attr construction (`nodeAttr`/`attrNode`)
 The **deep module** owning how a directory or file node's attributes are
 constructed — the non-symlink complement to Symlink views (`symlinkNode`), and
@@ -678,8 +749,9 @@ and symlinks.
 ### Entity cell (`entityCell`)
 The **deep module** owning the volatile-state slot every entity-carrying
 directory node embeds: one lock-guarded field the nodeRefresher seam swaps
-when go-fuse dedups a later Lookup onto an already-known node. Before it, each of
-the ~11 regular entity nodes (`TeamNode`, `IssuesNode`, `UserNode`, `CyclesNode`,
+when go-fuse dedups a later Lookup onto an already-known node — and, on the three
+entity directories, the slot [[adopt-up]] writes from the write side too.
+Before it, each of the ~11 regular entity nodes (`TeamNode`, `IssuesNode`, `UserNode`, `CyclesNode`,
 `RecentNode`, `InitiativeNode`, `IssueDirectoryNode`, `ProjectsNode`, the three
 by/ filter nodes) hand-wrote the identical `entity()/setEntity()` lock dance, so
 the "every read/write of the entity goes under the lock" discipline was enforced
@@ -769,7 +841,10 @@ edit as a byte-for-byte success. **Arming it in the flush rather than in
 on the rename tail meant a later in-place edit left the older atomic-save bytes
 pinned, and a forget-and-re-Lookup inside the window served them — read-your-writes
 running *backwards* (#381).
-It is bounded by **time** (`pinTTL`), **not consumed by the first Lookup** — a
+It is bounded by **time** (`pinTTL()` — 10s in production, overridable in-process
+by `SetTestPinTTL` so a mount-level test can wait the window out in milliseconds
+off the same value the pin is armed from, rather than duplicating the constant),
+**not consumed by the first Lookup** — a
 client's verification is several syscalls (stat, then open+read), each able to drive
 its own Lookup after the rename invalidation, so all of them must answer alike; the
 TTL is now the outer bound on a pin outliving its truth for a *remote* reason
