@@ -524,7 +524,9 @@ This means your own changes appear immediately, but changes made by others (in t
 In addition to the application-level cache, the Linux kernel caches filesystem attributes:
 
 - **Entry timeout**: 30 seconds (directory listings)
-- **Attr timeout**: 30 seconds (file metadata)
+- **Attr timeout**: 60 seconds (file metadata) — issue/project/initiative
+  directories, and everything inside an issue directory, use the entry timeout
+  (30 seconds) for both
 
 This reduces kernel-to-userspace calls but means `ls` output may lag slightly behind cache invalidations.
 
