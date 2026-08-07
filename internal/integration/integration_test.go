@@ -258,19 +258,23 @@ func sweepAbandonedTestDirs() {
 // issue.md apparently never refreshing. That diagnosis was wrong, and #414 is
 // the correction — a defect CLASS, not one file: a family of Lookup/Mkdir sites
 // handed their children a HARDCODED 30s timeout instead of the mount's, so this
-// constant governed nothing beneath them. The full set fixed: issue directories
-// (issues.go — IssuesNode.Lookup, IssuesNode.Mkdir, ChildrenNode.Mkdir), project
-// directories (projects.go — ProjectsNode.Lookup and .Mkdir), initiative
-// directories (initiatives.go — InitiativesNode.Lookup), and both attachment
-// kinds (attachments.go — embedded files and external .link files). Every
-// "failure" was simply a test whose wait budget (this timeout + a 10s poll) fell
-// short of the 30s that was actually in force — which is also why it looked
-// order-dependent rather than constant. Raise the poll to 90s against the old
-// code and it passes in 30.5s, every time.
+// constant governed nothing beneath them. Fixed: issue directories (issues.go —
+// IssuesNode.Lookup, IssuesNode.Mkdir, ChildrenNode.Mkdir), project directories
+// (projects.go — ProjectsNode.Lookup and .Mkdir), initiative directories
+// (initiatives.go — InitiativesNode.Lookup), and both attachment kinds
+// (attachments.go — embedded files and external .link files). NOT fixed, and so
+// still deaf to this constant: the three render-file sites that pin a literal
+// 30s — relations.go (.rel), links.go (.link on projects/initiatives) and
+// updates.go (status updates). No revalidation test walks those files (they
+// read issue.md, project.md and team.md), so the gap costs nothing here.
+// Every "failure" was simply a test whose wait budget (this timeout + a 10s
+// poll) fell short of the 30s that was actually in force — which is also why it
+// looked order-dependent rather than constant. Raise the poll to 90s against
+// the old code and it passes in 30.5s, every time.
 //
 // So: if the entry timeout is ever shortened further and a revalidation test
-// starts failing, suspect another site pinning its own timeout before
-// suspecting the refresh path.
+// starts failing, suspect a site pinning its own timeout — one of the three
+// above, or a new one — before suspecting the refresh path.
 const (
 	fixtureAttrTimeout  = fs.DefaultAttrTimeout
 	fixtureEntryTimeout = 1 * time.Second
