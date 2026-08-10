@@ -67,8 +67,8 @@ type createSpec[T any] struct {
 	// mutate is the per-entity front half: parse/validate the input, build the
 	// API input, and call the mutation seam. Return a *FieldError for invalid
 	// input (-> EINVAL) or a *notFoundError for a reference to a missing entity
-	// (-> ENOENT); any other error is classified transient (-> EAGAIN) or hard
-	// (-> EIO) by the tail.
+	// (-> ENOENT); any other error is classified by the tail (see
+	// classifyMutationErr, the single owner of the failure model).
 	mutate func(ctx context.Context) (*T, error)
 	// result projects the created entity into its .last entry. Required: every
 	// create surface reports its resulting identity (#149/#151).
@@ -99,7 +99,7 @@ type createSpec[T any] struct {
 //   - mutate returns *FieldError    -> .error gets Detail(), EINVAL.
 //   - mutate returns *notFoundError -> .error gets Detail(), ENOENT.
 //   - mutate fails transiently      -> .error gets a retry hint, EAGAIN.
-//   - mutate fails otherwise        -> .error gets the cause, EIO.
+//   - mutate fails otherwise        -> .error gets the cause, classified errno.
 //   - mutate ok but persist fails   -> .error gets a de-dupe message naming the
 //     created entity, EIO (the item is live on Linear but not cached locally;
 //     .last is NOT appended and the caller must not recreate it — #276).

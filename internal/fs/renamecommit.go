@@ -56,7 +56,7 @@ type renameSpec[T any] struct {
 	dirIno uint64
 	// find resolves the CURRENT entity by the old name. Return (nil, nil) when it
 	// does not exist -> .error note + ENOENT; a non-nil error is classified like
-	// a mutation failure (transient -> EAGAIN, else EIO).
+	// a mutation failure (classifyMutationErr).
 	find func(ctx context.Context) (*T, error)
 	// mutate calls the API rename with the parsed new name and RETURNS the
 	// server's updated entity — the tail persists that returned value, so any

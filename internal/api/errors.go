@@ -183,8 +183,10 @@ func IsNotFound(err error) bool {
 // IsFieldTooLong reports whether err is Linear rejecting a field for exceeding
 // its length cap — e.g. "description must be shorter than or equal to 255
 // characters." This is a size limit, not merely malformed input, so callers
-// (classifyMutationErr) can surface EMSGSIZE instead of a bare EINVAL, making
-// the errno itself a hint. Structured check first (the phrasing rides in
+// (classifyMutationErr) can surface EMSGSIZE instead of the bare EINVAL or EIO
+// the rejection would otherwise get — the tag Linear sets decides which, and
+// both are cases this predicate exists to rescue (#409) — making the errno
+// itself a hint. Structured check first (the phrasing rides in
 // Message/UserPresentableMessage), with a plain-string fallback. The two
 // substrings are the phrasings Linear uses for a max-length validation.
 func IsFieldTooLong(err error) bool {

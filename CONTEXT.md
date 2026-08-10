@@ -377,9 +377,10 @@ closures own the per-side effect (the API mutation plus an immediate best-effort
 junction-row write via `persistInitiativeProjectLink`). Like Name→ID resolution it is
 pure of the **ErrorSink** and of any entity type — it works only on ID strings and
 name lists — so it returns a **`FieldError`** (bad name → `EINVAL` via
-`classifyMutationErr`) or the wrapped mutation error (→ `EIO`/`EAGAIN`), and is
-unit-tested with recording closures (no FUSE mount, SQLite, or API). Persisting each
-junction row inline (rather than the old deferred batch a mid-loop failure skipped)
+`classifyMutationErr`) or the wrapped mutation error (classified by that same
+owner), and is unit-tested with recording closures (no FUSE mount, SQLite, or
+API). Persisting each junction row inline (rather than the old deferred batch a
+mid-loop failure skipped)
 keeps SQLite consistent with whatever the API actually accepted on a partial failure.
 Project labels deliberately do **not** reconcile through this module: `labelIds`
 is one atomic full-set input on the project update (no per-pair link mutation
