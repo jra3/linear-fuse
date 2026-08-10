@@ -225,6 +225,28 @@ func TestIsUsageLimited(t *testing.T) {
 		{"rate-limit phrasing is not a usage limit", errors.New("Rate limit exceeded"), false},
 		{"local budget deferral is not a usage limit", fmt.Errorf("query X deferred: %w", ErrDeferred), false},
 		{"not-found is not a usage limit", errors.New("Entity not found: Issue"), false},
+		{
+			// A false positive is strictly worse than a false negative here, and
+			// Linear echoes user-supplied entity names into UserPresentableMessage.
+			// A workspace that owns a label named "Usage limits" must still get the
+			// EINVAL its fixable input rejection earns — not a quota verdict saying
+			// retrying will not help.
+			"echoed entity name inside a validation sentence",
+			&GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "The label 'Usage limits' is a group and cannot be assigned to projects directly.",
+				UserError:              true,
+			},
+			false,
+		},
+		{
+			// The same echo arriving as the plain-string envelope, where the phrase
+			// legitimately sits inside a JSON body: the whole-message rule applies
+			// to the quoted value, not to the envelope that carries it.
+			"echoed entity name inside the envelope (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"The label 'Usage limits' is a group and cannot be assigned to projects directly."}]}`),
+			false,
+		},
 		{"unrelated error", errors.New("boom"), false},
 	}
 	for _, tc := range cases {

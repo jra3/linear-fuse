@@ -209,4 +209,26 @@ func TestClassifyMutationErr_UsageLimitIsEDQUOT(t *testing.T) {
 	if _, errno := classifyMutationErr("create issue", rateLimited); errno != syscall.EAGAIN {
 		t.Fatalf("errno = %v, want EAGAIN — a rate limit is not a plan wall", errno)
 	}
+
+	// Nor may an ECHOED entity name. Linear puts user-supplied names into
+	// UserPresentableMessage, so a workspace owning a label called "Usage limits"
+	// would have every validation rejection naming it hijacked by the EDQUOT arm
+	// — telling a caller with fixable input that retrying is futile. The arm sits
+	// above the userError gate, so the tag cannot rescue this; the predicate's
+	// whole-message rule is what keeps it EINVAL.
+	echo := &api.GraphQLError{
+		Message:                "Argument Validation Error",
+		UserPresentableMessage: "The label 'Usage limits' is a group and cannot be assigned to projects directly.",
+		UserError:              true,
+	}
+	msg, errno := classifyMutationErr("create issue", echo)
+	if errno != syscall.EINVAL {
+		t.Fatalf("errno = %v, want EINVAL — an echoed entity name is not a plan wall", errno)
+	}
+	if !strings.Contains(msg, "is a group and cannot be assigned") {
+		t.Errorf(".error = %q, want Linear's own rejection text", msg)
+	}
+	if strings.Contains(msg, "will NOT help") {
+		t.Errorf(".error = %q, must not claim retrying is futile for a fixable input error", msg)
+	}
 }

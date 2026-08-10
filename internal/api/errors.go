@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -95,9 +96,22 @@ func IsRateLimited(err error) bool {
 // rejection has never been observed — the only recorded instance is the bare
 // string "usage limit exceeded". If a code is ever captured, add a structured
 // check in first position, matching IsRateLimited's structured-first layering.
-// The substring is "usage limit" alone: "limit exceeded" would swallow "rate
-// limit exceeded", while the full "usage limit exceeded" would miss a rewording
-// like "workspace usage limit reached".
+//
+// For THIS predicate a false positive is strictly worse than a false negative,
+// so the match is biased hard toward missing. A miss degrades to the pre-#409
+// behavior — EIO, or EINVAL when Linear happened to tag the rejection
+// userError — which is the bug being fixed and no worse than before it. A false
+// hit actively lies: it tells a caller whose input is fixable that the
+// workspace is over quota and that retrying will NOT help.
+//
+// That asymmetry is why the phrase must CONSTITUTE the server's message rather
+// than appear anywhere within it. Linear echoes user-supplied entity names into
+// UserPresentableMessage ("The label 'X' is a group and cannot be assigned to
+// projects directly."), so a substring test hands a workspace that owns a label
+// named "Usage limits" a bogus quota verdict on every validation rejection that
+// names it. An echo is always embedded in a sentence while the recorded quota
+// message is bare, so an anchored whole-message test separates the two and
+// still tolerates a rewording like "workspace usage limit reached".
 func IsUsageLimited(err error) bool {
 	if err == nil {
 		return false
@@ -108,14 +122,43 @@ func IsUsageLimited(err error) bool {
 	if IsRateLimited(err) {
 		return false
 	}
-	has := func(s string) bool {
-		return strings.Contains(strings.ToLower(s), "usage limit")
-	}
 	var gqlErr *GraphQLError
-	if errors.As(err, &gqlErr) && (has(gqlErr.Message) || has(gqlErr.UserPresentableMessage)) {
-		return true
+	if errors.As(err, &gqlErr) {
+		return isUsageLimitMessage(gqlErr.Message) ||
+			isUsageLimitMessage(gqlErr.UserPresentableMessage)
 	}
-	return has(err.Error())
+	// Not a *GraphQLError: an HTTP-level failure carrying Linear's envelope
+	// verbatim. There the server's messages are quoted values INSIDE a JSON body,
+	// so the whole-message rule applies to each extracted value, never to the
+	// envelope text — which embeds an echoed name exactly as it embeds the quota
+	// phrase.
+	msg := err.Error()
+	for _, m := range envelopeMessageRe.FindAllStringSubmatch(msg, -1) {
+		if isUsageLimitMessage(m[1]) {
+			return true
+		}
+	}
+	return isUsageLimitMessage(msg)
+}
+
+// usageLimitMessageRe matches a message that IS a usage-limit rejection rather
+// than one that merely mentions the phrase: the bare wording, optionally scoped
+// ("workspace usage limit") and optionally closed with a limit verb ("...
+// exceeded" / "... reached"). Anchored on purpose — see IsUsageLimited.
+var usageLimitMessageRe = regexp.MustCompile(
+	`^(?:the |your )?(?:workspace |organization |account |plan |team )?usage limit(?: (?:exceeded|reached|hit))?$`)
+
+// envelopeMessageRe pulls the server's quoted message values out of Linear's
+// error envelope when it reaches a predicate as a plain string.
+var envelopeMessageRe = regexp.MustCompile(
+	`"(?:message|userPresentableMessage)"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// isUsageLimitMessage reports whether s, taken whole, is Linear's usage-limit
+// wording — case and a trailing full stop are the only slack.
+func isUsageLimitMessage(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(strings.TrimRight(s, ".!"))
+	return usageLimitMessageRe.MatchString(s)
 }
 
 // IsNotFound reports whether err is Linear's "Entity not found" rejection —

@@ -658,7 +658,6 @@ func (q quotaMutator) CreateIssue(ctx context.Context, input map[string]any) (*a
 // the only thing the errno cannot: that waiting will not clear it.
 func TestOffline_QuotaRejectionIsLegible(t *testing.T) {
 	skipIfLiveAPI(t, "fixture-mode: needs the injected mutator to model Linear's plan-quota rejection; live the workspace is not over quota and this mkdir would create a real issue")
-	enableMockMutations(t)
 
 	lfs.InjectTestMutationClient(quotaMutator{mockmutation.New(
 		mockmutation.WithTeamKey(testTeamKey),

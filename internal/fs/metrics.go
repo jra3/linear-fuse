@@ -83,6 +83,8 @@ func outcomeForErrno(errno syscall.Errno) string {
 		return "eperm"
 	case syscall.EACCES:
 		return "eacces"
+	case syscall.EXDEV:
+		return "exdev"
 	default:
 		return "other"
 	}

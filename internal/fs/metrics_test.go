@@ -77,6 +77,11 @@ func TestOutcomeForErrno(t *testing.T) {
 		syscall.EDQUOT:   "edquot",
 		syscall.EPERM:    "eperm",
 		syscall.EACCES:   "eacces",
+		// commitRename returns EXDEV for a rename that leaves its collection
+		// directory, inside the recordFuseOp defer — a caller-shape rejection the
+		// mount documents, so it gets its own label instead of collapsing into
+		// "other" with every genuinely unlisted errno.
+		syscall.EXDEV: "exdev",
 		// ENOSPC stays the unlisted-errno sentinel: it is deliberately NOT the
 		// quota label (EDQUOT is), because the local SQLite store sits on a real
 		// disk that can return ENOSPC for its own reasons.
