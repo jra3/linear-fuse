@@ -612,7 +612,8 @@ render's — a fresh-twin size would clamp kernel reads of longer dirty content
 (a real truncation: project.md read back "unclosed" after a rejected save;
 `TestRejectedSaveKeepsDirtyContentReadable` pins it). Guarded end-to-end by
 `TestRemoteUpdateVisibleAfterKernelRevalidation` (remote upsert → pinned
-inode chain so the kernel cannot FORGET → 31s real entry-timeout expiry →
+inode chain so the kernel cannot FORGET → a real entry-timeout expiry (the
+fixture's ~1s since #414, not the production 30s) →
 fresh content and mtime; the pin is what forces the reuse path — without it
 the kernel may forget everything and the test passes vacuously) and its
 `TestRemoteTeamUpdateVisibleAfterKernelRevalidation` twin on the busiest
@@ -681,9 +682,15 @@ and a later `Getattr` render it identically and can never disagree. `nodeAttr`
 directory node cannot hand-write a divergent one. The `newDirInode`/`newFileInode`
 `BaseNode` constructors stash the `nodeAttr` on the child, fill the Lookup
 `EntryOut` from that same value, take the entry timeout as an explicit param
-(the deliberate 30s/5s/0/1s classes are preserved verbatim, never rationalized
-here), and return `StableAttr{Mode, Ino}`. `newFileInode` carries one further
-responsibility, because it is the one builder every editable file passes
+(the deliberate classes are preserved, never rationalized here: the entity-dir
+tier passes `lfs.entryTimeout()` — the mount's configured bound, 30s by default
+— and the 5s/1s/0 classes stay literals), and return `StableAttr{Mode, Ino}`.
+The param sets **both** `SetAttrTimeout` and `SetEntryTimeout`, so a site that
+passes it is choosing its attr policy too — the reason #414 fixed the entity-dir
+hardcodes with `entryTimeout()` rather than `inheritTimeout`, which would have
+moved entity-dir attrs from 30s to the mount's 60s attr default.
+`newFileInode` carries one further responsibility, because it is the one
+builder every editable file passes
 through: it seeds serve-your-own-writes for any child exposing `editable()
 *editBuffer` — see [[authored-pin]].
 
@@ -907,7 +914,8 @@ each read now fetches from SQLite (cheap) and re-renders. These files are tiny a
 read interactively, so the per-read FUSE round-trip is imperceptible. The attr
 timeout stays a per-construction param (`inheritTimeout` = leave the mount default
 60s/30s, preserving the nodes that set none; `.meta`/`.error`/`.last` keep 0;
-relation/attachment keep 30s).
+attachment files take `lfs.entryTimeout()` since #414, while relation/link/update
+files still keep a literal 30s).
 
 **The closure returns real times, never `now()`** — the drift this module kills
 (`ls -lt` used to reshuffle those files every call). A zero time reports as an
@@ -1140,10 +1148,11 @@ lifted one tier up to the skeleton.
 **Self-describing, like the directory nodes `attrNode` forced.** The manifest is
 a builder carrying the facts *every* child shares — `parent *BaseNode`, the
 entity `id` (scopes `.error`/`.last`/`.meta` keys), the entity `created`/`updated`
-times, and the child `timeout` (uniform within a directory: issue children 30s,
-project/initiative children 0) — so each child declares only its difference. Five
-typed constructors cover all 22 arms across the three directories: `subdir(name,
-ino, node)` → `newDirInode(dirAttr(created,updated), ino, timeout)`; `file(name,
+times, and the child `timeout` (uniform within a directory: issue children take
+the mount's entry timeout, project/initiative children 0) — so each child
+declares only its difference. Five typed constructors cover all 22 arms across
+the three directories: `subdir(name, ino, node)` →
+`newDirInode(dirAttr(created,updated), ino, timeout)`; `file(name,
 ino, build)` where `build` returns `(node, content, errno)` → `fileAttr`;
 `metaFile(name, render)` → `lookupMetaFile`; `errorFile(name)`/`lastFile(name)` →
 `lookupErrorFile`/`lookupSuccessFile`; `renderFile(name, ino, render)` →
@@ -1173,14 +1182,18 @@ dynamic tail.
 three entity dir nodes bypassed `newDirInode` — hand-building the Lookup
 `EntryOut` at their six construction sites *and* hand-rolling a separate
 `Getattr`, two attr copies per directory that had to agree. Embedding `attrNode`
-and routing all six sites through `newDirInode(dirAttr(...), <dirIno>, 30s)`
+and routing all six sites through `newDirInode(dirAttr(...), <dirIno>, timeout)`
 deletes both and makes Lookup==Getattr by construction. It also normalized three
 latent inconsistencies: the initiative dir was constructed with `Ino: 0`
 (auto-assigned — now a stable `initiativeDirIno`), the issue-dir sites disagreed
 on setting `Uid`/`Gid`, and the initiative dir set no entry timeout (mount
-default) while its sibling entity dirs used 30s — **standardized to a uniform 30s
+default) while its sibling entity dirs used 30s — **standardized to a uniform
 entity-dir tier** (a deliberate, recorded behavior change, not preservation:
-initiative's unset read as an oversight, not a considered 0). The three dir-ino
+initiative's unset read as an oversight, not a considered 0). That tier was a
+hardcoded 30s until #414 made all six sites pass `lfs.entryTimeout()` — the same
+30s by default, but now the mount's configured bound really governs beneath them
+(`fs.WithKernelCacheTimeouts` had been silently inert there, which is what let a
+short-timeout fixture look like a broken refresh path). The three dir-ino
 wrappers use symmetric `issuedir`/`projectdir`/`initiativedir` prefixes,
 registered in `TestInodeNamespaceDistinct`.
 

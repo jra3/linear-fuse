@@ -146,8 +146,13 @@ func (n *AttachmentsNode) buildAttachment(ctx context.Context, name string, entr
 	} else {
 		out.Attr.Size = 1024 * 1024 // Placeholder for lazy-fetch
 	}
-	out.SetAttrTimeout(30 * time.Second)
-	out.SetEntryTimeout(30 * time.Second)
+	// The mount's configured bound, not a literal: a hardcode here silently
+	// overrides WithKernelCacheTimeouts for this surface — the #414 defect
+	// class. Same for the external .link below; the sites it was fixed at, and
+	// the ones still pinning a literal, are inventoried on fixtureEntryTimeout
+	// (internal/integration/integration_test.go).
+	out.SetAttrTimeout(n.lfs.entryTimeout())
+	out.SetEntryTimeout(n.lfs.entryTimeout())
 
 	// The bridge dedups AFTER this handler returns: push the fresh file
 	// metadata into the node it will keep (see refresh.go).
@@ -169,7 +174,7 @@ func (n *AttachmentsNode) createExternalAttachmentNode(ctx context.Context, name
 		attachment: att,
 		issueID:    n.issueID,
 	}
-	return n.newRenderInode(ctx, out, name, node, externalAttachmentIno(att.ID), 30*time.Second), 0
+	return n.newRenderInode(ctx, out, name, node, externalAttachmentIno(att.ID), n.lfs.entryTimeout()), 0
 }
 
 // EmbeddedFileNode represents a file in the /attachments/ directory

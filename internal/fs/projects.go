@@ -75,7 +75,7 @@ func (p *ProjectsNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	for _, project := range projects {
 		if projectDirName(project) == name {
 			node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: team, project: project}
-			return p.newDirInode(ctx, out, name, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
+			return p.newDirInode(ctx, out, name, node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), p.lfs.entryTimeout()), 0
 		}
 	}
 
@@ -117,7 +117,7 @@ func (p *ProjectsNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	}
 
 	node := &ProjectNode{attrNode: attrNode{BaseNode: BaseNode{lfs: p.lfs}}, team: team, project: *project}
-	return p.newDirInode(ctx, out, projectDirName(*project), node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), 30*time.Second), 0
+	return p.newDirInode(ctx, out, projectDirName(*project), node, dirAttr(project.CreatedAt, project.UpdatedAt), projectDirIno(project.ID), p.lfs.entryTimeout()), 0
 }
 
 // Rmdir archives a project (soft delete)

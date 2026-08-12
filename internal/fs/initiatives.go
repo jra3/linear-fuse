@@ -50,7 +50,7 @@ func (i *InitiativesNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	for _, init := range initiatives {
 		if initiativeDirName(init) == name {
 			node := &InitiativeNode{attrNode: attrNode{BaseNode: BaseNode{lfs: i.lfs}}, entityCell: entityCell[api.Initiative]{val: init}}
-			return i.newDirInode(ctx, out, name, node, dirAttr(init.CreatedAt, init.UpdatedAt), initiativeDirIno(init.ID), 30*time.Second), 0
+			return i.newDirInode(ctx, out, name, node, dirAttr(init.CreatedAt, init.UpdatedAt), initiativeDirIno(init.ID), i.lfs.entryTimeout()), 0
 		}
 	}
 
