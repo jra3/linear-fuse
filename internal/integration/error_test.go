@@ -16,34 +16,64 @@ import (
 // Error Handling Tests
 // =============================================================================
 
+// TestInvalidStatusReturnsError is one of the #420 census one-liners. It used to
+// write an unresolvable status and then throw the verdict away (`_ = err`) under
+// a comment saying either behaviour was acceptable — so a test whose NAME states
+// a contract asserted nothing at all, and paid for it with a live issue create.
+//
+// The mount does keep that contract: an unknown state name fails in
+// resolveIssueUpdate (internal/fs/resolve.go) with a FieldError, so the save is
+// EINVAL and .error carries the Field/Value/Error detail plus the pointer to
+// states.md.
+//
+// No mode guard, and no created issue: the rejection happens during resolution,
+// BEFORE the mutator is called, so the write is inert under a live key too, and
+// the subject comes from someIssueDir rather than a seeded row. Same argument as
+// TestUnknownFrontmatterKeyIsRejected below, which this now mirrors — including
+// the atomic save, the only save form whose verdict is synchronous.
 func TestInvalidStatusReturnsError(t *testing.T) {
-	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("Invalid Status Test")
+	dir := someIssueDir(t)
+	path := filepath.Join(dir, "issue.md")
+	errPath := filepath.Join(dir, ".error")
+
+	orig, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Failed to create test issue: %v", err)
+		t.Fatalf("read issue.md: %v", err)
 	}
-	defer cleanup()
+	// Restoring the original bytes is also what retires the .error the rejection
+	// leaves standing (#400): an unchanged save is a successful one.
+	defer func() { _ = claudeToolAtomicSave(t, path, orig) }()
 
-	waitForCacheExpiry()
-
-	// Read issue
-	path := issueFilePath(testTeamKey, issue.Identifier)
-	content, err := readFileWithRetry(path, defaultWaitTime)
+	const bogus = "InvalidStatusThatDoesNotExist"
+	modified, err := modifyFrontmatter(orig, "status", bogus)
 	if err != nil {
-		t.Fatalf("Failed to read issue: %v", err)
-	}
-
-	// Set an invalid status
-	modified, err := modifyFrontmatter(content, "status", "InvalidStatusThatDoesNotExist")
-	if err != nil {
-		t.Fatalf("Failed to modify frontmatter: %v", err)
+		t.Fatalf("modify frontmatter: %v", err)
 	}
 
-	// Write should fail or the status should not change
-	err = os.WriteFile(path, modified, 0644)
-	// Note: The filesystem may return EIO or silently ignore invalid status
-	// Either behavior is acceptable as long as it doesn't crash
-	_ = err
+	werr := claudeToolAtomicSave(t, path, modified)
+	if !errors.Is(werr, syscall.EINVAL) {
+		t.Fatalf("saving issue.md with status %q returned %v, want EINVAL — an unresolvable "+
+			"workflow state must not read as a successful edit", bogus, werr)
+	}
+
+	data := readFileUntilContains(t, errPath, bogus, errorVisibilityWait)
+	if !strings.Contains(string(data), bogus) {
+		t.Fatalf(".error must name the rejected status %q, got: %q", bogus, data)
+	}
+	// The remedy travels with the complaint: an agent that reads only .error has
+	// to learn where the valid states are listed.
+	if !strings.Contains(string(data), "states.md") {
+		t.Errorf(".error names the bad status but not where valid ones are listed: %q", data)
+	}
+
+	// Nothing partially applied.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("re-read issue.md after the rejected save: %v", err)
+	}
+	if !bytes.Equal(after, orig) {
+		t.Errorf("issue.md changed after a rejected save:\nbefore:\n%s\nafter:\n%s", orig, after)
+	}
 }
 
 func TestWriteToReadOnlyFileReturnsError(t *testing.T) {
@@ -154,29 +184,52 @@ func TestNonexistentPathReturnsENOENT(t *testing.T) {
 	}
 }
 
-func TestMalformedYAMLDoesNotCrash(t *testing.T) {
-	skipIfNoWriteTests(t)
-	issue, cleanup, err := createTestIssue("Malformed YAML Test")
+// TestMalformedYAMLIsRejectedLegibly is the second #420 census one-liner. As
+// TestMalformedYAMLDoesNotCrash it discarded the write verdict (`_ = err`,
+// "either error or no error is acceptable") and asserted only that the mount
+// still answered a ReadDir — a bar the mount clears whether or not it handled
+// the bad document. Since #370 the verdict is specified: a frontmatter parse
+// failure is EINVAL with "Parse error" in .error, and an indicator-triggered
+// failure carries a quoting hint (marshal/frontmatter.go quotingHint).
+//
+// Unguarded for the same reason as TestInvalidStatusReturnsError: the parse
+// fails before any resolution or mutation, so the write is inert in both modes.
+// The mount-is-still-alive check the old name promised is kept — it is the one
+// thing the original did assert.
+func TestMalformedYAMLIsRejectedLegibly(t *testing.T) {
+	dir := someIssueDir(t)
+	path := filepath.Join(dir, "issue.md")
+	errPath := filepath.Join(dir, ".error")
+
+	orig, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Failed to create test issue: %v", err)
+		t.Fatalf("read issue.md: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = claudeToolAtomicSave(t, path, orig) }()
 
-	waitForCacheExpiry()
-
-	// Write malformed YAML
-	path := issueFilePath(testTeamKey, issue.Identifier)
 	malformed := []byte("---\ntitle: [unclosed bracket\n---\nbody")
+	werr := claudeToolAtomicSave(t, path, malformed)
+	if !errors.Is(werr, syscall.EINVAL) {
+		t.Fatalf("saving malformed frontmatter returned %v, want EINVAL", werr)
+	}
 
-	// Write should either fail or be handled gracefully
-	err = os.WriteFile(path, malformed, 0644)
-	// Either error or no error is acceptable, as long as it doesn't crash
-	_ = err
+	data := readFileUntilContains(t, errPath, "Parse error", errorVisibilityWait)
+	if !strings.Contains(string(data), "Parse error") {
+		t.Errorf(".error must say the document failed to parse, got: %q", data)
+	}
 
-	// Filesystem should still be operational
-	_, err = os.ReadDir(teamsPath())
+	// The document was rejected whole: no field of it landed.
+	after, err := os.ReadFile(path)
 	if err != nil {
-		t.Errorf("Filesystem became unresponsive after malformed YAML: %v", err)
+		t.Fatalf("re-read issue.md after the rejected save: %v", err)
+	}
+	if !bytes.Equal(after, orig) {
+		t.Errorf("issue.md changed after a rejected save:\nbefore:\n%s\nafter:\n%s", orig, after)
+	}
+
+	// And the mount is still serving — the claim the old name made.
+	if _, err := os.ReadDir(teamsPath()); err != nil {
+		t.Errorf("filesystem became unresponsive after malformed YAML: %v", err)
 	}
 }
 

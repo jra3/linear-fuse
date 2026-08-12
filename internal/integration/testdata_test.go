@@ -191,6 +191,34 @@ func configureTestIssue(id, identifier string, input map[string]any) (*api.Issue
 	return fresh, nil
 }
 
+// issueIDFromMeta reads an issue's Linear id from its issue.meta sidecar.
+//
+// One reader, because there have been two and both rotted the same way: #148
+// moved the volatile server fields out of the editable issue.md, and a caller
+// that kept reading `id` from issue.md and swallowed the miss with `_` handed
+// every live test an api.Issue{ID: ""} — 14 failures as "not found in SQLite"
+// and "Argument Validation Error" (#396). The second copy sat in a deferred
+// cleanup, where a missing id meant the issue was simply never archived and
+// nothing said so (#420). Hence: one place, and an error on a miss rather than
+// a zero value.
+func issueIDFromMeta(identifier string) (string, error) {
+	metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, identifier))
+	if err != nil {
+		return "", fmt.Errorf("read issue.meta for %s: %w", identifier, err)
+	}
+	meta, err := parseFrontmatter(metaContent)
+	if err != nil {
+		return "", fmt.Errorf("parse issue.meta frontmatter for %s: %w", identifier, err)
+	}
+	id, ok := meta.Frontmatter["id"].(string)
+	if !ok || id == "" {
+		return "", fmt.Errorf("issue.meta for %s carries no id; every id-keyed "+
+			"assertion downstream would fail as 'not found'. Frontmatter: %v",
+			identifier, meta.Frontmatter)
+	}
+	return id, nil
+}
+
 // createTestIssue creates an issue via filesystem mkdir for testing.
 // The title is prefixed with [TEST] and a timestamp.
 // Returns the issue and a cleanup function (currently no-op since Linear doesn't have delete).
@@ -225,25 +253,11 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 		if strings.Contains(string(content), fullTitle) {
 			identifier := entry.Name()
 
-			// The id lives in issue.meta, not issue.md: #148 moved the volatile
-			// server fields out of the editable file. Reading it from issue.md
-			// and swallowing the miss with `_` is what handed every live test an
-			// api.Issue{ID: ""}, which then failed 14 tests as "not found in
-			// SQLite" and "Argument Validation Error" (#396). Hence: read the
-			// sidecar, and fail loudly on a miss.
-			metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, identifier))
+			// issueIDFromMeta is the one reader of the sidecar id — see its doc for
+			// why there is exactly one (#396, #420).
+			id, err := issueIDFromMeta(identifier)
 			if err != nil {
-				return nil, nil, fmt.Errorf("read issue.meta for %s: %w", identifier, err)
-			}
-			meta, err := parseFrontmatter(metaContent)
-			if err != nil {
-				return nil, nil, fmt.Errorf("parse issue.meta frontmatter for %s: %w", identifier, err)
-			}
-			id, ok := meta.Frontmatter["id"].(string)
-			if !ok || id == "" {
-				return nil, nil, fmt.Errorf("issue.meta for %s carries no id; every id-keyed "+
-					"assertion downstream would fail as 'not found'. Frontmatter: %v",
-					identifier, meta.Frontmatter)
+				return nil, nil, err
 			}
 
 			issue := &api.Issue{
