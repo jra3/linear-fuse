@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -162,30 +163,51 @@ func TestCreateIssueInvalidatesTeamListing(t *testing.T) {
 	}
 	initialCount := len(entries1)
 
-	// Create issue via mkdir
-	issueName := "[TEST] Cache Mkdir Test"
+	// Create issue via mkdir. The title carries a timestamp for the same reason
+	// createTestIssue's does: a constant [TEST] title matches every previous
+	// run's leftover, so the cleanup below could archive an issue this run never
+	// created while leaving its own behind.
+	issueName := fmt.Sprintf("[TEST] Cache Mkdir Test %d", time.Now().UnixMilli())
 	issuePath := issueDirPath(testTeamKey, issueName)
 	if err := os.Mkdir(issuePath, 0755); err != nil {
 		t.Fatalf("Failed to mkdir: %v", err)
 	}
 
-	// Clean up via API after test
+	// Clean up via API after test. This read `id` from issue.md until #420: #148
+	// moved the server fields to the issue.meta sidecar, so the lookup missed,
+	// the `ok` swallowed it, deleteTestIssue never ran, and every run of this
+	// test leaked an issue into the workspace in silence. Same defect as #396,
+	// in a deferred cleanup where nothing could notice — so it now reports what
+	// it failed to clean up rather than returning quietly.
 	defer func() {
-		// Find and delete the issue
-		entries, _ := os.ReadDir(issuesDir)
+		entries, err := os.ReadDir(issuesDir)
+		if err != nil {
+			t.Errorf("cleanup: read issues dir: %v; %q is now workspace debris", err, issueName)
+			return
+		}
 		for _, e := range entries {
 			content, err := os.ReadFile(issueFilePath(testTeamKey, e.Name()))
 			if err != nil {
 				continue
 			}
-			doc, _ := parseFrontmatter(content)
-			if title, ok := doc.Frontmatter["title"].(string); ok && title == issueName {
-				if id, ok := doc.Frontmatter["id"].(string); ok {
-					_ = deleteTestIssue(id)
-				}
-				break
+			doc, err := parseFrontmatter(content)
+			if err != nil {
+				continue
 			}
+			if title, ok := doc.Frontmatter["title"].(string); !ok || title != issueName {
+				continue
+			}
+			id, err := issueIDFromMeta(e.Name())
+			if err != nil {
+				t.Errorf("cleanup: %v; %s is now workspace debris", err, e.Name())
+				return
+			}
+			if err := deleteTestIssue(id); err != nil {
+				t.Errorf("cleanup: archive %s: %v", e.Name(), err)
+			}
+			return
 		}
+		t.Errorf("cleanup: created issue %q not found in the listing, so it was not archived", issueName)
 	}()
 
 	waitForCacheExpiry()
