@@ -57,6 +57,15 @@ func TestIsRateLimited(t *testing.T) {
 			&GraphQLError{Message: "labelIds contain parent labels", Code: "INPUT_ERROR", UserError: true},
 			false,
 		},
+		{
+			// The reciprocal of TestIsUsageLimited's rate-limit rows. A plan wall
+			// must never read as a request budget: client.go hands a rate limit to
+			// the admission ladder, which zeroes both budget axes for up to 15m —
+			// a punishing response to a condition waiting cannot clear.
+			"usage limit is not a rate limit",
+			&GraphQLError{Message: "usage limit exceeded"},
+			false,
+		},
 		{"unrelated error", errors.New("boom"), false},
 	}
 	for _, tc := range cases {
@@ -165,6 +174,85 @@ func TestIsFieldTooLong(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := IsFieldTooLong(tc.err); got != tc.want {
 				t.Errorf("IsFieldTooLong(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsUsageLimited(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{
+			// The one recorded instance (#409, the first live write dispatch):
+			// Linear sent the bare phrase, and whether it set userError is unknown.
+			// The predicate must not care.
+			"typed GraphQLError, userError unset",
+			&GraphQLError{Message: "usage limit exceeded"},
+			true,
+		},
+		{
+			"same rejection tagged userError",
+			&GraphQLError{Message: "usage limit exceeded", UserError: true},
+			true,
+		},
+		{
+			"phrasing only in UserPresentableMessage",
+			&GraphQLError{Message: "Argument Validation Error", UserPresentableMessage: "Workspace usage limit reached"},
+			true,
+		},
+		{
+			"typed error wrapped via %w",
+			fmt.Errorf("mutation IssueCreate failed: %w", &GraphQLError{Message: "usage limit exceeded"}),
+			true,
+		},
+		{
+			"plain string carrying the envelope (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"usage limit exceeded"}]}`),
+			true,
+		},
+		{
+			// Disjointness with IsRateLimited, both directions. A request budget
+			// clears by waiting; a plan wall does not, and classifyMutationErr
+			// tells the caller opposite things about retrying.
+			"server rate limit is not a usage limit",
+			&GraphQLError{Message: "you shall not pass", Code: "RATELIMITED"},
+			false,
+		},
+		{"rate-limit phrasing is not a usage limit", errors.New("Rate limit exceeded"), false},
+		{"local budget deferral is not a usage limit", fmt.Errorf("query X deferred: %w", ErrDeferred), false},
+		{"not-found is not a usage limit", errors.New("Entity not found: Issue"), false},
+		{
+			// A false positive is strictly worse than a false negative here, and
+			// Linear echoes user-supplied entity names into UserPresentableMessage.
+			// A workspace that owns a label named "Usage limits" must still get the
+			// EINVAL its fixable input rejection earns — not a quota verdict saying
+			// retrying will not help.
+			"echoed entity name inside a validation sentence",
+			&GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "The label 'Usage limits' is a group and cannot be assigned to projects directly.",
+				UserError:              true,
+			},
+			false,
+		},
+		{
+			// The same echo arriving as the plain-string envelope, where the phrase
+			// legitimately sits inside a JSON body: the whole-message rule applies
+			// to the quoted value, not to the envelope that carries it.
+			"echoed entity name inside the envelope (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"The label 'Usage limits' is a group and cannot be assigned to projects directly."}]}`),
+			false,
+		},
+		{"unrelated error", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsUsageLimited(tc.err); got != tc.want {
+				t.Errorf("IsUsageLimited(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}

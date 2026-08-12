@@ -2,6 +2,8 @@ package fs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"syscall"
 	"testing"
@@ -141,5 +143,92 @@ func TestClassifyMutationErr_TooLongIsEMSGSIZE(t *testing.T) {
 	other := &api.GraphQLError{Message: "bad enum value", Code: "INPUT_ERROR", UserError: true}
 	if _, errno := classifyMutationErr("update project", other); errno != syscall.EINVAL {
 		t.Fatalf("errno = %v, want EINVAL for a non-length userError", errno)
+	}
+
+	// The two cases api.IsFieldTooLong documents but that the classifier could not
+	// reach while the check sat inside the userError gate: the cap phrasing rides
+	// only in UserPresentableMessage with the tag unset, and the rejection arrives
+	// as a plain HTTP-400 envelope that is not a *GraphQLError at all. Both used to
+	// fall through to EIO — "backend failure", inviting a retry of a write that
+	// would be rejected identically forever.
+	untagged := []struct {
+		name string
+		err  error
+	}{
+		{"cap phrasing in UserPresentableMessage, userError unset", &api.GraphQLError{
+			Message:                "Argument Validation Error",
+			UserPresentableMessage: "name must be at most 80 characters",
+		}},
+		{"plain HTTP-400 envelope", errors.New(
+			`API error (status 400): {"errors":[{"message":"title must be shorter than or equal to 255 characters."}]}`)},
+	}
+	for _, tc := range untagged {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, errno := classifyMutationErr("update project", tc.err); errno != syscall.EMSGSIZE {
+				t.Fatalf("errno = %v, want EMSGSIZE — a length cap is a size error whether or not Linear tagged it", errno)
+			}
+		})
+	}
+}
+
+// TestClassifyMutationErr_UsageLimitIsEDQUOT pins #409. A workspace over its plan
+// limit is neither the caller's bad input (EINVAL blames a name that was fine)
+// nor a backend hiccup (EIO invites a retry that cannot succeed): it is a
+// capacity wall, so EDQUOT carries the meaning and .error carries the action.
+//
+// The load-bearing assertion is that BOTH tag states produce the same errno.
+// Linear's extensions.userError for this rejection has never been observed, so
+// an arm below the userError gate would make the errno depend on a bit we cannot
+// predict — EINVAL if set, EIO if not. This test is what pins the arm above it.
+func TestClassifyMutationErr_UsageLimitIsEDQUOT(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"userError unset", &api.GraphQLError{Message: "usage limit exceeded"}},
+		{"userError set", &api.GraphQLError{Message: "usage limit exceeded", UserError: true}},
+		{"wrapped", fmt.Errorf("mutation IssueCreate failed: %w", &api.GraphQLError{Message: "usage limit exceeded"})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, errno := classifyMutationErr("create issue", tc.err)
+			if errno != syscall.EDQUOT {
+				t.Fatalf("errno = %v, want EDQUOT for a plan/usage limit", errno)
+			}
+			// The errno alone cannot say WHICH limit, nor that waiting is futile.
+			for _, want := range []string{"plan/usage limit", "did NOT take effect", "will NOT help", "usage limit exceeded"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf(".error = %q, missing %q", msg, want)
+				}
+			}
+		})
+	}
+
+	// A server rate limit must NOT land here — it is retryable, and telling the
+	// caller that retrying will not help would be worse than the bug being fixed.
+	rateLimited := &api.GraphQLError{Message: "rate limit exceeded", Code: "RATELIMITED"}
+	if _, errno := classifyMutationErr("create issue", rateLimited); errno != syscall.EAGAIN {
+		t.Fatalf("errno = %v, want EAGAIN — a rate limit is not a plan wall", errno)
+	}
+
+	// Nor may an ECHOED entity name. Linear puts user-supplied names into
+	// UserPresentableMessage, so a workspace owning a label called "Usage limits"
+	// would have every validation rejection naming it hijacked by the EDQUOT arm
+	// — telling a caller with fixable input that retrying is futile. The arm sits
+	// above the userError gate, so the tag cannot rescue this; the predicate's
+	// whole-message rule is what keeps it EINVAL.
+	echo := &api.GraphQLError{
+		Message:                "Argument Validation Error",
+		UserPresentableMessage: "The label 'Usage limits' is a group and cannot be assigned to projects directly.",
+		UserError:              true,
+	}
+	msg, errno := classifyMutationErr("create issue", echo)
+	if errno != syscall.EINVAL {
+		t.Fatalf("errno = %v, want EINVAL — an echoed entity name is not a plan wall", errno)
+	}
+	if !strings.Contains(msg, "is a group and cannot be assigned") {
+		t.Errorf(".error = %q, want Linear's own rejection text", msg)
+	}
+	if strings.Contains(msg, "will NOT help") {
+		t.Errorf(".error = %q, must not claim retrying is futile for a fixable input error", msg)
 	}
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -43,14 +44,15 @@ func IsOutcomeUnknown(err error) bool { return errors.Is(err, ErrInFlight) }
 // Error predicates: the package-level classification of Linear API failures.
 //
 // Every layer above the client (fs mutation handlers, the repo's orphan
-// defense, the sync worker's backoff) needs to answer the same two questions
-// about an error — "was that a rate limit?" and "does the entity no longer
-// exist?" — and each used to answer with its own substring sniff, so the
-// checks drifted (different substrings, different case handling). These two
-// predicates are the single owners. Both prefer the structured *GraphQLError
-// (errors.As, so wrapping is transparent) and keep the message fallbacks for
-// errors that never carried the type: HTTP-level failures are plain
-// fmt.Errorf strings carrying Linear's error envelope verbatim.
+// defense, the sync worker's backoff) needs to ask the same questions about an
+// error — "was that a rate limit?", "does the entity no longer exist?" — and
+// each used to answer with its own substring sniff, so the checks drifted
+// (different substrings, different case handling). Each predicate here is the
+// single owner of its question, and layers above the client delegate to it
+// rather than sniffing substrings themselves. All of them prefer the structured
+// *GraphQLError (errors.As, so wrapping is transparent) and keep the message
+// fallbacks for errors that never carried the type: HTTP-level failures are
+// plain fmt.Errorf strings carrying Linear's error envelope verbatim.
 
 // IsRateLimited reports whether err is Linear telling us the account's
 // request or complexity budget is exhausted. Structured check first: Linear
@@ -82,6 +84,83 @@ func IsRateLimited(err error) bool {
 		strings.Contains(strings.ToLower(msg), "rate limit")
 }
 
+// IsUsageLimited reports whether err is Linear refusing the mutation because the
+// WORKSPACE is over a plan/usage limit — a capacity wall, not a request budget.
+// It is deliberately distinct from IsRateLimited: a rate limit clears when the
+// window resets, so waiting is the fix, whereas no amount of waiting clears a
+// plan limit. Only archiving/deleting entities or raising the plan does, which
+// is why classifyMutationErr maps this to EDQUOT rather than to the retryable
+// EAGAIN (#409).
+//
+// The check is message-shaped because Linear's extensions.code for this
+// rejection has never been observed — the only recorded instance is the bare
+// string "usage limit exceeded". If a code is ever captured, add a structured
+// check in first position, matching IsRateLimited's structured-first layering.
+//
+// For THIS predicate a false positive is strictly worse than a false negative,
+// so the match is biased hard toward missing. A miss degrades to the pre-#409
+// behavior — EIO, or EINVAL when Linear happened to tag the rejection
+// userError — which is the bug being fixed and no worse than before it. A false
+// hit actively lies: it tells a caller whose input is fixable that the
+// workspace is over quota and that retrying will NOT help.
+//
+// That asymmetry is why the phrase must CONSTITUTE the server's message rather
+// than appear anywhere within it. Linear echoes user-supplied entity names into
+// UserPresentableMessage ("The label 'X' is a group and cannot be assigned to
+// projects directly."), so a substring test hands a workspace that owns a label
+// named "Usage limits" a bogus quota verdict on every validation rejection that
+// names it. An echo is always embedded in a sentence while the recorded quota
+// message is bare, so an anchored whole-message test separates the two and
+// still tolerates a rewording like "workspace usage limit reached".
+func IsUsageLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	// A server rate limit is NOT a plan wall. The typed check takes precedence so
+	// a future widening of IsRateLimited's message fallback cannot land a request
+	// budget in the arm that tells the caller waiting will not help.
+	if IsRateLimited(err) {
+		return false
+	}
+	var gqlErr *GraphQLError
+	if errors.As(err, &gqlErr) {
+		return isUsageLimitMessage(gqlErr.Message) ||
+			isUsageLimitMessage(gqlErr.UserPresentableMessage)
+	}
+	// Not a *GraphQLError: an HTTP-level failure carrying Linear's envelope
+	// verbatim. There the server's messages are quoted values INSIDE a JSON body,
+	// so the whole-message rule applies to each extracted value, never to the
+	// envelope text — which embeds an echoed name exactly as it embeds the quota
+	// phrase.
+	msg := err.Error()
+	for _, m := range envelopeMessageRe.FindAllStringSubmatch(msg, -1) {
+		if isUsageLimitMessage(m[1]) {
+			return true
+		}
+	}
+	return isUsageLimitMessage(msg)
+}
+
+// usageLimitMessageRe matches a message that IS a usage-limit rejection rather
+// than one that merely mentions the phrase: the bare wording, optionally scoped
+// ("workspace usage limit") and optionally closed with a limit verb ("...
+// exceeded" / "... reached"). Anchored on purpose — see IsUsageLimited.
+var usageLimitMessageRe = regexp.MustCompile(
+	`^(?:the |your )?(?:workspace |organization |account |plan |team )?usage limit(?: (?:exceeded|reached|hit))?$`)
+
+// envelopeMessageRe pulls the server's quoted message values out of Linear's
+// error envelope when it reaches a predicate as a plain string.
+var envelopeMessageRe = regexp.MustCompile(
+	`"(?:message|userPresentableMessage)"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+
+// isUsageLimitMessage reports whether s, taken whole, is Linear's usage-limit
+// wording — case and a trailing full stop are the only slack.
+func isUsageLimitMessage(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(strings.TrimRight(s, ".!"))
+	return usageLimitMessageRe.MatchString(s)
+}
+
 // IsNotFound reports whether err is Linear's "Entity not found" rejection —
 // the entity the request referenced no longer exists upstream. Structured
 // check first ("Entity not found: <Type> - ..." is Linear's standard message
@@ -104,8 +183,10 @@ func IsNotFound(err error) bool {
 // IsFieldTooLong reports whether err is Linear rejecting a field for exceeding
 // its length cap — e.g. "description must be shorter than or equal to 255
 // characters." This is a size limit, not merely malformed input, so callers
-// (classifyMutationErr) can surface EMSGSIZE instead of a bare EINVAL, making
-// the errno itself a hint. Structured check first (the phrasing rides in
+// (classifyMutationErr) can surface EMSGSIZE instead of the bare EINVAL or EIO
+// the rejection would otherwise get — the tag Linear sets decides which, and
+// both are cases this predicate exists to rescue (#409) — making the errno
+// itself a hint. Structured check first (the phrasing rides in
 // Message/UserPresentableMessage), with a plain-string fallback. The two
 // substrings are the phrasings Linear uses for a max-length validation.
 func IsFieldTooLong(err error) bool {

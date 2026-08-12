@@ -47,7 +47,7 @@ type deleteSpec[T any] struct {
 	// entity (file-node deletes) returns it directly.
 	find func(ctx context.Context) (*T, error)
 	// mutate performs the API delete/archive. Failures are classified like
-	// creates: transient -> EAGAIN, else -> EIO, reason in .error.
+	// creates, by classifyMutationErr; the reason lands in .error.
 	mutate func(ctx context.Context, target *T) error
 	// forget removes the row from SQLite. Required: the store is the source of
 	// truth for listings, so a skipped forget resurrects the deleted item — and
@@ -70,7 +70,7 @@ type deleteSpec[T any] struct {
 // Contract:
 //   - find fails          -> .error gets the cause, classified errno.
 //   - find returns nil    -> .error notes the unknown name, ENOENT.
-//   - mutate fails        -> .error gets the cause, EAGAIN if transient else EIO.
+//   - mutate fails        -> .error gets the cause, classified errno.
 //   - forget fails (retried) -> .error names the self-heal (re-run rm), EIO; the
 //     coherence policy is skipped since the phantom row is still present.
 //   - success             -> clear .error, forget SQLite, InvalidateDeleted(dir,

@@ -21,7 +21,7 @@ import (
 // of any entity type — it works only on ID strings and name lists — so it is
 // unit-tested with fake closures, no FUSE mount, SQLite, or API. It returns a
 // classifiable error: a *FieldError for a name that will not resolve (→ EINVAL),
-// the wrapped mutation error otherwise (→ EIO/EAGAIN via classifyMutationErr).
+// the wrapped mutation error otherwise (classified by classifyMutationErr).
 
 // linkReconcileSpec describes one side of a many-to-many link edit.
 type linkReconcileSpec struct {

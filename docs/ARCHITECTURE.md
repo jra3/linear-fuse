@@ -242,8 +242,12 @@ Operational guards:
   request (op, vars, duration, outcome, complexity) to
   `~/.config/linearfs/requests.jsonl`, for offline diagnosis.
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
-  `IsFieldTooLong`, `IsDeferred` — the vocabulary the fs layer's error classifier
-  maps to errnos. `IsDeferred` (a local budget deferral: `ErrDeferred` or the
+  `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred` — the vocabulary the fs
+  layer's error classifier maps to errnos. `IsUsageLimited` (the workspace is
+  over a plan/usage limit) is likewise disjoint from `IsRateLimited`: a request
+  budget clears when the window resets, so waiting is the fix, whereas no wait
+  clears a plan wall — which is why it maps to `EDQUOT` rather than the
+  retryable `EAGAIN` (#409). `IsDeferred` (a local budget deferral: `ErrDeferred` or the
   pagination `ErrBudget`) is deliberately *excluded* from `IsRateLimited`: a
   server rate limit warrants a long pause until the window resets, but a local
   admission-ladder defer clears next cycle, so the sync worker skips-this-cycle
@@ -729,8 +733,11 @@ a layer above the commit-tail primitives) and no telemetry (matching
 3. On valid input, calls the `MutationClient`. `classifyMutationErr`
    (`createcommit.go`) is the single owner of the failure model: bad input →
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,
-   rate-limit/timeout/interruption → `EAGAIN`, backend failure → `EIO` — reason
-   always written to `.error`. The `EAGAIN` branch splits its *message* on
+   rate-limit/timeout/interruption → `EAGAIN`, workspace over its plan limit →
+   `EDQUOT`, backend failure → `EIO` — reason always written to `.error`. Arm
+   ORDER is load-bearing: the arms keyed on a condition Linear does not reliably
+   tag (`EDQUOT`, `EMSGSIZE`) sit ABOVE the `userError` gate, so their errno does
+   not depend on a server-set bit (#409). The `EAGAIN` branch splits its *message* on
    `api.IsOutcomeUnknown`: a request refused before it was sent (budget
    deferral, cancelled pre-send wait, tripped breaker) provably had no effect,
    while one whose POST was already on the wire (`api.ErrInFlight`, set in the
@@ -922,14 +929,17 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 - **Error surfacing contract:** every writable surface has a `.error` sibling
   (and `.last` where entities are minted). Bad input → `EINVAL`, over-length →
   `EMSGSIZE`, missing reference → `ENOENT`, rate-limited/timeout/interrupted →
-  `EAGAIN`, backend failure → `EIO`; the reason always lands in `.error`,
+  `EAGAIN`, workspace over its plan limit → `EDQUOT`, backend failure → `EIO`;
+  the reason always lands in `.error`,
   cleared on success. A stale local catalog self-heals with one refresh-and-retry
-  before any of that surfaces. Two refinements the errno alone cannot carry, so
+  before any of that surfaces. Three refinements the errno alone cannot carry, so
   the `.error` text is load-bearing: an `EAGAIN` says whether the request was
   refused before it was sent (safe to retry blindly) or interrupted in flight
-  (outcome unknown — check first, or duplicate), and an `EIO` from the
+  (outcome unknown — check first, or duplicate); an `EIO` from the
   read-your-writes check means retry, so the one divergence that retrying can
-  never fix — a declined body-clear — is `EINVAL` instead (#398/#399).
+  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and an
+  `EDQUOT` has to say that retrying will NOT help until the workspace has room,
+  which is the one next-action no other arm's phrasing covers (#409).
 - **Empty writes are refused at the shell:** `editFlush` rejects a flush whose
   buffer is empty or whitespace-only with `EINVAL` before any handler's front
   half runs. An empty document has no fields, so applying it diffs as "remove
