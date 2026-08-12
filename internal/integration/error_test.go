@@ -42,7 +42,12 @@ func TestInvalidStatusReturnsError(t *testing.T) {
 	}
 	// Restoring the original bytes is also what retires the .error the rejection
 	// leaves standing (#400): an unchanged save is a successful one.
-	defer func() { _ = claudeToolAtomicSave(t, path, orig) }()
+	defer func() {
+		if werr := claudeToolAtomicSave(t, path, orig); werr != nil {
+			t.Errorf("restoring the original bytes of %s failed (%v): the issue is left "+
+				"with a stale .error accusing a document that is valid", path, werr)
+		}
+	}()
 
 	const bogus = "InvalidStatusThatDoesNotExist"
 	modified, err := modifyFrontmatter(orig, "status", bogus)
@@ -205,7 +210,12 @@ func TestMalformedYAMLIsRejectedLegibly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read issue.md: %v", err)
 	}
-	defer func() { _ = claudeToolAtomicSave(t, path, orig) }()
+	defer func() {
+		if werr := claudeToolAtomicSave(t, path, orig); werr != nil {
+			t.Errorf("restoring the original bytes of %s failed (%v): the issue is left "+
+				"with a stale .error accusing a document that is valid", path, werr)
+		}
+	}()
 
 	malformed := []byte("---\ntitle: [unclosed bracket\n---\nbody")
 	werr := claudeToolAtomicSave(t, path, malformed)
