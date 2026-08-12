@@ -193,17 +193,20 @@ func configureTestIssue(id, identifier string, input map[string]any) (*api.Issue
 
 // issueIDFromMeta reads an issue's Linear id from its issue.meta sidecar.
 //
-// One reader, because there have been three and all three rotted the same way:
-// #148 moved the volatile server fields out of the editable issue.md, and a
-// caller that kept reading `id` from issue.md and swallowed the miss with `_`
-// handed every live test an api.Issue{ID: ""} — 14 failures as "not found in
-// SQLite" and "Argument Validation Error" (#396). The second copy sat in a
-// deferred cleanup, where a missing id meant the issue was simply never
-// archived and nothing said so (#420). The third filled FilesystemIssue.ID and
-// .Identifier with "" for every caller and was never noticed because no caller
-// read them; those fields are gone, so the compiler — not this comment — is
-// what keeps the count at one. Hence: one place, and an error on a miss rather
-// than a zero value.
+// It is the single reader of an issue's id on the create path in this file —
+// createTestIssue and the TestCreateIssueInvalidatesTeamListing cleanup both go
+// through it — because that path used to carry two copies of the read and both
+// rotted the same way. #148 moved the volatile server fields out of the
+// editable issue.md; a caller that kept reading `id` from issue.md and
+// swallowed the miss with `_` handed every live test an api.Issue{ID: ""} — 14
+// failures as "not found in SQLite" and "Argument Validation Error" (#396). The
+// other copy sat in a deferred cleanup, where a missing id meant the issue was
+// simply never archived and nothing said so (#420). Hence: one place, and an
+// error on a miss rather than a zero value.
+//
+// This says nothing about the rest of the package: reads of server-managed
+// fields from a rendered issue.md still exist elsewhere in internal/integration
+// and are tracked separately.
 func issueIDFromMeta(identifier string) (string, error) {
 	metaContent, err := os.ReadFile(issueMetaPath(testTeamKey, identifier))
 	if err != nil {
@@ -298,8 +301,9 @@ func createTestIssue(title string, opts ...IssueOption) (*TestIssue, func(), err
 //
 // The server-managed identity fields (id, identifier) are deliberately absent:
 // #148 moved them out of the editable issue.md and into the issue.meta sidecar,
-// so reading them here yielded "" forever. issueIDFromMeta is the one reader of
-// the sidecar id — a caller that needs it calls that.
+// so reading them here yielded "" forever. Their absence is what makes the
+// compiler, rather than a comment, the guard for this struct's id: a caller
+// that needs one calls issueIDFromMeta.
 type FilesystemIssue struct {
 	Title       string
 	Description string
