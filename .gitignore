@@ -35,6 +35,7 @@ go.work.sum
 docs/*
 !docs/plans/
 !docs/adr/
+!docs/agents/
 !docs/telemetry.md
 !docs/ARCHITECTURE.md
 !docs/THREAT-MODEL.md

@@ -499,3 +499,17 @@ After schema changes:
 - Breaking changes are acceptable - this is a prototype
 - Integration tests use TST team by preference (falls back to first team)
 - Test cache TTL is 100ms for fast tests; waits removed after filesystem writes
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues on `jra3/linear-fuse`, driven with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
