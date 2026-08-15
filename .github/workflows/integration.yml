@@ -34,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25'
+          go-version: '1.25.13'
 
       # Replaces an `apt-get install -y fuse3` that was a no-op: fuse3 is
       # preinstalled on GitHub's ubuntu images (the preflight still installs it if
