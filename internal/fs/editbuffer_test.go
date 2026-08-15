@@ -254,3 +254,124 @@ func TestEditBufferRead(t *testing.T) {
 		t.Errorf("Read at EOF = %q, want empty", got)
 	}
 }
+
+// TestEditBufferWriteDropsRestoredContent pins the consuming half of the #454
+// fix. A shell `>` redirect emits OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH:
+// the middle flush is rejected as an empty write and restores the entity's
+// render, and the write that follows belongs to the truncate, not to those
+// bytes. Overwriting a prefix of them is exactly the corruption #454 reports.
+func TestEditBufferWriteDropsRestoredContent(t *testing.T) {
+	t.Parallel()
+	b := &editBuffer{
+		content:          []byte("---\ntitle: Old\n---\nthe entity's long previous body\n"),
+		restoredForReads: true,
+	}
+
+	const short = "---\ntitle: New\n---\nshort\n"
+	n, errno := b.Write(context.Background(), nil, []byte(short), 0)
+	if errno != 0 {
+		t.Fatalf("Write errno = %v", errno)
+	}
+	if int(n) != len(short) {
+		t.Errorf("wrote %d bytes, want %d", n, len(short))
+	}
+	if string(b.content) != short {
+		t.Errorf("buffer = %q, want exactly the written bytes — restored content must not survive under them", b.content)
+	}
+	if b.restoredForReads {
+		t.Error("flag still set after the write consumed it; a second write would wrongly clear the buffer")
+	}
+	if !b.dirty {
+		t.Error("write left the buffer clean")
+	}
+}
+
+// TestEditBufferWriteKeepsOrdinaryContent is the control: without the mark, a
+// write is an ordinary in-place edit and must not clear anything. This is what
+// separates the fix from "truncate on every write".
+func TestEditBufferWriteKeepsOrdinaryContent(t *testing.T) {
+	t.Parallel()
+	b := &editBuffer{content: []byte("0123456789")}
+
+	if _, errno := b.Write(context.Background(), nil, []byte("ABC"), 2); errno != 0 {
+		t.Fatalf("Write errno = %v", errno)
+	}
+	if got, want := string(b.content), "01ABC56789"; got != want {
+		t.Errorf("buffer = %q, want %q — an unmarked write is an in-place edit", got, want)
+	}
+}
+
+// TestEditBufferRestoredMarkSurvivesOpenAndRefresh pins the lifetime rule, and
+// it is the inverse of what it looks like it should be. The mark describes the
+// CONTENT, not the handle that produced it, so an unrelated opener or a
+// background refresh must not clear it.
+//
+// Clearing on either reopens #454 in full: the window between the intervening
+// flush and the write is exactly when a reader can `cat` the file, and the
+// rejection sets dirty = false, which makes the buffer refresh-eligible right
+// then. Either one unmarks the buffer and the pending write splices itself onto
+// the old image.
+func TestEditBufferRestoredMarkSurvivesOpenAndRefresh(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a reader's open does not clear it", func(t *testing.T) {
+		t.Parallel()
+		b := &editBuffer{content: []byte("the entity's current render"), restoredForReads: true}
+
+		if _, _, errno := b.Open(context.Background(), 0); errno != 0 {
+			t.Fatalf("Open errno = %v", errno)
+		}
+		if !b.restoredForReads {
+			t.Fatal("open cleared the mark; a cat racing a `>` would reopen #454")
+		}
+
+		if _, errno := b.Write(context.Background(), nil, []byte("XX"), 0); errno != 0 {
+			t.Fatalf("Write errno = %v", errno)
+		}
+		if got := string(b.content); got != "XX" {
+			t.Errorf("buffer = %q, want %q — the interrupted truncate still owns this write", got, "XX")
+		}
+	})
+
+	t.Run("a background refresh does not clear it", func(t *testing.T) {
+		t.Parallel()
+		b := &editBuffer{content: []byte("the entity's current render"), restoredForReads: true}
+
+		swapped := false
+		b.refresh([]byte("a newer render from the sync worker"), func() { swapped = true })
+		if !swapped || string(b.content) != "a newer render from the sync worker" {
+			t.Fatalf("refresh did not adopt (swapped=%v content=%q)", swapped, b.content)
+		}
+		if !b.restoredForReads {
+			t.Fatal("refresh cleared the mark; the adopted render is equally nobody's write")
+		}
+
+		if _, errno := b.Write(context.Background(), nil, []byte("YY"), 0); errno != 0 {
+			t.Fatalf("Write errno = %v", errno)
+		}
+		if got := string(b.content); got != "YY" {
+			t.Errorf("buffer = %q, want %q", got, "YY")
+		}
+	})
+
+	t.Run("an explicit resize clears it", func(t *testing.T) {
+		t.Parallel()
+		b := &editBuffer{content: []byte("0123456789"), restoredForReads: true}
+
+		in := &fuse.SetAttrIn{}
+		in.Size = 4
+		in.Valid = fuse.FATTR_SIZE
+		if errno := b.Setattr(context.Background(), nil, in, &fuse.AttrOut{}); errno != 0 {
+			t.Fatalf("Setattr errno = %v", errno)
+		}
+		if b.restoredForReads {
+			t.Error("resize left the mark set; the writer has spoken and owns the buffer again")
+		}
+		if _, errno := b.Write(context.Background(), nil, []byte("AB"), 4); errno != 0 {
+			t.Fatalf("Write errno = %v", errno)
+		}
+		if got, want := string(b.content), "0123AB"; got != want {
+			t.Errorf("buffer = %q, want %q — an in-place write after a resize must not clear", got, want)
+		}
+	})
+}

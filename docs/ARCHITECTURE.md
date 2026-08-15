@@ -954,6 +954,14 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   re-save, while an emptied buffer on the in-place path belongs to the canonical
   node and would otherwise serve zero bytes for the node's whole lifetime —
   `refresh` refuses a dirty buffer, and only a successful flush clears the flag.
+  The restored bytes are then MARKED as the entity's rather than the writer's
+  (`editBuffer.restoredForReads`), because a flush can arrive between a truncate
+  and the write it belongs to — a shell `>` redirect emits exactly that, closing
+  a duplicated descriptor after the `SETATTR(size 0)`. `Write` treats marked
+  content as absent and clears it first, so the pending write cannot overwrite a
+  prefix of the old image and ship the splice (#454). Neither `Open` nor
+  `refresh` clears the mark: it describes the content, and a reader or a
+  background refresh landing mid-window would otherwise reopen the bug.
 - **Time handling** is the most common footgun — both directions: parse reads
   via `ParseSQLiteTime*`, stamp writes via `db.Now()` (UTC). Inside the worker,
   scheduling goes through the injected clock seam.

@@ -39,6 +39,41 @@ type editBuffer struct {
 	// the authoredPins pin on the same condition, and a Lookup re-seeds both from
 	// it (#379, #381); that pin, not this flag, is what survives the node.
 	authored bool
+	// restoredForReads marks content that editFlush's empty-write rejection put
+	// back so the canonical node would not serve zero bytes for the rest of its
+	// life (#397). Those bytes are the entity's, not the writer's: nobody asked
+	// for them, and they are present only to keep a re-read honest.
+	//
+	// That distinction is load-bearing because a flush can arrive between a
+	// truncate and the write it belongs to (#454). A shell `>` redirect emits
+	// exactly that — OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH — the middle
+	// FLUSH coming from the close of a duplicated descriptor. It finds an empty
+	// buffer, is rejected as an empty write, and restores. Without this flag the
+	// write that follows lands at offset 0 of the restored image and overwrites
+	// only a prefix, so the closing flush persists the writer's bytes spliced
+	// onto the tail of the old ones.
+	//
+	// So Write treats restored content as absent: a write arriving on top of it
+	// is the continuation of the interrupted truncate, and clears it first. A
+	// reader in the same window still sees the entity, which is all the
+	// rejection promised.
+	//
+	// The mark describes the CONTENT, not the handle that produced it, and that
+	// is why neither Open nor refresh clears it. Both were tried and both
+	// reopened the bug outright: a `cat` racing a `>` re-opens the file, and a
+	// background refresh is eligible the moment the rejection clears dirty, so
+	// either one could unmark the buffer mid-window and let the pending write
+	// splice itself onto the old image. A fresh render adopted by refresh is
+	// equally nobody's write, so the mark is still true of it.
+	//
+	// Only three things end it: the write that consumes it, an explicit resize
+	// (the writer speaking again), and truncateBuffer. A mark can therefore
+	// outlive the writer that caused it, on a buffer nobody ever wrote — the
+	// cost is that a later PARTIAL write with no truncate first would clear the
+	// buffer instead of editing in place. That write fails loudly on the parse
+	// rather than corrupting anything, and no writer of these files makes one:
+	// editors save through rename, and every truncating path resizes first.
+	restoredForReads bool
 }
 
 // editable exposes the embedded buffer to newFileInode, the one builder every
@@ -84,6 +119,7 @@ func (b *editBuffer) truncateBuffer() {
 	defer b.mu.Unlock()
 	b.content = b.content[:0]
 	b.dirty = true
+	b.restoredForReads = false
 }
 
 // Open clears this node's serve-your-own-writes flag (#365): a fresh open means
@@ -127,6 +163,15 @@ func (b *editBuffer) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// The bytes an empty-write rejection restored were never the writer's, and a
+	// write arriving on top of them continues the truncate that provoked the
+	// rejection — so drop them rather than let this write overwrite a prefix of
+	// the old image and ship the splice (#454).
+	if b.restoredForReads {
+		b.content = b.content[:0]
+		b.restoredForReads = false
+	}
+
 	newLen := int(off) + len(data)
 	if newLen > len(b.content) {
 		grown := make([]byte, newLen)
@@ -143,6 +188,9 @@ func (b *editBuffer) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetA
 	defer b.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
+		// An explicit resize is the writer speaking again; whatever the rejection
+		// restored is superseded by it (#454).
+		b.restoredForReads = false
 		if int(sz) < len(b.content) {
 			b.content = b.content[:sz]
 		} else if int(sz) > len(b.content) {

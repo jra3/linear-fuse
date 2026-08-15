@@ -191,6 +191,12 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 			if current := spec.restore(); len(current) > 0 {
 				eb.content = current
 				eb.dirty = false
+				// Mark whose bytes these are. They exist so a re-read is honest, not
+				// because anyone wrote them, and this flush may well be the one a
+				// shell emits between a truncate and its write (#454) — in which case
+				// the write still to come must land on an empty buffer, not on top of
+				// this image. editBuffer.Write consumes the flag to guarantee that.
+				eb.restoredForReads = true
 			}
 		}
 		return syscall.EINVAL

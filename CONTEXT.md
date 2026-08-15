@@ -786,7 +786,8 @@ mount (`entitycell_test.go`).
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file
 node — the edit-side twin of `createFileNode`'s buffer. `editBuffer`
-(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored}` and provides the
+(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored, restoredForReads}`
+and provides the
 FUSE buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into
 the node** the way `attrNode` promotes `Getattr`. `authored` is the
 serve-your-own-writes flag (#365): `editFlush` sets it after a write **commits
@@ -802,7 +803,38 @@ rebuild inside the [[authored-pin]]'s TTL re-arms it from the pin (#388).
 The flag protects the bytes only as long as **this node** lives — a dentry forget
 rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
 [[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
-pin, not this flag, is what survives the node. See [[node-refresh]]. Each of the seven editable file
+pin, not this flag, is what survives the node. See [[node-refresh]].
+
+`restoredForReads` marks **whose** the buffer's bytes are (#454). The
+[[edit-flush]] empty-write rejection puts the entity's current render back so the
+canonical node does not serve zero bytes for the rest of its life (#397) — bytes
+nobody wrote, present only to keep a re-read honest. That matters because a flush
+can arrive **between a truncate and the write it belongs to**: a shell `>`
+redirect emits `OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH`, the middle `FLUSH`
+coming from the close of a duplicated descriptor. It finds an empty buffer, is
+rejected, and restores. Unmarked, the write that follows lands at offset 0 of the
+restored image and overwrites only a prefix, so the closing flush persists the
+writer's bytes **spliced onto the tail of the old ones** — measured as description
+corruption that compounds across writes and never shrinks the file. So `Write`
+treats restored content as absent and clears it first: a write on top of it
+continues the interrupted truncate.
+
+The mark describes the **content**, not the handle that produced it, which is why
+neither `Open` nor `refresh` clears it. Both were tried and both reopened the bug:
+the window between the intervening flush and the write is exactly when a reader
+can `cat` the file, and the rejection sets `dirty = false`, which makes the buffer
+refresh-eligible right then — either one would unmark it mid-window. A render
+adopted by `refresh` is equally nobody's write, so the mark stays true of it. Only
+three things end it: the write that consumes it, an explicit resize (the writer
+speaking again), and `truncateBuffer`. A mark can therefore outlive the writer
+that caused it; the cost is that a later **partial** write with no truncate first
+clears the buffer instead of editing in place, which fails loudly on the parse
+rather than corrupting anything, and no writer of these files makes one — editors
+save through rename, and every truncating path resizes first. The
+[[atomic-save]] path was never affected at all, because a rename does not
+interleave a flush between the truncate and the write.
+
+Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`

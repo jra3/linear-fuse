@@ -509,3 +509,61 @@ func TestEditFlushCleanBufferIsNoOp(t *testing.T) {
 		t.Errorf("clean buffer: errno=%v mutateCalled=%v invalidated=%v, want 0/false/none", errno, called, sink.invalidated)
 	}
 }
+
+// TestEditFlushEmptyWriteMarksRestoredForReads pins the flag the fix for #454
+// hangs on: the bytes the rejection puts back are the entity's, not the
+// writer's, and the shell has to say so. Without the mark, editBuffer.Write
+// cannot tell "the writer is editing this render" from "the writer truncated
+// and their write is still in flight".
+func TestEditFlushEmptyWriteMarksRestoredForReads(t *testing.T) {
+	t.Parallel()
+	eb := &editBuffer{content: []byte{}, dirty: true}
+	sink := &recordingFlushSink{}
+	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		mutate:    func(context.Context) (bool, syscall.Errno) { return true, 0 },
+		writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
+		adopt:     func(*fakeEntity) {},
+		restore:   func() []byte { return []byte("the entity's current render") },
+		coherence: []uint64{1},
+		pinIno:    1,
+	})
+	if errno != syscall.EINVAL {
+		t.Fatalf("errno = %v, want EINVAL", errno)
+	}
+	if !eb.restoredForReads {
+		t.Error("restored content left unmarked; a write arriving after this flush would overwrite a prefix of it (#454)")
+	}
+}
+
+// TestEditFlushEmptyWriteWithoutRestoreDoesNotMark is the zero-value twin: with
+// no restore, there are no borrowed bytes in the buffer, so there is nothing to
+// mark and a later write must be taken at face value.
+func TestEditFlushEmptyWriteWithoutRestoreDoesNotMark(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		restore func() []byte
+	}{
+		{"no restore closure", nil},
+		{"restore declines", func() []byte { return nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eb := &editBuffer{content: []byte{}, dirty: true}
+			errno := editFlush(context.Background(), &recordingFlushSink{}, eb, editFlushSpec[fakeEntity]{
+				mutate:    func(context.Context) (bool, syscall.Errno) { return true, 0 },
+				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
+				adopt:     func(*fakeEntity) {},
+				restore:   tc.restore,
+				coherence: []uint64{1},
+				pinIno:    1,
+			})
+			if errno != syscall.EINVAL {
+				t.Errorf("errno = %v, want EINVAL", errno)
+			}
+			if eb.restoredForReads {
+				t.Error("marked restoredForReads without restoring anything; a later write would be discarded")
+			}
+		})
+	}
+}
