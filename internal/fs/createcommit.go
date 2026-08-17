@@ -192,8 +192,8 @@ func unconfirmedReflectionMsg(op string, r WriteResult, err error) string {
 // either way the reason lands in .error, and the errno itself hints where a
 // specific one exists. Rate-limit/not-found, too-long and usage-limit detection
 // delegate to the api package's predicates (api.IsRateLimited via
-// retryableCreateErr, api.IsNotFound via the delete tail's remoteAlreadyGone,
-// api.IsFieldTooLong, api.IsUsageLimited).
+// retryableCreateErr, api.IsNotFound both here and via the delete tail's
+// remoteAlreadyGone, api.IsFieldTooLong, api.IsUsageLimited).
 //
 // Arm ORDER carries meaning: the arms that classify on a condition Linear does
 // not reliably tag (usage limit, length cap) sit above the userError gate, so
@@ -202,6 +202,14 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {
 		return nferr.Detail(), syscall.ENOENT
+	}
+	// A Linear-side "Entity not found" rejection on a create/update/rename —
+	// the referenced entity was deleted between a read and the write — is
+	// ENOENT, not EIO: the reference is gone and no retry changes that (#445).
+	// The delete tail catches the same condition earlier via remoteAlreadyGone,
+	// where it means idempotent success instead.
+	if api.IsNotFound(err) {
+		return "Operation: " + op + "\nError: " + err.Error(), syscall.ENOENT
 	}
 	var ferr *FieldError
 	if errors.As(err, &ferr) {

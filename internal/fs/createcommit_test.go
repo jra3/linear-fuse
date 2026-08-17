@@ -117,6 +117,17 @@ func TestCommitCreate_Classification(t *testing.T) {
 			wantIn:    "unknown issue",
 		},
 		{
+			// #445: a Linear-side "Entity not found" rejection on a
+			// create/update/rename — the referenced entity was deleted
+			// between a read and the write — is ENOENT, not EIO. The
+			// predicate api.IsNotFound matches the structured GraphQL error
+			// (and the plain-string fallback) the API returns here.
+			name:      "api.IsNotFound (server-side Entity not found) is ENOENT",
+			err:       &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."},
+			wantErrno: syscall.ENOENT,
+			wantIn:    "Entity not found",
+		},
+		{
 			name:      "deadline is EAGAIN with a retry hint",
 			err:       context.DeadlineExceeded,
 			wantErrno: syscall.EAGAIN,

@@ -217,6 +217,22 @@ func TestCommitRename_Contract(t *testing.T) {
 			wantInvalidates: 0,
 		},
 		{
+			// #445: a Linear-side "Entity not found" rejection on a rename
+			// — the entity was deleted between a read and the rename — is
+			// ENOENT, not EIO. The rename tail classifies mutate errors
+			// through classifyMutationErr, which now calls api.IsNotFound.
+			name:            "7e mutate server-side Entity not found is ENOENT",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			mutErr:          &api.GraphQLError{Message: "Entity not found: Document - Could not find referenced Document."},
+			wantErrno:       syscall.ENOENT,
+			wantFind:        true,
+			wantMutate:      true,
+			wantSets:        1,
+			wantErrSubstr:   "Entity not found",
+			wantInvalidates: 0,
+		},
+		{
 			name:            "7d mutate usage-limit is EDQUOT",
 			oldName:         "foo.md",
 			newName:         "bar.md",
