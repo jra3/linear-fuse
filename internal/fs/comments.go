@@ -83,7 +83,7 @@ func (n *CommentsNode) buildComment(ctx context.Context, name string, comment ap
 		editBuffer: editBuffer{content: content},
 	}
 	// Shorter timeout for writable files.
-	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), 5*time.Second), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), comment.CreatedAt, comment.UpdatedAt), commentIno(comment.ID), editableFileTimeout), 0
 }
 
 func (n *CommentsNode) Unlink(ctx context.Context, name string) syscall.Errno {

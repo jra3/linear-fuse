@@ -141,6 +141,23 @@ type renderChild interface {
 // per-file timeout. Any value >= 0 is applied to both attr and entry.
 const inheritTimeout = time.Duration(-1)
 
+// noKernelCache is the other named timeout policy: 0, "the kernel may not serve
+// this entry or its attrs from its own cache at all". It is the right answer for
+// a surface whose content the mount itself mutates between two adjacent syscalls
+// — the write-through collection directories and the `.meta`/`.error`/`.last`
+// sidecars a failed write rewrites. Named rather than written as a bare 0 so
+// that every timeout argument at a build site is a policy the reader can look
+// up, which is what lets TestNoHardcodedKernelTimeouts forbid literals outright
+// (#449).
+const noKernelCache = time.Duration(0)
+
+// editableFileTimeout is the third and last policy: the short bound the editable
+// `.md` files (comment/document/label/milestone) hand the kernel. It is
+// deliberately NOT the mount's entry timeout — these files are written through
+// the mount, and the bound that matters is how long a stale render can outlive
+// the writer's own save, not how long a remote change may go unnoticed.
+const editableFileTimeout = 5 * time.Second
+
 // fillRenderEntry fills a Lookup EntryOut from the child's first render — the
 // same renderAttr() path its Getattr uses, so the two can never disagree — and
 // applies the timeout (< 0 inherits the mount default). Shared by both mount

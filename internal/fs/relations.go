@@ -127,7 +127,7 @@ func (n *RelationsNode) createRelationFileNode(ctx context.Context, name string,
 	if isInverse {
 		inoKey += "/inverse"
 	}
-	return n.newRenderInode(ctx, out, name, node, relationIno(inoKey), 30*time.Second), 0
+	return n.newRenderInode(ctx, out, name, node, relationIno(inoKey), n.lfs.entryTimeout()), 0
 }
 
 // RelationFileNode represents a relation file (read-only info). Deletion is the

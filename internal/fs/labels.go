@@ -86,7 +86,7 @@ func (n *LabelsNode) newLabelInode(ctx context.Context, name string, label api.L
 	// newFileInode owns the attr fill, timeouts, refresh dedup, and the
 	// dirty-size clamp (shared with comments/docs).
 	now := time.Now()
-	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), now, now), labelIno(label.ID), 5*time.Second), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), now, now), labelIno(label.ID), editableFileTimeout), 0
 }
 
 func (n *LabelsNode) Unlink(ctx context.Context, name string) syscall.Errno {

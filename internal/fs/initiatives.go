@@ -111,7 +111,7 @@ func (i *InitiativeNode) refreshFrom(fresh fs.InodeEmbedder) {
 func (i *InitiativeNode) manifest() *dirManifest {
 	initiative := i.entity() // snapshot captured by the build closures
 	lfs := i.lfs
-	m := newDirManifest(&i.BaseNode, initiative.ID, initiative.CreatedAt, initiative.UpdatedAt, 0)
+	m := newDirManifest(&i.BaseNode, initiative.ID, initiative.CreatedAt, initiative.UpdatedAt, noKernelCache)
 
 	// initiative.md is editable-only; identity/status/owner live in initiative.meta.
 	m.file("initiative.md", initiativeInfoIno(initiative.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {

@@ -873,7 +873,11 @@ persistent flags. **Startup order** (`mount.go` → `linearfs.go`):
    viewer into it, spawns a background viewer refresh, and starts the
    `sync.Worker` under `lifeCtx`.
 6. `fs.MountFS(...)` — creates the root node, mounts via go-fuse (attr/entry
-   timeouts 60s/30s), hands the server ref to `kernelNotify`.
+   timeouts 60s/30s, overridable with `WithKernelCacheTimeouts`), publishes the
+   configured entry timeout on `LinearFS` so the per-node build sites hand the
+   kernel the mount's own policy rather than a literal of their own (#414/#449,
+   guarded by `TestNoHardcodedKernelTimeouts`), and hands the server ref to
+   `kernelNotify`.
 7. On SIGINT/SIGTERM: unmount; after `server.Wait()` returns, flush telemetry
    *first* (the final export's observable gauges read the still-open store),
    then `lfs.Close()` — cancel `lifeCtx`, wait for spawned goroutines, stop the

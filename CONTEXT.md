@@ -681,14 +681,24 @@ and a later `Getattr` render it identically and can never disagree. `nodeAttr`
 (`BaseNode` + a stored `nodeAttr`) **provides the default `Getattr`**, so a
 directory node cannot hand-write a divergent one. The `newDirInode`/`newFileInode`
 `BaseNode` constructors stash the `nodeAttr` on the child, fill the Lookup
-`EntryOut` from that same value, take the entry timeout as an explicit param
-(the deliberate classes are preserved, never rationalized here: the entity-dir
-tier passes `lfs.entryTimeout()` — the mount's configured bound, 30s by default
-— and the 5s/1s/0 classes stay literals), and return `StableAttr{Mode, Ino}`.
-The param sets **both** `SetAttrTimeout` and `SetEntryTimeout`, so a site that
-passes it is choosing its attr policy too — the reason #414 fixed the entity-dir
-hardcodes with `entryTimeout()` rather than `inheritTimeout`, which would have
-moved entity-dir attrs from 30s to the mount's 60s attr default.
+`EntryOut` from that same value, take the entry timeout as an explicit param,
+and return `StableAttr{Mode, Ino}`. The deliberate classes are preserved, never
+rationalized here, but since #449 every one of them is a **named policy** rather
+than an inline duration: `lfs.entryTimeout()` (the mount's configured bound, 30s
+by default — the entity-dir and render-file tiers), `inheritTimeout` (leave the
+mount default alone), `noKernelCache` (0 — the write-through collection dirs and
+the `.meta`/`.error`/`.last` sidecars), `editableFileTimeout` (5s — the editable
+`.md` files). The param sets **both** `SetAttrTimeout` and `SetEntryTimeout`, so
+a site that passes it is choosing its attr policy too — the reason #414/#449
+fixed the hardcodes with `entryTimeout()` rather than `inheritTimeout`, which
+would have moved those attrs from 30s to the mount's 60s attr default.
+`TestNoHardcodedKernelTimeouts` (`internal/fs/kerneltimeout_test.go`) is the
+guard: it reads the package's own source and fails if any build site
+(`newDirInode`/`newFileInode`/`newRenderInode`/`lookupRenderFile`/
+`mountRenderFile`/`newDirManifest`) passes a duration literal, because a literal
+is exactly how `WithKernelCacheTimeouts` came to govern nothing beneath six
+directories (#414) and four render files (#449). A fifth class is a new named
+constant with a comment saying why.
 `newFileInode` carries one further responsibility, because it is the one
 builder every editable file passes
 through: it seeds serve-your-own-writes for any child exposing `editable()
@@ -913,9 +923,11 @@ kernel served the first read forever); the TTL/`cachedContent` fields are gone �
 each read now fetches from SQLite (cheap) and re-renders. These files are tiny and
 read interactively, so the per-read FUSE round-trip is imperceptible. The attr
 timeout stays a per-construction param (`inheritTimeout` = leave the mount default
-60s/30s, preserving the nodes that set none; `.meta`/`.error`/`.last` keep 0;
-attachment files take `lfs.entryTimeout()` since #414, while relation/link/update
-files still keep a literal 30s).
+60s/30s, preserving the nodes that set none; `.meta`/`.error`/`.last` take
+`noKernelCache`; the attachment `.link` files took `lfs.entryTimeout()` in #414
+and the relation/link/update files joined them in #449, which retired the last
+literal 30s here — the same value in production, but `WithKernelCacheTimeouts`
+now really governs them).
 
 **The closure returns real times, never `now()`** — the drift this module kills
 (`ls -lt` used to reshuffle those files every call). A zero time reports as an
@@ -1193,7 +1205,11 @@ initiative's unset read as an oversight, not a considered 0). That tier was a
 hardcoded 30s until #414 made all six sites pass `lfs.entryTimeout()` — the same
 30s by default, but now the mount's configured bound really governs beneath them
 (`fs.WithKernelCacheTimeouts` had been silently inert there, which is what let a
-short-timeout fixture look like a broken refresh path). The three dir-ino
+short-timeout fixture look like a broken refresh path). #449 finished the sweep
+on the render-file side (relation/link/update files) and made
+`kernelEntryTimeout` a pointer so a mount that configures **0** — a legitimate
+"never cache entries" — is no longer read as "never mounted" and answered with
+30s. The three dir-ino
 wrappers use symmetric `issuedir`/`projectdir`/`initiativedir` prefixes,
 registered in `TestInodeNamespaceDistinct`.
 

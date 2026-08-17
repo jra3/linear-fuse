@@ -54,8 +54,13 @@ type LinearFS struct {
 	// the serve loop starts, like mountPoint) so nodes that set a per-directory
 	// timeout read the SAME policy the mount was given, rather than a literal of
 	// their own: the issue directory carried a second hardcoded 30s, and a mount
-	// configured otherwise silently did not apply to it.
-	kernelEntryTimeout time.Duration
+	// configured otherwise silently did not apply to it. It is a pointer because
+	// 0 is a legitimate configured value ("do not let the kernel cache entries"):
+	// a plain duration cannot tell that apart from "never mounted", and the
+	// <= 0 guard it forced made WithKernelCacheTimeouts(0, 0) yield 30s on every
+	// surface routed through entryTimeout() while inheritTimeout sites got 0
+	// (#449).
+	kernelEntryTimeout *time.Duration
 
 	// userFeedback (config UserFeedback / env USER_FEEDBACK, default off) makes
 	// the generated README carry the agent self-reporting protocol. Read only
@@ -821,13 +826,14 @@ const (
 )
 
 // entryTimeout is the kernel-entry cache bound a node should hand its children.
-// It falls back to the default so a LinearFS built without MountFS (unit tests)
-// behaves like production.
+// Unset (nil) means no MountFS ran — a LinearFS built directly by a unit test —
+// and falls back to the default so that path behaves like production. A mount
+// that configured 0 gets 0, which is the point of the pointer.
 func (lfs *LinearFS) entryTimeout() time.Duration {
-	if lfs.kernelEntryTimeout <= 0 {
+	if lfs.kernelEntryTimeout == nil {
 		return DefaultEntryTimeout
 	}
-	return lfs.kernelEntryTimeout
+	return *lfs.kernelEntryTimeout
 }
 
 // MountOption tunes a mount. The defaults are production's; the options exist
@@ -869,7 +875,7 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool, opts ...MountOption) 
 		o(&mc)
 	}
 	attrTimeout, entryTimeout := mc.attrTimeout, mc.entryTimeout
-	lfs.kernelEntryTimeout = entryTimeout // published before the serve loop, as above
+	lfs.kernelEntryTimeout = &entryTimeout // published before the serve loop, as above
 
 	fsOpts := &fs.Options{
 		AttrTimeout:  &attrTimeout,
