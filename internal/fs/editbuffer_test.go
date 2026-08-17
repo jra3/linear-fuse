@@ -254,3 +254,55 @@ func TestEditBufferRead(t *testing.T) {
 		t.Errorf("Read at EOF = %q, want empty", got)
 	}
 }
+
+// TestEditBufferTruncateThenWriteAtOffset covers the pending-truncation flag at
+// a non-zero offset (#454): a truncation to zero makes the file logically empty,
+// so a later write at offset N must produce exactly N zero bytes plus the data —
+// never the bytes an intervening restore left sitting in the buffer under it.
+func TestEditBufferTruncateThenWriteAtOffset(t *testing.T) {
+	t.Parallel()
+	b := &editBuffer{content: []byte("hello world")}
+
+	zero := &fuse.SetAttrIn{}
+	zero.Valid = fuse.FATTR_SIZE
+	zero.Size = 0
+	if errno := b.Setattr(context.Background(), nil, zero, &fuse.AttrOut{}); errno != 0 {
+		t.Fatalf("Setattr truncate errno = %d", errno)
+	}
+	if !b.truncated {
+		t.Fatal("a truncation to zero did not arm the pending-truncation flag")
+	}
+
+	// Simulate the intervening flush's restore: content comes back, the file is
+	// still logically empty.
+	b.content = []byte("hello world")
+
+	b.Write(context.Background(), nil, []byte("hi"), 4)
+	if string(b.content) != "\x00\x00\x00\x00hi" {
+		t.Errorf("content = %q, want four zero bytes then \"hi\" — the restored image must not show through", b.content)
+	}
+	if b.truncated {
+		t.Error("the write did not consume the pending truncation; a later write would re-truncate")
+	}
+}
+
+// TestEditBufferSetattrNonZeroSupersedesPendingTruncate: an explicit non-zero
+// size IS the file's new length, so it clears any pending truncation rather than
+// leaving one armed to clip the next write.
+func TestEditBufferSetattrNonZeroSupersedesPendingTruncate(t *testing.T) {
+	t.Parallel()
+	b := &editBuffer{content: []byte("hello world"), truncated: true}
+
+	in := &fuse.SetAttrIn{}
+	in.Valid = fuse.FATTR_SIZE
+	in.Size = 5
+	b.Setattr(context.Background(), nil, in, &fuse.AttrOut{})
+	if b.truncated {
+		t.Error("an explicit non-zero size left the pending-truncation flag armed")
+	}
+
+	b.Write(context.Background(), nil, []byte("!"), 5)
+	if string(b.content) != "hello!" {
+		t.Errorf("content = %q, want hello! — the write appended to the sized file", b.content)
+	}
+}

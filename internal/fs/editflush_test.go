@@ -7,6 +7,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 // editFlush's shell is the branchy part where drift lived (dirty on the wrong
@@ -620,5 +622,68 @@ func TestHoleWriteMessageNamesTheCause(t *testing.T) {
 	}
 	if got := rejectedWriteMessage(writeIsEmpty, "save issue ENG-1"); !strings.Contains(got, "Empty write rejected") {
 		t.Errorf("empty verdict rendered the wrong message:\n%s", got)
+	}
+}
+
+// TestEditFlushRestoreDoesNotSpliceIntoTheNextWrite is #454 at the seam the bug
+// actually lives on: editFlush's empty-write restore meeting editBuffer.Write.
+//
+// A `-d` trace of a live mount shows the kernel's sequence for a shell `>`
+// redirect is OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH — the shell emits that
+// middle FLUSH by closing a duplicated descriptor. The restore (#397) answers it
+// by putting the entity's render back, so the write that follows used to land at
+// offset 0 of the resurrected image and the closing flush persisted the splice:
+// the old description's tail survived, and the previous frontmatter leaked into
+// the body. The pending-truncation flag is what keeps the restore a read-side
+// convenience.
+func TestEditFlushRestoreDoesNotSpliceIntoTheNextWrite(t *testing.T) {
+	t.Parallel()
+	const render = "---\ntitle: \"Truncate probe\"\n---\nAAAA BBBB CCCC DDDD EEEE FFFF GGGG\n"
+	eb := &editBuffer{content: []byte(render)}
+	sink := &recordingFlushSink{}
+	spec := editFlushSpec[fakeEntity]{
+		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+		writeBack: writeBackSpec[fakeEntity]{
+			errKey:  "k",
+			op:      "save issue ENG-1",
+			fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 1}, nil },
+			compare: func(*fakeEntity) []writeBackResult { return nil },
+		},
+		adopt:     func(*fakeEntity) {},
+		restore:   func() []byte { return []byte(render) },
+		coherence: []uint64{1},
+		pinIno:    1,
+	}
+
+	// SETATTR(size 0) — the O_TRUNC of the redirect.
+	zero := &fuse.SetAttrIn{}
+	zero.Valid = fuse.FATTR_SIZE
+	zero.Size = 0
+	eb.Setattr(context.Background(), nil, zero, &fuse.AttrOut{})
+
+	// FLUSH from the dup'd descriptor closing. The rejection still stands and the
+	// buffer is still restored — reads must keep working.
+	if errno := editFlush(context.Background(), sink, eb, spec); errno != syscall.EINVAL {
+		t.Fatalf("intervening flush errno = %v, want EINVAL (the empty-write rejection is unchanged)", errno)
+	}
+	if string(eb.content) != render {
+		t.Fatalf("intervening flush left content = %q, want the entity's render restored", eb.content)
+	}
+
+	// WRITE — the redirect's actual payload, shorter than the render.
+	const short = "---\ntitle: \"SHORT\"\n---\nSHORT\n"
+	eb.Write(context.Background(), nil, []byte(short), 0)
+	if string(eb.content) != short {
+		t.Errorf("buffer after the write = %q, want exactly %q — the restored image spliced through", eb.content, short)
+	}
+
+	// FLUSH — what the closing descriptor would persist.
+	var sent string
+	spec.mutate = func(context.Context) (bool, syscall.Errno) { sent = string(eb.content); return true, 0 }
+	if errno := editFlush(context.Background(), sink, eb, spec); errno != 0 {
+		t.Fatalf("closing flush errno = %v, want 0", errno)
+	}
+	if sent != short {
+		t.Errorf("front half saw %q, want %q — the splice would have reached Linear", sent, short)
 	}
 }

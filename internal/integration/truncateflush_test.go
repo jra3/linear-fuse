@@ -24,12 +24,11 @@ import (
 // plain O_TRUNC+write test passes against the bug. dup(2) + close(2) reproduces
 // it exactly, and is the whole difference between this test and a passing one.
 //
-// SKIPPED: this asserts the FIXED behavior and fails today. Deleting the skip
-// is the first step of fixing #454; the assertions below are its acceptance
-// criteria.
+// The fix is editBuffer's pending-truncation flag: the restore stays a read-side
+// convenience, and the write that follows re-applies the truncation at its own
+// offset, so this test now runs unskipped.
 func TestTruncatingWriteWithInterveningFlush(t *testing.T) {
 	skipIfLiveAPI(t, "fixture-mode: seeds a row and audits the fake mutator's payload")
-	t.Skip("pins #454 (unfixed): a flush between O_TRUNC and the first write restores the buffer, splicing the old image into the save. Remove this skip to fix it.")
 
 	if testStore == nil {
 		t.Fatal("fixture mode left no test store")

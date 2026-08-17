@@ -39,6 +39,23 @@ type editBuffer struct {
 	// the authoredPins pin on the same condition, and a Lookup re-seeds both from
 	// it (#379, #381); that pin, not this flag, is what survives the node.
 	authored bool
+	// truncated is the pending-truncation flag (#454): a truncation emptied the
+	// buffer and no write has landed since, so the FILE is logically zero bytes
+	// whatever `content` currently holds. It exists because those two can
+	// disagree. The kernel's sequence for a shell `>` redirect is OPEN,
+	// SETATTR(size 0), FLUSH, WRITE, FLUSH — the shell emits that middle FLUSH by
+	// closing a duplicated descriptor — and editFlush's empty-write guard (#397)
+	// answers it by RESTORING the entity's render into the buffer, which is right
+	// for a writer who truly emptied the file and wrong here. Without this flag
+	// the write that follows lands at offset 0 of the resurrected image,
+	// overwriting only a prefix, and the closing flush persists the splice to
+	// Linear: a shorter `>` rewrite kept the old description's tail, and a shorter
+	// one after that spliced the previous frontmatter into the body.
+	//
+	// Write consumes it by emptying the buffer again before applying the data, so
+	// the restore stays a read-side convenience and never becomes write-side
+	// content.
+	truncated bool
 }
 
 // editable exposes the embedded buffer to newFileInode, the one builder every
@@ -84,6 +101,7 @@ func (b *editBuffer) truncateBuffer() {
 	defer b.mu.Unlock()
 	b.content = b.content[:0]
 	b.dirty = true
+	b.truncated = true
 }
 
 // Open clears this node's serve-your-own-writes flag (#365): a fresh open means
@@ -127,6 +145,17 @@ func (b *editBuffer) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// A pending truncation still bounds this write (#454). If an intervening
+	// flush restored the entity's render into the emptied buffer, the FILE is
+	// nonetheless logically empty, so empty the buffer again before applying the
+	// write: the result is exactly what writing into the truncated buffer would
+	// have produced — the data at off, and a zero-filled hole before it, with no
+	// byte of the restored image showing through at either end.
+	if b.truncated {
+		b.content = b.content[:0]
+		b.truncated = false
+	}
+
 	newLen := int(off) + len(data)
 	if newLen > len(b.content) {
 		grown := make([]byte, newLen)
@@ -151,6 +180,11 @@ func (b *editBuffer) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetA
 			b.content = grown
 		}
 		b.dirty = true
+		// Only a truncation to zero arms the pending-truncation flag: it is the
+		// one size an intervening flush can misread as "the writer emptied this
+		// file" and answer by restoring the old image (#454). Any other explicit
+		// size is itself the file's new length, so it supersedes a pending one.
+		b.truncated = sz == 0
 	}
 
 	out.Mode = 0644

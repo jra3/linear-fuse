@@ -98,7 +98,20 @@ writer's text dirty for a corrected re-save, but a refused buffer holds no text
 worth preserving, and leaving it dirty would strand the
 node serving zero bytes for its lifetime ([[edit-buffer]]'s `refresh` refuses a
 dirty buffer) — defeating the very recovery the `.error` prescribes, "re-read the
-file to get its current contents". Projects/initiatives
+file to get its current contents".
+
+That restore is a **read-side** convenience only, and [[edit-buffer]]'s
+**pending-truncation** flag is what keeps it one (#454). The kernel's sequence for
+a shell `>` redirect is OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH — the shell
+emits that middle FLUSH by closing a duplicated descriptor, so the rejection fires
+on a buffer nobody meant to empty, and the write that follows used to land at
+offset 0 of the resurrected image. What persisted was a splice: a shorter `>`
+rewrite kept the old description's tail, and a shorter one after that pushed the
+previous *frontmatter* into the body, compounding per write and reaching Linear.
+The flag records that the FILE is logically zero bytes whatever `content` holds,
+and `Write` consumes it by emptying the buffer again before applying the data — so
+a `>` redirect truncates, while a genuinely emptied file still gets the `#397`
+rejection and its readable contents back. Projects/initiatives
 put their whole multi-mutation front half (labels + links-reconcile + scalar) in
 `mutate` and always return `proceed=true` (they re-fetch to catch link changes);
 the front-half result reaches the commit-tail `compare` through a method-local
@@ -796,7 +809,7 @@ mount (`entitycell_test.go`).
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file
 node — the edit-side twin of `createFileNode`'s buffer. `editBuffer`
-(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored}` and provides the
+(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored, truncated}` and provides the
 FUSE buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into
 the node** the way `attrNode` promotes `Getattr`. `authored` is the
 serve-your-own-writes flag (#365): `editFlush` sets it after a write **commits
@@ -812,7 +825,17 @@ rebuild inside the [[authored-pin]]'s TTL re-arms it from the pin (#388).
 The flag protects the bytes only as long as **this node** lives — a dentry forget
 rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
 [[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
-pin, not this flag, is what survives the node. See [[node-refresh]]. Each of the seven editable file
+pin, not this flag, is what survives the node. See [[node-refresh]].
+`truncated` is the **pending-truncation** flag (#454): a truncation emptied the
+buffer (a `Setattr` to size 0, or `truncateBuffer` for a `collectionDir` O_TRUNC
+`Create`) and no write has landed since, so the file is logically zero bytes
+whatever `content` currently holds. The two can disagree because [[edit-flush]]'s
+empty-write rejection RESTORES the entity's render into an emptied buffer, and the
+kernel interleaves that rejection between a `>` redirect's truncate and its write;
+`Write` consumes the flag by emptying the buffer again first, so the restored image
+never shows through — neither as a surviving tail nor as a zero-filled hole's
+contents. An explicit non-zero `Setattr` size supersedes a pending truncation,
+since that size IS the file's new length. Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`
