@@ -326,7 +326,9 @@ func (n *IssueDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.
 // manifest declares an issue directory's static children: the editable issue.md,
 // the read-through issue.meta, the generated history.md, the .error/.last
 // sidecars, and the comments/docs/children/attachments/relations subdirs. Issue
-// children have no dynamic tail and a uniform 30s timeout.
+// children have no dynamic tail and a uniform timeout: the mount's own entry
+// bound (lfs.entryTimeout(), 30s by default), never a literal — see the named
+// policies in renderfile.go.
 // entity()/setEntity() are promoted from the embedded entityCell[api.Issue].
 // setEntity is written by the Rename write-back and the nodeRefresher seam
 // (refresh.go), which pushes freshly-fetched state into this node when go-fuse

@@ -502,8 +502,9 @@ routes a `.meta` hit back through the **same** `listing().find()` — so the
 listed⇔openable round-trip [[named-listing]]/[[indexed-listing]] guarantee for
 the `.md` files extends to the sidecars by construction
 (`TestMetaSidecarRoundTrip`). Each sidecar is a plain [[render-file]] via
-`mountRenderFile` (0444, DIRECT_IO, timeout 0, re-finds the freshest entity by
-ID on every read), with its own ino kind (`commentMetaIno`/`documentMetaIno`/
+`mountRenderFile` (0444, DIRECT_IO, `mountDefaultTimeout`, re-finds the freshest
+entity by ID on every read — DIRECT_IO is what makes the read current, not the
+timeout), with its own ino kind (`commentMetaIno`/`documentMetaIno`/
 `milestoneMetaIno`/`labelMetaIno`, registered in `TestInodeNamespaceDistinct`).
 Unlink/Rename of a `.meta` is EPERM (it vanishes with its entity — the
 delete/rename tails invalidate the sidecar entry alongside the item's).
@@ -687,14 +688,14 @@ rationalized here, but since #449 every one of them is a **named policy** rather
 than an inline duration: `lfs.entryTimeout()` (the mount's configured bound, 30s
 by default — the entity-dir and render-file tiers), `inheritTimeout` (leave the
 mount default alone), `mountDefaultTimeout` (0 — the write-through collection
-dirs and the `.meta`/`.error`/`.last` sidecars), `editableFileTimeout` (5s — the
-editable `.md` files), and `transientFileTimeout` (1s — `_create` and the
-atomic-save scratch inode, the two sites that fill an `EntryOut` by hand rather
-than through a builder). The param sets **both** `SetAttrTimeout` and
-`SetEntryTimeout`, so a site that passes it is choosing its attr policy too —
-the reason #414/#449 fixed the hardcodes with `entryTimeout()` rather than
-`inheritTimeout`, which would have moved those attrs from 30s to the mount's 60s
-attr default.
+dirs, the project/initiative directory tiers, and the `.meta`/`.error`/`.last`
+sidecars), `editableFileTimeout` (5s — the editable `.md` files), and
+`transientFileTimeout` (1s — `_create` and the atomic-save scratch inode, the
+two sites that fill an `EntryOut` by hand rather than through a builder). The
+param sets **both** `SetAttrTimeout` and `SetEntryTimeout`, so a site that
+passes it is choosing its attr policy too — the reason #414/#449 fixed the
+hardcodes with `entryTimeout()` rather than `inheritTimeout`, which would have
+moved those attrs from 30s to the mount's 60s attr default.
 
 `inheritTimeout` and `mountDefaultTimeout` are the **same policy in two
 spellings**, and the names say so. go-fuse's `rawBridge.setEntryOutTimeout`
@@ -1198,9 +1199,9 @@ lifted one tier up to the skeleton.
 a builder carrying the facts *every* child shares — `parent *BaseNode`, the
 entity `id` (scopes `.error`/`.last`/`.meta` keys), the entity `created`/`updated`
 times, and the child `timeout` (uniform within a directory: issue children take
-the mount's entry timeout, project/initiative children 0) — so each child
-declares only its difference. Five typed constructors cover all 22 arms across
-the three directories: `subdir(name, ino, node)` →
+the mount's entry timeout, project/initiative children `mountDefaultTimeout`)
+— so each child declares only its difference. Five typed constructors cover all
+22 arms across the three directories: `subdir(name, ino, node)` →
 `newDirInode(dirAttr(created,updated), ino, timeout)`; `file(name,
 ino, build)` where `build` returns `(node, content, errno)` → `fileAttr`;
 `metaFile(name, render)` → `lookupMetaFile`; `errorFile(name)`/`lastFile(name)` →

@@ -97,8 +97,9 @@ func (i *InitiativeNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 
 // manifest declares an initiative directory's static children: the editable
 // initiative.md, the read-through initiative.meta, the .error sidecar, and the
-// docs/projects/updates subdirs. Initiative children have no dynamic tail and a
-// 0 timeout.
+// docs/projects/updates subdirs. Initiative children have no dynamic tail and
+// take mountDefaultTimeout — the mount's configured bound, not "uncached"
+// (renderfile.go).
 // entity()/setEntity() are promoted from the embedded entityCell[api.Initiative].
 // setEntity is written by the Rename write-back and the nodeRefresher seam
 // (refresh.go).
