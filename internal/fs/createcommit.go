@@ -193,31 +193,20 @@ func unconfirmedReflectionMsg(op string, r WriteResult, err error) string {
 // specific one exists. Rate-limit/not-found, too-long and usage-limit detection
 // delegate to the api package's predicates (api.IsRateLimited via
 // retryableCreateErr, api.IsNotFound both here and — for the opposite verdict,
-// idempotent success — via the delete tail's remoteAlreadyGone,
+// idempotent success — via the delete tail's remoteAlreadyGone step,
 // api.IsFieldTooLong, api.IsUsageLimited).
 //
-// Arm ORDER carries meaning: the arms that classify on a condition Linear does
-// not reliably tag (not-found, usage limit, length cap) sit above the userError
-// gate, so their errno does not depend on a server-set bit. See #409, #445.
+// Arm ORDER carries meaning twice over. The arms that classify on a condition
+// Linear does not reliably tag (not-found, usage limit, length cap) sit above
+// the userError gate, so their errno does not depend on a server-set bit (#409).
+// And the three of them, which answer on message TEXT, sit below the arms that
+// answer on error STRUCTURE (*notFoundError, *FieldError, retryableCreateErr) —
+// text can be the caller's own echoed input, so a structural answer outranks a
+// textual one. See #409, #445.
 func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {
 		return nferr.Detail(), syscall.ENOENT
-	}
-	// The same verdict when LINEAR is the one saying the entity is gone, not our
-	// own pre-send resolution: the reference does not exist, so ENOENT — the
-	// errno the mount's contract already gives "reference to something that
-	// doesn't exist" (#445). Without this arm it fell to the EIO fallthrough,
-	// which the generated README and docs/ARCHITECTURE.md both teach as a
-	// retryable backend fault; it is not, and every retry earns the same
-	// rejection. Reachable whenever the local catalog is ahead of the workspace
-	// (an entity archived or deleted between a read and a write). Condition, not
-	// tag — so, like the arms below, it sits above the userError gate. The delete
-	// tail never reaches here for this: remoteAlreadyGone claims it first, where
-	// already-gone is idempotent success.
-	if api.IsNotFound(err) {
-		return "Operation: " + op + "\nError: " + serverDetail(err) +
-			". The referenced entity no longer exists on Linear, so retrying will NOT help — re-read the directory listing for current entries.", syscall.ENOENT
 	}
 	var ferr *FieldError
 	if errors.As(err, &ferr) {
@@ -234,6 +223,35 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 			return "Operation: " + op + "\nError: the request was interrupted after it was sent, so whether it took effect is UNKNOWN — it may have been applied and the response lost. Wait a few seconds, then CHECK whether the entity exists (read the directory listing, or .last) before retrying: a blind retry can create a duplicate.", syscall.EAGAIN
 		}
 		return "Operation: " + op + "\nError: the request was rate-limited or deferred before it was sent, so the operation did not take effect. Wait a few seconds and retry.", syscall.EAGAIN
+	}
+	// The same verdict as the *notFoundError arm above, when LINEAR is the one
+	// saying the entity is gone rather than our own pre-send resolution: the
+	// reference does not exist, so ENOENT — the errno the mount's contract
+	// already gives "reference to something that doesn't exist" (#445). Without
+	// this arm it fell to the EIO fallthrough, which the generated README and
+	// docs/ARCHITECTURE.md both teach as a retryable backend fault; it is not,
+	// and every retry earns the same rejection. Reachable whenever the local
+	// catalog is ahead of the workspace (an entity archived or deleted between a
+	// read and a write).
+	//
+	// Placement is the whole contract here. Condition, not tag — so, like the
+	// arms below, it sits ABOVE the userError gate (#409). But it sits BELOW the
+	// typed *FieldError and retryableCreateErr arms, because api.IsNotFound
+	// answers on TEXT while those two answer on structure, and text can be the
+	// caller's own: *FieldError renders the caller's frontmatter value verbatim,
+	// so a status of "Entity not found" would otherwise pick its own errno, and
+	// a throttled request whose envelope also names a missing entity would be
+	// reported permanently unfixable when waiting is exactly what fixes it.
+	// api.IsNotFound is anchored against the same class at the source; the order
+	// here is the belt to that predicate's braces.
+	//
+	// The delete tail's MUTATE step never reaches this arm: remoteAlreadyGone
+	// claims that rejection first, where already-gone is idempotent success. A
+	// delete whose FIND fails this way is not behind that gate and does classify
+	// here.
+	if api.IsNotFound(err) {
+		return "Operation: " + op + "\nError: " + serverDetail(err) +
+			". The referenced entity no longer exists on Linear, so retrying will NOT help — re-read the directory listing for current entries.", syscall.ENOENT
 	}
 	// A workspace over its plan/usage limit is neither the caller's bad input nor
 	// a backend fault — it is a capacity wall. EDQUOT makes the errno itself the

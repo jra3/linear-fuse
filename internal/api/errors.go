@@ -164,20 +164,73 @@ func isUsageLimitMessage(s string) bool {
 // IsNotFound reports whether err is Linear's "Entity not found" rejection —
 // the entity the request referenced no longer exists upstream. Structured
 // check first ("Entity not found: <Type> - ..." is Linear's standard message
-// on the GraphQL error); the fallback covers not-found rejections that arrive
+// on the GraphQL error, and the phrasing can ride in either message field, as
+// IsFieldTooLong's can); the fallback covers not-found rejections that arrive
 // as plain strings (e.g. an HTTP 400 whose body carries the error envelope).
 //
-// For a delete this is idempotent success (the entity is already gone); for a
-// refresh it marks the local row an orphan to be cleaned up.
+// The verdicts this predicate feeds are opposite by caller: for a delete it is
+// idempotent success (the entity is already gone), for a refresh it marks the
+// local row an orphan to be cleaned up, and for a create/edit/rename it is
+// ENOENT with "retrying will NOT help" (#445). None of those are recoverable
+// from a wrong answer, so — exactly as for IsUsageLimited — the phrase must
+// CONSTITUTE a message rather than appear anywhere within it. Linear echoes
+// user-supplied entity names into UserPresentableMessage ("The label 'X' is a
+// group and cannot be assigned to projects directly."), so an unanchored
+// substring test hands a workspace that owns a label named "Entity not found"
+// a bogus gone verdict on every validation rejection that names it — and hands
+// the same verdict to any error whose text merely quotes the phrase, including
+// our own *FieldError rendering of a caller's frontmatter value. An echo is
+// always embedded mid-sentence while the real rejection opens its message, so
+// an anchored test separates the two and still tolerates the type suffix.
+//
+// No extensions.code for this rejection has ever been observed; if one is ever
+// captured, add a structured check in first position, matching IsRateLimited's
+// structured-first layering.
 func IsNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	var gqlErr *GraphQLError
-	if errors.As(err, &gqlErr) && strings.Contains(gqlErr.Message, "Entity not found") {
-		return true
+	// A rate limit is NOT proof the entity is gone. Without this precedence a
+	// throttled DELETE — whose gate (remoteAlreadyGone) asks this predicate
+	// directly, below the fs classifier's arm order — would report idempotent
+	// success and forget the local row for an entity Linear never deleted.
+	if IsRateLimited(err) {
+		return false
 	}
-	return strings.Contains(err.Error(), "Entity not found")
+	var gqlErr *GraphQLError
+	if errors.As(err, &gqlErr) {
+		return isNotFoundMessage(gqlErr.Message) ||
+			isNotFoundMessage(gqlErr.UserPresentableMessage)
+	}
+	// Not a *GraphQLError: an HTTP-level failure carrying Linear's envelope
+	// verbatim. There the server's messages are quoted values INSIDE a JSON
+	// body, so the whole-message rule applies to each extracted value, never to
+	// the envelope text — which embeds an echoed name exactly as it embeds the
+	// real rejection.
+	msg := err.Error()
+	for _, m := range envelopeMessageRe.FindAllStringSubmatch(msg, -1) {
+		if isNotFoundMessage(m[1]) {
+			return true
+		}
+	}
+	return isNotFoundMessage(msg)
+}
+
+// notFoundMessageRe matches a message that IS Linear's not-found rejection
+// rather than one that merely mentions the phrase: the phrase opens the message
+// (or opens a clause a wrapper prefixed with ": ", which is what
+// (*GraphQLError).Error() and fmt.Errorf wrapping produce), and anything after
+// it is introduced by the type separator ("Entity not found: Issue - Could not
+// find referenced Issue."). Anchored on purpose — see IsNotFound.
+var notFoundMessageRe = regexp.MustCompile(
+	`(?:^|: )entity not found(?:\s*[:\x{2013}\x{2014}-].*)?$`)
+
+// isNotFoundMessage reports whether s carries Linear's not-found wording as a
+// message of its own — case and a trailing full stop are the only slack.
+func isNotFoundMessage(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(strings.TrimRight(s, ".!"))
+	return notFoundMessageRe.MatchString(s)
 }
 
 // IsFieldTooLong reports whether err is Linear rejecting a field for exceeding

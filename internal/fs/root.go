@@ -417,7 +417,12 @@ Failure model (every writable surface follows this contract):
   NUL as the body AND clear every removable field. Write the WHOLE document back
   from offset 0 (truncate first) instead of seeking past the end.
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
-- Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
+- Reference to something that doesn't exist -> ENOENT. Two causes, and .error says
+  which. Either the name never resolved here (a relation target, rm of an unknown
+  name) -- fix the name. Or LINEAR no longer has the entity you edited, renamed, or
+  referenced: it was archived or deleted after this listing was read, so like
+  EDQUOT above and unlike EAGAIN below, retrying will NOT help. Re-read the parent
+  directory for current entries, and drop or repoint the reference.
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
   the workspace has room: archive or delete entities, or raise the plan limit.

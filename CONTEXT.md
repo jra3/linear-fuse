@@ -217,11 +217,18 @@ owners the client's GraphQL-errors branch, the sync worker's backoff, and the
 repo's orphan defense also delegate to. `IsNotFound` carries opposite verdicts
 by tail: a server-side not-found on a create/edit/rename is `ENOENT` (the
 reference is gone, and retrying earns the same rejection — it used to fall to
-the retryable-sounding `EIO`, #445), while the delete tail claims it first via
-`remoteAlreadyGone`, where already-gone is idempotent success. Arm order
-matters: the arms keyed on a condition Linear does not reliably tag (`ENOENT`,
-`EDQUOT`, `EMSGSIZE`) sit above the `userError` gate so their errno never
-depends on a server-set bit (#409, #445).
+the retryable-sounding `EIO`, #445), while the delete tail's *mutate* step
+claims it first via `remoteAlreadyGone`, where already-gone is idempotent
+success — a delete whose *find* fails that way is not behind that gate and does
+classify. Arm order matters twice over: the arms keyed on a condition Linear
+does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit above the `userError`
+gate so their errno never depends on a server-set bit (#409, #445); and those
+same three, which answer on message TEXT, sit below the arms that answer on
+error STRUCTURE (`*notFoundError`, `*FieldError`, `retryableCreateErr`), because
+the text can be the caller's own echoed input. `IsNotFound` is anchored for the
+same reason `IsUsageLimited` is — the phrase must open a message, not merely
+appear inside one — so a `status: Entity not found` typo cannot pick its own
+errno, and a throttle never reads as permanently gone.
 
 For status updates the front half is the shared `marshal.MarkdownToStatusUpdate`
 (one parser for both project and initiative updates — see [[entity-parse]]): an

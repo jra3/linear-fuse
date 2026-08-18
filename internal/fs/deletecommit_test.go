@@ -126,27 +126,6 @@ func TestCommitDelete_Classification(t *testing.T) {
 		})
 	}
 
-	// #445: a server-side not-found reaching the DELETE tail must NOT become
-	// ENOENT — remoteAlreadyGone claims it first, where already-gone is
-	// idempotent success (TestCommitDelete_RemoteAlreadyGone pins that). This row
-	// pins the ordering from the other side: the new classifier arm is dead code
-	// for a delete's mutate, so adding it changed nothing here.
-	t.Run("mutate: server not-found stays idempotent success, not ENOENT", func(t *testing.T) {
-		sink := &fakeDeleteSink{}
-		mutations, forgets, extras := 0, 0, 0
-		spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
-		spec.mutate = func(context.Context, *ent) error {
-			return &api.GraphQLError{Message: "Entity not found: Comment - Could not find referenced Comment."}
-		}
-
-		if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
-			t.Fatalf("errno = %v, want 0 (already-gone delete is success, never ENOENT)", errno)
-		}
-		if sink.setCalls != 0 {
-			t.Errorf(".error set %d times, want 0", sink.setCalls)
-		}
-	})
-
 	// find failures classify the same way.
 	t.Run("find: backend failure is EIO", func(t *testing.T) {
 		sink := &fakeDeleteSink{}
@@ -249,24 +228,48 @@ func TestCommitDelete_ForgetRetrySucceeds(t *testing.T) {
 // TestCommitDelete_RemoteAlreadyGone: deleting an entity Linear no longer has
 // is a success, not EIO — the local row is forgotten and the listing re-cohered.
 // This is the self-heal path for a phantom row left by an earlier failed forget.
+//
+// #445: both spellings of "Entity not found" must be idempotent success here —
+// a plain-string envelope (HTTP 400 body) and a structured *api.GraphQLError.
+// The delete tail intercepts the condition via remoteAlreadyGone BEFORE
+// classifyMutationErr, so the ENOENT arm the classifier gained for
+// creates/updates/renames must NOT change this path: not-found is success, not
+// ENOENT, on delete. Parameterizing rather than adding a thinner second case
+// keeps the whole success tail (forget, clear, invalidate) asserted for both
+// spellings, which is what makes this a contract and not just an errno check.
 func TestCommitDelete_RemoteAlreadyGone(t *testing.T) {
-	sink := &fakeDeleteSink{}
-	mutations, forgets, extras := 0, 0, 0
-	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
-	spec.mutate = func(context.Context, *ent) error {
-		return errors.New(`API error (status 400): {"errors":[{"message":"Entity not found: Comment - Could not find referenced Comment."}]}`)
+	notFoundErrs := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "plain string envelope",
+			err:  errors.New(`API error (status 400): {"errors":[{"message":"Entity not found: Comment - Could not find referenced Comment."}]}`),
+		},
+		{
+			name: "structured GraphQLError",
+			err:  &api.GraphQLError{Message: "Entity not found: Comment - Could not find referenced Comment."},
+		},
 	}
+	for _, tc := range notFoundErrs {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &fakeDeleteSink{}
+			mutations, forgets, extras := 0, 0, 0
+			spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
+			spec.mutate = func(context.Context, *ent) error { return tc.err }
 
-	if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
-		t.Fatalf("errno = %v, want 0 (already-gone delete is idempotent success)", errno)
-	}
-	if forgets != 1 {
-		t.Errorf("forgets = %d, want 1 (the phantom row must be forgotten)", forgets)
-	}
-	if sink.clears != 1 || sink.setCalls != 0 {
-		t.Errorf(".error handling: clears=%d sets=%d, want cleared and never set", sink.clears, sink.setCalls)
-	}
-	if sink.invalidates != 1 {
-		t.Errorf("InvalidateDeleted calls = %d, want 1", sink.invalidates)
+			if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
+				t.Fatalf("errno = %v, want 0 (already-gone delete is idempotent success)", errno)
+			}
+			if forgets != 1 {
+				t.Errorf("forgets = %d, want 1 (the phantom row must be forgotten)", forgets)
+			}
+			if sink.clears != 1 || sink.setCalls != 0 {
+				t.Errorf(".error handling: clears=%d sets=%d, want cleared and never set", sink.clears, sink.setCalls)
+			}
+			if sink.invalidates != 1 {
+				t.Errorf("InvalidateDeleted calls = %d, want 1", sink.invalidates)
+			}
+		})
 	}
 }

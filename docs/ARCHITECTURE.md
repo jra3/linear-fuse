@@ -735,12 +735,17 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,
    rate-limit/timeout/interruption → `EAGAIN`, workspace over its plan limit →
    `EDQUOT`, backend failure → `EIO` — reason always written to `.error`. Arm
-   ORDER is load-bearing: the arms keyed on a condition Linear does not reliably
-   tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit ABOVE the `userError` gate, so their
-   errno does not depend on a server-set bit (#409). Missing reference covers
-   both the fs-local `notFoundError` and Linear's own "Entity not found"
-   (`api.IsNotFound`, #445); only the delete tail reads that rejection
-   differently, as idempotent success. The `EAGAIN` branch splits its *message* on
+   ORDER is load-bearing in two directions: the arms keyed on a condition Linear
+   does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit ABOVE the
+   `userError` gate, so their errno does not depend on a server-set bit (#409);
+   and those same arms, which answer on message TEXT, sit BELOW the arms that
+   answer on error STRUCTURE (`*notFoundError`, `*FieldError`,
+   `retryableCreateErr`), because the text can be the caller's own echoed input
+   or a throttle's envelope. Missing reference covers both the fs-local
+   `notFoundError` and Linear's own "Entity not found" (`api.IsNotFound`, #445);
+   only the delete tail's *mutate* step reads that rejection differently, as
+   idempotent success — a delete whose *find* fails that way classifies here
+   like any other tail. The `EAGAIN` branch splits its *message* on
    `api.IsOutcomeUnknown`: a request refused before it was sent (budget
    deferral, cancelled pre-send wait, tripped breaker) provably had no effect,
    while one whose POST was already on the wire (`api.ErrInFlight`, set in the

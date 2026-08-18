@@ -174,6 +174,39 @@ func TestCommitCreate_Classification(t *testing.T) {
 			wantIn:    "retrying will NOT help",
 		},
 		{
+			// #445 arm ORDER, first of three. api.IsNotFound answers on message
+			// TEXT, and *FieldError renders the caller's frontmatter value
+			// verbatim — so with the not-found arm above this one, a caller who
+			// wrote `status: Entity not found` picked their own errno and got
+			// ENOENT plus "retrying will NOT help" for a typo that a corrected
+			// status fixes. Structural arms outrank textual ones.
+			name:      "a FieldError whose VALUE is the phrase stays EINVAL",
+			err:       &FieldError{Field: "status", Value: "Entity not found", Message: "unknown state. See states.md"},
+			wantErrno: syscall.EINVAL,
+			wantIn:    "unknown state",
+		},
+		{
+			// Second: Linear echoes user-supplied entity names into
+			// UserPresentableMessage, so a workspace owning a label named
+			// "Entity not found" must still get the EINVAL its fixable input
+			// rejection earns. Pinned here as well as on the predicate because
+			// this arm sits above the userError gate by design (#409) — ordering
+			// alone cannot save it, only the predicate's anchoring can.
+			name:      "an echoed entity name in a userError stays EINVAL",
+			err:       &api.GraphQLError{Message: "The label 'Entity not found' is a group and cannot be assigned", UserError: true},
+			wantErrno: syscall.EINVAL,
+			wantIn:    "is a group",
+		},
+		{
+			// Third, and the worst of them: a retryable throttle reported to an
+			// agent as permanently unfixable. Waiting is exactly what fixes this,
+			// so the EAGAIN arm must claim it first.
+			name:      "a throttle whose envelope also names a missing entity is EAGAIN",
+			err:       errors.New(`API error (status 429): {"errors":[{"message":"RATELIMITED"},{"message":"Entity not found"}]}`),
+			wantErrno: syscall.EAGAIN,
+			wantIn:    "Wait a few seconds and retry",
+		},
+		{
 			name:      "anything else is EIO carrying the cause",
 			err:       errors.New("boom"),
 			wantErrno: syscall.EIO,
