@@ -128,6 +128,23 @@ func TestCommitCreate_Classification(t *testing.T) {
 			wantIn:    "Entity not found",
 		},
 		{
+			// The same rejection arriving as a plain HTTP-400 envelope rather
+			// than a GraphQL-level error: no *api.GraphQLError to match, so
+			// only api.IsNotFound's plain-string fallback keeps it off EIO.
+			name:      "plain-string Entity not found envelope is ENOENT",
+			err:       errors.New(`API error (status 400): {"errors":[{"message":"Entity not found: Issue - Could not find referenced Issue."}]}`),
+			wantErrno: syscall.ENOENT,
+			wantIn:    "Entity not found",
+		},
+		{
+			// The guidance clause is the point of #445: EIO taught callers to
+			// retry, and ENOENT alone does not say not to.
+			name:      "Entity not found .error says retrying will not help",
+			err:       &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."},
+			wantErrno: syscall.ENOENT,
+			wantIn:    "retrying will not help",
+		},
+		{
 			name:      "deadline is EAGAIN with a retry hint",
 			err:       context.DeadlineExceeded,
 			wantErrno: syscall.EAGAIN,

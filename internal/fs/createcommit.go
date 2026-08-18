@@ -209,7 +209,7 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	// The delete tail catches the same condition earlier via remoteAlreadyGone,
 	// where it means idempotent success instead.
 	if api.IsNotFound(err) {
-		return "Operation: " + op + "\nError: " + err.Error(), syscall.ENOENT
+		return "Operation: " + op + "\nError: " + err.Error() + " — the referenced entity no longer exists upstream; retrying will not help.", syscall.ENOENT
 	}
 	var ferr *FieldError
 	if errors.As(err, &ferr) {

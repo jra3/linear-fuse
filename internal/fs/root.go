@@ -411,7 +411,8 @@ Failure model (every writable surface follows this contract):
   CONTENTS -- re-read it, change what you mean to change, and write the whole
   document back. To clear one field, omit that field's key and keep the rest.
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
-- Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
+- Reference to something that doesn't exist (a relation target, rm of an unknown name,
+  an entity deleted upstream between a read and a write) -> ENOENT
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
   the workspace has room: archive or delete entities, or raise the plan limit.
