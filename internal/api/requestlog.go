@@ -94,8 +94,10 @@ func truncateLogMessage(s string) string {
 
 // newRequestLogError projects a completed request's error onto its log object.
 // A *GraphQLError (through any wrapping) contributes its decoded extensions; any
-// other failure — HTTP-level, transport, a budget deferral — has no extensions
-// to decode, so it carries its rendered string and empty extension fields.
+// other failure — HTTP-level, transport, a response that would not decode — has
+// no extensions to decode, so it carries its rendered string and empty extension
+// fields. (A budget deferral is not among them: it returns before the request is
+// sent, and only sent requests are logged.)
 //
 // Every string here is remote text, so every one goes through
 // truncateLogMessage: the HTTP fallback provably embeds a whole response body,

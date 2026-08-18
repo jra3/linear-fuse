@@ -262,10 +262,10 @@ Operational guards:
   so both sinks that record a rejection carry it — `errors=<n>` on this line and
   the `errors` key on the request log's — and a census can tell a lone untagged
   rejection from the first of several. `Client.query` is the
-  single owner of that line, and the prefix carries the verdict: a not-found
-  rejection logs at a plain `[api]` prefix rather than `ERROR`, because a delete
-  of an entity already gone is success and a 404 on refresh is the routine orphan
-  signal (#448).
+  single owner of that line, and the prefix carries the verdict: a rate-limited
+  rejection keeps `[ratelimit] ERROR`, and a not-found one logs at a plain
+  `[api]` prefix rather than `ERROR`, because a delete of an entity already gone
+  is success and a 404 on refresh is the routine orphan signal (#448).
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
   `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred` — the vocabulary the fs
   layer's error classifier maps to errnos. `IsUsageLimited` (the workspace is

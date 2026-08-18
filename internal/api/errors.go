@@ -97,11 +97,12 @@ func IsRateLimited(err error) bool {
 // string "usage limit exceeded". If a code is ever captured, add a structured
 // check in first position, matching IsRateLimited's structured-first layering.
 // Capturing it no longer needs a reproduction: every rejection's decoded
-// extensions are written down as they arrive — the client's "[api] ERROR: <op>
-// rejected by Linear API" log line (GraphQLError.LogDetail) and, when the
-// request debug log is on, the `error` object on the requests.jsonl line. Both
-// carry userPresentableMessage as well as message, which matters because that
-// is where the quota wording lands when Linear rejects with a generic message.
+// extensions are written down as they arrive — the client's per-rejection log
+// line (rejectionLogLine, which renders GraphQLError.LogDetail under a prefix
+// that carries the severity verdict) and, when the request debug log is on, the
+// `error` object on the requests.jsonl line. Both carry userPresentableMessage
+// as well as message, which matters because that is where the quota wording
+// lands when Linear rejects with a generic message.
 // Grep either for a usage-limit message and read its code/type (#448).
 //
 // For THIS predicate a false positive is strictly worse than a false negative,

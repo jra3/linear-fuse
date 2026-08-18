@@ -303,9 +303,11 @@ A failed request carries one extra key, `error` — the rejection, decoded:
     error), so anything above 1 means this line is showing you one of several
     and a tagged rejection may have been dropped. `0` means the failure was not
     a GraphQL rejection at all (an HTTP or transport failure, whose `message` is
-    the rendered Go error). The same tally appears on the process log's
-    `[api] ERROR: <op> rejected by Linear API: … errors=<n>` line; a census does
-    not have to leave this artifact to read it.
+    the rendered Go error). The same tally rides on the process log's rejection
+    line, which always ends `… by Linear API: … errors=<n>` — its prefix and
+    wording carry the severity verdict, which `docs/ARCHITECTURE.md` describes,
+    so grep the suffix rather than `[api] ERROR:`. A census does not have to
+    leave this artifact to read it.
   - Every string is capped at 2 KB with an explicit truncation marker. A
     non-GraphQL failure's message embeds the whole response body, and an
     uncapped multi-MB error page would otherwise become one unreadable line.

@@ -157,9 +157,10 @@ carries an `error` object — `message`, `code`, `type`, `user_error`,
 `user_presentable_message` — every string of it server-authored, and Linear
 routinely echoes user-supplied entity names back inside them ("The label 'X' is
 a group …"). The same decoded rejection lands in the **process log** (journald)
-on an always-on `[api] ERROR: <op> rejected by Linear API` line, which is new
-reach: server text now appears in the operator's log without the request log
-being enabled at all. So the artifact's sensitivity is unchanged in *kind* — it
+on an always-on `<op> … by Linear API: <fields>` line (the prefix carries the
+severity verdict; `docs/ARCHITECTURE.md` owns that shape), which is new reach:
+server text now appears in the operator's log without the request log being
+enabled at all. So the artifact's sensitivity is unchanged in *kind* — it
 was already a workspace trace — but a rejection now quotes back the content that
 provoked it, and one sink is no longer opt-in.
 
