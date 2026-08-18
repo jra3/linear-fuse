@@ -211,10 +211,16 @@ condition Linear does not reliably tag (`EDQUOT`, `EMSGSIZE`) sit above the
 `IsUsageLimited` is message-shaped because Linear's `extensions.code` for that
 rejection has never been *observed* — and could not be, after the fact, because
 `(*api.GraphQLError).Error()` renders the message alone and every log site used
-`%v`. The client now writes the whole decoded rejection down where it is still in
-hand (`LogDetail()` — message plus `code`/`type`/`userError`, empty fields
-included, since "Linear sent no code" is the observation being waited on), on its
-own log line and on the `requests.jsonl` line when the request debug log is on.
+`%v`. The client now writes the decoded rejection down where it is still in hand
+(`LogDetail()` — message plus `code`/`type`/`userError`/`userPresentableMessage`,
+empty fields included, since "Linear sent no code" is the observation being
+waited on), on its own log line and on the `requests.jsonl` line when the request
+debug log is on. `userPresentableMessage` is not optional there: Linear routinely
+rejects with the generic message "Argument Validation Error" and puts the quota
+or cap sentence only in that field, which is why this predicate and
+`IsFieldTooLong` both read it — record the other fields and not that one and the
+grep comes back empty for exactly the rejection being hunted. Only the FIRST of
+the response's errors is decoded, so the log line carries `errors=<n>` beside it.
 Promoting a predicate to a structured check is then a grep over a run, not a
 reproduction (#448).
 

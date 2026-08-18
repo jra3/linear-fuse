@@ -240,16 +240,27 @@ Operational guards:
   (`linearfs.cdn.*`).
 - **Request log** (`requestlog.go`): optional JSONL trace of every completed
   request (op, vars, duration, outcome, complexity, and — on a failure — the
-  decoded rejection: message plus `extensions.{code, type, userError}`) to
+  first rejection, decoded: message plus
+  `extensions.{code, type, userError, userPresentableMessage}`) to
   `~/.config/linearfs/requests.jsonl`, for offline diagnosis. The rejection's
   extension fields are written even when empty, because "Linear sent no code" is
-  the observation a message-shaped predicate is waiting on (#448).
+  the observation a message-shaped predicate is waiting on;
+  `userPresentableMessage` is among them because that is where Linear puts the
+  cap/quota wording a census greps for. Every string is capped at 2 KB with a
+  truncation marker, since a non-GraphQL failure's message embeds the whole
+  response body (#448).
 - **GraphQL rejections** (`client.go`): a failed operation becomes a
-  `*GraphQLError` carrying the message plus every decoded extension (`code`,
-  `type`, `userError`, `userPresentableMessage`). `Error()` renders only the
-  message (callers string-match it), so the client logs `LogDetail()` — all four
-  fields, empties included — at the one site that still holds them; a caller's
-  `%v` would drop them (#448).
+  `*GraphQLError` carrying the FIRST error's message plus its decoded extensions
+  (`code`, `type`, `userError`, `userPresentableMessage`). `Error()` renders only
+  the message (callers string-match it), so the client logs `LogDetail()` — all
+  five fields, empties included, each `%q`-quoted against log injection — at the
+  one site that still holds them; a caller's `%v` would drop them. The line also
+  carries `errors=<n>`, the size of the response's error array, so a census can
+  tell a lone untagged rejection from the first of several. `Client.query` is the
+  single owner of that line, and the prefix carries the verdict: a not-found
+  rejection logs at a plain `[api]` prefix rather than `ERROR`, because a delete
+  of an entity already gone is success and a 404 on refresh is the routine orphan
+  signal (#448).
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
   `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred` — the vocabulary the fs
   layer's error classifier maps to errnos. `IsUsageLimited` (the workspace is

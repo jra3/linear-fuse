@@ -99,8 +99,10 @@ func IsRateLimited(err error) bool {
 // Capturing it no longer needs a reproduction: every rejection's decoded
 // extensions are written down as they arrive — the client's "[api] ERROR: <op>
 // rejected by Linear API" log line (GraphQLError.LogDetail) and, when the
-// request debug log is on, the `error` object on the requests.jsonl line. Grep
-// either for a usage-limit message and read its code/type (#448).
+// request debug log is on, the `error` object on the requests.jsonl line. Both
+// carry userPresentableMessage as well as message, which matters because that
+// is where the quota wording lands when Linear rejects with a generic message.
+// Grep either for a usage-limit message and read its code/type (#448).
 //
 // For THIS predicate a false positive is strictly worse than a false negative,
 // so the match is biased hard toward missing. A miss degrades to the pre-#409

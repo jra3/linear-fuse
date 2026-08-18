@@ -17,8 +17,10 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -40,17 +42,56 @@ type requestLogEntry struct {
 // message. Fields inside are written unconditionally: `"code": ""` records that
 // Linear tagged the rejection with no code, which is the census observation, and
 // omitting it would make absence indistinguishable from a line never written.
+//
+// UserPresentableMessage is here because it is where the wording a census greps
+// for actually lands. Two predicates read it and not just Message —
+// IsUsageLimited and IsFieldTooLong — because Linear routinely rejects a
+// mutation with the generic Message "Argument Validation Error" and puts the
+// quota or cap sentence only in the presentable field. Recording the other four
+// fields but not this one would leave `grep "usage limit" requests.jsonl` empty
+// for exactly the rejection the log exists to catch, while runtime
+// classification got it right.
 type requestLogError struct {
-	Message   string `json:"message"`
-	Code      string `json:"code"`
-	Type      string `json:"type"`
-	UserError bool   `json:"user_error"`
+	Message                string `json:"message"`
+	Code                   string `json:"code"`
+	Type                   string `json:"type"`
+	UserError              bool   `json:"user_error"`
+	UserPresentableMessage string `json:"user_presentable_message"`
+}
+
+// maxRequestLogMessage caps each remote string on a request-log line.
+//
+// The uncapped case is not hypothetical: a non-GraphQL failure carries
+// `API error (status %d): <entire response body>`, built from an unbounded
+// io.ReadAll, so a proxy or WAF answering with a multi-MB HTML error page would
+// put that whole page on one JSONL line (JSON escaping roughly doubles it).
+// The rotating writer deliberately lets a single oversize write land whole in a
+// fresh file, so the 100 MB cap does not save the artifact and a line-oriented
+// analysis pipeline gets one line it cannot hold in memory. 2 KB keeps every
+// phrasing a predicate matches on — those are sentences — while bounding the
+// line.
+const maxRequestLogMessage = 2048
+
+// truncateLogMessage bounds one remote string, marking the cut explicitly so a
+// reader never mistakes a truncated message for the whole of what Linear sent.
+// The cut is byte-indexed and then scrubbed to valid UTF-8, since landing
+// mid-rune would otherwise smuggle an invalid byte into the JSON encoder.
+func truncateLogMessage(s string) string {
+	if len(s) <= maxRequestLogMessage {
+		return s
+	}
+	return strings.ToValidUTF8(s[:maxRequestLogMessage], "") +
+		fmt.Sprintf("…[truncated, %d bytes total]", len(s))
 }
 
 // newRequestLogError projects a completed request's error onto its log object.
 // A *GraphQLError (through any wrapping) contributes its decoded extensions; any
 // other failure — HTTP-level, transport, a budget deferral — has no extensions
 // to decode, so it carries its rendered string and empty extension fields.
+//
+// Every string here is remote text, so every one goes through
+// truncateLogMessage: the HTTP fallback provably embeds a whole response body,
+// and a GraphQL message is a decoded field of a body that was equally unbounded.
 func newRequestLogError(err error) *requestLogError {
 	if err == nil {
 		return nil
@@ -58,13 +99,14 @@ func newRequestLogError(err error) *requestLogError {
 	var gqlErr *GraphQLError
 	if errors.As(err, &gqlErr) {
 		return &requestLogError{
-			Message:   gqlErr.Message,
-			Code:      gqlErr.Code,
-			Type:      gqlErr.Type,
-			UserError: gqlErr.UserError,
+			Message:                truncateLogMessage(gqlErr.Message),
+			Code:                   truncateLogMessage(gqlErr.Code),
+			Type:                   truncateLogMessage(gqlErr.Type),
+			UserError:              gqlErr.UserError,
+			UserPresentableMessage: truncateLogMessage(gqlErr.UserPresentableMessage),
 		}
 	}
-	return &requestLogError{Message: err.Error()}
+	return &requestLogError{Message: truncateLogMessage(err.Error())}
 }
 
 // SetRequestLog enables the per-request JSONL debug log: every completed

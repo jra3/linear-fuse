@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // decodeRequestLog splits buf into parsed JSONL entries, failing the test on
@@ -214,6 +215,22 @@ func TestNewRequestLogError(t *testing.T) {
 			want: &requestLogError{Message: "Argument Validation Error", Code: "INPUT_ERROR", Type: "invalid input", UserError: true},
 		},
 		{
+			// The shape the predicates actually key on: Linear rejects with a
+			// generic Message and puts the cap sentence only in the presentable
+			// field (IsFieldTooLong reads both; IsUsageLimited likewise). Drop this
+			// field from the line and a census greps the artifact for the wording
+			// that made the run fail and finds nothing.
+			name: "cap phrasing rides in userPresentableMessage",
+			err: &GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "name must be at most 80 characters",
+			},
+			want: &requestLogError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "name must be at most 80 characters",
+			},
+		},
+		{
 			// No extensions to decode: an HTTP-level failure carries Linear's
 			// envelope verbatim in its rendered string.
 			name: "http failure carries its rendered string",
@@ -278,5 +295,121 @@ func TestRequestLogRecordsRejectionExtensions(t *testing.T) {
 		if !strings.Contains(raw, key) {
 			t.Errorf("line does not record %s, so absence is indistinguishable from silence:\n%s", key, raw)
 		}
+	}
+}
+
+// TestRequestLogRecordsUserPresentableMessage is the artifact end of the
+// predicates' actual input. Linear rejects a create with the generic message
+// "Argument Validation Error" and puts the cap or quota sentence only in
+// extensions.userPresentableMessage — the shape IsFieldTooLong and
+// IsUsageLimited both read. Runtime classification is right either way, but a
+// line recording only `"message":"Argument Validation Error"` makes the run's
+// artifact answer "no such rejection" to the grep that goes looking for it.
+func TestRequestLogRecordsUserPresentableMessage(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"errors":[{"message":"Argument Validation Error","extensions":{"userPresentableMessage":"name must be at most 80 characters"}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+	var buf bytes.Buffer
+	client.SetRequestLog(&buf)
+
+	var result struct{}
+	err := client.query(context.Background(), `mutation IssueCreate { x }`, nil, &result)
+	// The classifier sees it; the artifact must too.
+	if !IsFieldTooLong(err) {
+		t.Fatalf("IsFieldTooLong(%v) = false, want true — fixture no longer models the case", err)
+	}
+
+	entries := decodeRequestLog(t, &buf)
+	if len(entries) != 1 || entries[0].Error == nil {
+		t.Fatalf("entries = %+v, want one carrying a decoded rejection", entries)
+	}
+	if got := entries[0].Error.UserPresentableMessage; got != "name must be at most 80 characters" {
+		t.Errorf("error.user_presentable_message = %q, want the cap sentence", got)
+	}
+	// The grep an investigator actually runs over the artifact.
+	if !strings.Contains(buf.String(), "must be at most") {
+		t.Errorf("the wording that failed the run is not greppable in the line:\n%s", buf.String())
+	}
+	// Empty is still written: absence must be recorded, not implied.
+	if !strings.Contains(buf.String(), `"user_presentable_message":`) {
+		t.Errorf("line omits the field entirely:\n%s", buf.String())
+	}
+}
+
+// TestRequestLogTruncatesOversizedRemoteText pins the size bound on the line.
+//
+// A non-GraphQL failure carries `API error (status N): <entire response body>`,
+// built from an unbounded io.ReadAll — so a proxy or WAF answering with a
+// multi-MB HTML error page would otherwise put that whole page on ONE JSONL
+// line, roughly doubled by JSON escaping. The rotating writer lets an oversize
+// write land whole in a fresh file, so the 100 MB cap does not contain it and
+// the line-oriented analysis pipeline is the thing that breaks.
+func TestRequestLogTruncatesOversizedRemoteText(t *testing.T) {
+	t.Parallel()
+
+	huge := strings.Repeat("<html>error</html>", 200_000) // ~3.6 MB
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, huge)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+	var buf bytes.Buffer
+	client.SetRequestLog(&buf)
+
+	var result struct{}
+	if err := client.query(context.Background(), `query TestOp { viewer { id } }`, nil, &result); err == nil {
+		t.Fatal("query succeeded, want an HTTP failure")
+	}
+
+	// Generous headroom over the 2 KB cap; the point is bounded, not exact.
+	if buf.Len() > 8*1024 {
+		t.Errorf("request log line is %d bytes for a %d byte body — the cap is not holding", buf.Len(), len(huge))
+	}
+	entries := decodeRequestLog(t, &buf)
+	if len(entries) != 1 || entries[0].Error == nil {
+		t.Fatalf("entries = %+v, want one carrying an error", entries)
+	}
+	msg := entries[0].Error.Message
+	// The cut is marked, so a reader never mistakes it for all Linear sent.
+	if !strings.Contains(msg, "truncated") {
+		t.Errorf("truncated message carries no truncation marker: %q", msg[:min(200, len(msg))])
+	}
+	// The head survives — the status code is the diagnostic value.
+	if !strings.HasPrefix(msg, "API error (status 502)") {
+		t.Errorf("message lost its head: %q", msg[:min(200, len(msg))])
+	}
+}
+
+// TestTruncateLogMessage pins the boundary behavior of the cap itself: a short
+// string passes through untouched, and a cut that lands mid-rune must not
+// smuggle an invalid UTF-8 byte into the JSON encoder.
+func TestTruncateLogMessage(t *testing.T) {
+	t.Parallel()
+
+	if got := truncateLogMessage("short"); got != "short" {
+		t.Errorf("truncateLogMessage(%q) = %q, want it unchanged", "short", got)
+	}
+	exact := strings.Repeat("a", maxRequestLogMessage)
+	if got := truncateLogMessage(exact); got != exact {
+		t.Error("a string exactly at the cap was truncated")
+	}
+	// Multi-byte runes straddling the cut.
+	multi := strings.Repeat("é", maxRequestLogMessage)
+	got := truncateLogMessage(multi)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncation produced invalid UTF-8")
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("no truncation marker: %q", got[:min(120, len(got))])
 	}
 }
