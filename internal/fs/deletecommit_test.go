@@ -273,3 +273,40 @@ func TestCommitDelete_RemoteAlreadyGone(t *testing.T) {
 		})
 	}
 }
+
+// TestCommitDelete_EchoedNotFoundIsNotAlreadyGone: the worst case the
+// already-gone gate can get wrong. Linear echoes user-supplied entity names back
+// into its rejections, so a workspace that owns a label named "Entity not found"
+// draws validation messages that END with the phrase ("Cannot assign label:
+// Entity not found"). That is a fixable input rejection, not proof the entity is
+// gone — and remoteAlreadyGone reading it as gone would report a clean rm and
+// FORGET the local row for an entity Linear still has, deleting it from the
+// listing until the next full sync. So it must classify instead: the delete
+// fails, the row survives, and the reason lands in .error.
+func TestCommitDelete_EchoedNotFoundIsNotAlreadyGone(t *testing.T) {
+	sink := &fakeDeleteSink{}
+	mutations, forgets, extras := 0, 0, 0
+	spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
+	spec.mutate = func(context.Context, *ent) error {
+		return &api.GraphQLError{Message: "Cannot assign label: Entity not found", UserError: true}
+	}
+
+	errno := commitDelete(context.Background(), sink, spec)
+
+	if errno != syscall.EINVAL {
+		t.Fatalf("errno = %v, want EINVAL (an echoed name is bad input, not an already-gone entity)", errno)
+	}
+	if forgets != 0 {
+		t.Errorf("forgets = %d, want 0 (the row is for an entity Linear still has)", forgets)
+	}
+	if sink.clears != 0 || sink.invalidates != 0 || extras != 0 {
+		t.Errorf("success tail ran on failure: clears=%d invalidates=%d extras=%d",
+			sink.clears, sink.invalidates, extras)
+	}
+	if sink.setCalls != 1 || !strings.Contains(sink.setMsg, "Cannot assign label") {
+		t.Errorf(".error = %q (calls=%d), want the server's rejection", sink.setMsg, sink.setCalls)
+	}
+	if strings.Contains(sink.setMsg, "no longer exists on Linear") {
+		t.Errorf(".error = %q, want no gone verdict", sink.setMsg)
+	}
+}

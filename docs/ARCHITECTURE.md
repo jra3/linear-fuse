@@ -793,8 +793,10 @@ an issue/project goes through `commitDelete`: API delete first, then a
 gate — the store is the listing source of truth, so a skipped forget resurrects
 the item as a phantom). On forget exhaustion it fails loud (`EIO`, `.error`
 naming the self-heal) and skips `InvalidateDeleted` (the phantom row is still
-present); otherwise `InvalidateDeleted` runs. "Entity not found" on delete is
-idempotent success, so re-`rm`ing a phantom row heals it.
+present); otherwise `InvalidateDeleted` runs. "Entity not found" from the delete
+tail's *mutate* step is idempotent success, so re-`rm`ing a phantom row heals it;
+the same rejection from its *find* step is not behind that gate and classifies
+like any other tail (`ENOENT`).
 
 **Deliberately-swallowed errors carry a one-line intent note.** A best-effort
 write that is *meant* to be swallowed (a startup optimization, a fetch cache, a
@@ -945,9 +947,13 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   refused before it was sent (safe to retry blindly) or interrupted in flight
   (outcome unknown — check first, or duplicate); an `EIO` from the
   read-your-writes check means retry, so the one divergence that retrying can
-  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and an
-  `EDQUOT` has to say that retrying will NOT help until the workspace has room,
-  which is the one next-action no other arm's phrasing covers (#409).
+  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and the
+  two arms whose failure retrying cannot fix, `EDQUOT` and a Linear-side
+  not-found `ENOENT`, both have to SAY so, since no errno carries that
+  next-action. They share the phrasing and differ in why it is futile: `EDQUOT`
+  is a capacity wall that clears once the workspace has room (archive, delete, or
+  raise the plan limit, then retry), while the `ENOENT` reference is gone for
+  good, so the next action is to re-read the listing (#409/#445).
 - **Empty and zero-filled writes are refused at the shell:** `editFlush` rejects
   a flush whose buffer is empty, whitespace-only, or carries NUL bytes with
   `EINVAL` before any handler's front half runs. The predicate is the pure

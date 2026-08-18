@@ -255,10 +255,12 @@ forever): the connection-level `busy_timeout` DSN pragma makes the race rare,
 the tail retries a failed forget through the shared `retrySQLite` gate (see
 [[persist-gate]]) and, on exhaustion (a wedge), **fails loud** — `.error` naming
 the self-heal + `EIO`, skipping `InvalidateDeleted` since the phantom row is
-still present (#278). A delete of an entity Linear already lacks ("Entity not
-found") is **idempotent success** — the row is still forgotten, so re-`rm`ing a
-phantom heals it (and is exactly the recovery the forget-exhaustion `.error`
-names) — and the details sync **prunes** rows a (provably complete, sub-page-cap)
+still present (#278). A delete whose *mutate* step says Linear already lacks the
+entity ("Entity not found") is **idempotent success** — the row is still
+forgotten, so re-`rm`ing a phantom heals it (and is exactly the recovery the
+forget-exhaustion `.error` names); the same rejection from the *find* step is not
+behind that gate and classifies (`ENOENT`) — and the details sync **prunes** rows
+a (provably complete, sub-page-cap)
 fetch no longer returns, scoped by issue and a pre-fetch `synced_at` cutoff so
 rows created mid-fetch survive.
 

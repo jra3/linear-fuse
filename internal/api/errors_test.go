@@ -165,6 +165,37 @@ func TestIsNotFound(t *testing.T) {
 			false,
 		},
 		{
+			// The echo's other placement: an entity name echoed at the TAIL of a
+			// server message, where a ": " directly precedes the phrase. Nothing
+			// distinguishes it from the real rejection except which end of the
+			// message the phrase opens, so text Linear wrote gets no wrapper slack.
+			"echoed entity name at the tail of a server message",
+			&GraphQLError{Message: "Cannot assign label: Entity not found"},
+			false,
+		},
+		{
+			"echoed entity name at the tail of UserPresentableMessage",
+			&GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "Cannot assign label: Entity not found",
+				UserError:              true,
+			},
+			false,
+		},
+		{
+			"echoed entity name at the tail of an envelope message (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"Cannot assign label: Entity not found"}]}`),
+			false,
+		},
+		{
+			// The counterpart the slack exists for: the ": " prefix is OURS, not
+			// the server's. internal/repo's orphan defense builds exactly this
+			// spelling, so the wrapper-tolerant fallback must keep answering true.
+			"our own wrapper prefix on a flattened error string",
+			fmt.Errorf("GraphQL error: Entity not found: Issue"),
+			true,
+		},
+		{
 			// Our own *FieldError rendering quotes the caller's frontmatter value
 			// verbatim. A caller who writes `status: Entity not found` must not
 			// get to pick the errno for their own typo.

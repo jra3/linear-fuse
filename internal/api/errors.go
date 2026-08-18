@@ -122,23 +122,49 @@ func IsUsageLimited(err error) bool {
 	if IsRateLimited(err) {
 		return false
 	}
+	// The same matcher in both positions: the recorded quota message is bare, so
+	// there is no wrapper prefix for it to tolerate.
+	return matchesServerMessage(err, isUsageLimitMessage, isUsageLimitMessage)
+}
+
+// matchesServerMessage runs the shape every message-keyed predicate here shares.
+// The structured *GraphQLError comes first (errors.As, so wrapping is
+// transparent) and both of its message fields are asked. Otherwise err is an
+// HTTP-level failure carrying Linear's envelope verbatim, where the server's
+// messages are quoted values INSIDE a JSON body — so the whole-message rule
+// applies to each extracted value, never to the envelope text, which embeds an
+// echoed name exactly as it embeds a real rejection.
+//
+// The two matchers differ by the SOURCE of the text they judge, which is why
+// this takes both. isServerMessage sees only what Linear wrote, so it may demand
+// the phrase constitute the whole message. isWrappedMessage sees the flattened
+// error string, which OUR OWN layers prefix — (*GraphQLError).Error() prepends
+// "GraphQL error: ", the client prepends "API error (status N): ", and every
+// fmt.Errorf %w prepends more — so a predicate that must survive those passes a
+// looser matcher in that position only. A predicate with nothing to tolerate
+// passes the same matcher twice.
+//
+// err must be non-nil; every caller guards.
+func matchesServerMessage(err error, isServerMessage, isWrappedMessage func(string) bool) bool {
 	var gqlErr *GraphQLError
 	if errors.As(err, &gqlErr) {
-		return isUsageLimitMessage(gqlErr.Message) ||
-			isUsageLimitMessage(gqlErr.UserPresentableMessage)
+		return isServerMessage(gqlErr.Message) ||
+			isServerMessage(gqlErr.UserPresentableMessage)
 	}
-	// Not a *GraphQLError: an HTTP-level failure carrying Linear's envelope
-	// verbatim. There the server's messages are quoted values INSIDE a JSON body,
-	// so the whole-message rule applies to each extracted value, never to the
-	// envelope text — which embeds an echoed name exactly as it embeds the quota
-	// phrase.
 	msg := err.Error()
 	for _, m := range envelopeMessageRe.FindAllStringSubmatch(msg, -1) {
-		if isUsageLimitMessage(m[1]) {
+		if isServerMessage(m[1]) {
 			return true
 		}
 	}
-	return isUsageLimitMessage(msg)
+	return isWrappedMessage(msg)
+}
+
+// normalizeServerMessage reduces a message to the form the anchored matchers
+// judge — case and a trailing full stop are the only slack any of them allows.
+func normalizeServerMessage(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimSpace(strings.TrimRight(s, ".!"))
 }
 
 // usageLimitMessageRe matches a message that IS a usage-limit rejection rather
@@ -154,11 +180,9 @@ var envelopeMessageRe = regexp.MustCompile(
 	`"(?:message|userPresentableMessage)"\s*:\s*"((?:[^"\\]|\\.)*)"`)
 
 // isUsageLimitMessage reports whether s, taken whole, is Linear's usage-limit
-// wording — case and a trailing full stop are the only slack.
+// wording.
 func isUsageLimitMessage(s string) bool {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.TrimSpace(strings.TrimRight(s, ".!"))
-	return usageLimitMessageRe.MatchString(s)
+	return usageLimitMessageRe.MatchString(normalizeServerMessage(s))
 }
 
 // IsNotFound reports whether err is Linear's "Entity not found" rejection —
@@ -180,8 +204,14 @@ func isUsageLimitMessage(s string) bool {
 // a bogus gone verdict on every validation rejection that names it — and hands
 // the same verdict to any error whose text merely quotes the phrase, including
 // our own *FieldError rendering of a caller's frontmatter value. An echo is
-// always embedded mid-sentence while the real rejection opens its message, so
+// always embedded mid-sentence while the real rejection OPENS its message, so
 // an anchored test separates the two and still tolerates the type suffix.
+//
+// That invariant only holds of text Linear itself wrote, which is why the two
+// matchers below split by source: server-supplied text (both *GraphQLError
+// message fields, and every value extracted from the envelope) is judged by the
+// strict opens-the-message rule, and only the flattened error string — where the
+// prefixes are OUR OWN — gets any slack. See notFoundWrappedRe.
 //
 // No extensions.code for this rejection has ever been observed; if one is ever
 // captured, add a structured check in first position, matching IsRateLimited's
@@ -197,40 +227,37 @@ func IsNotFound(err error) bool {
 	if IsRateLimited(err) {
 		return false
 	}
-	var gqlErr *GraphQLError
-	if errors.As(err, &gqlErr) {
-		return isNotFoundMessage(gqlErr.Message) ||
-			isNotFoundMessage(gqlErr.UserPresentableMessage)
-	}
-	// Not a *GraphQLError: an HTTP-level failure carrying Linear's envelope
-	// verbatim. There the server's messages are quoted values INSIDE a JSON
-	// body, so the whole-message rule applies to each extracted value, never to
-	// the envelope text — which embeds an echoed name exactly as it embeds the
-	// real rejection.
-	msg := err.Error()
-	for _, m := range envelopeMessageRe.FindAllStringSubmatch(msg, -1) {
-		if isNotFoundMessage(m[1]) {
-			return true
-		}
-	}
-	return isNotFoundMessage(msg)
+	return matchesServerMessage(err, isNotFoundServerMessage, isNotFoundWrappedMessage)
 }
 
 // notFoundMessageRe matches a message that IS Linear's not-found rejection
-// rather than one that merely mentions the phrase: the phrase opens the message
-// (or opens a clause a wrapper prefixed with ": ", which is what
-// (*GraphQLError).Error() and fmt.Errorf wrapping produce), and anything after
-// it is introduced by the type separator ("Entity not found: Issue - Could not
-// find referenced Issue."). Anchored on purpose — see IsNotFound.
+// rather than one that merely mentions the phrase: the phrase OPENS the message,
+// and anything after it is introduced by the type separator ("Entity not found:
+// Issue - Could not find referenced Issue."). Strictly anchored, exactly like
+// usageLimitMessageRe and for the same reason — see IsNotFound.
 var notFoundMessageRe = regexp.MustCompile(
+	`^entity not found(?:\s*[:\x{2013}\x{2014}-].*)?$`)
+
+// notFoundWrappedRe is notFoundMessageRe with one tolerance: the phrase may open
+// a clause a wrapper prefixed with ": ". That slack exists ONLY for our own
+// wrappers — (*GraphQLError).Error() prepends "GraphQL error: ", the client
+// prepends "API error (status N): ", and each fmt.Errorf %w prepends more — so
+// it is applied only to the flattened error string. Applying it to server text
+// would read a trailing echo ("Cannot assign label: Entity not found") as a
+// rejection, which is the hazard the anchoring exists to close.
+var notFoundWrappedRe = regexp.MustCompile(
 	`(?:^|: )entity not found(?:\s*[:\x{2013}\x{2014}-].*)?$`)
 
-// isNotFoundMessage reports whether s carries Linear's not-found wording as a
-// message of its own — case and a trailing full stop are the only slack.
-func isNotFoundMessage(s string) bool {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.TrimSpace(strings.TrimRight(s, ".!"))
-	return notFoundMessageRe.MatchString(s)
+// isNotFoundServerMessage reports whether s, as Linear wrote it, IS the
+// not-found rejection.
+func isNotFoundServerMessage(s string) bool {
+	return notFoundMessageRe.MatchString(normalizeServerMessage(s))
+}
+
+// isNotFoundWrappedMessage is isNotFoundServerMessage plus tolerance for the
+// prefixes our own layers add — see notFoundWrappedRe.
+func isNotFoundWrappedMessage(s string) bool {
+	return notFoundWrappedRe.MatchString(normalizeServerMessage(s))
 }
 
 // IsFieldTooLong reports whether err is Linear rejecting a field for exceeding
