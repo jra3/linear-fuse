@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -186,5 +187,96 @@ func TestRequestLogDisabledByDefault(t *testing.T) {
 
 	if _, err := client.GetTeams(context.Background()); err != nil {
 		t.Fatalf("GetTeams failed with nil request log: %v", err)
+	}
+}
+
+// TestNewRequestLogError pins the projection from a completed request's error
+// onto its log object — the pure half of the request log's #448 fix.
+func TestNewRequestLogError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want *requestLogError
+	}{
+		{"no error", nil, nil},
+		{
+			// The #409 shape, wrapped the way a mutation site wraps it. errors.As
+			// sees through the wrap, so the extensions still land in the line.
+			name: "wrapped graphql rejection keeps its extensions",
+			err:  fmt.Errorf("mutation IssueCreate failed: %w", &GraphQLError{Message: "usage limit exceeded"}),
+			want: &requestLogError{Message: "usage limit exceeded"},
+		},
+		{
+			name: "tagged rejection",
+			err:  &GraphQLError{Message: "Argument Validation Error", Code: "INPUT_ERROR", Type: "invalid input", UserError: true},
+			want: &requestLogError{Message: "Argument Validation Error", Code: "INPUT_ERROR", Type: "invalid input", UserError: true},
+		},
+		{
+			// No extensions to decode: an HTTP-level failure carries Linear's
+			// envelope verbatim in its rendered string.
+			name: "http failure carries its rendered string",
+			err:  errors.New(`API error (status 400): {"errors":[{"message":"boom"}]}`),
+			want: &requestLogError{Message: `API error (status 400): {"errors":[{"message":"boom"}]}`},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := newRequestLogError(tc.err)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("newRequestLogError(nil) = %+v, want nil", got)
+				}
+				return
+			}
+			if got == nil || *got != *tc.want {
+				t.Errorf("newRequestLogError() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequestLogRecordsRejectionExtensions is the artifact end of #448: after a
+// live run, requests.jsonl must answer "what did Linear actually send?" — the
+// question #409 could not answer once the run was over. An untagged rejection
+// writes its absences explicitly, so a missing code is recorded, not inferred.
+func TestRequestLogRecordsRejectionExtensions(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"errors":[{"message":"usage limit exceeded"}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+	var buf bytes.Buffer
+	client.SetRequestLog(&buf)
+
+	var result struct{}
+	if err := client.query(context.Background(), `query TestOp { viewer { id } }`, nil, &result); err == nil {
+		t.Fatal("query succeeded, want a GraphQL rejection")
+	}
+
+	entries := decodeRequestLog(t, &buf)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v, want one", entries)
+	}
+	got := entries[0]
+	if got.Outcome != "error" || got.Error == nil {
+		t.Fatalf("entry = %+v, want an error entry carrying a decoded rejection", got)
+	}
+	if got.Error.Message != "usage limit exceeded" {
+		t.Errorf("error.message = %q, want %q", got.Error.Message, "usage limit exceeded")
+	}
+	// The absences are the observation: an untagged rejection must be
+	// distinguishable from one whose tags were simply never written down.
+	raw := buf.String()
+	for _, key := range []string{`"code":""`, `"type":""`, `"user_error":false`} {
+		if !strings.Contains(raw, key) {
+			t.Errorf("line does not record %s, so absence is indistinguishable from silence:\n%s", key, raw)
+		}
 	}
 }

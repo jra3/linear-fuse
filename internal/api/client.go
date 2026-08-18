@@ -122,6 +122,7 @@ type graphQLResponse struct {
 		Message    string `json:"message"`
 		Extensions struct {
 			Code                   string `json:"code"`
+			Type                   string `json:"type"`
 			UserError              bool   `json:"userError"`
 			UserPresentableMessage string `json:"userPresentableMessage"`
 		} `json:"extensions"`
@@ -138,11 +139,36 @@ type graphQLResponse struct {
 type GraphQLError struct {
 	Message                string
 	Code                   string
+	Type                   string
 	UserError              bool
 	UserPresentableMessage string
 }
 
 func (e *GraphQLError) Error() string { return "GraphQL error: " + e.Message }
+
+// LogDetail renders the whole decoded rejection — message plus every extension
+// field — as one greppable key=value line, and is the shape every log site
+// should use in place of %v.
+//
+// Error() deliberately renders only the message (callers string-match it), so
+// logging a rejection with %v drops Code/Type/UserError at exactly the moment
+// they are most useful. That cost #409 its central question: a live run failed
+// 42 of 45 creates on "usage limit exceeded", and whether Linear had tagged
+// that rejection userError was unanswerable from any surviving artifact,
+// because the only thing written down was the message. IsUsageLimited is still
+// message-shaped for the same reason.
+//
+// So the empty fields print too: code="" is the evidence that Linear sent NO
+// code for this rejection, which is precisely the observation a structured
+// check is waiting on. Omitting them would record absence as silence again.
+func (e *GraphQLError) LogDetail() string {
+	detail := fmt.Sprintf("message=%q code=%q type=%q userError=%t",
+		e.Message, e.Code, e.Type, e.UserError)
+	if e.UserPresentableMessage != "" {
+		detail += fmt.Sprintf(" userPresentableMessage=%q", e.UserPresentableMessage)
+	}
+	return detail
+}
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
 	// Extract operation name for stats and logging
@@ -321,18 +347,23 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 
 	if len(gqlResp.Errors) > 0 {
 		first := gqlResp.Errors[0]
-		errMsg := first.Message
-		queryErr = &GraphQLError{
-			Message:                errMsg,
+		gqlErr := &GraphQLError{
+			Message:                first.Message,
 			Code:                   first.Extensions.Code,
+			Type:                   first.Extensions.Type,
 			UserError:              first.Extensions.UserError,
 			UserPresentableMessage: first.Extensions.UserPresentableMessage,
 		}
+		queryErr = gqlErr
+		// The one place a rejection's extensions are still in hand. Log the
+		// decoded set here rather than leaving it to a caller's %v, which renders
+		// Error() and keeps only the message (#448).
 		if IsRateLimited(queryErr) {
 			adm.rateLimited(resp.Header)
-			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, errMsg)
+			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, gqlErr.LogDetail())
 		} else {
 			adm.observe(resp.Header)
+			log.Printf("[api] ERROR: %s rejected by Linear API: %s", opName, gqlErr.LogDetail())
 		}
 		return queryErr
 	}

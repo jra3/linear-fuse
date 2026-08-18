@@ -16,6 +16,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"time"
@@ -23,12 +24,47 @@ import (
 
 // requestLogEntry is one requests.jsonl line.
 type requestLogEntry struct {
-	TS         string         `json:"ts"` // RFC3339Nano, UTC
-	Op         string         `json:"op"`
-	Vars       map[string]any `json:"vars,omitempty"`
-	DurationMS float64        `json:"duration_ms"`
-	Outcome    string         `json:"outcome"` // ok|error|ratelimited — same classification as linearfs.api.requests
-	Complexity *float64       `json:"complexity,omitempty"`
+	TS         string           `json:"ts"` // RFC3339Nano, UTC
+	Op         string           `json:"op"`
+	Vars       map[string]any   `json:"vars,omitempty"`
+	DurationMS float64          `json:"duration_ms"`
+	Outcome    string           `json:"outcome"` // ok|error|ratelimited — same classification as linearfs.api.requests
+	Complexity *float64         `json:"complexity,omitempty"`
+	Error      *requestLogError `json:"error,omitempty"`
+}
+
+// requestLogError is the failed request's rejection, decoded. The outcome enum
+// says only ok|error|ratelimited; this says WHAT Linear sent, which is the
+// question an after-the-fact investigation actually asks (#448) — and the one
+// #409 could not answer, because the run's only surviving artifact was the
+// message. Fields inside are written unconditionally: `"code": ""` records that
+// Linear tagged the rejection with no code, which is the census observation, and
+// omitting it would make absence indistinguishable from a line never written.
+type requestLogError struct {
+	Message   string `json:"message"`
+	Code      string `json:"code"`
+	Type      string `json:"type"`
+	UserError bool   `json:"user_error"`
+}
+
+// newRequestLogError projects a completed request's error onto its log object.
+// A *GraphQLError (through any wrapping) contributes its decoded extensions; any
+// other failure — HTTP-level, transport, a budget deferral — has no extensions
+// to decode, so it carries its rendered string and empty extension fields.
+func newRequestLogError(err error) *requestLogError {
+	if err == nil {
+		return nil
+	}
+	var gqlErr *GraphQLError
+	if errors.As(err, &gqlErr) {
+		return &requestLogError{
+			Message:   gqlErr.Message,
+			Code:      gqlErr.Code,
+			Type:      gqlErr.Type,
+			UserError: gqlErr.UserError,
+		}
+	}
+	return &requestLogError{Message: err.Error()}
 }
 
 // SetRequestLog enables the per-request JSONL debug log: every completed
@@ -54,6 +90,7 @@ func (c *Client) logRequest(op string, vars map[string]any, elapsed time.Duratio
 		Vars:       vars,
 		DurationMS: float64(elapsed.Microseconds()) / 1000.0,
 		Outcome:    outcomeFor(err),
+		Error:      newRequestLogError(err),
 	}
 	if adm != nil {
 		if v, ok := adm.actualComplexity(); ok {

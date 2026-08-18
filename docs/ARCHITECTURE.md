@@ -239,8 +239,17 @@ Operational guards:
   (admit/defer/wait/ratelimited), plus per-method CDN requests and latency
   (`linearfs.cdn.*`).
 - **Request log** (`requestlog.go`): optional JSONL trace of every completed
-  request (op, vars, duration, outcome, complexity) to
-  `~/.config/linearfs/requests.jsonl`, for offline diagnosis.
+  request (op, vars, duration, outcome, complexity, and — on a failure — the
+  decoded rejection: message plus `extensions.{code, type, userError}`) to
+  `~/.config/linearfs/requests.jsonl`, for offline diagnosis. The rejection's
+  extension fields are written even when empty, because "Linear sent no code" is
+  the observation a message-shaped predicate is waiting on (#448).
+- **GraphQL rejections** (`client.go`): a failed operation becomes a
+  `*GraphQLError` carrying the message plus every decoded extension (`code`,
+  `type`, `userError`, `userPresentableMessage`). `Error()` renders only the
+  message (callers string-match it), so the client logs `LogDetail()` — all four
+  fields, empties included — at the one site that still holds them; a caller's
+  `%v` would drop them (#448).
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
   `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred` — the vocabulary the fs
   layer's error classifier maps to errnos. `IsUsageLimited` (the workspace is

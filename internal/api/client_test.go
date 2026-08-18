@@ -1327,3 +1327,83 @@ func TestClient_GetWorkspaceInitiativeIDs(t *testing.T) {
 		t.Errorf("got %q, want i1", got)
 	}
 }
+
+// TestGraphQLErrorLogDetail pins the rendering every log site uses in place of
+// %v: all four decoded fields, empty ones included. #409's central question —
+// does Linear tag "usage limit exceeded" with userError? — was unanswerable
+// after a live run precisely because the empty fields were never written down
+// (#448).
+func TestGraphQLErrorLogDetail(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  *GraphQLError
+		want string
+	}{
+		{
+			// The #409 shape: a bare message, every extension unset. The verdict
+			// this line records is "Linear sent no code and no userError bit".
+			name: "untagged rejection records the absences",
+			err:  &GraphQLError{Message: "usage limit exceeded"},
+			want: `message="usage limit exceeded" code="" type="" userError=false`,
+		},
+		{
+			name: "fully tagged rejection",
+			err: &GraphQLError{
+				Message:                "Argument Validation Error",
+				Code:                   "INPUT_ERROR",
+				Type:                   "invalid input",
+				UserError:              true,
+				UserPresentableMessage: "The label 'X' is a group.",
+			},
+			want: `message="Argument Validation Error" code="INPUT_ERROR" type="invalid input" userError=true userPresentableMessage="The label 'X' is a group."`,
+		},
+		{
+			name: "rate limit",
+			err:  &GraphQLError{Message: "rate limit exceeded", Code: "RATELIMITED"},
+			want: `message="rate limit exceeded" code="RATELIMITED" type="" userError=false`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.LogDetail(); got != tc.want {
+				t.Errorf("LogDetail() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGraphQLErrorDecodesExtensionType pins that extensions.type survives the
+// decode. It is the field #409 needed and client.go did not decode at all, so a
+// classifier promoted to a structured check has something to key on.
+func TestGraphQLErrorDecodesExtensionType(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"errors":[{"message":"usage limit exceeded","extensions":{"code":"FEATURE_NOT_ACCESSIBLE","type":"usage limit","userError":true,"userPresentableMessage":"You are over your plan limit."}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	var result struct{}
+	err := client.query(context.Background(), `query TestOp { viewer { id } }`, nil, &result)
+	var gqlErr *GraphQLError
+	if !errors.As(err, &gqlErr) {
+		t.Fatalf("query error = %v, want *GraphQLError", err)
+	}
+	if gqlErr.Type != "usage limit" {
+		t.Errorf("Type = %q, want %q", gqlErr.Type, "usage limit")
+	}
+	if gqlErr.Code != "FEATURE_NOT_ACCESSIBLE" || !gqlErr.UserError {
+		t.Errorf("Code/UserError = %q/%v, want FEATURE_NOT_ACCESSIBLE/true", gqlErr.Code, gqlErr.UserError)
+	}
+	// Error() keeps the legacy shape: callers string-match it, and LogDetail is
+	// the surface that carries the extensions.
+	if got := gqlErr.Error(); got != "GraphQL error: usage limit exceeded" {
+		t.Errorf("Error() = %q, want the legacy message-only shape", got)
+	}
+}
