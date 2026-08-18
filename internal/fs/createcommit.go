@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strings"
 	"syscall"
 	"time"
 
@@ -250,7 +251,7 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	// delete whose FIND fails this way is not behind that gate and does classify
 	// here.
 	if api.IsNotFound(err) {
-		return "Operation: " + op + "\nError: " + serverDetail(err) +
+		return "Operation: " + op + "\nError: " + serverClause(err) +
 			". The referenced entity no longer exists on Linear, so retrying will NOT help — re-read the directory listing for current entries.", syscall.ENOENT
 	}
 	// A workspace over its plan/usage limit is neither the caller's bad input nor
@@ -299,4 +300,14 @@ func serverDetail(err error) string {
 		}
 	}
 	return err.Error()
+}
+
+// serverClause renders serverDetail(err) as a clause an arm can append its own
+// sentence to. Linear's canonical messages already end in a full stop ("Entity
+// not found: Issue - Could not find referenced Issue."), so joining onto the raw
+// detail doubles it — a typo in exactly the .error sentence an agent is meant to
+// read and act on. Pure string transform: trailing sentence punctuation off, the
+// wording of neither half touched.
+func serverClause(err error) string {
+	return strings.TrimRight(serverDetail(err), " .!?")
 }

@@ -252,6 +252,52 @@ func TestCommitCreate_Classification(t *testing.T) {
 	}
 }
 
+// TestClassifyMutationErr_NotFoundJoin pins the seam where the #445 arm appends
+// its own sentence to Linear's message. Linear's canonical not-found text ends
+// in a full stop, so joining onto it raw rendered "...referenced Issue.. The
+// referenced entity no longer exists..." — a typo in the one sentence the arm
+// exists to make an agent trust. Both spellings must read as one sentence
+// followed by another, and both must keep the verdict's substrings.
+func TestClassifyMutationErr_NotFoundJoin(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string // the join, rendered exactly
+	}{
+		{
+			name: "a server message ending in a full stop gets exactly one",
+			err:  &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."},
+			want: "referenced Issue. The referenced entity no longer exists on Linear",
+		},
+		{
+			name: "a server message with no trailing stop still gets its separator",
+			err:  &api.GraphQLError{Message: "Entity not found: Issue"},
+			want: "Entity not found: Issue. The referenced entity no longer exists on Linear",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, errno := classifyMutationErr("update issue", tc.err)
+
+			if errno != syscall.ENOENT {
+				t.Fatalf("errno = %v, want ENOENT", errno)
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf(".error = %q, want it to contain %q", msg, tc.want)
+			}
+			if strings.Contains(msg, "..") {
+				t.Errorf(".error = %q, want no doubled full stop", msg)
+			}
+			for _, keep := range []string{"no longer exists on Linear", "retrying will NOT help"} {
+				if !strings.Contains(msg, keep) {
+					t.Errorf(".error = %q, want it to contain %q", msg, keep)
+				}
+			}
+		})
+	}
+}
+
 // TestCommitCreate_PersistFailureFailsLoud confirms a SQLite upsert failure is
 // fatal to the create (#276): the entity is live on Linear but unconfirmed
 // locally, so the tail must return EIO, write a de-dupe .error naming the
