@@ -521,7 +521,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// i.issue with the moved entity, so these cannot be read afterwards.
 	prevTeam := i.issue.Team
 	prevIdentifier := i.issue.Identifier
-	return editFlush(ctx, i.lfs, &i.editBuffer, editFlushSpec[api.Issue]{
+	return editFlush(ctx, i.lfs, &i.editBuffer, f, editFlushSpec[api.Issue]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			if i.lfs.debug {
 				log.Printf("Flush: %s (saving changes)", i.issue.Identifier)

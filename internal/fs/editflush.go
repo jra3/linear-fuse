@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"syscall"
 	"time"
+
+	"github.com/hanwen/go-fuse/v2/fs"
 )
 
 // emptyWriteMessage is the .error an emptied editable file gets. It follows the
@@ -207,14 +209,16 @@ type editFlushSpec[T any] struct {
 
 // editFlush runs the invariant shell of a file node's Flush. eb is the node's
 // embedded editBuffer (the shell owns the lock, the clean/empty guard, and the
-// dirty flag); sink carries the error + invalidation surfaces; spec supplies the
-// per-entity front half, commit tail, adopt, and invalidation set.
+// dirty flag); fh is the FUSE file handle the Flush arrived on, which the
+// empty-write restore attributes its bytes to (#454, see editHandle); sink
+// carries the error + invalidation surfaces; spec supplies the per-entity front
+// half, commit tail, adopt, and invalidation set.
 //
 // Returns the errno the Flush should surface: the front half's errno on
 // failure, 0 on a no-op, or the commit tail's errno on a completed write. The
 // buffer lock is held across the whole shell, exactly as the hand-written
 // handlers held n.mu.
-func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, spec editFlushSpec[T]) syscall.Errno {
+func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, fh fs.FileHandle, spec editFlushSpec[T]) syscall.Errno {
 	eb.mu.Lock()
 	defer eb.mu.Unlock()
 
@@ -268,10 +272,22 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 			if current := spec.restore(); len(current) > 0 {
 				eb.content = current
 				eb.dirty = false
+				// The buffer now holds bytes NOBODY WROTE, put there only so the
+				// .error's "re-read the file" recovery works. Record that against the
+				// handle this flush arrived on, so if the same open goes on to write —
+				// the `>` redirect's kernel sequence puts this flush in the middle of
+				// one — the write re-applies the truncation instead of splicing into
+				// the resurrected image (#454). A flush with no handle (the atomic-save
+				// path) records nothing; there is no writer to continue.
+				eb.markRestored(fh)
 			}
 		}
 		return syscall.EINVAL
 	}
+
+	// Past the empty guard the buffer holds content somebody actually wrote, so
+	// any restore this handle was still carrying is spent.
+	_ = eb.takeTruncation(fh)
 
 	// Bound the API work — the front half and the commit tail both call Linear.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

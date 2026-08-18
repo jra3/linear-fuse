@@ -274,7 +274,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	// edit bridges the front half (which builds it) to the commit-tail compare
 	// (which reads its divergences against the pre-write i.initiative).
 	var edit scalarEdit
-	return editFlush(ctx, i.lfs, &i.editBuffer, editFlushSpec[api.Initiative]{
+	return editFlush(ctx, i.lfs, &i.editBuffer, f, editFlushSpec[api.Initiative]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			if i.lfs.debug {
 				log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)

@@ -963,6 +963,18 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   re-save, while an emptied buffer on the in-place path belongs to the canonical
   node and would otherwise serve zero bytes for the node's whole lifetime —
   `refresh` refuses a dirty buffer, and only a successful flush clears the flag.
+  That restore is **read-side only**, and the restoring flush says so by
+  attributing the bytes to the FILE HANDLE it arrived on (`editHandle`, #454): a
+  flush can land between a truncate and the write it belongs to — a shell `>`
+  redirect emits exactly that, closing a duplicated descriptor after the
+  `SETATTR(size 0)` — and the pending write would otherwise overwrite a prefix of
+  the resurrected image and ship the splice. Only that handle's own next write or
+  resize re-applies the truncation. The scoping is the contract, not an
+  implementation detail: a mark on the BUFFER outlives the writer and clips the
+  next ordinary write instead (a NUL-padded document, whose lost frontmatter also
+  nils every removable field), while clearing one on `Open` or `refresh` reopens
+  #454 for any concurrent reader. It is armed by the restoring flush rather than
+  by `Setattr` because the kernel sends no file handle on an open-time truncate.
 - **Time handling** is the most common footgun — both directions: parse reads
   via `ParseSQLiteTime*`, stamp writes via `db.Now()` (UTC). Inside the worker,
   scheduling goes through the injected clock seam.

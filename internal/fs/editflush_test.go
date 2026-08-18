@@ -46,7 +46,7 @@ func TestEditFlushFailKeepsDirtyNoCommit(t *testing.T) {
 	sink := &recordingFlushSink{}
 	fetched := false
 	restored := false
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return false, syscall.EINVAL },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey: "k",
@@ -82,7 +82,7 @@ func TestEditFlushNoChangeClearsDirtyNoCommit(t *testing.T) {
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
 	fetched := false
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return false, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey: "k",
@@ -119,7 +119,7 @@ func TestEditFlushProceedCommitsAdoptsInvalidates(t *testing.T) {
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
 	var adopted *fakeEntity
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey:  "k",
@@ -148,7 +148,7 @@ func TestEditFlushProceedMarksAuthored(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey:  "k",
@@ -185,7 +185,7 @@ func TestEditFlushZeroPinInoNeverPins(t *testing.T) {
 	// not pin" for a future spec whose file is not built through newFileInode:
 	// nothing would ever seed from that pin, so it would be bytes nobody can read,
 	// held for the TTL.
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey:  "k",
@@ -230,7 +230,7 @@ func TestEditFlushInPlaceWriteSupersedesAtomicSavePin(t *testing.T) {
 	// Now the client edits the same file IN PLACE, inside the pin's window, and
 	// that write commits cleanly.
 	eb := &editBuffer{content: []byte("newer in-place bytes"), dirty: true}
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey:  "k",
@@ -263,7 +263,7 @@ func TestEditFlushNoChangeDoesNotMarkAuthored(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate:    func(context.Context) (bool, syscall.Errno) { return false, 0 },
 		writeBack: writeBackSpec[fakeEntity]{errKey: "k"},
 		adopt:     func(*fakeEntity) {},
@@ -287,7 +287,7 @@ func TestEditFlushFailDoesNotMarkAuthored(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate:    func(context.Context) (bool, syscall.Errno) { return false, syscall.EINVAL },
 		writeBack: writeBackSpec[fakeEntity]{errKey: "k"},
 		adopt:     func(*fakeEntity) {},
@@ -313,7 +313,7 @@ func TestEditFlushFatalDivergenceDoesNotMarkAuthored(t *testing.T) {
 	// (silent revert / truncation) → commitWriteBack returns EIO. Serving the
 	// written bytes here would mask real data loss from a re-reading verifier, so
 	// the buffer must NOT be armed authored.
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey: "k",
@@ -341,7 +341,7 @@ func TestEditFlushInvalidatesAfterPersist(t *testing.T) {
 	t.Parallel()
 	eb := dirtyBuffer()
 	sink := &recordingFlushSink{}
-	errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
 		writeBack: writeBackSpec[fakeEntity]{
 			errKey:  "k",
@@ -383,7 +383,7 @@ func TestEditFlushEmptiedFileIsRejected(t *testing.T) {
 			eb := &editBuffer{content: tc.content, dirty: true}
 			sink := &recordingFlushSink{}
 			called := false
-			errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+			errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 				mutate:    func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
 				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
 				adopt:     func(*fakeEntity) {},
@@ -441,7 +441,7 @@ func TestEditFlushEmptyWriteWithoutRestoreLeavesBufferAlone(t *testing.T) {
 			t.Parallel()
 			eb := &editBuffer{content: []byte{}, dirty: true}
 			sink := &recordingFlushSink{}
-			errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+			errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 				mutate:    func(context.Context) (bool, syscall.Errno) { return true, 0 },
 				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
 				adopt:     func(*fakeEntity) {},
@@ -482,7 +482,7 @@ func TestEditFlushNonEmptyContentStillFlushes(t *testing.T) {
 		eb := &editBuffer{content: []byte(content), dirty: true}
 		sink := &recordingFlushSink{}
 		called := false
-		errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+		errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 			mutate: func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
 			writeBack: writeBackSpec[fakeEntity]{
 				errKey:  "k",
@@ -504,7 +504,7 @@ func TestEditFlushCleanBufferIsNoOp(t *testing.T) {
 	sink := &recordingFlushSink{}
 	called := false
 	// dirty=false: the guard short-circuits before mutate.
-	errno := editFlush(context.Background(), sink, &editBuffer{content: []byte("x")}, editFlushSpec[fakeEntity]{
+	errno := editFlush(context.Background(), sink, &editBuffer{content: []byte("x")}, nil, editFlushSpec[fakeEntity]{
 		mutate:    func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
 		coherence: []uint64{1},
 	})
@@ -570,7 +570,7 @@ func TestEditFlushZeroFilledWriteIsRejected(t *testing.T) {
 			eb := &editBuffer{content: tc.content, dirty: true}
 			sink := &recordingFlushSink{}
 			called := false
-			errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+			errno := editFlush(context.Background(), sink, eb, nil, editFlushSpec[fakeEntity]{
 				mutate:    func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
 				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
 				adopt:     func(*fakeEntity) {},
@@ -625,8 +625,8 @@ func TestHoleWriteMessageNamesTheCause(t *testing.T) {
 	}
 }
 
-// TestEditFlushRestoreDoesNotSpliceIntoTheNextWrite is #454 at the seam the bug
-// actually lives on: editFlush's empty-write restore meeting editBuffer.Write.
+// #454 at the seam the bug actually lives on: editFlush's empty-write restore
+// meeting editBuffer.Write.
 //
 // A `-d` trace of a live mount shows the kernel's sequence for a shell `>`
 // redirect is OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH — the shell emits that
@@ -634,56 +634,124 @@ func TestHoleWriteMessageNamesTheCause(t *testing.T) {
 // by putting the entity's render back, so the write that follows used to land at
 // offset 0 of the resurrected image and the closing flush persisted the splice:
 // the old description's tail survived, and the previous frontmatter leaked into
-// the body. The pending-truncation flag is what keeps the restore a read-side
-// convenience.
-func TestEditFlushRestoreDoesNotSpliceIntoTheNextWrite(t *testing.T) {
+// the body.
+//
+// The two subtests are the two halves of the contract, and a fix that trades one
+// for the other is what this pair exists to catch: the redirect's own write must
+// re-apply the truncation, and a LATER writer's must not.
+func TestEditFlushRestoreAndTheWritesThatFollow(t *testing.T) {
 	t.Parallel()
 	const render = "---\ntitle: \"Truncate probe\"\n---\nAAAA BBBB CCCC DDDD EEEE FFFF GGGG\n"
-	eb := &editBuffer{content: []byte(render)}
-	sink := &recordingFlushSink{}
-	spec := editFlushSpec[fakeEntity]{
-		mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
-		writeBack: writeBackSpec[fakeEntity]{
-			errKey:  "k",
-			op:      "save issue ENG-1",
-			fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 1}, nil },
-			compare: func(*fakeEntity) []writeBackResult { return nil },
-		},
-		adopt:     func(*fakeEntity) {},
-		restore:   func() []byte { return []byte(render) },
-		coherence: []uint64{1},
-		pinIno:    1,
-	}
 
-	// SETATTR(size 0) — the O_TRUNC of the redirect.
-	zero := &fuse.SetAttrIn{}
-	zero.Valid = fuse.FATTR_SIZE
-	zero.Size = 0
-	eb.Setattr(context.Background(), nil, zero, &fuse.AttrOut{})
+	t.Run("the truncating writer's own write is still truncated", func(t *testing.T) {
+		t.Parallel()
+		eb := &editBuffer{content: []byte(render)}
+		sink := &recordingFlushSink{}
+		spec := editFlushSpec[fakeEntity]{
+			mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+			writeBack: writeBackSpec[fakeEntity]{
+				errKey:  "k",
+				op:      "save issue ENG-1",
+				fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 1}, nil },
+				compare: func(*fakeEntity) []writeBackResult { return nil },
+			},
+			adopt:     func(*fakeEntity) {},
+			restore:   func() []byte { return []byte(render) },
+			coherence: []uint64{1},
+			pinIno:    1,
+		}
 
-	// FLUSH from the dup'd descriptor closing. The rejection still stands and the
-	// buffer is still restored — reads must keep working.
-	if errno := editFlush(context.Background(), sink, eb, spec); errno != syscall.EINVAL {
-		t.Fatalf("intervening flush errno = %v, want EINVAL (the empty-write rejection is unchanged)", errno)
-	}
-	if string(eb.content) != render {
-		t.Fatalf("intervening flush left content = %q, want the entity's render restored", eb.content)
-	}
+		// OPEN — the handle the whole redirect runs on.
+		h, _, _ := eb.Open(context.Background(), 0)
 
-	// WRITE — the redirect's actual payload, shorter than the render.
-	const short = "---\ntitle: \"SHORT\"\n---\nSHORT\n"
-	eb.Write(context.Background(), nil, []byte(short), 0)
-	if string(eb.content) != short {
-		t.Errorf("buffer after the write = %q, want exactly %q — the restored image spliced through", eb.content, short)
-	}
+		// SETATTR(size 0) — the O_TRUNC of the redirect. Measured against a live
+		// mount, this one carries NO file handle, which is why the pending
+		// truncation cannot be armed here.
+		zero := &fuse.SetAttrIn{}
+		zero.Valid = fuse.FATTR_SIZE
+		zero.Size = 0
+		eb.Setattr(context.Background(), nil, zero, &fuse.AttrOut{})
 
-	// FLUSH — what the closing descriptor would persist.
-	var sent string
-	spec.mutate = func(context.Context) (bool, syscall.Errno) { sent = string(eb.content); return true, 0 }
-	if errno := editFlush(context.Background(), sink, eb, spec); errno != 0 {
-		t.Fatalf("closing flush errno = %v, want 0", errno)
-	}
-	if sent != short {
-		t.Errorf("front half saw %q, want %q — the splice would have reached Linear", sent, short)
-	}
+		// FLUSH from the dup'd descriptor closing. The rejection still stands and
+		// the buffer is still restored — reads must keep working.
+		if errno := editFlush(context.Background(), sink, eb, h, spec); errno != syscall.EINVAL {
+			t.Fatalf("intervening flush errno = %v, want EINVAL (the empty-write rejection is unchanged)", errno)
+		}
+		if string(eb.content) != render {
+			t.Fatalf("intervening flush left content = %q, want the entity's render restored", eb.content)
+		}
+
+		// WRITE — the redirect's actual payload, shorter than the render, on the
+		// handle the restore was made for.
+		const short = "---\ntitle: \"SHORT\"\n---\nSHORT\n"
+		eb.Write(context.Background(), h, []byte(short), 0)
+		if string(eb.content) != short {
+			t.Errorf("buffer after the write = %q, want exactly %q — the restored image spliced through", eb.content, short)
+		}
+
+		// FLUSH — what the closing descriptor would persist.
+		var sent string
+		spec.mutate = func(context.Context) (bool, syscall.Errno) { sent = string(eb.content); return true, 0 }
+		if errno := editFlush(context.Background(), sink, eb, h, spec); errno != 0 {
+			t.Fatalf("closing flush errno = %v, want 0", errno)
+		}
+		if sent != short {
+			t.Errorf("front half saw %q, want %q — the splice would have reached Linear", sent, short)
+		}
+	})
+
+	t.Run("a later writer's write is not", func(t *testing.T) {
+		t.Parallel()
+		// The `> file` above is abandoned without ever writing (`: > file`), so the
+		// rejection stands and the restore is all that is left behind. The NEXT
+		// writer — a plain `>>` on a fresh open — truncated nothing, and clearing
+		// the buffer under it would send Linear a document of NUL bytes whose
+		// missing frontmatter also nils every removable field.
+		eb := &editBuffer{content: []byte(render)}
+		sink := &recordingFlushSink{}
+		spec := editFlushSpec[fakeEntity]{
+			mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+			writeBack: writeBackSpec[fakeEntity]{
+				errKey:  "k",
+				op:      "save issue ENG-1",
+				fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 1}, nil },
+				compare: func(*fakeEntity) []writeBackResult { return nil },
+			},
+			adopt:     func(*fakeEntity) {},
+			restore:   func() []byte { return []byte(render) },
+			coherence: []uint64{1},
+			pinIno:    1,
+		}
+
+		truncator, _, _ := eb.Open(context.Background(), 0)
+		zero := &fuse.SetAttrIn{}
+		zero.Valid = fuse.FATTR_SIZE
+		zero.Size = 0
+		eb.Setattr(context.Background(), nil, zero, &fuse.AttrOut{})
+		if errno := editFlush(context.Background(), sink, eb, truncator, spec); errno != syscall.EINVAL {
+			t.Fatalf("intervening flush errno = %v, want EINVAL", errno)
+		}
+		// …and that writer goes away without writing anything.
+
+		appender, _, _ := eb.Open(context.Background(), 0)
+		const tail = "\nAppended line.\n"
+		eb.Write(context.Background(), appender, []byte(tail), int64(len(render)))
+
+		want := render + tail
+		if string(eb.content) != want {
+			t.Errorf("buffer after the append = %q, want %q — the abandoned truncate followed the wrong writer", eb.content, want)
+		}
+		if i := bytes.IndexByte(eb.content, 0); i >= 0 {
+			t.Errorf("buffer carries a NUL byte at %d; the appended document was written over a cleared buffer", i)
+		}
+
+		var sent string
+		spec.mutate = func(context.Context) (bool, syscall.Errno) { sent = string(eb.content); return true, 0 }
+		if errno := editFlush(context.Background(), sink, eb, appender, spec); errno != 0 {
+			t.Fatalf("closing flush errno = %v, want 0", errno)
+		}
+		if sent != want {
+			t.Errorf("front half saw %q, want %q", sent, want)
+		}
+	})
 }

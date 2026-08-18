@@ -170,7 +170,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	// update + updatedLabel bridge the front half to the commit tail.
 	var update map[string]any
 	var updatedLabel *api.Label
-	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.Label]{
+	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.Label]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			var err error
 			update, err = marshal.MarkdownToLabelUpdate(n.content, &n.label)

@@ -419,7 +419,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	// compare (which reads their divergences against the pre-write p.project).
 	var edit scalarEdit
 	var labels labelsEdit
-	return editFlush(ctx, p.lfs, &p.editBuffer, editFlushSpec[api.Project]{
+	return editFlush(ctx, p.lfs, &p.editBuffer, f, editFlushSpec[api.Project]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			if p.lfs.debug {
 				log.Printf("Flush: project %s (saving changes)", p.project.Name)

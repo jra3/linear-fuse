@@ -101,17 +101,20 @@ dirty buffer) — defeating the very recovery the `.error` prescribes, "re-read 
 file to get its current contents".
 
 That restore is a **read-side** convenience only, and [[edit-buffer]]'s
-**pending-truncation** flag is what keeps it one (#454). The kernel's sequence for
+**pending truncation** is what keeps it one (#454). The kernel's sequence for
 a shell `>` redirect is OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH — the shell
 emits that middle FLUSH by closing a duplicated descriptor, so the rejection fires
 on a buffer nobody meant to empty, and the write that follows used to land at
 offset 0 of the resurrected image. What persisted was a splice: a shorter `>`
 rewrite kept the old description's tail, and a shorter one after that pushed the
 previous *frontmatter* into the body, compounding per write and reaching Linear.
-The flag records that the FILE is logically zero bytes whatever `content` holds,
-and `Write` consumes it by emptying the buffer again before applying the data — so
-a `>` redirect truncates, while a genuinely emptied file still gets the `#397`
-rejection and its readable contents back. Projects/initiatives
+So the restoring flush **attributes the restored bytes to the file handle it
+arrived on**, and only that handle's own next write re-applies the truncation — a
+`>` redirect truncates, while a genuinely emptied file still gets the `#397`
+rejection and its readable contents back. Attributing it to the BUFFER instead is
+the trap: the mark then outlives the writer, and the next ordinary `>>` — which
+truncated nothing — is written into a cleared buffer, sending Linear a NUL-padded
+document whose absent frontmatter also nils every removable field. Projects/initiatives
 put their whole multi-mutation front half (labels + links-reconcile + scalar) in
 `mutate` and always return `proceed=true` (they re-fetch to catch link changes);
 the front-half result reaches the commit-tail `compare` through a method-local
@@ -809,7 +812,7 @@ mount (`entitycell_test.go`).
 ### Edit buffer (`editBuffer`)
 The **deep module** owning the read/write byte buffer of every editable file
 node — the edit-side twin of `createFileNode`'s buffer. `editBuffer`
-(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored, truncated}` and provides the
+(`internal/fs/editbuffer.go`) is `{mu, content, dirty, authored}` and provides the
 FUSE buffer operations (`Open`/`Read`/`Write`/`Setattr`/`Fsync`), **promoted into
 the node** the way `attrNode` promotes `Getattr`. `authored` is the
 serve-your-own-writes flag (#365): `editFlush` sets it after a write **commits
@@ -826,16 +829,28 @@ The flag protects the bytes only as long as **this node** lives — a dentry for
 rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
 [[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
 pin, not this flag, is what survives the node. See [[node-refresh]].
-`truncated` is the **pending-truncation** flag (#454): a truncation emptied the
-buffer (a `Setattr` to size 0, or `truncateBuffer` for a `collectionDir` O_TRUNC
-`Create`) and no write has landed since, so the file is logically zero bytes
-whatever `content` currently holds. The two can disagree because [[edit-flush]]'s
-empty-write rejection RESTORES the entity's render into an emptied buffer, and the
-kernel interleaves that rejection between a `>` redirect's truncate and its write;
-`Write` consumes the flag by emptying the buffer again first, so the restored image
-never shows through — neither as a surviving tail nor as a zero-filled hole's
-contents. An explicit non-zero `Setattr` size supersedes a pending truncation,
-since that size IS the file's new length. Each of the seven editable file
+`Open` returns an **`editHandle`**, the per-open handle that carries the
+**pending truncation** of #454. A truncation empties the buffer (a `Setattr` to
+size 0, or `truncateBuffer` for a `collectionDir` O_TRUNC `Create`), and if
+[[edit-flush]]'s empty-write rejection then RESTORES the entity's render into it —
+which the kernel interleaves between a `>` redirect's truncate and its write — the
+buffer holds bytes nobody wrote while the FILE is still logically zero. `editFlush`
+marks that on the handle its flush arrived on; that handle's next `Write` or
+`Setattr` empties the buffer again first, so the restored image never shows
+through — neither as a surviving tail nor as a zero-filled hole's contents — and a
+resize sizes the emptied file rather than the resurrected one.
+**Scoping it to the handle is the contract.** A mark on the buffer outlives its
+writer and clips the next unrelated write; clearing one on `Open` or `refresh`
+hands it to any concurrent `cat` in the restore→write window and reopens #454.
+It is armed by the restoring FLUSH rather than by `Setattr` because the kernel
+sends no file handle on an open-time truncate (measured: `FATTR_FH` is unset
+there, though an explicit `ftruncate(2)` does carry one) — and it need not be
+armed earlier, since until something restores, an emptied buffer really is empty.
+`collectionDir`'s overwrite-in-place `Create` hands back the same handle for the
+same reason: that Create is an open, and a `nil` there would leave its write
+unattributable. Per-open state is the idiom `createFileNode` already uses for its
+own buffer, and for the same underlying reason — a dup'd descriptor and a
+genuinely new open are the two things a node-scoped flag cannot tell apart. Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`
