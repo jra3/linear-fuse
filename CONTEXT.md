@@ -734,11 +734,11 @@ does `AttrValid = uint64(ns / 1e9)` with no sign check, so a negative reaching
 the setters is a ~584-billion-year TTL, not a short one. `newFileInode` was the
 one builder missing that check before #449's rework. The same conversion runs on
 the mount's own bounds — go-fuse applies `*fs.Options.EntryTimeout` through those
-setters — so `mountConfig.resolve()` clamps a negative `WithKernelCacheTimeouts`
-argument back to its default before it reaches either `fsOpts` or
-`lfs.kernelEntryTimeout`, which is what keeps the two halves of a mount from
-disagreeing about one input. `entryTimeout()` clamps too, now as defence in depth
-for a `LinearFS` a unit test built without mounting.
+setters — so `resolveMountTimeouts` (seed, apply the options, clamp) clamps a
+negative `WithKernelCacheTimeouts` argument back to its default before it
+reaches either `fsOpts` or `lfs.kernelEntryTimeout`, which is what keeps the two
+halves of a mount from disagreeing about one input. `entryTimeout()` clamps too,
+now as defence in depth for a `LinearFS` a unit test built without mounting.
 `newFileInode` carries one further responsibility, because it is the one
 builder every editable file passes
 through: it seeds serve-your-own-writes for any child exposing `editable()

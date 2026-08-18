@@ -853,17 +853,6 @@ type mountConfig struct {
 	attrTimeout, entryTimeout time.Duration
 }
 
-// resolve returns the bounds the mount will actually use, clamping a negative
-// configured value back to its default.
-//
-// WithKernelCacheTimeouts is exported and accepts any duration, and both halves
-// of the mount convert what it lands on to unsigned with no sign check —
-// go-fuse's setEntryOutTimeout applies *fs.Options.EntryTimeout through the same
-// fuse.EntryOut setters applyNodeTimeout guards. So a negative here is not a
-// short cache but a ~584-billion-year one, at every inheritTimeout and
-// mountDefaultTimeout site, which is most of the tree. Clamping once at the
-// point the option lands is what keeps fsOpts and lfs.kernelEntryTimeout
-// agreeing on the same input instead of disagreeing about it.
 // resolveMountTimeouts seeds the mount's defaults, applies the options, and
 // clamps the result. MountFS calls it for the bounds it hands both fs.Options
 // and lfs.kernelEntryTimeout, and TestMountConfigClampsNegativeTimeouts calls
@@ -880,6 +869,17 @@ func resolveMountTimeouts(opts ...MountOption) (attr, entry time.Duration) {
 	return mc.resolve()
 }
 
+// resolve returns the bounds the mount will actually use, clamping a negative
+// configured value back to its default.
+//
+// WithKernelCacheTimeouts is exported and accepts any duration, and both halves
+// of the mount convert what it lands on to unsigned with no sign check —
+// go-fuse's setEntryOutTimeout applies *fs.Options.EntryTimeout through the same
+// fuse.EntryOut setters applyNodeTimeout guards. So a negative here is not a
+// short cache but a ~584-billion-year one, at every inheritTimeout and
+// mountDefaultTimeout site, which is most of the tree. Clamping once at the
+// point the option lands is what keeps fsOpts and lfs.kernelEntryTimeout
+// agreeing on the same input instead of disagreeing about it.
 func (c mountConfig) resolve() (attr, entry time.Duration) {
 	attr, entry = c.attrTimeout, c.entryTimeout
 	if attr < 0 {

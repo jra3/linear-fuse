@@ -50,9 +50,10 @@ var timeoutPolicies = map[string]bool{
 // policy constant: the mount's configured bound, read through LinearFS.
 const entryTimeoutAccessor = "entryTimeout"
 
-// guardedHelpers is DERIVED, not hand-written: every package-level function in
-// this package that takes a `timeout time.Duration` parameter is guarded, and
-// its argument index comes from its own declaration (see timeoutParamIndex).
+// discoverGuardedHelpers derives the guarded set rather than listing it by hand:
+// every package-level function in this package that takes a `timeout
+// time.Duration` parameter is guarded, and its argument index comes from its own
+// declaration (see timeoutParamIndex).
 //
 // Both halves are deliberate. A hand-maintained index misaims silently — shift
 // `mountRenderFile` by one and the rule starts checking `out`, an identifier it
