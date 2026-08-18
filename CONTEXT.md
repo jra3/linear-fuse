@@ -65,7 +65,9 @@ stale-repopulation window — a racing read could reload the not-yet-written row
 and re-cache it), and the invalidation set lived as loose `InvalidateUpdated`
 calls each handler had to remember. `editFlush` (`internal/fs/editflush.go`,
 generic over `T`) concentrates the shell; each `Flush` becomes `return
-editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[T]{…})`.
+editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[T]{…})` — `f` being the
+FUSE file handle the flush arrived on, which the refused-write restore below
+attributes its bytes to.
 
 The **front half is one `mutate` closure** returning `(proceed bool, errno
 syscall.Errno)`: `errno != 0` → return it and **keep dirty** (a corrected
@@ -870,7 +872,10 @@ regenerate on first Read — a live double-compute this fix removed by seeding.
 `labelfile`/`milestonefile` remain the timestamp-less exception (their API types
 carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
 [[attr-construction]]). Unit-tested directly (write-expands, in-place,
-truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
+truncate-grow/shrink, read-clamps-at-EOF, and the pending truncation's
+handle-scoping: a truncating write at an offset, a restore that must not follow
+the writer onto another handle, distinct handles per `Open`, and a non-zero
+resize sizing the emptied file), no FUSE mount.
 
 ### Authored-write pin (`authoredPins`)
 The **deep module** that carries serve-your-own-writes across a node boundary the
