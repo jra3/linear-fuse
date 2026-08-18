@@ -88,13 +88,15 @@ a parse failure keeps the writer's text dirty for a corrected re-save, but an
 empty buffer holds no text worth preserving, and leaving it dirty would strand the
 node serving zero bytes for its lifetime ([[edit-buffer]]'s `refresh` refuses a
 dirty buffer) — defeating the very recovery the `.error` prescribes, "re-read the
-file to get its current contents". Projects/initiatives
-put their whole multi-mutation front half (labels + links-reconcile + scalar) in
-`mutate` and always return `proceed=true` (they re-fetch to catch link changes);
-the front-half result reaches the commit-tail `compare` through a method-local
-var the two closures share (mutate runs first). **Invalidate-after-persist is
-uniform by construction** — the shell invalidates only after the tail upserts,
-closing the window issues had (a recorded behavior change).
+file to get its current contents". It also **marks** those restored bytes as the
+entity's rather than the writer's, which is what keeps a write still in flight
+from landing on top of them (#454) — see [[edit-buffer]]'s `restoredForReads`.
+Projects/initiatives put their whole multi-mutation front half (labels +
+links-reconcile + scalar) in `mutate` and always return `proceed=true` (they
+re-fetch to catch link changes); the front-half result reaches the commit-tail
+`compare` through a method-local var the two closures share (mutate runs first).
+**Invalidate-after-persist is uniform by construction** — the shell invalidates
+only after the tail upserts, closing the window issues had (a recorded behavior change).
 
 The shell is also **the one place serve-your-own-writes arms** (#365, #379, #381).
 A committed clean write both marks the buffer authored (the node-local half) and
@@ -831,8 +833,8 @@ that caused it; the cost is that a later **partial** write with no truncate firs
 clears the buffer instead of editing in place, which fails loudly on the parse
 rather than corrupting anything, and no writer of these files makes one — editors
 save through rename, and every truncating path resizes first. The
-[[atomic-save]] path was never affected at all, because a rename does not
-interleave a flush between the truncate and the write.
+**atomic-save** path ([[rename-save]]) was never affected at all, because a
+rename does not interleave a flush between the truncate and the write.
 
 Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
@@ -854,7 +856,8 @@ regenerate on first Read — a live double-compute this fix removed by seeding.
 `labelfile`/`milestonefile` remain the timestamp-less exception (their API types
 carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
 [[attr-construction]]). Unit-tested directly (write-expands, in-place,
-truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
+truncate-grow/shrink, read-clamps-at-EOF, and the restored-mark lifetime), no
+FUSE mount.
 
 ### Authored-write pin (`authoredPins`)
 The **deep module** that carries serve-your-own-writes across a node boundary the
