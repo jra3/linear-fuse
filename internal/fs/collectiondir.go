@@ -241,18 +241,18 @@ func (c collectionDir[T]) create(ctx context.Context, name string, flags uint32,
 			// per-open handle Open would (#454): the write it opens for has to be
 			// attributable to it, or an intervening flush's restore has nothing to
 			// name and the truncate below can still be spliced through.
-			var fh fs.FileHandle
-			if eb, ok := inode.Operations().(interface {
-				openHandle() fs.FileHandle
-			}); ok {
-				fh = eb.openHandle()
-			}
+			//
 			// Honor O_TRUNC: a Create carries it in its own flags (no separate
 			// setattr follows), so without truncating here a shorter rewrite over
-			// the existing content would leave stale tail bytes (#289).
-			if flags&syscall.O_TRUNC != 0 {
-				if tr, ok := inode.Operations().(interface{ truncateBuffer() }); ok {
-					tr.truncateBuffer()
+			// the existing content would leave stale tail bytes (#289). Both
+			// resolve through editableFile, the package's one seam onto a node's
+			// buffer, so the handle and the truncation cannot name different ones.
+			var fh fs.FileHandle
+			if editable, ok := inode.Operations().(editableFile); ok {
+				buf := editable.editable()
+				fh = buf.openHandle()
+				if flags&syscall.O_TRUNC != 0 {
+					buf.truncateBuffer()
 				}
 			}
 			return inode, fh, 0, 0
