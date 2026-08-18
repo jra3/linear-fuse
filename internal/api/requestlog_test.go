@@ -231,8 +231,17 @@ func TestNewRequestLogError(t *testing.T) {
 			},
 		},
 		{
+			// Only the first rejection is decoded, so the tally rides along on
+			// the line: without it the artifact cannot say whether the recorded
+			// rejection was the whole of what Linear sent.
+			name: "the response's error count rides on the line",
+			err:  &GraphQLError{Message: "Argument Validation Error", ErrorCount: 3},
+			want: &requestLogError{Message: "Argument Validation Error", Errors: 3},
+		},
+		{
 			// No extensions to decode: an HTTP-level failure carries Linear's
-			// envelope verbatim in its rendered string.
+			// envelope verbatim in its rendered string. There is no errors array
+			// at all, so the count is 0.
 			name: "http failure carries its rendered string",
 			err:  errors.New(`API error (status 400): {"errors":[{"message":"boom"}]}`),
 			want: &requestLogError{Message: `API error (status 400): {"errors":[{"message":"boom"}]}`},
@@ -295,6 +304,77 @@ func TestRequestLogRecordsRejectionExtensions(t *testing.T) {
 		if !strings.Contains(raw, key) {
 			t.Errorf("line does not record %s, so absence is indistinguishable from silence:\n%s", key, raw)
 		}
+	}
+}
+
+// TestRequestLogRecordsErrorCount pins the census field on the JSONL line. Only
+// the FIRST of a response's errors becomes the returned Go error and the decoded
+// object, so a line recording a generic untagged rejection is ambiguous on its
+// own: it could be all Linear sent, or the first of several with the tagged one
+// dropped. The census that asks this is the jq recipe in docs/telemetry.md,
+// which reads this artifact and not journald, so the tally has to be here.
+func TestRequestLogRecordsErrorCount(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"errors":[{"message":"Argument Validation Error"},{"message":"second one","extensions":{"code":"INPUT_ERROR","userError":true}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+	var buf bytes.Buffer
+	client.SetRequestLog(&buf)
+
+	var result struct{}
+	if err := client.query(context.Background(), `mutation IssueCreate { x }`, nil, &result); err == nil {
+		t.Fatal("query succeeded, want a GraphQL rejection")
+	}
+
+	entries := decodeRequestLog(t, &buf)
+	if len(entries) != 1 || entries[0].Error == nil {
+		t.Fatalf("entries = %+v, want one carrying a decoded rejection", entries)
+	}
+	got := entries[0].Error
+	if got.Errors != 2 {
+		t.Errorf("error.errors = %d, want 2 — the line cannot say it is showing one of several", got.Errors)
+	}
+	// The recorded rejection is the first, which is also the returned error.
+	if got.Message != "Argument Validation Error" {
+		t.Errorf("error.message = %q, want the first rejection", got.Message)
+	}
+	if got.Code != "" {
+		t.Errorf("error.code = %q, want the first rejection's (empty) code, not the second's", got.Code)
+	}
+}
+
+// TestRequestLogErrorCountWrittenWhenAbsent: the count is written even when
+// there was no errors array — a non-GraphQL failure records 0 rather than
+// dropping the key, because a key that vanishes reintroduces exactly the
+// absence-vs-silence defect its four siblings are written unconditionally to
+// avoid.
+func TestRequestLogErrorCountWrittenWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprint(w, "upstream is unwell")
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+	var buf bytes.Buffer
+	client.SetRequestLog(&buf)
+
+	var result struct{}
+	if err := client.query(context.Background(), `query TestOp { viewer { id } }`, nil, &result); err == nil {
+		t.Fatal("query succeeded, want an HTTP failure")
+	}
+
+	if raw := buf.String(); !strings.Contains(raw, `"errors":0`) {
+		t.Errorf("line omits the error count for a non-GraphQL failure:\n%s", raw)
 	}
 }
 

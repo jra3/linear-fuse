@@ -51,12 +51,20 @@ type requestLogEntry struct {
 // fields but not this one would leave `grep "usage limit" requests.jsonl` empty
 // for exactly the rejection the log exists to catch, while runtime
 // classification got it right.
+//
+// Errors is the size of the response's errors array, of which only the first is
+// decoded here. It rides on the line for the same reason the empty fields do:
+// the census that asks "was this the only rejection, or the first of several?"
+// is a jq pipeline over this artifact (docs/telemetry.md), so a tally that lived
+// only in the process log could not answer it. A non-GraphQL failure carries no
+// error array at all, so 0 reads as "not a GraphQL rejection".
 type requestLogError struct {
 	Message                string `json:"message"`
 	Code                   string `json:"code"`
 	Type                   string `json:"type"`
 	UserError              bool   `json:"user_error"`
 	UserPresentableMessage string `json:"user_presentable_message"`
+	Errors                 int    `json:"errors"`
 }
 
 // maxRequestLogMessage caps each remote string on a request-log line.
@@ -104,6 +112,7 @@ func newRequestLogError(err error) *requestLogError {
 			Type:                   truncateLogMessage(gqlErr.Type),
 			UserError:              gqlErr.UserError,
 			UserPresentableMessage: truncateLogMessage(gqlErr.UserPresentableMessage),
+			Errors:                 gqlErr.ErrorCount,
 		}
 	}
 	return &requestLogError{Message: truncateLogMessage(err.Error())}

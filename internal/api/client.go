@@ -142,6 +142,15 @@ type GraphQLError struct {
 	Type                   string
 	UserError              bool
 	UserPresentableMessage string
+
+	// ErrorCount is how many errors the response carried; this error is the
+	// first of them. Only the first is decoded, so the tally rides along on the
+	// rejection itself and reaches both sinks that record it — the process log
+	// line and the requests.jsonl error object. A census that finds an untagged
+	// rejection can then tell "that is all Linear sent" from "we kept the first
+	// of several and the tagged one was dropped" without leaving the artifact it
+	// is reading.
+	ErrorCount int
 }
 
 func (e *GraphQLError) Error() string { return "GraphQL error: " + e.Message }
@@ -191,12 +200,12 @@ func (e *GraphQLError) LogDetail() string {
 // still written down in full: the point of #448 is to record what Linear sent,
 // and demoting the severity is not the same as dropping the evidence.
 //
-// count is len(response.errors). Only the first becomes the returned error, so
-// the tally rides along: a census that finds an untagged rejection can then tell
-// "that is all Linear sent" from "we kept the first of several and the tagged
-// one was dropped".
-func rejectionLogLine(opName string, e *GraphQLError, count int) string {
-	detail := fmt.Sprintf("%s errors=%d", e.LogDetail(), count)
+// e.ErrorCount is len(response.errors). Only the first becomes the returned
+// error, so the tally rides along: a census that finds an untagged rejection can
+// then tell "that is all Linear sent" from "we kept the first of several and the
+// tagged one was dropped".
+func rejectionLogLine(opName string, e *GraphQLError) string {
+	detail := fmt.Sprintf("%s errors=%d", e.LogDetail(), e.ErrorCount)
 	switch {
 	case IsRateLimited(e):
 		return fmt.Sprintf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, detail)
@@ -395,6 +404,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 			Type:                   first.Extensions.Type,
 			UserError:              first.Extensions.UserError,
 			UserPresentableMessage: first.Extensions.UserPresentableMessage,
+			ErrorCount:             len(gqlResp.Errors),
 		}
 		queryErr = gqlErr
 		if IsRateLimited(queryErr) {
@@ -405,7 +415,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		// The one place a rejection's extensions are still in hand. Log the
 		// decoded set here rather than leaving it to a caller's %v, which renders
 		// Error() and keeps only the message (#448).
-		log.Print(rejectionLogLine(opName, gqlErr, len(gqlResp.Errors)))
+		log.Print(rejectionLogLine(opName, gqlErr))
 		return queryErr
 	}
 

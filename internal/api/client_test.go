@@ -1424,38 +1424,34 @@ func TestRejectionLogLine(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name  string
-		err   *GraphQLError
-		count int
-		want  string
+		name string
+		err  *GraphQLError
+		want string
 	}{
 		{
-			name:  "ordinary rejection is an ERROR",
-			err:   &GraphQLError{Message: "Argument Validation Error", Code: "INPUT_ERROR"},
-			count: 1,
-			want:  `[api] ERROR: IssueCreate rejected by Linear API: message="Argument Validation Error" code="INPUT_ERROR" type="" userError=false userPresentableMessage="" errors=1`,
+			name: "ordinary rejection is an ERROR",
+			err:  &GraphQLError{Message: "Argument Validation Error", Code: "INPUT_ERROR", ErrorCount: 1},
+			want: `[api] ERROR: IssueCreate rejected by Linear API: message="Argument Validation Error" code="INPUT_ERROR" type="" userError=false userPresentableMessage="" errors=1`,
 		},
 		{
 			// The rm-an-already-deleted-comment path: syscall returns 0, so the
 			// log must not claim a failure.
-			name:  "not found is not an ERROR",
-			err:   &GraphQLError{Message: "Entity not found - Could not find referenced Comment."},
-			count: 1,
-			want:  `[api] CommentDelete rejected as not-found by Linear API: message="Entity not found - Could not find referenced Comment." code="" type="" userError=false userPresentableMessage="" errors=1`,
+			name: "not found is not an ERROR",
+			err:  &GraphQLError{Message: "Entity not found - Could not find referenced Comment.", ErrorCount: 1},
+			want: `[api] CommentDelete rejected as not-found by Linear API: message="Entity not found - Could not find referenced Comment." code="" type="" userError=false userPresentableMessage="" errors=1`,
 		},
 		{
-			name:  "rate limit keeps its own prefix",
-			err:   &GraphQLError{Message: "rate limit exceeded", Code: "RATELIMITED"},
-			count: 1,
-			want:  `[ratelimit] ERROR: TeamIssues rate limited by Linear API: message="rate limit exceeded" code="RATELIMITED" type="" userError=false userPresentableMessage="" errors=1`,
+			name: "rate limit keeps its own prefix",
+			err:  &GraphQLError{Message: "rate limit exceeded", Code: "RATELIMITED", ErrorCount: 1},
+			want: `[ratelimit] ERROR: TeamIssues rate limited by Linear API: message="rate limit exceeded" code="RATELIMITED" type="" userError=false userPresentableMessage="" errors=1`,
 		},
 		{
-			// Only Errors[0] becomes the returned error. The count is the hint
-			// that a census reading this line is reading one of several.
-			name:  "the count says how many rejections arrived",
-			err:   &GraphQLError{Message: "Something went wrong"},
-			count: 3,
-			want:  `[api] ERROR: IssueCreate rejected by Linear API: message="Something went wrong" code="" type="" userError=false userPresentableMessage="" errors=3`,
+			// Only Errors[0] becomes the returned error. The count rides on the
+			// rejection itself, so it is the hint that a census reading this line
+			// is reading one of several.
+			name: "the count says how many rejections arrived",
+			err:  &GraphQLError{Message: "Something went wrong", ErrorCount: 3},
+			want: `[api] ERROR: IssueCreate rejected by Linear API: message="Something went wrong" code="" type="" userError=false userPresentableMessage="" errors=3`,
 		},
 	}
 	for _, tc := range cases {
@@ -1467,7 +1463,7 @@ func TestRejectionLogLine(t *testing.T) {
 			case IsRateLimited(tc.err):
 				op = "TeamIssues"
 			}
-			if got := rejectionLogLine(op, tc.err, tc.count); got != tc.want {
+			if got := rejectionLogLine(op, tc.err); got != tc.want {
 				t.Errorf("rejectionLogLine()\n got: %s\nwant: %s", got, tc.want)
 			}
 		})
@@ -1484,7 +1480,8 @@ func TestRejectionLogLineQuotesRemoteText(t *testing.T) {
 	line := rejectionLogLine("IssueCreate", &GraphQLError{
 		Message:                "boom\nFAKE: [api] ERROR: forged",
 		UserPresentableMessage: "also\rbad",
-	}, 1)
+		ErrorCount:             1,
+	})
 	if strings.ContainsAny(line, "\n\r") {
 		t.Errorf("rejection line carries a raw newline, so remote text can forge a log line:\n%s", line)
 	}

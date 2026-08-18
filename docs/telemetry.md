@@ -268,7 +268,7 @@ A failed request carries one extra key, `error` — the rejection, decoded:
 {"ts":"2026-07-09T02:00:07.900000000Z","op":"IssueCreate",
  "vars":{"input":{"teamId":"...","title":"..."}},"duration_ms":180.2,"outcome":"error",
  "error":{"message":"Argument Validation Error","code":"","type":"","user_error":false,
-          "user_presentable_message":"name must be at most 80 characters"}}
+          "user_presentable_message":"name must be at most 80 characters","errors":1}}
 ```
 
 - `ts` — RFC3339Nano, UTC, at completion.
@@ -285,7 +285,7 @@ A failed request carries one extra key, `error` — the rejection, decoded:
   when the response carried none.
 - `error` — **present only on a failed request**; the rejection, decoded (#448).
   `outcome` says whether the request failed, `error` says *what Linear sent*,
-  which is the question an after-the-fact investigation actually asks. Its five
+  which is the question an after-the-fact investigation actually asks. Its six
   keys are written **unconditionally**, empty values included: `"code": ""` is
   the evidence that Linear tagged this rejection with no code, and a key that
   vanished when unset would make that indistinguishable from a line written by
@@ -298,11 +298,14 @@ A failed request carries one extra key, `error` — the rejection, decoded:
     only here, which is why both `IsFieldTooLong` and `IsUsageLimited` match
     against it. A census that greps only `.error.message` misses exactly the
     rejections it is hunting.
-  - Only the **first** entry of the response's `errors` array is decoded (it is
-    also the one that becomes the returned Go error). The process log's
-    `[api] ERROR: <op> rejected by Linear API: … errors=<n>` line carries the
-    tally, so a count above 1 there means the JSONL is showing you one of
-    several.
+  - `errors` — how many entries the response's `errors` array carried. Only the
+    **first** is decoded above (it is also the one that becomes the returned Go
+    error), so anything above 1 means this line is showing you one of several
+    and a tagged rejection may have been dropped. `0` means the failure was not
+    a GraphQL rejection at all (an HTTP or transport failure, whose `message` is
+    the rendered Go error). The same tally appears on the process log's
+    `[api] ERROR: <op> rejected by Linear API: … errors=<n>` line; a census does
+    not have to leave this artifact to read it.
   - Every string is capped at 2 KB with an explicit truncation marker. A
     non-GraphQL failure's message embeds the whole response body, and an
     uncapped multi-MB error page would otherwise become one unreadable line.
@@ -321,10 +324,15 @@ A census over a run — "what did Linear actually reject, and how did it tag it?
 
 ```bash
 jq -r 'select(.error) | [.op, .error.code, .error.type, .error.user_error,
+  .error.errors,
   (if .error.user_presentable_message == "" then .error.message
    else .error.user_presentable_message end)]
   | @tsv' requests.jsonl | sort | uniq -c | sort -rn
 ```
+
+An untagged rejection in that output with `errors` above 1 is the one case the
+census cannot take at face value: the tagged entry Linear also sent was dropped
+before the line was written.
 
 Semantics match `linearfs.api.requests`: only requests actually sent are
 logged — budget deferrals never appear (they land in

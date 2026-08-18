@@ -220,7 +220,10 @@ rejects with the generic message "Argument Validation Error" and puts the quota
 or cap sentence only in that field, which is why this predicate and
 `IsFieldTooLong` both read it — record the other fields and not that one and the
 grep comes back empty for exactly the rejection being hunted. Only the FIRST of
-the response's errors is decoded, so the log line carries `errors=<n>` beside it.
+the response's errors is decoded, so the count rides on the `*GraphQLError`
+itself and both sinks record it beside the decoded first error — `errors=<n>` on
+the log line, an `errors` key on the JSONL one — since the census that asks "the
+only rejection, or the first of several?" is a jq pipeline over the artifact.
 Promoting a predicate to a structured check is then a grep over a run, not a
 reproduction (#448).
 
