@@ -710,16 +710,20 @@ caching would need a non-zero minimum here — a real change to production cache
 behavior, and a separate decision.) `TestMountDefaultTimeoutEqualsInherit` pins
 the equivalence so the doc and the code cannot drift apart again.
 
-Two rules guard all of it (`internal/fs/kerneltimeout_test.go`), both reading
-the package's own source. `TestNoHardcodedKernelTimeouts` fails if the timeout
-argument at any build site (`newDirInode`/`newFileInode`/`newRenderInode`/
-`lookupRenderFile`/`mountRenderFile`/`newDirManifest`/`applyNodeTimeout`) is
-anything but a name on its allowlist or `lfs.entryTimeout()` — the allowlist is
-closed, so `time.Second` fails just as `30*time.Second` does, and each helper's
-argument position is derived from its own declaration rather than hardcoded.
-`TestTimeoutSettersGoThroughOneChokePoint` is what makes that complete: every
-`SetAttrTimeout`/`SetEntryTimeout` in the package must live in
+Three rules guard all of it (`internal/fs/kerneltimeout_test.go`), all reading
+the package's own source, and **nothing about them is a hand-maintained list**
+— that is the point, because every hole this rule has had was a list going
+stale. `TestNoHardcodedKernelTimeouts` derives its guarded set from the AST
+(every package-level function taking a `timeout time.Duration`) and each
+helper's argument position from that function's own declaration, then fails if
+the argument is anything but a name on its closed allowlist or
+`lfs.entryTimeout()` — so `time.Second` fails just as `30*time.Second` does.
+`TestTimeoutSettersGoThroughOneChokePoint` makes that complete on the write
+side: every `SetAttrTimeout`/`SetEntryTimeout` in the package must live in
 `applyNodeTimeout`, so a handler cannot reach the kernel around the builders.
+`TestMountFSResolvesItsTimeouts` covers the mount end, where the bounds are
+clamped once in `resolveMountTimeouts` — which `MountFS` and the clamp test
+both call, so the test cannot keep passing after that wiring is reverted.
 A literal is exactly how `WithKernelCacheTimeouts` came to govern nothing
 beneath six directories (#414) and three render files (#449). A new class is a
 new named constant, added to the allowlist, with a comment saying why.

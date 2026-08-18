@@ -864,6 +864,22 @@ type mountConfig struct {
 // mountDefaultTimeout site, which is most of the tree. Clamping once at the
 // point the option lands is what keeps fsOpts and lfs.kernelEntryTimeout
 // agreeing on the same input instead of disagreeing about it.
+// resolveMountTimeouts seeds the mount's defaults, applies the options, and
+// clamps the result. MountFS calls it for the bounds it hands both fs.Options
+// and lfs.kernelEntryTimeout, and TestMountConfigClampsNegativeTimeouts calls
+// the same function — so the clamp test exercises the bounds the mount actually
+// uses instead of re-seeding a mountConfig of its own and testing resolve() in
+// isolation. That copy is the shape this package keeps finding defects in: a
+// guard that still passes after the wiring it guards has been reverted.
+// TestMountFSResolvesItsTimeouts pins the call itself.
+func resolveMountTimeouts(opts ...MountOption) (attr, entry time.Duration) {
+	mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
+	for _, o := range opts {
+		o(&mc)
+	}
+	return mc.resolve()
+}
+
 func (c mountConfig) resolve() (attr, entry time.Duration) {
 	attr, entry = c.attrTimeout, c.entryTimeout
 	if attr < 0 {
@@ -901,11 +917,7 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool, opts ...MountOption) 
 	// — a plain data race the first README lookup can hit.
 	lfs.mountPoint = mountpoint
 
-	mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
-	for _, o := range opts {
-		o(&mc)
-	}
-	attrTimeout, entryTimeout := mc.resolve()
+	attrTimeout, entryTimeout := resolveMountTimeouts(opts...)
 	lfs.kernelEntryTimeout = &entryTimeout // published before the serve loop, as above
 
 	fsOpts := &fs.Options{

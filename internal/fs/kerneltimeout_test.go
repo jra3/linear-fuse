@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -49,32 +50,53 @@ var timeoutPolicies = map[string]bool{
 // policy constant: the mount's configured bound, read through LinearFS.
 const entryTimeoutAccessor = "entryTimeout"
 
-// guardedHelpers names every function that takes a kernel caching bound and
-// hands it to the FUSE reply. The argument index is NOT listed here — it is
-// derived from each function's own declaration (see timeoutParamIndex), because
-// a hand-maintained index misaims silently: shift `mountRenderFile` by one and
-// the rule starts checking `out`, an identifier it accepts, while the
-// call-sites-found counter keeps the "rule stopped checking" alarm quiet.
+// guardedHelpers is DERIVED, not hand-written: every package-level function in
+// this package that takes a `timeout time.Duration` parameter is guarded, and
+// its argument index comes from its own declaration (see timeoutParamIndex).
 //
-// A build helper missing from this list is the next place the defect can hide,
-// so the test asserts every name still resolves to a declaration AND still has
-// call sites.
-var guardedHelpers = []string{
-	// The three inode builders, and the manifest that feeds two of them for the
-	// entity directories.
-	"newDirInode",
-	"newFileInode",
-	"newRenderInode",
-	"lookupRenderFile",
-	"mountRenderFile",
-	"newDirManifest",
-	// The single choke point that actually writes the bound onto the reply.
-	// Guarding it closes the escape hatch the builder-only rule left open: a
-	// handler that filled an EntryOut by hand (`_create` in collection.go, the
-	// atomic-save scratch inode in atomicwrite.go) bypassed every builder and
-	// was invisible to this test, which is exactly the defect class #449 asked
-	// it to cover.
-	"applyNodeTimeout",
+// Both halves are deliberate. A hand-maintained index misaims silently — shift
+// `mountRenderFile` by one and the rule starts checking `out`, an identifier it
+// accepts, while the call-sites-found counter keeps the "rule stopped checking"
+// alarm quiet. And a hand-maintained LIST goes stale the same way: `fillRenderEntry`
+// takes a timeout and reaches applyNodeTimeout, but was missing from the first
+// version of this list, so `fillRenderEntry(ctx, out, child, 30*time.Second)`
+// would have slipped past the whole rule — the literal enters there and the
+// downstream applyNodeTimeout(out, timeout) is accepted as a forward. Deriving
+// the set means a new helper is covered the moment it is written.
+func discoverGuardedHelpers(files map[string]*ast.File) []string {
+	var found []string
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Type.Params == nil {
+				continue
+			}
+			if declaresTimeoutParam(fd) {
+				found = append(found, fd.Name.Name)
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
+}
+
+// mustGuard are the helpers whose disappearance from the derived set would mean
+// the rule had quietly stopped covering the core of the tree — a builder losing
+// its timeout parameter is not obviously a regression at the call site, so it is
+// asserted here rather than left to the derivation.
+var mustGuard = []string{
+	"applyNodeTimeout", "newDirInode", "newFileInode", "newRenderInode",
+	"lookupRenderFile", "mountRenderFile", "newDirManifest", "fillRenderEntry",
+}
+
+// plumbingHelpers forward their timeout from an already-guarded caller and have
+// no call site that supplies a policy of its own. They are exempt from the
+// "no call sites found" assertion ONLY — their arguments are still checked, and
+// exempting them from the count is what lets that alarm stay meaningful for the
+// helpers where a zero count really does mean the rule stopped working.
+var plumbingHelpers = map[string]bool{
+	// Only ever called by newRenderInode and mountRenderFile, both forwarding.
+	"fillRenderEntry": true,
 }
 
 func TestNoHardcodedKernelTimeouts(t *testing.T) {
@@ -87,7 +109,14 @@ func TestNoHardcodedKernelTimeouts(t *testing.T) {
 	// verify the parameter it lands on is really named `timeout` and typed
 	// time.Duration.
 	index := map[string]int{}
-	for _, fn := range guardedHelpers {
+	guarded := discoverGuardedHelpers(files)
+	for _, want := range mustGuard {
+		if !slices.Contains(guarded, want) {
+			t.Errorf("%s no longer takes a timeout parameter, so it is no longer derived into "+
+				"this rule; if that is deliberate, drop it from mustGuard", want)
+		}
+	}
+	for _, fn := range guarded {
 		idx, err := timeoutParamIndex(files, fn)
 		if err != nil {
 			t.Errorf("%s: %v (renamed, removed, or its timeout parameter changed — this rule "+
@@ -124,7 +153,7 @@ func TestNoHardcodedKernelTimeouts(t *testing.T) {
 	})
 
 	for fn := range index {
-		if seen[fn] == 0 {
+		if seen[fn] == 0 && !plumbingHelpers[fn] {
 			t.Errorf("no call sites found for %s; it was renamed or removed and this rule "+
 				"has stopped checking it", fn)
 		}
@@ -317,14 +346,6 @@ func TestEntryTimeoutHonorsConfiguredZero(t *testing.T) {
 func TestMountConfigClampsNegativeTimeouts(t *testing.T) {
 	t.Parallel()
 
-	apply := func(opts ...MountOption) mountConfig {
-		mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
-		for _, o := range opts {
-			o(&mc)
-		}
-		return mc
-	}
-
 	for _, tc := range []struct {
 		name                string
 		opts                []MountOption
@@ -341,9 +362,9 @@ func TestMountConfigClampsNegativeTimeouts(t *testing.T) {
 		{"entry negative only", []MountOption{WithKernelCacheTimeouts(time.Second, -time.Hour)},
 			time.Second, DefaultEntryTimeout},
 	} {
-		attr, entry := apply(tc.opts...).resolve()
+		attr, entry := resolveMountTimeouts(tc.opts...)
 		if attr != tc.wantAttr || entry != tc.wantEntry {
-			t.Errorf("%s: resolve() = attr %v entry %v, want attr %v entry %v",
+			t.Errorf("%s: resolveMountTimeouts() = attr %v entry %v, want attr %v entry %v",
 				tc.name, attr, entry, tc.wantAttr, tc.wantEntry)
 		}
 		// The bound MountFS publishes and the one every entryTimeout() site
@@ -561,4 +582,31 @@ func parsePackageSource(t *testing.T, fset *token.FileSet) map[string]*ast.File 
 		t.Fatal("no package sources found; this rule has stopped checking anything")
 	}
 	return files
+}
+
+// TestMountFSResolvesItsTimeouts pins the wiring TestMountConfigClampsNegativeTimeouts
+// depends on. That test calls resolveMountTimeouts directly, which is only a test
+// of the mount's real bounds while MountFS calls it too — re-inline the seeding
+// there and the clamp test would still pass while the mount handed go-fuse an
+// unclamped negative. This is the same "guard that stopped guarding the wiring"
+// shape the derived helper set and the AST-derived argument indices exist to
+// prevent, so it is checked the same way.
+func TestMountFSResolvesItsTimeouts(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	files := parsePackageSource(t, fset)
+
+	found := false
+	forEachCall(files, func(enclosing *ast.FuncDecl, call *ast.CallExpr) {
+		if enclosing != nil && enclosing.Name.Name == "MountFS" &&
+			calleeName(call.Fun) == "resolveMountTimeouts" {
+			found = true
+		}
+	})
+	if !found {
+		t.Error("MountFS does not call resolveMountTimeouts; the bounds it hands fs.Options and " +
+			"lfs.kernelEntryTimeout are no longer the ones TestMountConfigClampsNegativeTimeouts " +
+			"checks, so a negative would reach go-fuse unclamped with that test still green")
+	}
 }
