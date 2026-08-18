@@ -260,9 +260,8 @@ entity ("Entity not found") is **idempotent success** — the row is still
 forgotten, so re-`rm`ing a phantom heals it (and is exactly the recovery the
 forget-exhaustion `.error` names); the same rejection from the *find* step is not
 behind that gate and classifies (`ENOENT`) — and the details sync **prunes** rows
-a (provably complete, sub-page-cap)
-fetch no longer returns, scoped by issue and a pre-fetch `synced_at` cutoff so
-rows created mid-fetch survive.
+a (provably complete, sub-page-cap) fetch no longer returns, scoped by issue and
+a pre-fetch `synced_at` cutoff so rows created mid-fetch survive.
 
 ### Rename tail (`commitRename`)
 The **deep module** owning the invariant tail of every *entity* rename — a

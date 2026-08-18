@@ -421,7 +421,7 @@ Failure model (every writable surface follows this contract):
   which. Either the name never resolved here (a relation target, rm of an unknown
   name) -- fix the name. Or LINEAR no longer has the entity you edited, renamed, or
   referenced: it was archived or deleted after this listing was read, so like
-  EDQUOT above and unlike EAGAIN below, retrying will NOT help. Re-read the parent
+  EDQUOT below and unlike EAGAIN, retrying will NOT help. Re-read the parent
   directory for current entries, and drop or repoint the reference.
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
