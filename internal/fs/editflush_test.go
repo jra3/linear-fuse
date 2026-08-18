@@ -1,6 +1,7 @@
 package fs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -507,5 +508,117 @@ func TestEditFlushCleanBufferIsNoOp(t *testing.T) {
 	})
 	if errno != 0 || called || len(sink.invalidated) != 0 {
 		t.Errorf("clean buffer: errno=%v mutateCalled=%v invalidated=%v, want 0/false/none", errno, called, sink.invalidated)
+	}
+}
+
+// TestClassifyWriteVerdicts is the whole rejection decision as a table. The NUL
+// arm is #472: bytes.TrimSpace does not strip NUL, so a zero-filled buffer read
+// as a document, and the mutation that followed sent a description of NUL bytes
+// AND cleared assignee, due date, parent, project, milestone, cycle and labels
+// in one shot — exit 0, no .error.
+func TestClassifyWriteVerdicts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		content []byte
+		want    writeVerdict
+	}{
+		{"zero bytes", []byte{}, writeIsEmpty},
+		{"nil buffer", nil, writeIsEmpty},
+		{"newline only", []byte("\n"), writeIsEmpty},
+		{"whitespace only", []byte("  \n\t\n"), writeIsEmpty},
+		// ftruncate(fd, 20) after an O_TRUNC: the whole file is hole.
+		{"all NUL", bytes.Repeat([]byte{0}, 20), writeIsHole},
+		// pwrite(fd, "hello", 10) after an O_TRUNC: hole, then real bytes.
+		{"leading hole then text", append(bytes.Repeat([]byte{0}, 10), []byte("hello")...), writeIsHole},
+		// A document whose frontmatter parses but whose body is zero-fill is the
+		// same accident with a smaller blast radius, and NUL is not content here.
+		{"hole after frontmatter", []byte("---\ntitle: Keep\n---\n\x00\x00\x00"), writeIsHole},
+		{"trailing NUL", []byte("---\ntitle: Keep\n---\nbody\n\x00"), writeIsHole},
+		{"one byte", []byte("x"), writeIsDocument},
+		{"frontmatter with empty body", []byte("---\ntitle: Keep\n---\n"), writeIsDocument},
+		{"body mentioning NUL by name", []byte("---\ntitle: Keep\n---\nthe \\0 sentinel\n"), writeIsDocument},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := classifyWrite(tc.content); got != tc.want {
+				t.Errorf("classifyWrite(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEditFlushZeroFilledWriteIsRejected pins #472 at the shell: a buffer
+// carrying filesystem zero-fill must be refused on the same terms as an emptied
+// one — EINVAL, no front half, a legible .error, the buffer restored, and no
+// serve-your-own-writes arming. Measured before the fix, both of these reached
+// Linear as a NUL description with every removable field cleared alongside it.
+func TestEditFlushZeroFilledWriteIsRejected(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		content []byte
+	}{
+		{"ftruncate grow", bytes.Repeat([]byte{0}, 20)},
+		{"pwrite past EOF", append(bytes.Repeat([]byte{0}, 10), []byte("hello")...)},
+		{"hole after frontmatter", []byte("---\ntitle: Keep\n---\n\x00\x00")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			eb := &editBuffer{content: tc.content, dirty: true}
+			sink := &recordingFlushSink{}
+			called := false
+			errno := editFlush(context.Background(), sink, eb, editFlushSpec[fakeEntity]{
+				mutate:    func(context.Context) (bool, syscall.Errno) { called = true; return true, 0 },
+				writeBack: writeBackSpec[fakeEntity]{errKey: "k", op: "save issue ENG-1"},
+				adopt:     func(*fakeEntity) {},
+				restore:   func() []byte { return []byte("the entity's current render") },
+				coherence: []uint64{1},
+				pinIno:    1,
+			})
+			if errno != syscall.EINVAL {
+				t.Errorf("errno = %v, want EINVAL", errno)
+			}
+			if called {
+				t.Error("front half ran on a zero-filled file; the mutation would send a NUL description " +
+					"and clear every removable field")
+			}
+			if sink.sets != 1 {
+				t.Errorf("SetWriteError called %d times, want 1 — the rejection must be legible in .error", sink.sets)
+			}
+			if string(eb.content) != "the entity's current render" {
+				t.Errorf("buffer = %q after a rejected zero-filled write, want the entity's current render", eb.content)
+			}
+			if eb.dirty {
+				t.Error("dirty left set after restoring the buffer; a background refresh would stay blocked forever")
+			}
+			if eb.authored || len(sink.pins) != 0 {
+				t.Errorf("rejected write armed serve-your-own-writes (authored=%v pins=%v); nothing persisted",
+					eb.authored, sink.pins)
+			}
+			if len(sink.invalidated) != 0 {
+				t.Errorf("invalidated %v on a rejected write, want none", sink.invalidated)
+			}
+		})
+	}
+}
+
+// TestHoleWriteMessageNamesTheCause: the two rejections share a recovery but not
+// a diagnosis. A writer who reads "empty write" after a pwrite at offset 10 has
+// been told the wrong thing — the file was not empty, the offset was wrong — so
+// the zero-fill verdict has to name the hole and say to write from offset 0.
+func TestHoleWriteMessageNamesTheCause(t *testing.T) {
+	t.Parallel()
+	msg := rejectedWriteMessage(writeIsHole, "save issue ENG-1")
+	for _, want := range []string{
+		"Zero-filled write rejected", "save issue ENG-1", "NUL", "past the end of the file",
+		"Nothing was written", "offset 0", "clear a single field",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("zero-fill .error does not mention %q:\n%s", want, msg)
+		}
+	}
+	if got := rejectedWriteMessage(writeIsEmpty, "save issue ENG-1"); !strings.Contains(got, "Empty write rejected") {
+		t.Errorf("empty verdict rendered the wrong message:\n%s", got)
 	}
 }

@@ -410,6 +410,12 @@ Failure model (every writable surface follows this contract):
   removable field at once instead of the one you meant. The file KEEPS ITS CURRENT
   CONTENTS -- re-read it, change what you mean to change, and write the whole
   document back. To clear one field, omit that field's key and keep the rest.
+- A ZERO-FILLED editable file (it contains NUL bytes) -> EINVAL, and NOTHING is
+  written. NUL is what the filesystem fills a hole with when a write starts past
+  the end of the file, or when a resize grows it, so the document it makes is an
+  accident: it no longer starts with its frontmatter, and applying it would store
+  NUL as the body AND clear every removable field. Write the WHOLE document back
+  from offset 0 (truncate first) instead of seeking past the end.
 - A field longer than its limit (e.g. a too-long name) -> EMSGSIZE
 - Reference to something that doesn't exist (a relation target, rm of an unknown name) -> ENOENT
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
