@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -213,46 +214,61 @@ func TestTruncatingWriteWithInterveningFlushClearsError(t *testing.T) {
 // The fix lives in the shell every editable file flushes through, so all seven
 // inherit it by construction — but #454 names project.md and initiative.md as
 // affected by inspection, and "by construction" is a claim worth a test.
+//
+// Like the initiative case below it seeds its own project rather than rewriting
+// the package fixture: the seeded project.md renders with an empty body, so
+// there would be nothing to leave behind — and putting the fixture back through
+// the mount is not possible anyway, since restoring an empty body is the one
+// write the backend declines (#398), leaving every later test reading
+// SHORTPROJECTBODY.
 func TestTruncatingWriteWithInterveningFlushOnProjectMD(t *testing.T) {
-	skipIfLiveAPI(t, "fixture-mode: rewrites the seeded project and audits the fake mutator's payload")
-	mock := enableMockMutations(t)
-	if mock == nil {
-		t.Fatal("no mock mutator")
+	skipIfLiveAPI(t, "fixture-mode: seeds a project and audits the fake mutator's payload")
+	if testStore == nil {
+		t.Fatal("fixture mode left no test store")
 	}
+	mock := enableMockMutations(t)
 
-	path := projectMDPath()
+	ctx := context.Background()
+	uniq := time.Now().UnixNano()
+	proj := fixtures.FixtureAPIProject()
+	proj.ID = fmt.Sprintf("trunc-project-%d", uniq)
+	proj.Name = fmt.Sprintf("Truncate Probe %d", uniq)
+	proj.Slug = fmt.Sprintf("truncate-probe-%d", uniq)
+	proj.Content = "AAAA BBBB CCCC DDDD EEEE FFFF\n\nLong tail: ZZZZ-TAIL-MARKER-454."
+	if err := fixtures.PopulateProject(ctx, testStore, proj, testTeamID); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	t.Cleanup(func() {
+		bg := context.Background()
+		_ = testStore.Queries().DeleteProjectTeams(bg, proj.ID)
+		_ = testStore.Queries().DeleteProject(bg, proj.ID)
+	})
+
+	path := filepath.Join(projectsPath(testTeamKey), proj.Slug, "project.md")
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("prime read: %v", err)
 	}
-	if len(before) == 0 {
-		t.Fatal("seeded project.md is empty; nothing to leave behind")
+	if !strings.Contains(string(before), "ZZZZ-TAIL-MARKER-454") {
+		t.Fatalf("seeded project.md has no body to leave behind:\n%s", before)
 	}
-	// The seeded project is shared with every other test in the package, and this
-	// write both shortens its body and drops frontmatter keys. Put it back.
-	t.Cleanup(func() {
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644)
-		if err != nil {
-			t.Logf("restore project.md: %v", err)
-			return
-		}
-		_, _ = f.Write(before)
-		_ = f.Close()
-	})
 
-	const short = "---\nname: test-project\n---\nSHORTPROJECTBODY\n"
+	short := fmt.Sprintf("---\nname: %s\n---\nSHORTPROJECTBODY\n", proj.Name)
 	if err := truncateWriteViaShellSequence(t, path, short); err != nil {
 		t.Fatalf("close/commit: %v", err)
 	}
 
 	var sent string
 	for _, u := range mock.Updates() {
-		if u.Kind == "project" && u.Body != nil {
+		if u.Kind == "project" && u.ID == proj.ID && u.Body != nil {
 			sent = *u.Body
 		}
 	}
 	if sent == "" {
 		t.Fatal("no project update reached the mutator")
+	}
+	if strings.Contains(sent, "ZZZZ-TAIL-MARKER-454") {
+		t.Errorf("previous image survived the truncate on project.md:\n%s", sent)
 	}
 	if got := strings.TrimSpace(sent); got != "SHORTPROJECTBODY" {
 		t.Errorf("sent description = %q, want %q — the truncate must not leave residue on project.md either",
