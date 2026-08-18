@@ -1,16 +1,11 @@
 package integration
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/jra3/linear-fuse/internal/db"
-	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
 
 // TestRejectedWriteVerdictReachesTheWriter pins where a rejected save's verdict
@@ -38,25 +33,7 @@ func TestRejectedWriteVerdictReachesTheWriter(t *testing.T) {
 
 	seed := func(t *testing.T, tag string) string {
 		t.Helper()
-		ctx := context.Background()
-		team := fixtures.FixtureAPITeam()
-		uniq := time.Now().UnixNano()
-		issueID := fmt.Sprintf("verdict-%s-%d", tag, uniq)
-		identifier := fmt.Sprintf("TST-%d", 20000+uniq%10000)
-		row, err := db.APIIssueToDBIssue(fixtures.FixtureAPIIssue(
-			fixtures.WithIssueID(issueID, identifier),
-			fixtures.WithTitle("Verdict probe"),
-			fixtures.WithDescription("original body"),
-			fixtures.WithTeam(&team),
-		))
-		if err != nil {
-			t.Fatalf("convert seed: %v", err)
-		}
-		if err := testStore.Queries().UpsertIssue(ctx, row.ToUpsertParams()); err != nil {
-			t.Fatalf("seed upsert: %v", err)
-		}
-		t.Cleanup(func() { _ = testStore.Queries().DeleteIssue(context.Background(), issueID) })
-		return mountPoint + "/teams/" + testTeamKey + "/issues/" + identifier + "/issue.md"
+		return seedIssueProbe(t, "verdict-"+tag, "Verdict probe", "original body").Path
 	}
 
 	// close(2) carries the verdict, and Go checks it.

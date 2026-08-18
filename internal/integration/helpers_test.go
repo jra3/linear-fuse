@@ -1,14 +1,18 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jra3/linear-fuse/internal/db"
 	"github.com/jra3/linear-fuse/internal/marshal"
+	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
 
@@ -37,6 +41,91 @@ func enableMockMutations(t *testing.T, opts ...mockmutation.Option) *mockmutatio
 	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
 	return mock
 }
+
+// updatesFor filters the fake mutator's audit log down to one entity, which is
+// how a write test asks "what actually went out for MY row" on a mount every
+// other test is also writing to. A rejected write shows up as an EMPTY slice
+// (#415): the stored value alone cannot tell a refused save from one that
+// happened to persist the same bytes.
+func updatesFor(mock *mockmutation.Client, id string) []mockmutation.UpdateCall {
+	var out []mockmutation.UpdateCall
+	for _, u := range mock.Updates() {
+		if u.ID == id {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// issueProbe is a throwaway issue seeded straight into the fixture store for a
+// single test: the ID the mutation audit log keys on, the identifier it takes
+// in the mount, the two paths that follow from it, and the body it started with.
+type issueProbe struct {
+	ID         string // opaque issue ID — what mockmutation.UpdateCall.ID carries
+	Identifier string // TST-NNNNN, the name the issue takes in the mount
+	Dir        string // <mount>/teams/<KEY>/issues/<Identifier>
+	Path       string // …/issue.md
+	Body       string // the description it was seeded with
+}
+
+// seedIssueProbe upserts one throwaway issue and returns the handles a write
+// test needs. tag names the probe in its issue ID, so a leaked row says which
+// test left it; title and body are what the seeded issue starts with. Cleanup
+// deletes the row, so a probe never colours the next test — which is why a
+// test driving several sequences seeds one probe per subtest rather than
+// sharing a row whose buffer a previous rejection may have left dirty.
+//
+// The identifier comes from ONE monotone allocator, not a per-file range: the
+// hand-rolled `fmt.Sprintf("TST-%d", 30000+time.Now().UnixNano()%10000)` idiom
+// this replaces made every new write test pick an unused decade by hand and
+// still risk a birthday collision inside it.
+//
+// Spelling "TST-" here rather than in each caller is safe under the #395 rule
+// only because TestFixtureLiteralsCarryTheGuard follows calls into helpers:
+// a test reaching a fixture literal through this function is held to the same
+// mode-guard requirement as one that spells it inline.
+func seedIssueProbe(t *testing.T, tag, title, body string) issueProbe {
+	t.Helper()
+	if testStore == nil {
+		t.Fatal("fixture mode left no test store; seedIssueProbe has nothing to seed into")
+	}
+
+	ctx := context.Background()
+	team := fixtures.FixtureAPITeam()
+	n := probeSeq.Add(1)
+	id := fmt.Sprintf("%s-probe-%d", tag, n)
+	identifier := fmt.Sprintf("TST-%d", probeIdentifierBase+n)
+
+	row, err := db.APIIssueToDBIssue(fixtures.FixtureAPIIssue(
+		fixtures.WithIssueID(id, identifier),
+		fixtures.WithTitle(title),
+		fixtures.WithDescription(body),
+		fixtures.WithTeam(&team),
+	))
+	if err != nil {
+		t.Fatalf("convert %s seed: %v", tag, err)
+	}
+	if err := testStore.Queries().UpsertIssue(ctx, row.ToUpsertParams()); err != nil {
+		t.Fatalf("seed %s upsert: %v", tag, err)
+	}
+	t.Cleanup(func() { _ = testStore.Queries().DeleteIssue(context.Background(), id) })
+
+	return issueProbe{
+		ID:         id,
+		Identifier: identifier,
+		Dir:        issueDirPath(testTeamKey, identifier),
+		Path:       issueFilePath(testTeamKey, identifier),
+		Body:       body,
+	}
+}
+
+// probeIdentifierBase sits above every identifier the fixture population and
+// the static seeds use (TST-1…TST-n, TST-90xx), so a probe can never shadow a
+// row a read test asserts against; probeSeq makes each probe's number unique
+// within the run, which is all the per-run temp store needs.
+const probeIdentifierBase = 50000
+
+var probeSeq atomic.Int64
 
 // isControlFile reports whether a directory entry is a virtual control/feedback
 // file (the _create trigger or the .error feedback file) rather than a real

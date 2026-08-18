@@ -1,18 +1,12 @@
 package integration
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
-	"time"
-
-	"github.com/jra3/linear-fuse/internal/db"
-	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
-	"github.com/jra3/linear-fuse/internal/testutil/mockmutation"
 )
 
 // TestZeroFilledWriteIsRejected pins #472 at the mount: a write that leaves a
@@ -76,8 +70,11 @@ func TestZeroFilledWriteIsRejected(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			issueID, identifier, body := seedZeroFillProbe(t)
-			path := issueFilePath(testTeamKey, identifier)
+			// Each subtest gets its own row so a restored buffer from one
+			// cannot colour the next.
+			probe := seedIssueProbe(t, "zero-fill", "Zero fill probe",
+				"a body a zero-filled write must not replace with NUL bytes")
+			path := probe.Path
 			if _, err := os.ReadFile(path); err != nil {
 				t.Fatalf("prime read: %v", err)
 			}
@@ -88,7 +85,7 @@ func TestZeroFilledWriteIsRejected(t *testing.T) {
 					"document the writer composed", cerr)
 			}
 
-			for _, u := range updatesFor(mock, issueID) {
+			for _, u := range updatesFor(mock, probe.ID) {
 				sent := "<nil>"
 				if u.Body != nil {
 					sent = fmt.Sprintf("%d NULs in %q", strings.Count(*u.Body, "\x00"), *u.Body)
@@ -99,7 +96,7 @@ func TestZeroFilledWriteIsRejected(t *testing.T) {
 
 			// The rejection is legible, and it names the cause rather than
 			// claiming the file was empty — it was not, the offset was wrong.
-			errPath := issueDirPath(testTeamKey, identifier) + "/.error"
+			errPath := probe.Dir + "/.error"
 			data := readFileUntilContains(t, errPath, "Zero-filled write rejected", errorVisibilityWait)
 			for _, want := range []string{"Zero-filled write rejected", "NUL", "Nothing was written", "offset 0"} {
 				if !strings.Contains(string(data), want) {
@@ -109,13 +106,13 @@ func TestZeroFilledWriteIsRejected(t *testing.T) {
 
 			// Nothing was applied, and the file still serves its contents — the
 			// recovery the .error prescribes is "re-read the file".
-			fresh, err := getIssueFromSQLite(issueID)
+			fresh, err := getIssueFromSQLite(probe.ID)
 			if err != nil {
 				t.Fatalf("issue not readable after the rejected write: %v", err)
 			}
-			if strings.TrimSpace(fresh.Description) != strings.TrimSpace(body) {
+			if strings.TrimSpace(fresh.Description) != strings.TrimSpace(probe.Body) {
 				t.Errorf("description = %q after a rejected zero-filled write, want the original %q",
-					fresh.Description, body)
+					fresh.Description, probe.Body)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil {
@@ -126,44 +123,4 @@ func TestZeroFilledWriteIsRejected(t *testing.T) {
 			}
 		})
 	}
-}
-
-// seedZeroFillProbe upserts one issue with a real body and returns its ID,
-// identifier, and body. Each subtest gets its own row so a restored buffer from
-// one cannot colour the next.
-func seedZeroFillProbe(t *testing.T) (issueID, identifier, body string) {
-	t.Helper()
-
-	const probeBody = "a body a zero-filled write must not replace with NUL bytes"
-
-	ctx := context.Background()
-	team := fixtures.FixtureAPITeam()
-	uniq := time.Now().UnixNano()
-	issueID = fmt.Sprintf("zero-fill-%d", uniq)
-	identifier = fmt.Sprintf("TST-%d", 40000+uniq%10000)
-	row, err := db.APIIssueToDBIssue(fixtures.FixtureAPIIssue(
-		fixtures.WithIssueID(issueID, identifier),
-		fixtures.WithTitle("Zero fill probe"),
-		fixtures.WithDescription(probeBody),
-		fixtures.WithTeam(&team),
-	))
-	if err != nil {
-		t.Fatalf("convert seed: %v", err)
-	}
-	if err := testStore.Queries().UpsertIssue(ctx, row.ToUpsertParams()); err != nil {
-		t.Fatalf("seed upsert: %v", err)
-	}
-	t.Cleanup(func() { _ = testStore.Queries().DeleteIssue(context.Background(), issueID) })
-	return issueID, identifier, probeBody
-}
-
-// updatesFor filters the fake mutator's audit log down to one entity.
-func updatesFor(mock *mockmutation.Client, id string) []mockmutation.UpdateCall {
-	var out []mockmutation.UpdateCall
-	for _, u := range mock.Updates() {
-		if u.ID == id {
-			out = append(out, u)
-		}
-	}
-	return out
 }
