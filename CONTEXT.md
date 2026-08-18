@@ -56,16 +56,16 @@ issues the resolve step is itself a deep module — see Name→ID resolution bel
 ### Edit-flush shell (`editFlush`)
 The **deep module** owning the invariant *shell* every editable file node's FUSE
 `Flush` wraps around its front half and the [[writeback-tail]]: take the buffer
-lock, skip a clean buffer, reject an emptied one, bound the API work with a 30s
-timeout, run the front half, and on success run the commit tail, adopt the fresh
-value, invalidate the node's kernel-cache set, and clear dirty. All seven handlers
-(issue/comment/label/document/milestone/project/initiative) hand-copied it, and
-it had drifted: issues invalidated **before** persisting (a stale-repopulation
-window — a racing read could reload the not-yet-written row and re-cache it),
-and the invalidation set lived as loose `InvalidateUpdated` calls each handler
-had to remember. `editFlush` (`internal/fs/editflush.go`, generic over `T`)
-concentrates the shell; each `Flush` becomes `return editFlush(ctx, n.lfs,
-&n.editBuffer, editFlushSpec[T]{…})`.
+lock, skip a clean buffer, reject an emptied or zero-filled one, bound the API
+work with a 30s timeout, run the front half, and on success run the commit tail,
+adopt the fresh value, invalidate the node's kernel-cache set, and clear dirty.
+All seven handlers (issue/comment/label/document/milestone/project/initiative)
+hand-copied it, and it had drifted: issues invalidated **before** persisting (a
+stale-repopulation window — a racing read could reload the not-yet-written row
+and re-cache it), and the invalidation set lived as loose `InvalidateUpdated`
+calls each handler had to remember. `editFlush` (`internal/fs/editflush.go`,
+generic over `T`) concentrates the shell; each `Flush` becomes `return
+editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[T]{…})`.
 
 The **front half is one `mutate` closure** returning `(proceed bool, errno
 syscall.Errno)`: `errno != 0` → return it and **keep dirty** (a corrected

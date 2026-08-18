@@ -174,17 +174,18 @@ type editFlushSpec[T any] struct {
 	invalidateExtra func(fresh *T)
 	// restore re-renders the entity's CURRENT content, exactly as the node's
 	// construction seam rendered it. The shell calls it on one path only: the
-	// empty-write rejection below, where it puts those bytes back into the buffer
-	// and clears dirty. Return nil (or an empty render) to decline, and the buffer
-	// is left as-is.
+	// refused-write rejection below — an emptied or a zero-filled buffer, both
+	// arms of classifyWrite — where it puts those bytes back into the buffer and
+	// clears dirty. Return nil (or an empty render) to decline, and the buffer is
+	// left as-is.
 	//
 	// This is the difference between the two rejections. A parse failure holds a
 	// document the writer meant, so the buffer stays dirty for a corrected
-	// re-save; an emptied file holds nothing worth preserving, and leaving it
+	// re-save; a refused buffer holds nothing worth preserving, and leaving it
 	// would strand the canonical node serving zero bytes for its whole lifetime —
 	// refresh refuses a dirty buffer, and only a successful editFlush clears the
-	// flag — which is exactly the state emptyWriteMessage tells the writer to
-	// recover from by re-reading.
+	// flag — which is exactly the state the rejection's .error tells the writer
+	// to recover from by re-reading.
 	restore func() []byte
 	// pinIno is the inode of the canonical file whose Lookup seeds from
 	// authoredPins. A committed clean write pins its bytes there, which is what
