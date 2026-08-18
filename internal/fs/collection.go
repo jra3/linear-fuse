@@ -70,8 +70,7 @@ func (lfs *LinearFS) lookupCollectionTrio(ctx context.Context, parent fs.InodeEm
 		out.Attr.Gid = lfs.gid
 		out.Attr.Size = 0
 		out.Attr.SetTimes(&now, &now, &now)
-		out.SetAttrTimeout(1 * time.Second)
-		out.SetEntryTimeout(1 * time.Second)
+		applyNodeTimeout(out, transientFileTimeout)
 		return parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{Mode: syscall.S_IFREG}), true
 	case ".error":
 		return lfs.lookupErrorFile(ctx, parent, collectionErrorKey(t.kind, t.parentID), out), true

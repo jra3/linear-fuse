@@ -829,8 +829,16 @@ const (
 // Unset (nil) means no MountFS ran — a LinearFS built directly by a unit test —
 // and falls back to the default so that path behaves like production. A mount
 // that configured 0 gets 0, which is the point of the pointer.
+//
+// It never returns a negative. No caller passes one today, but the accessor is
+// total on purpose: a build site reads this as a concrete bound, not as the
+// inheritTimeout sentinel, and a negative reaching the FUSE setters is a
+// ~584-billion-year TTL rather than a short one (applyNodeTimeout has the other
+// half of that guard). The pre-#449 `<= 0` test covered this incidentally; it
+// had to go so a configured 0 would stop being read as "never mounted", and the
+// clamp is what it left behind.
 func (lfs *LinearFS) entryTimeout() time.Duration {
-	if lfs.kernelEntryTimeout == nil {
+	if lfs.kernelEntryTimeout == nil || *lfs.kernelEntryTimeout < 0 {
 		return DefaultEntryTimeout
 	}
 	return *lfs.kernelEntryTimeout

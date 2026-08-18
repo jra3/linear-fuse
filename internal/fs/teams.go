@@ -222,11 +222,11 @@ func (t *TeamNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	case "docs":
 		node := &DocsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: team.ID}
-		return t.newDirInode(ctx, out, "docs", node, dirAttr(team.CreatedAt, team.UpdatedAt), docsDirIno(team.ID), noKernelCache), 0
+		return t.newDirInode(ctx, out, "docs", node, dirAttr(team.CreatedAt, team.UpdatedAt), docsDirIno(team.ID), mountDefaultTimeout), 0
 
 	case "labels":
 		node := &LabelsNode{attrNode: attrNode{BaseNode: BaseNode{lfs: t.lfs}}, teamID: team.ID}
-		return t.newDirInode(ctx, out, "labels", node, dirAttr(team.CreatedAt, team.UpdatedAt), labelsDirIno(team.ID), noKernelCache), 0
+		return t.newDirInode(ctx, out, "labels", node, dirAttr(team.CreatedAt, team.UpdatedAt), labelsDirIno(team.ID), mountDefaultTimeout), 0
 	}
 
 	return nil, syscall.ENOENT

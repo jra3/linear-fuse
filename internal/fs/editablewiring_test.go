@@ -2,10 +2,7 @@ package fs
 
 import (
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -65,24 +62,12 @@ func TestEverySpecSetsRestore(t *testing.T) {
 func specsMissingField(t *testing.T, field string) []string {
 	t.Helper()
 
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read package dir: %v", err)
-	}
-
 	fset := token.NewFileSet()
+	files := parsePackageSource(t, fset)
 	var missing []string
 	found := 0
 
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(fset, filepath.Join(".", name), nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
+	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
 			if !ok {

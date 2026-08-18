@@ -33,5 +33,5 @@ import (
 // and must return the current meta bytes and times from a live source. Timeouts
 // are zero (like .error/.last) so the file never serves a stale cached size.
 func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, name, key string, render renderFunc, out *fuse.EntryOut) *fs.Inode {
-	return lfs.mountRenderFile(ctx, parent, name, render, metaIno(key), noKernelCache, out)
+	return lfs.mountRenderFile(ctx, parent, name, render, metaIno(key), mountDefaultTimeout, out)
 }

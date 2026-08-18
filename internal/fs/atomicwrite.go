@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -180,8 +179,7 @@ func newScratchInode(ctx context.Context, lfs *LinearFS, parent fs.InodeEmbedder
 	out.Attr.Size = 0
 	// Short timeouts: the scratch file is transient and should not linger in the
 	// kernel cache after the rename consumes it.
-	out.SetAttrTimeout(time.Second)
-	out.SetEntryTimeout(time.Second)
+	applyNodeTimeout(out, transientFileTimeout)
 	inode := parent.EmbeddedInode().NewInode(ctx, node, fs.StableAttr{
 		Mode: syscall.S_IFREG,
 		Ino:  scratchIno(parentIno, name),

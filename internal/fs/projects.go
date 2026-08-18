@@ -255,7 +255,7 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 func (p *ProjectNode) manifest() *dirManifest {
 	team, project := p.entity() // snapshot captured by the build closures
 	lfs := p.lfs
-	m := newDirManifest(&p.BaseNode, project.ID, project.CreatedAt, project.UpdatedAt, noKernelCache)
+	m := newDirManifest(&p.BaseNode, project.ID, project.CreatedAt, project.UpdatedAt, mountDefaultTimeout)
 
 	// project.md is editable-only; identity/status/dates live in project.meta.
 	m.file("project.md", projectInfoIno(project.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {

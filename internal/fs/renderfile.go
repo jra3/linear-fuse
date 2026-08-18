@@ -136,27 +136,78 @@ type renderChild interface {
 	baseNode() *BaseNode
 }
 
-// inheritTimeout, passed as the timeout to newRenderInode/lookupRenderFile, means
-// "leave the mount's default attr/entry timeout" — for the nodes that never set a
-// per-file timeout. Any value >= 0 is applied to both attr and entry.
-const inheritTimeout = time.Duration(-1)
+// The named kernel-caching policies. Every timeout argument at a node build
+// site is one of these, `lfs.entryTimeout()` (the mount's configured bound), or
+// a new named constant with a comment saying why — never an inline duration.
+// TestNoHardcodedKernelTimeouts enforces that, because an inline duration is
+// exactly how WithKernelCacheTimeouts came to govern nothing beneath six
+// directories (#414) and three render files (#449).
+//
+// Two of them mean the same thing on the wire, and the names say so rather than
+// pretending otherwise. go-fuse's bridge fills in the mount's configured
+// defaults for any reply whose timeouts read back as zero
+// (`rawBridge.setEntryOutTimeout`, fs/bridge.go — `if out.EntryTimeout() == 0`),
+// and `SetEntryTimeout(0)` leaves `EntryTimeout()` at 0. So writing an explicit
+// zero and writing nothing at all produce byte-identical replies, and neither
+// can express "do not cache this": the smallest bound the kernel will actually
+// be told about is a non-zero one. `TestMountDefaultTimeoutEqualsInherit` pins
+// the equivalence.
+const (
+	// inheritTimeout means "do not touch the reply's timeouts" — applyNodeTimeout
+	// skips the setters entirely, so the mount's defaults apply. The spelling for
+	// nodes that have no per-node policy of their own.
+	inheritTimeout = time.Duration(-1)
 
-// noKernelCache is the other named timeout policy: 0, "the kernel may not serve
-// this entry or its attrs from its own cache at all". It is the right answer for
-// a surface whose content the mount itself mutates between two adjacent syscalls
-// — the write-through collection directories and the `.meta`/`.error`/`.last`
-// sidecars a failed write rewrites. Named rather than written as a bare 0 so
-// that every timeout argument at a build site is a policy the reader can look
-// up, which is what lets TestNoHardcodedKernelTimeouts forbid literals outright
-// (#449).
-const noKernelCache = time.Duration(0)
+	// mountDefaultTimeout is the same policy written as an explicit zero, and is
+	// what the sites that used to pass a bare `0` pass now: the write-through
+	// collection directories and the `.meta`/`.error`/`.last` sidecars. It is
+	// spelled as a name so the guard can forbid bare literals outright.
+	//
+	// It is NOT "no kernel caching" — an earlier name for it claimed that, and
+	// the claim was false in both directions: these surfaces run at the mount's
+	// 30s entry / 60s attr in production, and at the integration fixture's
+	// configured defaults under test. What actually keeps them fresh is that
+	// their content is FOPEN_DIRECT_IO (re-rendered on every read) and their
+	// writers invalidate explicitly (`wf.invalidate(errorIno/successIno)`), not
+	// this constant. Making them genuinely uncacheable would mean a non-zero
+	// minimum here, which is a real change to production cache behavior and
+	// wants its own justification.
+	mountDefaultTimeout = time.Duration(0)
 
-// editableFileTimeout is the third and last policy: the short bound the editable
-// `.md` files (comment/document/label/milestone) hand the kernel. It is
-// deliberately NOT the mount's entry timeout — these files are written through
-// the mount, and the bound that matters is how long a stale render can outlive
-// the writer's own save, not how long a remote change may go unnoticed.
-const editableFileTimeout = 5 * time.Second
+	// editableFileTimeout is the short bound the editable `.md` files
+	// (comment/document/label/milestone) hand the kernel. It is deliberately NOT
+	// the mount's entry timeout — these files are written through the mount, and
+	// the bound that matters is how long a stale render can outlive the writer's
+	// own save, not how long a remote change may go unnoticed.
+	editableFileTimeout = 5 * time.Second
+
+	// transientFileTimeout is the bound for the synthetic files that exist only
+	// across a single write sequence: the write-only `_create` trigger and the
+	// scratch inode an editor's atomic save renames over. Neither should linger
+	// in the kernel cache once its sequence completes. These two are built by
+	// hand rather than through a node builder, so before #449's rework they were
+	// the one class of site the guard could not see.
+	transientFileTimeout = 1 * time.Second
+)
+
+// applyNodeTimeout writes one caching policy onto a Lookup reply — the single
+// place in the package that touches SetAttrTimeout/SetEntryTimeout, which is
+// what lets TestNoHardcodedKernelTimeouts check every site by checking the
+// arguments to this function and the builders that call it.
+//
+// A negative bound means inheritTimeout: leave the reply alone. The guard is not
+// cosmetic. fuse.EntryOut.SetAttrTimeout does `AttrValid = uint64(ns / 1e9)`
+// with no sign check, so a negative reaching the setters becomes a ~584-billion-
+// year TTL rather than a short one. newDirInode and fillRenderEntry had this
+// check; newFileInode did not, so a negative bound arriving at a file build site
+// pinned an effectively immortal kernel cache entry.
+func applyNodeTimeout(out *fuse.EntryOut, timeout time.Duration) {
+	if timeout < 0 {
+		return
+	}
+	out.SetAttrTimeout(timeout)
+	out.SetEntryTimeout(timeout)
+}
 
 // fillRenderEntry fills a Lookup EntryOut from the child's first render — the
 // same renderAttr() path its Getattr uses, so the two can never disagree — and
@@ -164,10 +215,7 @@ const editableFileTimeout = 5 * time.Second
 // paths below.
 func fillRenderEntry(ctx context.Context, out *fuse.EntryOut, child renderChild, timeout time.Duration) {
 	child.renderAttr(ctx).fill(&out.Attr, child.baseNode())
-	if timeout >= 0 {
-		out.SetAttrTimeout(timeout)
-		out.SetEntryTimeout(timeout)
-	}
+	applyNodeTimeout(out, timeout)
 }
 
 // newRenderInode fills a read-only render file's Lookup EntryOut and returns its

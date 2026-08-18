@@ -177,7 +177,7 @@ func (c collectionDir[T]) lookup(ctx context.Context, name string, out *fuse.Ent
 	res := c.classify(name, items)
 	switch res.kind {
 	case lookupMeta:
-		return c.lfs.mountRenderFile(ctx, c.parent, name, c.metaRender(res.item), c.metaIno(res.item), noKernelCache, out), 0
+		return c.lfs.mountRenderFile(ctx, c.parent, name, c.metaRender(res.item), c.metaIno(res.item), mountDefaultTimeout, out), 0
 	case lookupFile:
 		return c.buildFile(ctx, name, res.item, out)
 	default:
