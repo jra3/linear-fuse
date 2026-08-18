@@ -932,14 +932,17 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   `EAGAIN`, workspace over its plan limit → `EDQUOT`, backend failure → `EIO`;
   the reason always lands in `.error`,
   cleared on success. A stale local catalog self-heals with one refresh-and-retry
-  before any of that surfaces. Three refinements the errno alone cannot carry, so
+  before any of that surfaces. Four refinements the errno alone cannot carry, so
   the `.error` text is load-bearing: an `EAGAIN` says whether the request was
   refused before it was sent (safe to retry blindly) or interrupted in flight
   (outcome unknown — check first, or duplicate); an `EIO` from the
   read-your-writes check means retry, so the one divergence that retrying can
-  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and an
-  `EDQUOT` has to say that retrying will NOT help until the workspace has room,
-  which is the one next-action no other arm's phrasing covers (#409).
+  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); an
+  `EDQUOT` has to say that retrying will NOT help until the workspace has room
+  (#409); and the "missing reference" `ENOENT` covers an entity deleted upstream
+  between a read and the write (Linear's "Entity not found" on a create, update
+  or rename), whose `.error` likewise has to say a retry will not help — EIO is
+  what had taught callers to retry a write that can never succeed (#445).
 - **Empty writes are refused at the shell:** `editFlush` rejects a flush whose
   buffer is empty or whitespace-only with `EINVAL` before any handler's front
   half runs. An empty document has no fields, so applying it diffs as "remove

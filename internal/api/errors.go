@@ -167,8 +167,10 @@ func isUsageLimitMessage(s string) bool {
 // on the GraphQL error); the fallback covers not-found rejections that arrive
 // as plain strings (e.g. an HTTP 400 whose body carries the error envelope).
 //
-// For a delete this is idempotent success (the entity is already gone); for a
-// refresh it marks the local row an orphan to be cleaned up.
+// What it means depends on the caller: for a delete it is idempotent success
+// (the entity is already gone); for a create/update/rename it is ENOENT — the
+// reference is gone upstream and no retry brings it back (#445); for a refresh
+// it marks the local row an orphan to be cleaned up.
 func IsNotFound(err error) bool {
 	if err == nil {
 		return false
