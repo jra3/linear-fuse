@@ -126,6 +126,27 @@ func TestCommitDelete_Classification(t *testing.T) {
 		})
 	}
 
+	// #445: a server-side not-found reaching the DELETE tail must NOT become
+	// ENOENT — remoteAlreadyGone claims it first, where already-gone is
+	// idempotent success (TestCommitDelete_RemoteAlreadyGone pins that). This row
+	// pins the ordering from the other side: the new classifier arm is dead code
+	// for a delete's mutate, so adding it changed nothing here.
+	t.Run("mutate: server not-found stays idempotent success, not ENOENT", func(t *testing.T) {
+		sink := &fakeDeleteSink{}
+		mutations, forgets, extras := 0, 0, 0
+		spec := okDeleteSpec(&ent{title: "x"}, &mutations, &forgets, &extras)
+		spec.mutate = func(context.Context, *ent) error {
+			return &api.GraphQLError{Message: "Entity not found: Comment - Could not find referenced Comment."}
+		}
+
+		if errno := commitDelete(context.Background(), sink, spec); errno != 0 {
+			t.Fatalf("errno = %v, want 0 (already-gone delete is success, never ENOENT)", errno)
+		}
+		if sink.setCalls != 0 {
+			t.Errorf(".error set %d times, want 0", sink.setCalls)
+		}
+	})
+
 	// find failures classify the same way.
 	t.Run("find: backend failure is EIO", func(t *testing.T) {
 		sink := &fakeDeleteSink{}
@@ -141,6 +162,28 @@ func TestCommitDelete_Classification(t *testing.T) {
 		}
 		if sink.setCalls != 1 || !strings.Contains(sink.setMsg, "store down") {
 			t.Errorf(".error = %q, want the find failure cause", sink.setMsg)
+		}
+	})
+
+	// A find that fails because Linear no longer has the entity is not the
+	// already-gone path (that gate covers mutate only), so it does classify:
+	// ENOENT rather than the EIO fallthrough (#445).
+	t.Run("find: server not-found is ENOENT", func(t *testing.T) {
+		sink := &fakeDeleteSink{}
+		mutations, forgets, extras := 0, 0, 0
+		spec := okDeleteSpec(nil, &mutations, &forgets, &extras)
+		spec.find = func(context.Context) (*ent, error) {
+			return nil, &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."}
+		}
+
+		if errno := commitDelete(context.Background(), sink, spec); errno != syscall.ENOENT {
+			t.Fatalf("errno = %v, want ENOENT", errno)
+		}
+		if mutations != 0 || forgets != 0 {
+			t.Errorf("tail ran after a find failure: mutations=%d forgets=%d", mutations, forgets)
+		}
+		if sink.setCalls != 1 || !strings.Contains(sink.setMsg, "no longer exists on Linear") {
+			t.Errorf(".error = %q, want the not-found cause", sink.setMsg)
 		}
 	})
 }

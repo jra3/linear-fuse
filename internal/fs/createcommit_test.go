@@ -155,6 +155,25 @@ func TestCommitCreate_Classification(t *testing.T) {
 			wantIn:    "plan/usage limit",
 		},
 		{
+			// #445: the server-side twin of the notFoundError row above. Linear
+			// says the referenced entity is gone — the same condition, so the same
+			// errno, not the EIO fallthrough that reads as a retryable backend
+			// fault. Reachable whenever the local catalog is ahead of the
+			// workspace.
+			name:      "server not-found is ENOENT, not a retryable EIO",
+			err:       &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."},
+			wantErrno: syscall.ENOENT,
+			wantIn:    "no longer exists on Linear",
+		},
+		{
+			// The plain-string form (an HTTP-400 envelope) classifies the same:
+			// the predicate, not the error type, is what decides.
+			name:      "server not-found in a plain envelope is ENOENT",
+			err:       errors.New(`API error (status 400): {"errors":[{"message":"Entity not found: Comment - Could not find referenced Comment."}]}`),
+			wantErrno: syscall.ENOENT,
+			wantIn:    "retrying will NOT help",
+		},
+		{
 			name:      "anything else is EIO carrying the cause",
 			err:       errors.New("boom"),
 			wantErrno: syscall.EIO,

@@ -214,9 +214,14 @@ transient, which stays a `retryableCreateErr` concern; `api.IsNotFound` — the
 "Entity not found" rejection; `api.IsUsageLimited` — a workspace over its plan
 limit, disjoint from `IsRateLimited` because no wait clears it), the single
 owners the client's GraphQL-errors branch, the sync worker's backoff, and the
-repo's orphan defense also delegate to. Arm order matters: the arms keyed on a
-condition Linear does not reliably tag (`EDQUOT`, `EMSGSIZE`) sit above the
-`userError` gate so their errno never depends on a server-set bit (#409).
+repo's orphan defense also delegate to. `IsNotFound` carries opposite verdicts
+by tail: a server-side not-found on a create/edit/rename is `ENOENT` (the
+reference is gone, and retrying earns the same rejection — it used to fall to
+the retryable-sounding `EIO`, #445), while the delete tail claims it first via
+`remoteAlreadyGone`, where already-gone is idempotent success. Arm order
+matters: the arms keyed on a condition Linear does not reliably tag (`ENOENT`,
+`EDQUOT`, `EMSGSIZE`) sit above the `userError` gate so their errno never
+depends on a server-set bit (#409, #445).
 
 For status updates the front half is the shared `marshal.MarkdownToStatusUpdate`
 (one parser for both project and initiative updates — see [[entity-parse]]): an

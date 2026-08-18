@@ -217,6 +217,32 @@ func TestCommitRename_Contract(t *testing.T) {
 			wantInvalidates: 0,
 		},
 		{
+			// #445: the server-side twin of 7c. A rename whose target Linear no
+			// longer has is the same missing-reference condition, so ENOENT — not
+			// the EIO fallthrough that reads as retryable.
+			name:            "7e mutate server not-found is ENOENT",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			mutErr:          &api.GraphQLError{Message: "Entity not found: Document - Could not find referenced Document."},
+			wantErrno:       syscall.ENOENT,
+			wantFind:        true,
+			wantMutate:      true,
+			wantSets:        1,
+			wantErrSubstr:   "no longer exists on Linear",
+			wantInvalidates: 0,
+		},
+		{
+			name:            "5c find server not-found is ENOENT",
+			oldName:         "foo.md",
+			newName:         "bar.md",
+			findErr:         &api.GraphQLError{Message: "Entity not found: Document - Could not find referenced Document."},
+			wantErrno:       syscall.ENOENT,
+			wantFind:        true,
+			wantSets:        1,
+			wantErrSubstr:   "retrying will NOT help",
+			wantInvalidates: 0,
+		},
+		{
 			name:            "7d mutate usage-limit is EDQUOT",
 			oldName:         "foo.md",
 			newName:         "bar.md",

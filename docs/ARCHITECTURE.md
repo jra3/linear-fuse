@@ -736,8 +736,11 @@ a layer above the commit-tail primitives) and no telemetry (matching
    rate-limit/timeout/interruption → `EAGAIN`, workspace over its plan limit →
    `EDQUOT`, backend failure → `EIO` — reason always written to `.error`. Arm
    ORDER is load-bearing: the arms keyed on a condition Linear does not reliably
-   tag (`EDQUOT`, `EMSGSIZE`) sit ABOVE the `userError` gate, so their errno does
-   not depend on a server-set bit (#409). The `EAGAIN` branch splits its *message* on
+   tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit ABOVE the `userError` gate, so their
+   errno does not depend on a server-set bit (#409). Missing reference covers
+   both the fs-local `notFoundError` and Linear's own "Entity not found"
+   (`api.IsNotFound`, #445); only the delete tail reads that rejection
+   differently, as idempotent success. The `EAGAIN` branch splits its *message* on
    `api.IsOutcomeUnknown`: a request refused before it was sent (budget
    deferral, cancelled pre-send wait, tripped breaker) provably had no effect,
    while one whose POST was already on the wire (`api.ErrInFlight`, set in the
