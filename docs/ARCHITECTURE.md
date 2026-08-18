@@ -873,9 +873,11 @@ persistent flags. **Startup order** (`mount.go` → `linearfs.go`):
    viewer into it, spawns a background viewer refresh, and starts the
    `sync.Worker` under `lifeCtx`.
 6. `fs.MountFS(...)` — creates the root node, mounts via go-fuse (attr/entry
-   timeouts 60s/30s, overridable with `WithKernelCacheTimeouts`), publishes the
-   configured entry timeout on `LinearFS` so the per-node build sites hand the
-   kernel the mount's own policy rather than a literal of their own (#414/#449).
+   timeouts 60s/30s, overridable with `WithKernelCacheTimeouts` — a negative
+   override is clamped back to its default, since the kernel reads both bounds
+   unsigned), publishes the resolved entry timeout on `LinearFS` so the per-node
+   build sites hand the kernel the mount's own policy rather than a literal of
+   their own (#414/#449).
    Every node's bound goes through the single `applyNodeTimeout` helper and is a
    named policy, never an inline duration — guarded by
    `TestNoHardcodedKernelTimeouts` and `TestTimeoutSettersGoThroughOneChokePoint`.

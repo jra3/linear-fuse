@@ -210,9 +210,13 @@ func (lfs *LinearFS) renderWriteSuccess(key string) []byte {
 
 // lookupSuccessFile mounts the read-only `.last` virtual file for a collection as
 // a child of parent. Reading it returns the YAML list of recent creates (empty if
-// none yet), keyed by the collectionSuccessKey used with AppendWriteSuccess. It
-// is a plain renderFile with zero timeouts, so it always reflects the most recent
-// create; the reported time is the newest recorded create's timestamp.
+// none yet), keyed by the collectionSuccessKey used with AppendWriteSuccess; the
+// reported time is the newest recorded create's timestamp. It is a plain
+// renderFile at mountDefaultTimeout — the mount's configured bound, not
+// "uncached" — so what makes a read reflect the most recent create is the render
+// closure running on every read under FOPEN_DIRECT_IO, plus the
+// wf.invalidate(successIno(key)) each create does. Within that bound a stat can
+// still be answered from the kernel's attr cache.
 func (lfs *LinearFS) lookupSuccessFile(ctx context.Context, parent fs.InodeEmbedder, key string, out *fuse.EntryOut) *fs.Inode {
 	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		content := lfs.renderWriteSuccess(key)

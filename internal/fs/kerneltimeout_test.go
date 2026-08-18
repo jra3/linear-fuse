@@ -106,10 +106,17 @@ func TestNoHardcodedKernelTimeouts(t *testing.T) {
 		if !guarded || idx >= len(call.Args) {
 			return
 		}
-		// A helper forwarding its own parameter to the next helper down is not a
-		// call site; the value was checked where it entered.
-		seen[fn]++
 		arg := call.Args[idx]
+		// A helper forwarding its own parameter to the next helper down is not a
+		// call site; the value was checked where it entered, and counting it
+		// would let the "no call sites found" alarm be satisfied entirely by
+		// intra-package plumbing — applyNodeTimeout has three such forwards and
+		// newRenderInode one, so every real build site could be deleted without
+		// the alarm firing. The forwarded argument is still checked below; this
+		// only decides what counts as a site supplying a policy.
+		if !isForwardedTimeout(arg, enclosing) {
+			seen[fn]++
+		}
 		if !isNamedTimeout(arg, enclosing) {
 			offenders = append(offenders, fmt.Sprintf("%s (%s: %s)",
 				fset.Position(arg.Pos()), fn, exprText(fset, arg)))
@@ -300,6 +307,54 @@ func TestEntryTimeoutHonorsConfiguredZero(t *testing.T) {
 	}
 }
 
+// TestMountConfigClampsNegativeTimeouts covers the half of the negative-bound
+// guard that entryTimeout() cannot reach. MountFS hands the configured bounds to
+// fs.Options as well as to lfs.kernelEntryTimeout, and go-fuse applies
+// *Options.EntryTimeout through the same unsigned conversion applyNodeTimeout
+// refuses — so an unclamped negative would give a ~584-billion-year TTL at every
+// inheritTimeout/mountDefaultTimeout site while entryTimeout() quietly reported
+// the 30s default, the two halves of one mount disagreeing about one input.
+func TestMountConfigClampsNegativeTimeouts(t *testing.T) {
+	t.Parallel()
+
+	apply := func(opts ...MountOption) mountConfig {
+		mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
+		for _, o := range opts {
+			o(&mc)
+		}
+		return mc
+	}
+
+	for _, tc := range []struct {
+		name                string
+		opts                []MountOption
+		wantAttr, wantEntry time.Duration
+	}{
+		{"defaults", nil, DefaultAttrTimeout, DefaultEntryTimeout},
+		{"configured", []MountOption{WithKernelCacheTimeouts(100*time.Millisecond, 200*time.Millisecond)},
+			100 * time.Millisecond, 200 * time.Millisecond},
+		{"configured zero survives", []MountOption{WithKernelCacheTimeouts(0, 0)}, 0, 0},
+		{"both negative", []MountOption{WithKernelCacheTimeouts(-time.Second, -time.Second)},
+			DefaultAttrTimeout, DefaultEntryTimeout},
+		{"attr negative only", []MountOption{WithKernelCacheTimeouts(-time.Nanosecond, time.Second)},
+			DefaultAttrTimeout, time.Second},
+		{"entry negative only", []MountOption{WithKernelCacheTimeouts(time.Second, -time.Hour)},
+			time.Second, DefaultEntryTimeout},
+	} {
+		attr, entry := apply(tc.opts...).resolve()
+		if attr != tc.wantAttr || entry != tc.wantEntry {
+			t.Errorf("%s: resolve() = attr %v entry %v, want attr %v entry %v",
+				tc.name, attr, entry, tc.wantAttr, tc.wantEntry)
+		}
+		// The bound MountFS publishes and the one every entryTimeout() site
+		// reads must be the same value.
+		lfs := &LinearFS{kernelEntryTimeout: &entry}
+		if got := lfs.entryTimeout(); got != entry {
+			t.Errorf("%s: entryTimeout() = %v but the mount serves %v", tc.name, got, entry)
+		}
+	}
+}
+
 // isNamedTimeout reports whether a timeout argument names a policy rather than
 // spelling a duration inline.
 //
@@ -319,7 +374,7 @@ func isNamedTimeout(arg ast.Expr, enclosing *ast.FuncDecl) bool {
 		if timeoutPolicies[e.Name] {
 			return true
 		}
-		return e.Name == "timeout" && declaresTimeoutParam(enclosing)
+		return isForwardedTimeout(e, enclosing)
 	case *ast.SelectorExpr:
 		// m.timeout — never time.Anything, which this rule exists to reject.
 		return !rootedAtTime(e) && e.Sel.Name == "timeout"
@@ -328,6 +383,17 @@ func isNamedTimeout(arg ast.Expr, enclosing *ast.FuncDecl) bool {
 	default:
 		return false
 	}
+}
+
+// isForwardedTimeout reports whether arg is the bare `timeout` parameter of the
+// helper it appears in — one guarded helper handing its own already-checked
+// argument to the next one down, rather than a site choosing a policy.
+func isForwardedTimeout(arg ast.Expr, enclosing *ast.FuncDecl) bool {
+	if p, ok := arg.(*ast.ParenExpr); ok {
+		return isForwardedTimeout(p.X, enclosing)
+	}
+	ident, ok := arg.(*ast.Ident)
+	return ok && ident.Name == "timeout" && declaresTimeoutParam(enclosing)
 }
 
 // rootedAtTime reports whether a selector's base is the identifier `time`.

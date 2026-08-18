@@ -830,13 +830,14 @@ const (
 // and falls back to the default so that path behaves like production. A mount
 // that configured 0 gets 0, which is the point of the pointer.
 //
-// It never returns a negative. No caller passes one today, but the accessor is
-// total on purpose: a build site reads this as a concrete bound, not as the
-// inheritTimeout sentinel, and a negative reaching the FUSE setters is a
+// It never returns a negative. A build site reads this as a concrete bound, not
+// as the inheritTimeout sentinel, and a negative reaching the FUSE setters is a
 // ~584-billion-year TTL rather than a short one (applyNodeTimeout has the other
 // half of that guard). The pre-#449 `<= 0` test covered this incidentally; it
 // had to go so a configured 0 would stop being read as "never mounted", and the
-// clamp is what it left behind.
+// clamp is what it left behind. mountConfig.resolve now clamps first, so for a
+// mounted filesystem this is redundant defence in depth; it still covers a
+// LinearFS whose kernelEntryTimeout a unit test set directly.
 func (lfs *LinearFS) entryTimeout() time.Duration {
 	if lfs.kernelEntryTimeout == nil || *lfs.kernelEntryTimeout < 0 {
 		return DefaultEntryTimeout
@@ -850,6 +851,28 @@ type MountOption func(*mountConfig)
 
 type mountConfig struct {
 	attrTimeout, entryTimeout time.Duration
+}
+
+// resolve returns the bounds the mount will actually use, clamping a negative
+// configured value back to its default.
+//
+// WithKernelCacheTimeouts is exported and accepts any duration, and both halves
+// of the mount convert what it lands on to unsigned with no sign check —
+// go-fuse's setEntryOutTimeout applies *fs.Options.EntryTimeout through the same
+// fuse.EntryOut setters applyNodeTimeout guards. So a negative here is not a
+// short cache but a ~584-billion-year one, at every inheritTimeout and
+// mountDefaultTimeout site, which is most of the tree. Clamping once at the
+// point the option lands is what keeps fsOpts and lfs.kernelEntryTimeout
+// agreeing on the same input instead of disagreeing about it.
+func (c mountConfig) resolve() (attr, entry time.Duration) {
+	attr, entry = c.attrTimeout, c.entryTimeout
+	if attr < 0 {
+		attr = DefaultAttrTimeout
+	}
+	if entry < 0 {
+		entry = DefaultEntryTimeout
+	}
+	return attr, entry
 }
 
 // WithKernelCacheTimeouts overrides how long the kernel may serve attrs and
@@ -882,7 +905,7 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool, opts ...MountOption) 
 	for _, o := range opts {
 		o(&mc)
 	}
-	attrTimeout, entryTimeout := mc.attrTimeout, mc.entryTimeout
+	attrTimeout, entryTimeout := mc.resolve()
 	lfs.kernelEntryTimeout = &entryTimeout // published before the serve loop, as above
 
 	fsOpts := &fs.Options{
