@@ -141,8 +141,12 @@ observed — a stuck reservation is exactly the anomaly worth seeing.
 `state`, `label`, `cycle`, `project`, `member`, `initiative-project`,
 `project-label`, `comment`, `document`, `attachment`, `relation`,
 `inverse-relation`, `project-update`, `initiative-update`. (Kinds whose spec
-carries a nil prune — e.g. `state`, `inverse-relation`, the repo's four
-upsert-only tails — can never appear in `prunes`.) The spec's `Label` field
+carries a nil prune — e.g. `state`, `inverse-relation`, the repo's
+upsert-only doc/update/link tails — can never appear in `prunes`.) Every
+series is the sync worker's except `label`, which since #475 has a second
+emitter: the repository's read-path catalog refresh (`refreshTeamLabels`)
+drains and prunes per team, so `prunes{collection=label}` no longer tracks
+the full-cycle cadence. The spec's `Label` field
 is NOT used as an attribute: it embeds entity IDs (unbounded cardinality) and
 stays log-only.
 
@@ -153,8 +157,13 @@ stays log-only.
 | `linearfs.swr.triggers` | counter | `kind`, `decision` = `triggered` \| `fresh` \| `deduped` \| `sem_dropped` | `fresh` in `maybeRefreshSWR` when `swrStale` says no; the other three are `triggerBackgroundRefresh`'s exits (started / already in flight / refresh semaphore full) |
 | `linearfs.swr.refresh_outcomes` | counter | `kind`, `outcome` = `ok` \| `error` \| `orphaned` | when a background refresh completes; `orphaned` mirrors the module's orphan classification (`api.IsNotFound` → local rows deleted) |
 
-`kind` is the six `refreshKind` constants: `issue-details`, `history`,
-`project-docs`, `initiative-docs`, `project-updates`, `initiative-updates`.
+`kind` is one per SWR surface — the `refreshKind` constants in
+`internal/repo/swr.go`, which is the set that grows, so read it there rather
+than trusting a tally here: `issue-details`, `history`, `team-docs`,
+`project-docs`, `initiative-docs`, `project-updates`, `initiative-updates`,
+`project-links`, `initiative-links`, `team-labels` (#475 — a whole-catalog
+surface rather than an entity sub-resource, so it carries no orphan handler
+and a not-found there deletes nothing locally).
 `triggerBackgroundRefresh(kind, id, fn)` mints its own dedup key from the
 kind, so the attribute is bounded by construction. Fixture mode (nil client)
 returns before any recording — zero-value `swrMetrics` records nothing.

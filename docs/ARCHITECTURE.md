@@ -130,9 +130,10 @@ Two rules govern the whole design:
 
 1. **Reads never touch the Linear API.** Every metadata read is served from
    SQLite via the Repository, with no blocking cold-cache fetch: a read returns
-   whatever SQLite holds and, when a sub-resource looks stale, kicks a
-   **non-blocking** background refresh (stale-while-revalidate). The Sync Worker
-   keeps SQLite fresh. Two deliberate exceptions block on the network: embedded
+   whatever SQLite holds and, when the surface it serves looks stale, kicks a
+   **non-blocking** background refresh (stale-while-revalidate — sub-resources
+   mostly, plus the team label catalog). The Sync Worker keeps SQLite fresh.
+   Two deliberate exceptions block on the network: embedded
    attachment bytes (`*.png`, `*.pdf`) fall through memory → disk → a lazy CDN
    GET (`embeddedFileCache`), and a handful of interactive-tier synchronous
    reads (a few write-flow re-checks, e.g. the attachment-listing live
@@ -173,10 +174,12 @@ Authorization key onto the redirect target (SSRF / http-downgrade). The CDN
 client additionally **caps each GET body at 100 MiB** (`maxCDNBytes`), erroring
 rather than caching a truncated entry. The package's only internal dependency
 is the small `internal/telemetry` instrument-constructor helpers. It exposes
-26 query methods (`GetTeamIssuesPage`,
+~28 query methods (`GetTeamIssuesPage`,
 `GetTeamMetadata`, `GetInitiativesProbe`, `GetIssueDetailsBatch`, …) backed by
 31 named GraphQL operations — combined fetches like `GetTeamMetadata` issue
-several (metadata query + drain-page twins) — and ~30 mutation methods
+several (metadata query + drain-page twins), and a narrow method can reuse an
+existing one (`GetTeamLabels` drains `queryTeamLabelsPage`, the same page query
+the combined metadata fetch drains) — and ~30 mutation methods
 (`UpdateIssue`, `CreateComment`, `CreateLabel`, …). Types in `types.go` mirror
 Linear's schema; queries in `queries.go` are built from 17 shared GraphQL
 fragments (`IssueFields`, `IssueFieldsLite`, `CommentFields`, …) concatenated as
@@ -419,8 +422,9 @@ prune is licensed at all (nil `Prune` for capped/partial fetches).
 **Called by:** the Sync Worker (workspace/metadata/details) and the
 Repository's SWR refreshes (issue details; project/initiative docs, updates,
 links; the team label catalog — the one repo-side reconcile that passes a
-`Prune`, licensed by its drained fetch). The fs write tails do **not** go through it — they upsert single
-entities directly, and the SWR refresh reconciles behind them.
+`Prune`, licensed by its drained fetch). The fs write tails do **not** go
+through it — they upsert single entities directly, and the SWR refresh
+reconciles behind them.
 
 ### `internal/db` — SQLite persistence (sqlc)
 
