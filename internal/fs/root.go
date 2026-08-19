@@ -421,10 +421,9 @@ Failure model (every writable surface follows this contract):
   which. Either the name never resolved here (a relation target, rm of an unknown
   name) -- fix the name. Or LINEAR no longer has the entity you edited, renamed, or
   referenced: it was archived or deleted after this listing was read, so like
-  EDQUOT below and unlike EAGAIN, retrying will NOT help. Read that entity's own
-  file to reconcile the local view, and drop or repoint the reference. The parent
-  directory is served from the local cache, so it can keep listing the entity
-  until that refresh, or the next sync cycle, prunes it.
+  EDQUOT below and unlike EAGAIN, retrying will NOT help -- drop or repoint the
+  reference. No read reconciles this for you: the listing is served from the local
+  cache, so it may keep showing the entity until the next sync cycle reconciles it.
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
   the workspace has room: archive or delete entities, or raise the plan limit.

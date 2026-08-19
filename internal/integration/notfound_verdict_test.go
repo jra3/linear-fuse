@@ -137,7 +137,7 @@ func TestOffline_ServerNotFoundIsLegible(t *testing.T) {
 		"Entity not found: Issue",
 		"no longer exists on Linear",
 		"retrying will NOT help",
-		"read that entity's own file",
+		"next sync cycle reconciles the cache",
 	} {
 		if !strings.Contains(reason, want) {
 			t.Errorf(".error = %q, missing %q", reason, want)
