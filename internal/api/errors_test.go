@@ -124,8 +124,92 @@ func TestIsNotFound(t *testing.T) {
 			true,
 		},
 		{
+			// Case is not the contract: siblings lowercase before matching, and a
+			// rejection this predicate misses degrades a create/edit to the EIO
+			// that reads as retryable (#445).
+			"lowercased message",
+			&GraphQLError{Message: "entity not found: Issue"},
+			true,
+		},
+		{
+			// The phrasing can ride in UserPresentableMessage alone, exactly as
+			// IsFieldTooLong's cap phrasing can.
+			"phrasing only in UserPresentableMessage",
+			&GraphQLError{Message: "internal", UserPresentableMessage: "Entity not found: Issue"},
+			true,
+		},
+		{
 			"typed GraphQLError with unrelated message",
 			&GraphQLError{Message: "something else went wrong"},
+			false,
+		},
+		{
+			// The IsUsageLimited echo hazard, same shape: Linear renders
+			// user-supplied entity names into UserPresentableMessage, so a
+			// workspace that owns a label named "Entity not found" must still get
+			// the EINVAL its fixable input rejection earns — not a gone verdict
+			// saying retrying will not help.
+			"echoed entity name inside a validation sentence",
+			&GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "The label 'Entity not found' is a group and cannot be assigned to projects directly.",
+				UserError:              true,
+			},
+			false,
+		},
+		{
+			// The same echo arriving as the plain-string envelope: the whole-
+			// message rule applies to the quoted value, not to the body carrying it.
+			"echoed entity name inside the envelope (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"The label 'Entity not found' is a group and cannot be assigned to projects directly."}]}`),
+			false,
+		},
+		{
+			// The echo's other placement: an entity name echoed at the TAIL of a
+			// server message, where a ": " directly precedes the phrase. Nothing
+			// distinguishes it from the real rejection except which end of the
+			// message the phrase opens, so text Linear wrote gets no wrapper slack.
+			"echoed entity name at the tail of a server message",
+			&GraphQLError{Message: "Cannot assign label: Entity not found"},
+			false,
+		},
+		{
+			"echoed entity name at the tail of UserPresentableMessage",
+			&GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "Cannot assign label: Entity not found",
+				UserError:              true,
+			},
+			false,
+		},
+		{
+			"echoed entity name at the tail of an envelope message (HTTP 400)",
+			errors.New(`API error (status 400): {"errors":[{"message":"Cannot assign label: Entity not found"}]}`),
+			false,
+		},
+		{
+			// The counterpart the slack exists for: the ": " prefix is OURS, not
+			// the server's. internal/repo's orphan defense builds exactly this
+			// spelling, so the wrapper-tolerant fallback must keep answering true.
+			"our own wrapper prefix on a flattened error string",
+			fmt.Errorf("GraphQL error: Entity not found: Issue"),
+			true,
+		},
+		{
+			// Our own *FieldError rendering quotes the caller's frontmatter value
+			// verbatim. A caller who writes `status: Entity not found` must not
+			// get to pick the errno for their own typo.
+			"the phrase quoted as a caller-supplied field value",
+			errors.New("Field: status\nValue: \"Entity not found\"\nError: unknown state. See states.md"),
+			false,
+		},
+		{
+			// A throttled request is not proof the entity is gone, and the two
+			// verdicts are opposite: waiting fixes one and never fixes the other.
+			// The delete gate asks this predicate directly, so a false hit here
+			// forgets the local row for an entity Linear never deleted.
+			"rate limit wins even when the envelope also names a missing entity",
+			errors.New(`API error (status 429): {"errors":[{"message":"RATELIMITED"},{"message":"Entity not found"}]}`),
 			false,
 		},
 		{"rate limit is not not-found", errors.New("Rate limit exceeded"), false},

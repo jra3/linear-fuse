@@ -247,7 +247,14 @@ Operational guards:
   over a plan/usage limit) is likewise disjoint from `IsRateLimited`: a request
   budget clears when the window resets, so waiting is the fix, whereas no wait
   clears a plan wall — which is why it maps to `EDQUOT` rather than the
-  retryable `EAGAIN` (#409). `IsDeferred` (a local budget deferral: `ErrDeferred` or the
+  retryable `EAGAIN` (#409). `IsNotFound` is disjoint from `IsRateLimited` for a
+  sharper reason: a throttled rejection is not proof the entity is gone, and the
+  delete tail reads not-found as idempotent success, so without that precedence a
+  throttled delete forgets the local row for an entity Linear still has (#445).
+  `IsNotFound` and `IsUsageLimited` are both anchored against Linear's own text —
+  the phrase must CONSTITUTE the server's message, not merely appear inside it —
+  because Linear echoes caller-supplied names back in its rejections (#445).
+  `IsDeferred` (a local budget deferral: `ErrDeferred` or the
   pagination `ErrBudget`) is deliberately *excluded* from `IsRateLimited`: a
   server rate limit warrants a long pause until the window resets, but a local
   admission-ladder defer clears next cycle, so the sync worker skips-this-cycle
@@ -735,9 +742,17 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,
    rate-limit/timeout/interruption → `EAGAIN`, workspace over its plan limit →
    `EDQUOT`, backend failure → `EIO` — reason always written to `.error`. Arm
-   ORDER is load-bearing: the arms keyed on a condition Linear does not reliably
-   tag (`EDQUOT`, `EMSGSIZE`) sit ABOVE the `userError` gate, so their errno does
-   not depend on a server-set bit (#409). The `EAGAIN` branch splits its *message* on
+   ORDER is load-bearing in two directions: the arms keyed on a condition Linear
+   does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit ABOVE the
+   `userError` gate, so their errno does not depend on a server-set bit (#409);
+   and those same arms, which answer on message TEXT, sit BELOW the arms that
+   answer on error STRUCTURE (`*notFoundError`, `*FieldError`,
+   `retryableCreateErr`), because the text can be the caller's own echoed input
+   or a throttle's envelope. Missing reference covers both the fs-local
+   `notFoundError` and Linear's own "Entity not found" (`api.IsNotFound`, #445);
+   only the delete tail's *mutate* step reads that rejection differently, as
+   idempotent success — a delete whose *find* fails that way classifies here
+   like any other tail. The `EAGAIN` branch splits its *message* on
    `api.IsOutcomeUnknown`: a request refused before it was sent (budget
    deferral, cancelled pre-send wait, tripped breaker) provably had no effect,
    while one whose POST was already on the wire (`api.ErrInFlight`, set in the
@@ -785,8 +800,10 @@ an issue/project goes through `commitDelete`: API delete first, then a
 gate — the store is the listing source of truth, so a skipped forget resurrects
 the item as a phantom). On forget exhaustion it fails loud (`EIO`, `.error`
 naming the self-heal) and skips `InvalidateDeleted` (the phantom row is still
-present); otherwise `InvalidateDeleted` runs. "Entity not found" on delete is
-idempotent success, so re-`rm`ing a phantom row heals it.
+present); otherwise `InvalidateDeleted` runs. "Entity not found" from the delete
+tail's *mutate* step is idempotent success, so re-`rm`ing a phantom row heals it;
+the same rejection from its *find* step is not behind that gate and classifies
+like any other tail (`ENOENT`).
 
 **Deliberately-swallowed errors carry a one-line intent note.** A best-effort
 write that is *meant* to be swallowed (a startup optimization, a fetch cache, a
@@ -937,9 +954,24 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   refused before it was sent (safe to retry blindly) or interrupted in flight
   (outcome unknown — check first, or duplicate); an `EIO` from the
   read-your-writes check means retry, so the one divergence that retrying can
-  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and an
-  `EDQUOT` has to say that retrying will NOT help until the workspace has room,
-  which is the one next-action no other arm's phrasing covers (#409).
+  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and the
+  two arms whose failure retrying cannot fix, `EDQUOT` and a Linear-side
+  not-found `ENOENT`, both have to SAY so, since no errno carries that
+  next-action. They share the phrasing and differ in why it is futile: `EDQUOT`
+  is a capacity wall that clears once the workspace has room (archive, delete, or
+  raise the plan limit, then retry), while the `ENOENT` reference is gone for
+  good, so the only action left is to drop or repoint the reference. The text
+  names no reconciling read, deliberately: the failed write prunes nothing, and
+  the reads an agent reaches for first do not prune either (`issue.md` renders
+  from the dir manifest's captured value, `issue.meta` is a plain
+  `GetIssueByIdentifier`). Sibling reads that *do* — `history.md` and the
+  `comments/`/`docs/`/`attachments/` listings route through orphan-carrying SWR
+  specs (`historySpec` and `MaybeRefreshIssueDetails`, both classifying to
+  `deleteOrphanIssue`) — prune as a background side effect, which is not a
+  recovery step to hand an agent, so the `.error` promises only that the
+  cache-served listing can keep showing the entity until a sync cycle or the
+  worker's reconcile sweep (`reconcileIssuesForTeam` → `deleteOrphanIssue`)
+  removes it (#409/#445).
 - **Empty and zero-filled writes are refused at the shell:** `editFlush` rejects
   a flush whose buffer is empty, whitespace-only, or carries NUL bytes with
   `EINVAL` before any handler's front half runs. The predicate is the pure

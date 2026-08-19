@@ -155,6 +155,58 @@ func TestCommitCreate_Classification(t *testing.T) {
 			wantIn:    "plan/usage limit",
 		},
 		{
+			// #445: the server-side twin of the notFoundError row above. Linear
+			// says the referenced entity is gone — the same condition, so the same
+			// errno, not the EIO fallthrough that reads as a retryable backend
+			// fault. Reachable whenever the local catalog is ahead of the
+			// workspace.
+			name:      "server not-found is ENOENT, not a retryable EIO",
+			err:       &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."},
+			wantErrno: syscall.ENOENT,
+			wantIn:    "no longer exists on Linear",
+		},
+		{
+			// The plain-string form (an HTTP-400 envelope) classifies the same:
+			// the predicate, not the error type, is what decides.
+			name:      "server not-found in a plain envelope is ENOENT",
+			err:       errors.New(`API error (status 400): {"errors":[{"message":"Entity not found: Comment - Could not find referenced Comment."}]}`),
+			wantErrno: syscall.ENOENT,
+			wantIn:    "retrying will NOT help",
+		},
+		{
+			// #445 arm ORDER, first of three. api.IsNotFound answers on message
+			// TEXT, and *FieldError renders the caller's frontmatter value
+			// verbatim — so with the not-found arm above this one, a caller who
+			// wrote `status: Entity not found` picked their own errno and got
+			// ENOENT plus "retrying will NOT help" for a typo that a corrected
+			// status fixes. Structural arms outrank textual ones.
+			name:      "a FieldError whose VALUE is the phrase stays EINVAL",
+			err:       &FieldError{Field: "status", Value: "Entity not found", Message: "unknown state. See states.md"},
+			wantErrno: syscall.EINVAL,
+			wantIn:    "unknown state",
+		},
+		{
+			// Second: Linear echoes user-supplied entity names into
+			// UserPresentableMessage, so a workspace owning a label named
+			// "Entity not found" must still get the EINVAL its fixable input
+			// rejection earns. Pinned here as well as on the predicate because
+			// this arm sits above the userError gate by design (#409) — ordering
+			// alone cannot save it, only the predicate's anchoring can.
+			name:      "an echoed entity name in a userError stays EINVAL",
+			err:       &api.GraphQLError{Message: "The label 'Entity not found' is a group and cannot be assigned", UserError: true},
+			wantErrno: syscall.EINVAL,
+			wantIn:    "is a group",
+		},
+		{
+			// Third, and the worst of them: a retryable throttle reported to an
+			// agent as permanently unfixable. Waiting is exactly what fixes this,
+			// so the EAGAIN arm must claim it first.
+			name:      "a throttle whose envelope also names a missing entity is EAGAIN",
+			err:       errors.New(`API error (status 429): {"errors":[{"message":"RATELIMITED"},{"message":"Entity not found"}]}`),
+			wantErrno: syscall.EAGAIN,
+			wantIn:    "Wait a few seconds and retry",
+		},
+		{
 			name:      "anything else is EIO carrying the cause",
 			err:       errors.New("boom"),
 			wantErrno: syscall.EIO,
@@ -195,6 +247,52 @@ func TestCommitCreate_Classification(t *testing.T) {
 			if sink.clears != 0 || sink.appends != 0 || persists != 0 || sink.invalidates != 0 || extras != 0 {
 				t.Errorf("success tail ran on failure: clears=%d appends=%d persists=%d invalidates=%d extras=%d",
 					sink.clears, sink.appends, persists, sink.invalidates, extras)
+			}
+		})
+	}
+}
+
+// TestClassifyMutationErr_NotFoundJoin pins the seam where the #445 arm appends
+// its own sentence to Linear's message. Linear's canonical not-found text ends
+// in a full stop, so joining onto it raw rendered "...referenced Issue.. The
+// referenced entity no longer exists..." — a typo in the one sentence the arm
+// exists to make an agent trust. Both spellings must read as one sentence
+// followed by another, and both must keep the verdict's substrings.
+func TestClassifyMutationErr_NotFoundJoin(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string // the join, rendered exactly
+	}{
+		{
+			name: "a server message ending in a full stop gets exactly one",
+			err:  &api.GraphQLError{Message: "Entity not found: Issue - Could not find referenced Issue."},
+			want: "referenced Issue. The referenced entity no longer exists on Linear",
+		},
+		{
+			name: "a server message with no trailing stop still gets its separator",
+			err:  &api.GraphQLError{Message: "Entity not found: Issue"},
+			want: "Entity not found: Issue. The referenced entity no longer exists on Linear",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, errno := classifyMutationErr("update issue", tc.err)
+
+			if errno != syscall.ENOENT {
+				t.Fatalf("errno = %v, want ENOENT", errno)
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf(".error = %q, want it to contain %q", msg, tc.want)
+			}
+			if strings.Contains(msg, "..") {
+				t.Errorf(".error = %q, want no doubled full stop", msg)
+			}
+			for _, keep := range []string{"no longer exists on Linear", "retrying will NOT help"} {
+				if !strings.Contains(msg, keep) {
+					t.Errorf(".error = %q, want it to contain %q", msg, keep)
+				}
 			}
 		})
 	}

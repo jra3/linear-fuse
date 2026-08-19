@@ -214,9 +214,21 @@ transient, which stays a `retryableCreateErr` concern; `api.IsNotFound` — the
 "Entity not found" rejection; `api.IsUsageLimited` — a workspace over its plan
 limit, disjoint from `IsRateLimited` because no wait clears it), the single
 owners the client's GraphQL-errors branch, the sync worker's backoff, and the
-repo's orphan defense also delegate to. Arm order matters: the arms keyed on a
-condition Linear does not reliably tag (`EDQUOT`, `EMSGSIZE`) sit above the
-`userError` gate so their errno never depends on a server-set bit (#409).
+repo's orphan defense also delegate to. `IsNotFound` carries opposite verdicts
+by tail: a server-side not-found on a create/edit/rename is `ENOENT` (the
+reference is gone, and retrying earns the same rejection — it used to fall to
+the retryable-sounding `EIO`, #445), while the delete tail's *mutate* step
+claims it first via `remoteAlreadyGone`, where already-gone is idempotent
+success — a delete whose *find* fails that way is not behind that gate and does
+classify. Arm order matters twice over: the arms keyed on a condition Linear
+does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit above the `userError`
+gate so their errno never depends on a server-set bit (#409, #445); and those
+same three, which answer on message TEXT, sit below the arms that answer on
+error STRUCTURE (`*notFoundError`, `*FieldError`, `retryableCreateErr`), because
+the text can be the caller's own echoed input. `IsNotFound` is anchored for the
+same reason `IsUsageLimited` is — the phrase must open a message, not merely
+appear inside one — so a `status: Entity not found` typo cannot pick its own
+errno, and a throttle never reads as permanently gone.
 
 For status updates the front half is the shared `marshal.MarkdownToStatusUpdate`
 (one parser for both project and initiative updates — see [[entity-parse]]): an
@@ -243,12 +255,13 @@ forever): the connection-level `busy_timeout` DSN pragma makes the race rare,
 the tail retries a failed forget through the shared `retrySQLite` gate (see
 [[persist-gate]]) and, on exhaustion (a wedge), **fails loud** — `.error` naming
 the self-heal + `EIO`, skipping `InvalidateDeleted` since the phantom row is
-still present (#278). A delete of an entity Linear already lacks ("Entity not
-found") is **idempotent success** — the row is still forgotten, so re-`rm`ing a
-phantom heals it (and is exactly the recovery the forget-exhaustion `.error`
-names) — and the details sync **prunes** rows a (provably complete, sub-page-cap)
-fetch no longer returns, scoped by issue and a pre-fetch `synced_at` cutoff so
-rows created mid-fetch survive.
+still present (#278). A delete whose *mutate* step says Linear already lacks the
+entity ("Entity not found") is **idempotent success** — the row is still
+forgotten, so re-`rm`ing a phantom heals it (and is exactly the recovery the
+forget-exhaustion `.error` names); the same rejection from the *find* step is not
+behind that gate and classifies (`ENOENT`) — and the details sync **prunes** rows
+a (provably complete, sub-page-cap) fetch no longer returns, scoped by issue and
+a pre-fetch `synced_at` cutoff so rows created mid-fetch survive.
 
 ### Rename tail (`commitRename`)
 The **deep module** owning the invariant tail of every *entity* rename — a
