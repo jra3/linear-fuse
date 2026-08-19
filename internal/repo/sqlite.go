@@ -668,8 +668,19 @@ func (r *SQLiteRepository) GetTeamLabels(ctx context.Context, teamID string) ([]
 		// TTL flavor: api.Label carries no timestamps, so there is no change
 		// event to compare against — the same reason the catalog has no
 		// mtime worth reporting (see LabelsNode.collection's metaTimes).
+		//
+		// Freshness is the team's own catalog stamp, not an aggregate over
+		// the rows it serves: the rows are shared (workspace labels appear in
+		// every team's catalog) and an empty catalog has no rows to carry a
+		// timestamp at all. See db.TeamLabelsScheduleKey. A missing stamp is a
+		// query error here, which swrStale already reads as never-synced, so
+		// one refresh fires, stamps, and the surface goes quiet.
 		syncedAt: func() (interface{}, error) {
-			return r.store.Queries().GetTeamLabelsSyncedAt(context.Background(), sql.NullString{String: teamID, Valid: true})
+			stamp, err := r.store.Queries().GetSyncSchedule(context.Background(), db.TeamLabelsScheduleKey(teamID))
+			if err != nil {
+				return nil, err
+			}
+			return stamp, nil
 		},
 		refresh: func(ctx context.Context) error {
 			return r.refreshTeamLabels(ctx, teamID)
@@ -696,6 +707,13 @@ func (r *SQLiteRepository) GetTeamLabels(ctx context.Context, teamID string) ([]
 // = ?, so those workspace rows (team_id NULL) are untouched by it, exactly as
 // in syncTeamMetadata. The cutoff is taken BEFORE the fetch so a row this pass
 // re-stamps cannot fall behind its own cutoff.
+//
+// A clean pass then stamps the team's catalog key — including a pass that
+// fetched ZERO labels, which is the whole reason the stamp is not derived
+// from the rows. The clean gate is the detail_synced_at discipline
+// (refreshIssueDetails): a pass whose upserts did not all land stays
+// unstamped, so it reads stale and retriggers, and a FAILED fetch returns
+// above without touching the previous stamp.
 func (r *SQLiteRepository) refreshTeamLabels(ctx context.Context, teamID string) error {
 	pruneCutoff := db.Now()
 	labels, err := r.client.GetTeamLabels(ctx, teamID)
@@ -703,7 +721,7 @@ func (r *SQLiteRepository) refreshTeamLabels(ctx context.Context, teamID string)
 		return err
 	}
 
-	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
+	clean := reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
 		Label: "team label " + teamID,
 		Kind:  "label",
 		Items: labels,
@@ -721,6 +739,15 @@ func (r *SQLiteRepository) refreshTeamLabels(ctx context.Context, teamID string)
 			})
 		},
 	})
+
+	if clean {
+		if err := r.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+			Key:     db.TeamLabelsScheduleKey(teamID),
+			LastRun: db.Now(),
+		}); err != nil {
+			log.Printf("[repo] stamp label catalog for team %s: %v", teamID, err)
+		}
+	}
 	return nil
 }
 

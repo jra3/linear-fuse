@@ -1616,10 +1616,13 @@ there — prunes-when-complete, the clean guard, and embedded-file extraction,
 none of which its old hand-rolled upsert loops carried.
 
 ### SWR refresh coordinator (`swrRefresh`)
-The repo's six stale-while-revalidate surfaces — issue details, issue
-history, project/initiative documents, project/initiative updates — route
-through one coordinator, `maybeRefreshSWR(swrSpec)` in
-`internal/repo/swr.go`. Before it, two staleness policies lived in three
+EVERY stale-while-revalidate surface the repo has routes through one
+coordinator, `maybeRefreshSWR(swrSpec)` in `internal/repo/swr.go` — that is
+the invariant, and it is stated rather than tallied because the tally drifts
+each time a surface is added (this paragraph and the two code comments all
+still said "six" long after they weren't).
+
+Before it, two staleness policies lived in three
 implementations (the TTL `staleSince`/`maybeRefresh` pair; the event-driven
 `issue.updatedAt > synced_at` comparison hand-copied in
 `MaybeRefreshIssueDetails` and `maybeRefreshHistory`), the history fetch

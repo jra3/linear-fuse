@@ -55,8 +55,11 @@ func labelServer(t *testing.T, calls *atomic.Int32, labels ...api.Label) *api.Cl
 	return client
 }
 
-// seedLabel writes a label row with an explicit synced_at, so a test can place
-// the catalog on either side of the staleness threshold.
+// seedLabel writes a label row with an explicit synced_at. Times come from
+// db.Now() (UTC), never time.Now(): synced_at strings keep their zone verbatim
+// and the prune compares them textually, so a local-zone seed sorts by its
+// wall-clock face and a positive-offset TZ would read an hour-old row as newer
+// than the cutoff (internal/sync/prune_test.go states the invariant).
 func seedLabel(t *testing.T, store *db.Store, label api.Label, syncedAt time.Time) {
 	t.Helper()
 	params, err := db.APILabelToDBLabel(label)
@@ -67,6 +70,45 @@ func seedLabel(t *testing.T, store *db.Store, label api.Label, syncedAt time.Tim
 	if err := store.Queries().UpsertLabel(context.Background(), params); err != nil {
 		t.Fatalf("seed %s: %v", label.ID, err)
 	}
+}
+
+// seedCatalogStamp places a team's label-catalog freshness stamp, the signal
+// the SWR trigger actually reads. It is deliberately independent of the label
+// rows — see db.TeamLabelsScheduleKey.
+func seedCatalogStamp(t *testing.T, store *db.Store, teamID string, at time.Time) {
+	t.Helper()
+	if err := store.Queries().UpsertSyncSchedule(context.Background(), db.UpsertSyncScheduleParams{
+		Key:     db.TeamLabelsScheduleKey(teamID),
+		LastRun: at,
+	}); err != nil {
+		t.Fatalf("seed catalog stamp %s: %v", teamID, err)
+	}
+}
+
+// catalogStamp reads a team's stamp back; ok=false means no row (never
+// stamped), which is what a never-synced catalog and a failed refresh both
+// look like.
+func catalogStamp(t *testing.T, store *db.Store, teamID string) (time.Time, bool) {
+	t.Helper()
+	at, err := store.Queries().GetSyncSchedule(context.Background(), db.TeamLabelsScheduleKey(teamID))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
+// waitForCatalogStamp polls for the background refresh's stamp, the same
+// "lands within a bound" shape as waitForDescription.
+func waitForCatalogStamp(t *testing.T, store *db.Store, teamID string) bool {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := catalogStamp(t, store, teamID); ok {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 func labelByID(t *testing.T, labels []api.Label, id string) *api.Label {
@@ -107,11 +149,12 @@ func TestGetTeamLabelsTriggersRefreshWhenStale(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	stale := time.Now().Add(-defaultStalenessThreshold - time.Minute)
+	stale := db.Now().Add(-defaultStalenessThreshold - time.Minute)
 	seedLabel(t, store, api.Label{
 		ID: "l-home", Name: "@home", Color: "#95A2B3",
 		Description: "STALE-DESCRIPTION", Team: &api.Team{ID: "team-1"},
 	}, stale)
+	seedCatalogStamp(t, store, "team-1", stale)
 
 	var calls atomic.Int32
 	client := labelServer(t, &calls, api.Label{
@@ -160,7 +203,8 @@ func TestGetTeamLabelsFreshCatalogTouchesNothing(t *testing.T) {
 
 	seedLabel(t, store, api.Label{
 		ID: "l-fresh", Name: "quick", Team: &api.Team{ID: "team-1"},
-	}, time.Now())
+	}, db.Now())
+	seedCatalogStamp(t, store, "team-1", db.Now())
 
 	var calls atomic.Int32
 	repo := NewSQLiteRepository(store, labelServer(t, &calls))
@@ -177,37 +221,87 @@ func TestGetTeamLabelsFreshCatalogTouchesNothing(t *testing.T) {
 	}
 }
 
-// TestGetTeamLabelsSyncedAtCountsWorkspaceLabels pins the freshness query's
-// scope against a specific trap. ListTeamLabels serves the team's own labels
-// AND the workspace labels (team_id NULL); scoping the MAX(synced_at) to
-// team_id alone would read NULL — "never synced" — for a team whose labels are
-// all workspace-scoped, and a never-synced verdict re-fires on EVERY browse.
-// That is the permanent per-browse API loop MaybeRefreshIssueDetails was
-// rewritten to escape.
-func TestGetTeamLabelsSyncedAtCountsWorkspaceLabels(t *testing.T) {
+// TestGetTeamLabelsEmptyCatalogRefreshesOnceThenQuiets pins why freshness is a
+// stamp and not an aggregate over the label rows. A team with NO labels — its
+// own or workspace-scoped — has no row to carry a synced_at, so a row-derived
+// signal reads "never synced" forever: the refresh fetches an empty catalog,
+// upserts nothing, and every following browse re-fires it. That is the
+// permanent per-browse API loop detail_synced_at was introduced to escape, and
+// this path is hot (the labels/ listing, each label file's Lookup, labels.md,
+// the by/label views, the write path's resolver all land here). The stamp is
+// written by the refresh itself, so the empty catalog converges: one fetch.
+func TestGetTeamLabelsEmptyCatalogRefreshesOnceThenQuiets(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	// A workspace label only: no row carries team_id = team-1.
-	seedLabel(t, store, api.Label{ID: "l-ws", Name: "Bug"}, time.Now())
 
 	var calls atomic.Int32
 	repo := NewSQLiteRepository(store, labelServer(t, &calls))
 	defer repo.Close()
 
+	got, err := repo.GetTeamLabels(context.Background(), "team-1")
+	if err != nil {
+		t.Fatalf("GetTeamLabels: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected an empty catalog, got %+v", got)
+	}
+	if !waitForCatalogStamp(t, store, "team-1") {
+		t.Fatal("an empty catalog never recorded that it was checked")
+	}
+
 	for i := 0; i < 3; i++ {
-		got, err := repo.GetTeamLabels(context.Background(), "team-1")
-		if err != nil {
+		if _, err := repo.GetTeamLabels(context.Background(), "team-1"); err != nil {
 			t.Fatalf("GetTeamLabels: %v", err)
-		}
-		if len(got) != 1 {
-			t.Fatalf("workspace label not served to the team: %+v", got)
 		}
 	}
 	time.Sleep(200 * time.Millisecond)
-	if n := calls.Load(); n != 0 {
-		t.Errorf("workspace-only catalog read as never-synced: %d fetches, want 0", n)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("label-less team fetched %d times; want exactly 1", n)
+	}
+}
+
+// TestGetTeamLabelsStampIsPerTeam pins the other hole a row-derived signal
+// has. A team's catalog is its own labels PLUS the workspace labels (team_id
+// NULL), and those rows are SHARED: an aggregate over that union lets team-1's
+// refresh re-stamp the workspace rows and so declare team-2 fresh, suppressing
+// exactly the refresh #475 exists to fire. Each team's stamp is its own, so
+// team-2's first read still goes to the network.
+func TestGetTeamLabelsStampIsPerTeam(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// The shared row both teams' catalogs serve, plus one label each.
+	seedLabel(t, store, api.Label{ID: "l-ws", Name: "Bug"}, db.Now())
+	seedLabel(t, store, api.Label{ID: "l-one", Name: "one", Team: &api.Team{ID: "team-1"}}, db.Now())
+	seedLabel(t, store, api.Label{ID: "l-two", Name: "two", Team: &api.Team{ID: "team-2"}}, db.Now())
+
+	var calls atomic.Int32
+	repo := NewSQLiteRepository(store, labelServer(t, &calls,
+		api.Label{ID: "l-ws", Name: "Bug"},
+		api.Label{ID: "l-one", Name: "one", Team: &api.Team{ID: "team-1"}}))
+	defer repo.Close()
+
+	if _, err := repo.GetTeamLabels(context.Background(), "team-1"); err != nil {
+		t.Fatalf("team-1 GetTeamLabels: %v", err)
+	}
+	if !waitForCatalogStamp(t, store, "team-1") {
+		t.Fatal("team-1's refresh never stamped its catalog")
+	}
+	if _, ok := catalogStamp(t, store, "team-2"); ok {
+		t.Fatal("team-1's refresh stamped team-2's catalog")
+	}
+
+	// team-2 has never been refreshed, so its own read must still fire.
+	if _, err := repo.GetTeamLabels(context.Background(), "team-2"); err != nil {
+		t.Fatalf("team-2 GetTeamLabels: %v", err)
+	}
+	if !waitForCatalogStamp(t, store, "team-2") {
+		t.Fatal("team-2 read as fresh off team-1's refresh: no refresh fired")
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("expected one fetch per team, got %d", n)
 	}
 }
 
@@ -223,7 +317,7 @@ func TestRefreshTeamLabelsPrunes(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	old := time.Now().Add(-time.Hour)
+	old := db.Now().Add(-time.Hour)
 	seedLabel(t, store, api.Label{ID: "l-keep", Name: "keep", Team: &api.Team{ID: "team-1"}}, old)
 	seedLabel(t, store, api.Label{ID: "l-deleted", Name: "gone", Team: &api.Team{ID: "team-1"}}, old)
 	seedLabel(t, store, api.Label{ID: "l-other-team", Name: "theirs", Team: &api.Team{ID: "team-2"}}, old)
@@ -252,6 +346,10 @@ func TestRefreshTeamLabelsPrunes(t *testing.T) {
 			t.Errorf("%s: gone=%v want %v (err=%v)", tc.id, gone, tc.wantGone, err)
 		}
 	}
+
+	if _, ok := catalogStamp(t, store, "team-1"); !ok {
+		t.Error("a clean drained pass left the catalog unstamped")
+	}
 }
 
 // TestRefreshTeamLabelsFailureKeepsRows: a failed fetch must leave the cache
@@ -263,7 +361,7 @@ func TestRefreshTeamLabelsFailureKeepsRows(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	seedLabel(t, store, api.Label{ID: "l-keep", Name: "keep", Team: &api.Team{ID: "team-1"}}, time.Now().Add(-time.Hour))
+	seedLabel(t, store, api.Label{ID: "l-keep", Name: "keep", Team: &api.Team{ID: "team-1"}}, db.Now().Add(-time.Hour))
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
@@ -279,5 +377,55 @@ func TestRefreshTeamLabelsFailureKeepsRows(t *testing.T) {
 	}
 	if _, err := store.Queries().GetLabel(ctx, "l-keep"); err != nil {
 		t.Errorf("failed refresh removed a cached label: %v", err)
+	}
+}
+
+// TestRefreshTeamLabelsFailureLeavesStampAlone: a failed fetch must not record
+// that the catalog was checked. Stamping one would suppress the next read's
+// refresh for the whole threshold, converting a transient API failure into
+// five more minutes of the staleness #475 is about — so the previous stamp
+// stands untouched and the next read retries.
+func TestRefreshTeamLabelsFailureLeavesStampAlone(t *testing.T) {
+	t.Parallel()
+	store, cleanup := setupTestDB(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	stale := db.Now().Add(-defaultStalenessThreshold - time.Minute)
+	seedCatalogStamp(t, store, "team-1", stale)
+
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	client := api.NewClient("test-key")
+	client.SetAPIURL(srv.URL)
+	repo := NewSQLiteRepository(store, client)
+	defer repo.Close()
+
+	if err := repo.refreshTeamLabels(ctx, "team-1"); err == nil {
+		t.Fatal("expected the failed fetch to return an error")
+	}
+	at, ok := catalogStamp(t, store, "team-1")
+	if !ok {
+		t.Fatal("failed refresh deleted the previous stamp")
+	}
+	if at.After(stale) {
+		t.Fatalf("failed refresh advanced the stamp to %s (was %s)", at, stale)
+	}
+
+	// Still stale, so the read path tries again rather than going quiet.
+	before := calls.Load()
+	if _, err := repo.GetTeamLabels(ctx, "team-1"); err != nil {
+		t.Fatalf("GetTeamLabels: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && calls.Load() == before {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if calls.Load() == before {
+		t.Error("the read after a failed refresh did not retry")
 	}
 }

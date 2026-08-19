@@ -3,10 +3,10 @@ package repo
 // swrRefresh coordinator: the one owner of the repo's stale-while-revalidate
 // policy. EVERY SWR surface routes through maybeRefreshSWR with a swrSpec —
 // that is the invariant, not the tally, which drifts every time a surface is
-// added (this comment and its twin in metrics.go both still said "six" at
-// nine). The module owns the staleness decision (both flavors), the typed
-// dedup key, and the orphan-on-not-found classification that the individual
-// refresh tails used to each restate by hand.
+// added (this comment and its twin in metrics.go both still said "six" long
+// after they weren't). The module owns the staleness decision (both flavors),
+// the typed dedup key, and the orphan-on-not-found classification that the
+// individual refresh tails used to each restate by hand.
 
 import (
 	"context"
@@ -46,7 +46,8 @@ type swrSpec struct {
 
 	// syncedAt returns the raw last-sync instant (a MAX() aggregate for the
 	// doc/update surfaces, the issues.detail_synced_at stamp for issue
-	// details — nil means never synced); the module applies parseTime.
+	// details, a sync_schedule stamp for the team label catalog — nil means
+	// never synced); the module applies parseTime.
 	syncedAt func() (interface{}, error)
 
 	// changedAt selects the staleness flavor: nil means TTL (threshold-driven);

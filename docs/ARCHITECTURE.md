@@ -540,6 +540,17 @@ appears.
   leave the cache between full sync cycles. Without it, labels reached SQLite
   only on the full cycle, so a remote label edit was invisible for
   `FullSyncInterval + Interval` — ~12 min, measured (#475).
+  Its freshness is a **per-team stamp** in `sync_schedule`
+  (`db.TeamLabelsScheduleKey`), not an aggregate over the label rows: the rows
+  are shared (a team's catalog is its own labels plus the workspace ones), so a
+  row-derived signal lets one team's refresh declare every other team fresh,
+  and a legitimately empty catalog has no row to stamp at all — the permanent
+  per-browse refetch loop `detail_synced_at` exists to avoid. The refresh
+  stamps the key on a clean pass (a zero-label fetch included); **the sync
+  worker's `syncTeamMetadata` stamps the same key**, so a read moments after a
+  full cycle does not re-drain what the cycle just persisted. It is the one
+  schedule key written by both packages, which is why the factory lives in
+  `internal/db` — `internal/sync` and `internal/repo` do not import each other.
 - **Orphan handling:** a refresh that hits Linear's "Entity not found"
   cascade-deletes the local rows (issue → its comments/docs/attachments/
   relations/history; likewise projects and initiatives) and schedules a

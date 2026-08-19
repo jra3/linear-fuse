@@ -849,12 +849,13 @@ func (c *Client) RemoveProjectFromInitiative(ctx context.Context, projectID, ini
 // behind the repository's label SWR refresh (#475).
 //
 // It is deliberately NOT GetTeamMetadata: that query drags states, cycles,
-// members and the team's projects along with the labels, and refuses under
-// the LowBudget preflight — so a read-triggered refresh built on it would pay
-// for four collections nobody asked for and then go silent exactly when the
-// workspace is busiest. Same query text and same page size as the combined
-// query's own labels drain (queryTeamLabelsPage), so both project through
-// LabelFields and see identical fields.
+// members and the team's projects along with the labels, so a read-triggered
+// refresh built on it would pay for four collections nobody asked for. The
+// saving is cost, not availability — this drain checks LowBudget too
+// (drainFrom, before the first page), so it refuses on exactly the same
+// terms; it just pays less for the same refusal. Same query text and same
+// page size as the combined query's own labels drain (queryTeamLabelsPage),
+// so both project through LabelFields and see identical fields.
 //
 // The result is the COMPLETE set, which is what licenses the caller's prune.
 // Like the combined query, team.labels mixes workspace labels in with the
