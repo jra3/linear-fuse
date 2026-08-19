@@ -754,4 +754,53 @@ func TestEditFlushRestoreAndTheWritesThatFollow(t *testing.T) {
 			t.Errorf("front half saw %q, want %q", sent, want)
 		}
 	})
+
+	t.Run("the zero-fill rejection's restore is attributed too", func(t *testing.T) {
+		t.Parallel()
+		// The zero-fill verdict (#472) restores the render exactly as the empty one
+		// does, so it has to arm the same mark: its .error tells the writer to
+		// "write the WHOLE document back from offset 0", and on the SAME open fd a
+		// document shorter than the restored render would otherwise keep the
+		// render's tail — #454's splice, reached by following the instructions.
+		eb := &editBuffer{content: []byte(render)}
+		sink := &recordingFlushSink{}
+		spec := editFlushSpec[fakeEntity]{
+			mutate: func(context.Context) (bool, syscall.Errno) { return true, 0 },
+			writeBack: writeBackSpec[fakeEntity]{
+				errKey:  "k",
+				op:      "save issue ENG-1",
+				fetch:   func(context.Context) (*fakeEntity, error) { return &fakeEntity{v: 1}, nil },
+				compare: func(*fakeEntity) []writeBackResult { return nil },
+			},
+			adopt:     func(*fakeEntity) {},
+			restore:   func() []byte { return []byte(render) },
+			coherence: []uint64{1},
+			pinIno:    1,
+		}
+
+		h, _, _ := eb.Open(context.Background(), 0)
+
+		// O_TRUNC, then a pwrite past EOF: the buffer is hole + bytes.
+		zero := &fuse.SetAttrIn{}
+		zero.Valid = fuse.FATTR_SIZE
+		zero.Size = 0
+		eb.Setattr(context.Background(), nil, zero, &fuse.AttrOut{})
+		eb.Write(context.Background(), h, []byte("hello"), 10)
+
+		if errno := editFlush(context.Background(), sink, eb, h, spec); errno != syscall.EINVAL {
+			t.Fatalf("flush of a zero-filled buffer errno = %v, want EINVAL", errno)
+		}
+		if string(eb.content) != render {
+			t.Fatalf("rejected zero-filled write left content = %q, want the entity's render restored", eb.content)
+		}
+
+		// The prescribed recovery, on the same descriptor: the whole document from
+		// offset 0, shorter than the render.
+		const short = "---\ntitle: \"SHORT\"\n---\nSHORT\n"
+		eb.Write(context.Background(), h, []byte(short), 0)
+		if string(eb.content) != short {
+			t.Errorf("buffer after the corrective write = %q, want exactly %q — the restored image spliced through",
+				eb.content, short)
+		}
+	})
 }

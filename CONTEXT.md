@@ -834,13 +834,17 @@ pin, not this flag, is what survives the node. See [[node-refresh]].
 `Open` returns an **`editHandle`**, the per-open handle that carries the
 **pending truncation** of #454. A truncation empties the buffer (a `Setattr` to
 size 0, or `truncateBuffer` for a `collectionDir` O_TRUNC `Create`), and if
-[[edit-flush]]'s empty-write rejection then RESTORES the entity's render into it —
-which the kernel interleaves between a `>` redirect's truncate and its write — the
-buffer holds bytes nobody wrote while the FILE is still logically zero. `editFlush`
-marks that on the handle its flush arrived on; that handle's next `Write` or
-`Setattr` empties the buffer again first, so the restored image never shows
-through — neither as a surviving tail nor as a zero-filled hole's contents — and a
-resize sizes the emptied file rather than the resurrected one.
+[[edit-flush]]'s refused-write rejection then RESTORES the entity's render into
+it — which the kernel interleaves between a `>` redirect's truncate and its
+write — the buffer holds bytes nobody wrote while the FILE is still logically
+zero. `editFlush` marks that on the handle its flush arrived on; that handle's
+next `Write` or `Setattr` empties the buffer again first, so the restored image
+never shows through — neither as a surviving tail nor as a zero-filled hole's
+contents — and a resize sizes the emptied file rather than the resurrected one.
+Both arms of the rejection arm it, the zero-filled one included (#472): its
+`.error` prescribes writing the whole document back **from offset 0**, and on the
+same descriptor a document shorter than the restored render would otherwise keep
+that render's tail — #454's splice, reached by following the instructions.
 **Scoping it to the handle is the contract.** A mark on the buffer outlives its
 writer and clips the next unrelated write; clearing one on `Open` or `refresh`
 hands it to any concurrent `cat` in the restore→write window and reopens #454.

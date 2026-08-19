@@ -210,7 +210,7 @@ type editFlushSpec[T any] struct {
 // editFlush runs the invariant shell of a file node's Flush. eb is the node's
 // embedded editBuffer (the shell owns the lock, the clean/empty guard, and the
 // dirty flag); fh is the FUSE file handle the Flush arrived on, which the
-// empty-write restore attributes its bytes to (#454, see editHandle); sink
+// refused-write restore attributes its bytes to (#454, see editHandle); sink
 // carries the error + invalidation surfaces; spec supplies the per-entity front
 // half, commit tail, adopt, and invalidation set.
 //
@@ -285,8 +285,8 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, f
 		return syscall.EINVAL
 	}
 
-	// Past the empty guard the buffer holds content somebody actually wrote, so
-	// any restore this handle was still carrying is spent.
+	// Past the rejection guard the buffer holds content somebody actually wrote,
+	// so any restore this handle was still carrying is spent.
 	_ = eb.takeTruncation(fh)
 
 	// Bound the API work — the front half and the commit tail both call Linear.

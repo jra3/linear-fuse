@@ -73,12 +73,19 @@ type editBuffer struct {
 // unset — an explicit ftruncate(2) does carry one). The flush that restores does
 // carry it, and it is the only moment that matters: until something restores, an
 // emptied buffer IS empty and any write to it is already correct.
+//
+// The zero-fill rejection (#472) restores on the same terms and therefore arms
+// the same mark: the recovery its .error prescribes is "write the WHOLE document
+// back from offset 0", and on the same open fd a document SHORTER than the
+// restored render would otherwise keep the render's tail — the original splice,
+// reached by following the instructions.
 type editHandle struct {
-	// truncatedRestore says an intervening flush restored the entity's render
-	// into a buffer THIS handle had emptied, so the file is still logically zero
-	// bytes whatever content holds. Guarded by the owning editBuffer's mu, not by
-	// the handle: every reader and writer of it (Write, Setattr, editFlush) already
-	// runs under that lock, and a handle belongs to exactly one buffer.
+	// truncatedRestore says a refused flush on THIS handle put the entity's render
+	// back into the buffer this handle had emptied (or, on the zero-fill arm, left
+	// refused), so what content holds is bytes NOBODY WROTE and the file this
+	// handle writes next starts empty again. Guarded by the owning editBuffer's mu,
+	// not by the handle: every reader and writer of it (Write, Setattr, editFlush)
+	// already runs under that lock, and a handle belongs to exactly one buffer.
 	truncatedRestore bool
 }
 
@@ -144,10 +151,10 @@ func (b *editBuffer) takeTruncation(f fs.FileHandle) bool {
 	return true
 }
 
-// markRestored attributes a just-restored image to the handle whose flush
-// restored it (see editHandle). The caller holds b.mu. A nil or foreign handle —
-// the atomic-save path flushes with none — records nothing, which is correct:
-// there is no writer to continue.
+// markRestored attributes a just-restored image to the handle whose refused
+// flush restored it (see editHandle). The caller holds b.mu. A nil or foreign
+// handle — the atomic-save path flushes with none — records nothing, which is
+// correct: there is no writer to continue.
 func (b *editBuffer) markRestored(f fs.FileHandle) {
 	if h, ok := f.(*editHandle); ok {
 		h.truncatedRestore = true
@@ -195,9 +202,9 @@ func (b *editBuffer) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// This handle's pending truncation still bounds its write (#454). If an
-	// intervening flush restored the entity's render into the buffer THIS handle
-	// emptied, the file is nonetheless logically empty, so empty it again before
+	// This handle's pending truncation still bounds its write (#454). If a refused
+	// flush restored the entity's render into the buffer THIS handle emptied, the
+	// file is nonetheless logically empty, so empty it again before
 	// applying the data: the result is exactly what writing into the truncated
 	// buffer would have produced — the data at off, and a zero-filled hole before
 	// it, with no byte of the restored image showing through at either end. A
