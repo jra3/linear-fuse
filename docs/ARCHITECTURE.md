@@ -247,7 +247,14 @@ Operational guards:
   over a plan/usage limit) is likewise disjoint from `IsRateLimited`: a request
   budget clears when the window resets, so waiting is the fix, whereas no wait
   clears a plan wall — which is why it maps to `EDQUOT` rather than the
-  retryable `EAGAIN` (#409). `IsDeferred` (a local budget deferral: `ErrDeferred` or the
+  retryable `EAGAIN` (#409). `IsNotFound` is disjoint from `IsRateLimited` for a
+  sharper reason: a throttled rejection is not proof the entity is gone, and the
+  delete tail reads not-found as idempotent success, so without that precedence a
+  throttled delete forgets the local row for an entity Linear still has (#445).
+  `IsNotFound` and `IsUsageLimited` are both anchored against Linear's own text —
+  the phrase must CONSTITUTE the server's message, not merely appear inside it —
+  because Linear echoes caller-supplied names back in its rejections (#445).
+  `IsDeferred` (a local budget deferral: `ErrDeferred` or the
   pagination `ErrBudget`) is deliberately *excluded* from `IsRateLimited`: a
   server rate limit warrants a long pause until the window resets, but a local
   admission-ladder defer clears next cycle, so the sync worker skips-this-cycle
@@ -955,11 +962,16 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   raise the plan limit, then retry), while the `ENOENT` reference is gone for
   good, so the only action left is to drop or repoint the reference. The text
   names no reconciling read, deliberately: the failed write prunes nothing, and
-  no read of the entity's own files reaches an orphan-carrying SWR spec
-  (`issue.md` renders from the dir manifest's captured value, `issue.meta` is a
-  plain `GetIssueByIdentifier`), so the cache-served listing can keep showing the
-  entity until the worker's reconcile sweep (`reconcileIssuesForTeam` →
-  `deleteOrphanIssue`) removes it (#409/#445).
+  the reads an agent reaches for first do not prune either (`issue.md` renders
+  from the dir manifest's captured value, `issue.meta` is a plain
+  `GetIssueByIdentifier`). Sibling reads that *do* — `history.md` and the
+  `comments/`/`docs/`/`attachments/` listings route through orphan-carrying SWR
+  specs (`historySpec` and `MaybeRefreshIssueDetails`, both classifying to
+  `deleteOrphanIssue`) — prune as a background side effect, which is not a
+  recovery step to hand an agent, so the `.error` promises only that the
+  cache-served listing can keep showing the entity until a sync cycle or the
+  worker's reconcile sweep (`reconcileIssuesForTeam` → `deleteOrphanIssue`)
+  removes it (#409/#445).
 - **Empty and zero-filled writes are refused at the shell:** `editFlush` rejects
   a flush whose buffer is empty, whitespace-only, or carries NUL bytes with
   `EINVAL` before any handler's front half runs. The predicate is the pure
