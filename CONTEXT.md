@@ -230,6 +230,25 @@ same reason `IsUsageLimited` is — the phrase must open a message, not merely
 appear inside one — so a `status: Entity not found` typo cannot pick its own
 errno, and a throttle never reads as permanently gone.
 
+`IsUsageLimited` is message-shaped because Linear's `extensions.code` for that
+rejection has never been *observed* — and could not be, after the fact, because
+`(*api.GraphQLError).Error()` renders the message alone and every log site used
+`%v`. The client now writes the decoded rejection down where it is still in hand
+(`LogDetail()` — message plus `code`/`type`/`userError`/`userPresentableMessage`,
+empty fields included, since "Linear sent no code" is the observation being
+waited on), on its own log line and on the `requests.jsonl` line when the request
+debug log is on. `userPresentableMessage` is not optional there: Linear routinely
+rejects with the generic message "Argument Validation Error" and puts the quota
+or cap sentence only in that field, which is why this predicate and
+`IsFieldTooLong` both read it — record the other fields and not that one and the
+grep comes back empty for exactly the rejection being hunted. Only the FIRST of
+the response's errors is decoded, so the count rides on the `*GraphQLError`
+itself and both sinks record it beside the decoded first error — `errors=<n>` on
+the log line, an `errors` key on the JSONL one — since the census that asks "the
+only rejection, or the first of several?" is a jq pipeline over the artifact.
+Promoting a predicate to a structured check is then a grep over a run, not a
+reproduction (#448).
+
 For status updates the front half is the shared `marshal.MarkdownToStatusUpdate`
 (one parser for both project and initiative updates — see [[entity-parse]]): an
 explicitly-written unknown `health:` is a `FieldError` (→ `EINVAL`), never silently

@@ -122,6 +122,7 @@ type graphQLResponse struct {
 		Message    string `json:"message"`
 		Extensions struct {
 			Code                   string `json:"code"`
+			Type                   string `json:"type"`
 			UserError              bool   `json:"userError"`
 			UserPresentableMessage string `json:"userPresentableMessage"`
 		} `json:"extensions"`
@@ -138,11 +139,82 @@ type graphQLResponse struct {
 type GraphQLError struct {
 	Message                string
 	Code                   string
+	Type                   string
 	UserError              bool
 	UserPresentableMessage string
+
+	// ErrorCount is how many errors the response carried; this error is the
+	// first of them. Only the first is decoded, so the tally rides along on the
+	// rejection itself and reaches both sinks that record it — the process log
+	// line and the requests.jsonl error object. A census that finds an untagged
+	// rejection can then tell "that is all Linear sent" from "we kept the first
+	// of several and the tagged one was dropped" without leaving the artifact it
+	// is reading.
+	ErrorCount int
 }
 
 func (e *GraphQLError) Error() string { return "GraphQL error: " + e.Message }
+
+// LogDetail renders the whole decoded rejection — message plus every extension
+// field — as one greppable key=value line.
+//
+// Client.query is the single owner of this line: it is the one site that still
+// holds the decoded rejection, and it logs every rejection it returns. A caller
+// that already logs its own mutation failure needs no second copy and must not
+// reach for %v to get one — %v renders Error(), which is the message alone.
+//
+// Error() deliberately renders only the message (callers string-match it), so
+// logging a rejection with %v drops Code/Type/UserError at exactly the moment
+// they are most useful. That cost #409 its central question: a live run failed
+// 42 of 45 creates on "usage limit exceeded", and whether Linear had tagged
+// that rejection userError was unanswerable from any surviving artifact,
+// because the only thing written down was the message. IsUsageLimited is still
+// message-shaped for the same reason.
+//
+// So the empty fields print too: code="" is the evidence that Linear sent NO
+// code for this rejection, which is precisely the observation a structured
+// check is waiting on. Omitting them would record absence as silence again.
+// userPresentableMessage is no exception and prints unconditionally even though
+// it is usually empty — "does Linear attach a presentable message to a
+// usage-limit rejection?" is itself a census question, and a field that
+// disappears when unset answers it with silence either way.
+//
+// Every value is rendered with %q. These are remote, attacker-influenceable
+// strings (Linear echoes user-supplied entity names back in
+// UserPresentableMessage) going into a line-oriented log, so quoting is what
+// stops an embedded newline from forging a second log line.
+func (e *GraphQLError) LogDetail() string {
+	return fmt.Sprintf("message=%q code=%q type=%q userError=%t userPresentableMessage=%q",
+		e.Message, e.Code, e.Type, e.UserError, e.UserPresentableMessage)
+}
+
+// rejectionLogLine renders the process-log line for one GraphQL rejection. The
+// prefix carries the severity verdict and the body carries the evidence, so the
+// whole decision is one pure function a test can pin without capturing logs.
+//
+// ERROR is reserved for "something went wrong". A not-found rejection is a
+// routine, expected outcome in at least two paths — a delete of an entity
+// already gone upstream is SUCCESS (fs/deletecommit.go's remoteAlreadyGone) and
+// a refresh that 404s is the repo's ordinary orphan-cleanup signal
+// (repo/swr.go's orphanOnNotFound) — so it logs at a plain [api] prefix. It is
+// still written down in full: the point of #448 is to record what Linear sent,
+// and demoting the severity is not the same as dropping the evidence.
+//
+// e.ErrorCount is len(response.errors). Only the first becomes the returned
+// error, so the tally rides along: a census that finds an untagged rejection can
+// then tell "that is all Linear sent" from "we kept the first of several and the
+// tagged one was dropped".
+func rejectionLogLine(opName string, e *GraphQLError) string {
+	detail := fmt.Sprintf("%s errors=%d", e.LogDetail(), e.ErrorCount)
+	switch {
+	case IsRateLimited(e):
+		return fmt.Sprintf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, detail)
+	case IsNotFound(e):
+		return fmt.Sprintf("[api] %s rejected as not-found by Linear API: %s", opName, detail)
+	default:
+		return fmt.Sprintf("[api] ERROR: %s rejected by Linear API: %s", opName, detail)
+	}
+}
 
 func (c *Client) query(ctx context.Context, query string, variables map[string]any, result any) error {
 	// Extract operation name for stats and logging
@@ -290,10 +362,15 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		return queryErr
 	}
 
+	// The response body below is remote, uncapped and unescaped, so every LOG
+	// line renders it with %q — a body containing a newline would otherwise forge
+	// a second line in a line-oriented log. The ERROR STRINGS keep it raw on
+	// purpose: IsUsageLimited parses Linear's envelope out of exactly this text
+	// (envelopeMessageRe), and quoting would escape the JSON it reads.
 	if resp.StatusCode == http.StatusTooManyRequests {
 		adm.rateLimited(resp.Header)
 		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-		log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP 429): %s", opName, string(respBody))
+		log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP 429): %q", opName, string(respBody))
 		return queryErr
 	}
 
@@ -304,7 +381,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		// positive on issue content.
 		if strings.Contains(string(respBody), "RATELIMITED") {
 			adm.rateLimited(resp.Header)
-			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP %d): %s", opName, resp.StatusCode, string(respBody))
+			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP %d): %q", opName, resp.StatusCode, string(respBody))
 		} else {
 			adm.observe(resp.Header)
 		}
@@ -321,19 +398,24 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 
 	if len(gqlResp.Errors) > 0 {
 		first := gqlResp.Errors[0]
-		errMsg := first.Message
-		queryErr = &GraphQLError{
-			Message:                errMsg,
+		gqlErr := &GraphQLError{
+			Message:                first.Message,
 			Code:                   first.Extensions.Code,
+			Type:                   first.Extensions.Type,
 			UserError:              first.Extensions.UserError,
 			UserPresentableMessage: first.Extensions.UserPresentableMessage,
+			ErrorCount:             len(gqlResp.Errors),
 		}
+		queryErr = gqlErr
 		if IsRateLimited(queryErr) {
 			adm.rateLimited(resp.Header)
-			log.Printf("[ratelimit] ERROR: %s rate limited by Linear API: %s", opName, errMsg)
 		} else {
 			adm.observe(resp.Header)
 		}
+		// The one place a rejection's extensions are still in hand. Log the
+		// decoded set here rather than leaving it to a caller's %v, which renders
+		// Error() and keeps only the message (#448).
+		log.Print(rejectionLogLine(opName, gqlErr))
 		return queryErr
 	}
 

@@ -148,6 +148,36 @@ mount itself is always owner-only: FUSE denies other users by default, and
 LinearFS never sets `fuse.MountOptions.AllowOther` (the `allow_other` config
 key that once suggested otherwise was a dead knob, removed in #355).
 
+**What the request log carries (answered).** Not the key: it lives only in the
+`Authorization` header and nothing in the process renders headers, so neither
+sink below can reach it. What both sinks *do* carry is workspace-derived and
+remote-controlled. `requests.jsonl` already logged the full `vars` map (entity
+IDs, and on a mutation the content being written); since #448 a failed line also
+carries an `error` object — `message`, `code`, `type`, `user_error`,
+`user_presentable_message` — every string of it server-authored, and Linear
+routinely echoes user-supplied entity names back inside them ("The label 'X' is
+a group …"). The same decoded rejection lands in the **process log** (journald)
+on an always-on `<op> … by Linear API: <fields>` line (the prefix carries the
+severity verdict; `docs/ARCHITECTURE.md` owns that shape), which is new reach:
+server text now appears in the operator's log without the request log being
+enabled at all. So the artifact's sensitivity is unchanged in *kind* — it
+was already a workspace trace — but a rejection now quotes back the content that
+provoked it, and one sink is no longer opt-in.
+
+Three containments. `requests.jsonl` stays off by default and is `0600` inside a
+`0700` directory like every other artifact (below). Every remote string reaching
+either sink is escaped on the way in — `json.Marshal` for the JSONL, `%q` for
+every field of `GraphQLError.LogDetail()` and for the two raw-body log lines
+beside it — so a message containing a newline cannot forge a second line in a
+line-oriented log — TB1's discipline (neutralize a remote string before it
+becomes structure) applied to a log sink instead of a filename.
+And every string on a JSONL line is capped at 2 KB with an explicit truncation
+marker, because a non-GraphQL failure's message embeds the entire response body
+from an unbounded `io.ReadAll`: a proxy answering with a multi-MB error page
+would otherwise write one line the rotating writer lets through whole (it never
+splits a single oversize write) and no downstream reader can hold. Journald
+applies its own limits to the process-log side.
+
 **At-rest posture (enforced).** Every on-disk artifact LinearFS writes is
 owner-only: `0700` directories, `0600` files. The mode constants and the
 best-effort `Chmod` self-heal live in one place, `internal/atrest`, and every

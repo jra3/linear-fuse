@@ -1327,3 +1327,165 @@ func TestClient_GetWorkspaceInitiativeIDs(t *testing.T) {
 		t.Errorf("got %q, want i1", got)
 	}
 }
+
+// TestGraphQLErrorLogDetail pins the rendering the client logs in place of %v:
+// all five decoded fields, empty ones included. #409's central question — does
+// Linear tag "usage limit exceeded" with userError? — was unanswerable after a
+// live run precisely because the empty fields were never written down (#448).
+//
+// userPresentableMessage is in every want string, including where it is empty:
+// a field that vanishes when unset cannot distinguish "Linear sent none" from
+// "we did not write it down", which is the same defect one field over.
+func TestGraphQLErrorLogDetail(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  *GraphQLError
+		want string
+	}{
+		{
+			// The #409 shape: a bare message, every extension unset. The verdict
+			// this line records is "Linear sent no code and no userError bit".
+			name: "untagged rejection records the absences",
+			err:  &GraphQLError{Message: "usage limit exceeded"},
+			want: `message="usage limit exceeded" code="" type="" userError=false userPresentableMessage=""`,
+		},
+		{
+			name: "fully tagged rejection",
+			err: &GraphQLError{
+				Message:                "Argument Validation Error",
+				Code:                   "INPUT_ERROR",
+				Type:                   "invalid input",
+				UserError:              true,
+				UserPresentableMessage: "The label 'X' is a group.",
+			},
+			want: `message="Argument Validation Error" code="INPUT_ERROR" type="invalid input" userError=true userPresentableMessage="The label 'X' is a group."`,
+		},
+		{
+			name: "rate limit",
+			err:  &GraphQLError{Message: "rate limit exceeded", Code: "RATELIMITED"},
+			want: `message="rate limit exceeded" code="RATELIMITED" type="" userError=false userPresentableMessage=""`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.err.LogDetail(); got != tc.want {
+				t.Errorf("LogDetail() = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGraphQLErrorDecodesExtensionType pins that extensions.type survives the
+// decode. It is the field #409 needed and client.go did not decode at all, so a
+// classifier promoted to a structured check has something to key on.
+func TestGraphQLErrorDecodesExtensionType(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"errors":[{"message":"usage limit exceeded","extensions":{"code":"FEATURE_NOT_ACCESSIBLE","type":"usage limit","userError":true,"userPresentableMessage":"You are over your plan limit."}}]}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-api-key")
+	client.SetAPIURL(server.URL)
+
+	var result struct{}
+	err := client.query(context.Background(), `query TestOp { viewer { id } }`, nil, &result)
+	var gqlErr *GraphQLError
+	if !errors.As(err, &gqlErr) {
+		t.Fatalf("query error = %v, want *GraphQLError", err)
+	}
+	if gqlErr.Type != "usage limit" {
+		t.Errorf("Type = %q, want %q", gqlErr.Type, "usage limit")
+	}
+	if gqlErr.Code != "FEATURE_NOT_ACCESSIBLE" || !gqlErr.UserError {
+		t.Errorf("Code/UserError = %q/%v, want FEATURE_NOT_ACCESSIBLE/true", gqlErr.Code, gqlErr.UserError)
+	}
+	// Error() keeps the legacy shape: callers string-match it, and LogDetail is
+	// the surface that carries the extensions.
+	if got := gqlErr.Error(); got != "GraphQL error: usage limit exceeded" {
+		t.Errorf("Error() = %q, want the legacy message-only shape", got)
+	}
+}
+
+// TestRejectionLogLine pins the severity verdict the process log records for a
+// rejection, and the error count beside it.
+//
+// ERROR has to keep meaning "something went wrong". Not-found does not: a delete
+// of an entity already gone upstream is success (fs/deletecommit.go's
+// remoteAlreadyGone) and a 404 on refresh is the repo's routine orphan-cleanup
+// signal (repo/swr.go's orphanOnNotFound). Logging those at ERROR would fill
+// journald with alarms for outcomes the code deliberately treats as fine — while
+// still, per #448, writing the extensions down.
+func TestRejectionLogLine(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  *GraphQLError
+		want string
+	}{
+		{
+			name: "ordinary rejection is an ERROR",
+			err:  &GraphQLError{Message: "Argument Validation Error", Code: "INPUT_ERROR", ErrorCount: 1},
+			want: `[api] ERROR: IssueCreate rejected by Linear API: message="Argument Validation Error" code="INPUT_ERROR" type="" userError=false userPresentableMessage="" errors=1`,
+		},
+		{
+			// The rm-an-already-deleted-comment path: syscall returns 0, so the
+			// log must not claim a failure.
+			name: "not found is not an ERROR",
+			err:  &GraphQLError{Message: "Entity not found - Could not find referenced Comment.", ErrorCount: 1},
+			want: `[api] CommentDelete rejected as not-found by Linear API: message="Entity not found - Could not find referenced Comment." code="" type="" userError=false userPresentableMessage="" errors=1`,
+		},
+		{
+			name: "rate limit keeps its own prefix",
+			err:  &GraphQLError{Message: "rate limit exceeded", Code: "RATELIMITED", ErrorCount: 1},
+			want: `[ratelimit] ERROR: TeamIssues rate limited by Linear API: message="rate limit exceeded" code="RATELIMITED" type="" userError=false userPresentableMessage="" errors=1`,
+		},
+		{
+			// Only Errors[0] becomes the returned error. The count rides on the
+			// rejection itself, so it is the hint that a census reading this line
+			// is reading one of several.
+			name: "the count says how many rejections arrived",
+			err:  &GraphQLError{Message: "Something went wrong", ErrorCount: 3},
+			want: `[api] ERROR: IssueCreate rejected by Linear API: message="Something went wrong" code="" type="" userError=false userPresentableMessage="" errors=3`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := "IssueCreate"
+			switch {
+			case IsNotFound(tc.err):
+				op = "CommentDelete"
+			case IsRateLimited(tc.err):
+				op = "TeamIssues"
+			}
+			if got := rejectionLogLine(op, tc.err); got != tc.want {
+				t.Errorf("rejectionLogLine()\n got: %s\nwant: %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRejectionLogLineQuotesRemoteText pins the injection defense: a rejection
+// message is remote text (Linear echoes user-supplied entity names into it)
+// going into a line-oriented log, so a newline in it must not be able to forge a
+// second log line.
+func TestRejectionLogLineQuotesRemoteText(t *testing.T) {
+	t.Parallel()
+
+	line := rejectionLogLine("IssueCreate", &GraphQLError{
+		Message:                "boom\nFAKE: [api] ERROR: forged",
+		UserPresentableMessage: "also\rbad",
+		ErrorCount:             1,
+	})
+	if strings.ContainsAny(line, "\n\r") {
+		t.Errorf("rejection line carries a raw newline, so remote text can forge a log line:\n%s", line)
+	}
+	if !strings.Contains(line, `\n`) {
+		t.Errorf("expected the newline escaped by %%q, got:\n%s", line)
+	}
+}

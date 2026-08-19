@@ -239,8 +239,33 @@ Operational guards:
   (admit/defer/wait/ratelimited), plus per-method CDN requests and latency
   (`linearfs.cdn.*`).
 - **Request log** (`requestlog.go`): optional JSONL trace of every completed
-  request (op, vars, duration, outcome, complexity) to
-  `~/.config/linearfs/requests.jsonl`, for offline diagnosis.
+  request (op, vars, duration, outcome, complexity, and — on a failure — the
+  first rejection, decoded: message plus
+  `extensions.{code, type, userError, userPresentableMessage}`, beside the count
+  of errors the response carried) to
+  `~/.config/linearfs/requests.jsonl`, for offline diagnosis. The rejection's
+  extension fields are written even when empty, because "Linear sent no code" is
+  the observation a message-shaped predicate is waiting on;
+  `userPresentableMessage` is among them because that is where Linear puts the
+  cap/quota wording a census greps for, and the count is there because only the
+  first rejection is decoded — the census that reads this artifact must be able
+  to tell a lone rejection from the first of several without leaving it. Every
+  string is capped at 2 KB with a truncation marker, since a non-GraphQL
+  failure's message embeds the whole response body (#448).
+- **GraphQL rejections** (`client.go`): a failed operation becomes a
+  `*GraphQLError` carrying the FIRST error's message plus its decoded extensions
+  (`code`, `type`, `userError`, `userPresentableMessage`). `Error()` renders only
+  the message (callers string-match it), so the client logs `LogDetail()` — all
+  five fields, empties included, each `%q`-quoted against log injection — at the
+  one site that still holds them; a caller's `%v` would drop them. The size of
+  the response's error array rides on the `*GraphQLError` itself (`ErrorCount`),
+  so both sinks that record a rejection carry it — `errors=<n>` on this line and
+  the `errors` key on the request log's — and a census can tell a lone untagged
+  rejection from the first of several. `Client.query` is the
+  single owner of that line, and the prefix carries the verdict: a rate-limited
+  rejection keeps `[ratelimit] ERROR`, and a not-found one logs at a plain
+  `[api]` prefix rather than `ERROR`, because a delete of an entity already gone
+  is success and a 404 on refresh is the routine orphan signal (#448).
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
   `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred` — the vocabulary the fs
   layer's error classifier maps to errnos. `IsUsageLimited` (the workspace is
