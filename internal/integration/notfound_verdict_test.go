@@ -80,6 +80,15 @@ func injectMutator(t *testing.T, wrap func(*mockmutation.Client) fs.MutationClie
 
 // editIssueTitle rewrites issue.md with a new title and returns the error the
 // write surfaces — the errno an editor, a shell redirect, or an agent sees.
+//
+// It saves through claudeToolAtomicSave rather than a raw os.WriteFile because
+// the read above primes the kernel page cache for this path: an O_TRUNC+write
+// against a primed cache can be served without ever reaching Flush, so the
+// rejection under test would never reach the caller and the assertion would
+// pass or fail on timing. The rename routes the bytes through the directory's
+// Rename handler, which runs Flush inline and returns the errno directly — the
+// only save form whose verdict is synchronous, and the one every other
+// failing-write test in this package already uses.
 func editIssueTitle(t *testing.T, identifier, title string) error {
 	t.Helper()
 	path := issueFilePath(testTeamKey, identifier)
@@ -91,7 +100,7 @@ func editIssueTitle(t *testing.T, identifier, title string) error {
 	if err != nil {
 		t.Fatalf("modify frontmatter: %v", err)
 	}
-	return os.WriteFile(path, modified, 0o644)
+	return claudeToolAtomicSave(t, path, modified)
 }
 
 // TestOffline_ServerNotFoundIsLegible: an edit Linear rejects because it no
