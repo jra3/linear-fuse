@@ -230,13 +230,18 @@ func IsNotFound(err error) bool {
 	return matchesServerMessage(err, isNotFoundServerMessage, isNotFoundWrappedMessage)
 }
 
+// notFoundTail is the phrase itself plus the optional type suffix, shared by
+// both matchers below so that widening it (a new separator, a new phrasing)
+// cannot land on one and miss the other. The two differ ONLY in the leading
+// anchor they prepend, which is the whole point of the source split.
+const notFoundTail = `entity not found(?:\s*[:\x{2013}\x{2014}-].*)?$`
+
 // notFoundMessageRe matches a message that IS Linear's not-found rejection
 // rather than one that merely mentions the phrase: the phrase OPENS the message,
 // and anything after it is introduced by the type separator ("Entity not found:
 // Issue - Could not find referenced Issue."). Strictly anchored, exactly like
 // usageLimitMessageRe and for the same reason — see IsNotFound.
-var notFoundMessageRe = regexp.MustCompile(
-	`^entity not found(?:\s*[:\x{2013}\x{2014}-].*)?$`)
+var notFoundMessageRe = regexp.MustCompile(`^` + notFoundTail)
 
 // notFoundWrappedRe is notFoundMessageRe with one tolerance: the phrase may open
 // a clause a wrapper prefixed with ": ". That slack exists ONLY for our own
@@ -245,8 +250,7 @@ var notFoundMessageRe = regexp.MustCompile(
 // it is applied only to the flattened error string. Applying it to server text
 // would read a trailing echo ("Cannot assign label: Entity not found") as a
 // rejection, which is the hazard the anchoring exists to close.
-var notFoundWrappedRe = regexp.MustCompile(
-	`(?:^|: )entity not found(?:\s*[:\x{2013}\x{2014}-].*)?$`)
+var notFoundWrappedRe = regexp.MustCompile(`(?:^|: )` + notFoundTail)
 
 // isNotFoundServerMessage reports whether s, as Linear wrote it, IS the
 // not-found rejection.

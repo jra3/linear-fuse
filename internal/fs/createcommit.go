@@ -252,7 +252,7 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	// here.
 	if api.IsNotFound(err) {
 		return "Operation: " + op + "\nError: " + serverClause(err) +
-			". The referenced entity no longer exists on Linear, so retrying will NOT help — re-read the directory listing for current entries.", syscall.ENOENT
+			". The referenced entity no longer exists on Linear, so retrying will NOT help — read that entity's own file to reconcile the local view, then drop or repoint the reference. The directory listing is served from the local cache, so it can keep showing the entry until that refresh, or the next sync cycle, prunes it.", syscall.ENOENT
 	}
 	// A workspace over its plan/usage limit is neither the caller's bad input nor
 	// a backend fault — it is a capacity wall. EDQUOT makes the errno itself the

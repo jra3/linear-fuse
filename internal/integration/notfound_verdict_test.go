@@ -68,8 +68,17 @@ func (throttledMutator) UpdateIssue(ctx context.Context, issueID string, input m
 }
 
 // injectMutator swaps in a wrapper over the in-memory fake for one test.
+//
+// Like enableMockMutations, it is inert in live mode: injecting a fake would
+// swap out the real Linear client and leave the test passing while asserting
+// nothing about the API it names. Every caller is behind a skipIfLiveAPI guard,
+// but the guard and the injection are separate statements, so the coupling
+// lives here rather than in each caller's discipline.
 func injectMutator(t *testing.T, wrap func(*mockmutation.Client) fs.MutationClient) {
 	t.Helper()
+	if liveAPIMode {
+		return // live mode uses the real API; the fake would mask it
+	}
 	mock := mockmutation.New(
 		mockmutation.WithTeamKey(testTeamKey),
 		mockmutation.WithStore(lfs.GetStore()),
@@ -128,7 +137,7 @@ func TestOffline_ServerNotFoundIsLegible(t *testing.T) {
 		"Entity not found: Issue",
 		"no longer exists on Linear",
 		"retrying will NOT help",
-		"re-read the directory listing",
+		"read that entity's own file",
 	} {
 		if !strings.Contains(reason, want) {
 			t.Errorf(".error = %q, missing %q", reason, want)

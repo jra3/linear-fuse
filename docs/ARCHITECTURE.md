@@ -953,7 +953,10 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   next-action. They share the phrasing and differ in why it is futile: `EDQUOT`
   is a capacity wall that clears once the workspace has room (archive, delete, or
   raise the plan limit, then retry), while the `ENOENT` reference is gone for
-  good, so the next action is to re-read the listing (#409/#445).
+  good, so the next action is to read that entity's own file — its detail SWR
+  refresh is the path that prunes the local row on a not-found, and the failed
+  write itself prunes nothing. The listing is cache-served, so it can keep
+  showing the entry until that refresh or the next sync cycle (#409/#445).
 - **Empty and zero-filled writes are refused at the shell:** `editFlush` rejects
   a flush whose buffer is empty, whitespace-only, or carries NUL bytes with
   `EINVAL` before any handler's front half runs. The predicate is the pure
