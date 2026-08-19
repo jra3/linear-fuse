@@ -37,6 +37,8 @@ func TestRefreshKindKey(t *testing.T) {
 		kindIssueDetails, kindHistory,
 		kindProjectDocs, kindInitiativeDocs,
 		kindProjectUpdates, kindInitiativeUpdates,
+		kindTeamDocs, kindProjectLinks, kindInitiativeLinks,
+		kindTeamLabels,
 	}
 	seen := make(map[string]refreshKind)
 	for _, k := range kinds {

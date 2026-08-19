@@ -845,6 +845,26 @@ func (c *Client) RemoveProjectFromInitiative(ctx context.Context, projectID, ini
 	return execMutationOK(ctx, c, mutationInitiativeToProjectDelete, map[string]any{"projectId": projectID, "initiativeId": initiativeID}, "initiativeToProjectDelete")
 }
 
+// GetTeamLabels fetches a team's label catalog, drained — the narrow read
+// behind the repository's label SWR refresh (#475).
+//
+// It is deliberately NOT GetTeamMetadata: that query drags states, cycles,
+// members and the team's projects along with the labels, and refuses under
+// the LowBudget preflight — so a read-triggered refresh built on it would pay
+// for four collections nobody asked for and then go silent exactly when the
+// workspace is busiest. Same query text and same page size as the combined
+// query's own labels drain (queryTeamLabelsPage), so both project through
+// LabelFields and see identical fields.
+//
+// The result is the COMPLETE set, which is what licenses the caller's prune.
+// Like the combined query, team.labels mixes workspace labels in with the
+// team-scoped ones; the caller stamps team_id from label.Team, never from the
+// team it asked about (see APILabelToDBLabel).
+func (c *Client) GetTeamLabels(ctx context.Context, teamID string) ([]Label, error) {
+	return fetchAll[Label](ctx, c, queryTeamLabelsPage,
+		map[string]any{"teamId": teamID}, "team", "labels")
+}
+
 // CreateLabel creates a new label
 func (c *Client) CreateLabel(ctx context.Context, input map[string]any) (*Label, error) {
 	return execMutation[Label](ctx, c, mutationCreateLabel, map[string]any{"input": input}, "issueLabelCreate", "issueLabel")

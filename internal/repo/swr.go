@@ -1,8 +1,10 @@
 package repo
 
 // swrRefresh coordinator: the one owner of the repo's stale-while-revalidate
-// policy. Every SWR surface (six today) routes through maybeRefreshSWR with a
-// swrSpec; the module owns the staleness decision (both flavors), the typed
+// policy. EVERY SWR surface routes through maybeRefreshSWR with a swrSpec —
+// that is the invariant, not the tally, which drifts every time a surface is
+// added (this comment and its twin in metrics.go both still said "six" at
+// nine). The module owns the staleness decision (both flavors), the typed
 // dedup key, and the orphan-on-not-found classification that the individual
 // refresh tails used to each restate by hand.
 
@@ -28,6 +30,7 @@ const (
 	kindInitiativeUpdates refreshKind = "initiative-updates"
 	kindProjectLinks      refreshKind = "project-links"
 	kindInitiativeLinks   refreshKind = "initiative-links"
+	kindTeamLabels        refreshKind = "team-labels"
 )
 
 // key is the one factory for a refresh's dedup-map key.

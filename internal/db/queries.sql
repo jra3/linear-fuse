@@ -215,6 +215,13 @@ SELECT * FROM labels WHERE (team_id = ? OR team_id IS NULL) AND name = ?;
 -- name: ListTeamLabels :many
 SELECT * FROM labels WHERE team_id = ? OR team_id IS NULL ORDER BY name;
 
+-- name: GetTeamLabelsSyncedAt :one
+-- Freshness of exactly what ListTeamLabels serves: the team's own labels AND
+-- the workspace labels mixed in with them. Scoping this to team_id alone would
+-- read NULL ("never synced") for a team whose labels are all workspace-scoped,
+-- and a never-synced verdict re-triggers the refresh on every browse.
+SELECT MAX(synced_at) FROM labels WHERE team_id = ? OR team_id IS NULL;
+
 -- name: UpsertLabel :exec
 INSERT INTO labels (id, team_id, name, color, description, parent_id, created_at, updated_at, synced_at, data)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

@@ -310,7 +310,10 @@ server-reported reset. Cycles come in two sizes:
   members).
 
 **Probes never license a prune**, so metadata deletions and link changes are
-bounded by the full-cycle interval by design. That bound is load-bearing for
+bounded by the full-cycle interval by design — with one carve-out: the label
+catalog also refreshes (and prunes) on demand from the read path, because
+label names and descriptions steer how agents file work and a 12-minute lie
+was measured as harmful (#475). That bound is load-bearing for
 one live-verified Linear quirk: linking/unlinking a project↔initiative bumps
 *neither* entity's `updatedAt`, so link changes are structurally invisible to
 the newest-first probes — the full-cycle workspace drain is the *only* thing
@@ -415,7 +418,8 @@ prune is licensed at all (nil `Prune` for capped/partial fetches).
 
 **Called by:** the Sync Worker (workspace/metadata/details) and the
 Repository's SWR refreshes (issue details; project/initiative docs, updates,
-links). The fs write tails do **not** go through it — they upsert single
+links; the team label catalog — the one repo-side reconcile that passes a
+`Prune`, licensed by its drained fetch). The fs write tails do **not** go through it — they upsert single
 entities directly, and the SWR refresh reconciles behind them.
 
 ### `internal/db` — SQLite persistence (sqlc)
@@ -521,12 +525,21 @@ appears.
   not-found → `(nil, nil)`, fetch errors labeled with the op, convert errors
   propagated.
 - **Stale-while-revalidate** (`swr.go`): `maybeRefreshSWR` is the single owner
-  of refresh policy — every sub-resource surface routes through it with an
+  of refresh policy — every refreshed surface routes through it with an
   `swrSpec` (staleness rule, refresh func, orphan classification). Refreshes are
   non-blocking, bounded by a 10-slot semaphore and a 30s timeout, and persist
   through the `reconcile` tails. Staleness is either TTL-based (5 min; 30 min
   in catch-up mode) or event-driven (`detail_synced_at` older than the entity's
   `updatedAt`).
+  Most surfaces are entity sub-resources; the **team label catalog**
+  (`GetTeamLabels`, TTL flavor) is the exception, and it is hooked on the
+  repository read rather than on the FUSE directory node because
+  `collectionDir.refresh` fires only on `Readdir` — reading one label file is a
+  bare `Lookup`. Its refresh drains the whole catalog, so unlike the
+  upsert-only doc/update refreshes it **prunes**: a label deleted in Linear can
+  leave the cache between full sync cycles. Without it, labels reached SQLite
+  only on the full cycle, so a remote label edit was invisible for
+  `FullSyncInterval + Interval` — ~12 min, measured (#475).
 - **Orphan handling:** a refresh that hits Linear's "Entity not found"
   cascade-deletes the local rows (issue → its comments/docs/attachments/
   relations/history; likewise projects and initiatives) and schedules a

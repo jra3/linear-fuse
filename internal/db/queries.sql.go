@@ -767,6 +767,21 @@ func (q *Queries) GetTeamIssueCount(ctx context.Context, teamID string) (int64, 
 	return count, err
 }
 
+const getTeamLabelsSyncedAt = `-- name: GetTeamLabelsSyncedAt :one
+SELECT MAX(synced_at) FROM labels WHERE team_id = ? OR team_id IS NULL
+`
+
+// Freshness of exactly what ListTeamLabels serves: the team's own labels AND
+// the workspace labels mixed in with them. Scoping this to team_id alone would
+// read NULL ("never synced") for a team whose labels are all workspace-scoped,
+// and a never-synced verdict re-triggers the refresh on every browse.
+func (q *Queries) GetTeamLabelsSyncedAt(ctx context.Context, teamID sql.NullString) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getTeamLabelsSyncedAt, teamID)
+	var max interface{}
+	err := row.Scan(&max)
+	return max, err
+}
+
 const getUser = `-- name: GetUser :one
 
 SELECT id, email, name, display_name, avatar_url, active, admin, created_at, updated_at, synced_at, data FROM users WHERE id = ?
