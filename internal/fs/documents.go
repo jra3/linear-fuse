@@ -231,7 +231,7 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 	// update + updatedDoc bridge the front half to the commit tail.
 	var update map[string]any
 	var updatedDoc *api.Document
-	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.Document]{
+	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.Document]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			var err error
 			update, err = marshal.MarkdownToDocumentUpdate(n.content, &n.document)

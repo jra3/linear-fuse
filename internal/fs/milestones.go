@@ -161,7 +161,7 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	// input + updated bridge the front half to the commit tail.
 	var input api.ProjectMilestoneUpdateInput
 	var updated *api.ProjectMilestone
-	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.ProjectMilestone]{
+	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.ProjectMilestone]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			var err error
 			input, err = marshal.MarkdownToMilestoneUpdate(n.content, &n.milestone)

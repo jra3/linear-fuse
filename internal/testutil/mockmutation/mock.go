@@ -82,6 +82,17 @@ type UpdateCall struct {
 	Kind string  // "issue" | "project" | "initiative"
 	ID   string  // the entity's ID
 	Body *string // the body/description the mutation carried; nil if it carried none
+	// Input is the raw issue-update map the mutation carried, copied. It is
+	// recorded because Body alone cannot express the most damaging half of a
+	// corrupted write: MarkdownToIssueUpdate sends `key: nil` for every REMOVABLE
+	// field the document's frontmatter omits, so a body that failed to parse as
+	// frontmatter clears assignee/due/parent/project/milestone/cycle/labels in the
+	// same mutation that stores the wrong text (#454). A test asserting only the
+	// description would call that write correct.
+	//
+	// Issue updates only — project/initiative updates carry a typed input struct
+	// whose editable surface is Body — so it is nil for those kinds.
+	Input map[string]any
 }
 
 // Updates returns, in order, every issue/project/initiative update the fake
@@ -95,13 +106,22 @@ func (c *Client) Updates() []UpdateCall {
 }
 
 // recordUpdateLocked appends one update to the audit log. Callers hold c.mu.
-func (c *Client) recordUpdateLocked(kind, id string, body *string) {
+// input is the raw mutation map when the kind carries one (issues) and nil
+// otherwise; it is copied, since the caller keeps using the map.
+func (c *Client) recordUpdateLocked(kind, id string, body *string, input map[string]any) {
 	var copied *string
 	if body != nil {
 		b := *body
 		copied = &b
 	}
-	c.updates = append(c.updates, UpdateCall{Kind: kind, ID: id, Body: copied})
+	var in map[string]any
+	if input != nil {
+		in = make(map[string]any, len(input))
+		for k, v := range input {
+			in[k] = v
+		}
+	}
+	c.updates = append(c.updates, UpdateCall{Kind: kind, ID: id, Body: copied, Input: in})
 }
 
 // Option configures a Client.
@@ -326,9 +346,9 @@ func (c *Client) UpdateIssue(ctx context.Context, issueID string, input map[stri
 	}
 	if v, ok := input["description"].(string); ok {
 		iss.Description = c.reformat(v)
-		c.recordUpdateLocked("issue", issueID, &v)
+		c.recordUpdateLocked("issue", issueID, &v, input)
 	} else {
-		c.recordUpdateLocked("issue", issueID, nil)
+		c.recordUpdateLocked("issue", issueID, nil, input)
 	}
 	// Overlay the editable scalar frontmatter fields the issue Flush can send, so
 	// the verify getter reads them back — mirroring CreateIssue's field handling.
@@ -521,7 +541,7 @@ func (c *Client) UpdateProject(ctx context.Context, projectID string, input api.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	proj := c.currentProjectLocked(ctx, projectID)
-	c.recordUpdateLocked("project", projectID, input.Content)
+	c.recordUpdateLocked("project", projectID, input.Content, nil)
 	if input.Name != nil {
 		proj.Name = *input.Name
 	}
@@ -606,7 +626,7 @@ func (c *Client) UpdateInitiative(ctx context.Context, initiativeID string, inpu
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	init := c.currentInitiativeLocked(ctx, initiativeID)
-	c.recordUpdateLocked("initiative", initiativeID, input.Content)
+	c.recordUpdateLocked("initiative", initiativeID, input.Content, nil)
 	if input.Name != nil {
 		init.Name = *input.Name
 	}

@@ -41,6 +41,54 @@ type editBuffer struct {
 	authored bool
 }
 
+// editHandle is the per-open file handle editBuffer hands the kernel. It exists
+// for one reason: to carry the PENDING TRUNCATION of #454, which belongs to a
+// single open file and to nothing else.
+//
+// The kernel's sequence for a shell `>` redirect is OPEN, SETATTR(size 0),
+// FLUSH, WRITE, FLUSH — the shell emits that middle FLUSH by closing a
+// duplicated descriptor, so it lands on a buffer nobody meant to empty.
+// editFlush's empty-write guard (#397) answers it by RESTORING the entity's
+// render, which is right for a writer who truly emptied the file and wrong here:
+// the write that follows would land at offset 0 of the resurrected image and the
+// closing flush would persist the splice to Linear — a shorter `>` rewrite
+// keeping the old description's tail, and a shorter one after that pushing the
+// previous frontmatter into the body.
+//
+// So the restore is ATTRIBUTED to the handle it was made for, and only that
+// handle's next write re-applies the truncation. Scoping it to the handle rather
+// than to the buffer is what keeps the cure from being the next disease: a mark
+// on the buffer outlives the writer, and the very next `>>` on a fresh handle
+// then clears a file it never truncated — measured, and worse than the original
+// bug, because the resulting NUL-padded document does not start with `---`, so
+// marshal.Parse reads the whole thing as body with EMPTY frontmatter and the
+// update nils every removable field (assignee, due, parent, project, milestone,
+// cycle, labels) alongside the mangled description. Neither can Open or refresh
+// clear a buffer-scoped mark: a concurrent `cat` in the restore→write window
+// arrives on both, which is how clearing there (PR #466) reopened #454 outright.
+//
+// The mark is ARMED BY THE RESTORING FLUSH, not by Setattr, because the kernel
+// does not say which handle asked for an open-time truncate: measured against a
+// live mount, the SETATTR of a `>` redirect carries NO file handle (FATTR_FH is
+// unset — an explicit ftruncate(2) does carry one). The flush that restores does
+// carry it, and it is the only moment that matters: until something restores, an
+// emptied buffer IS empty and any write to it is already correct.
+//
+// The zero-fill rejection (#472) restores on the same terms and therefore arms
+// the same mark: the recovery its .error prescribes is "write the WHOLE document
+// back from offset 0", and on the same open fd a document SHORTER than the
+// restored render would otherwise keep the render's tail — the original splice,
+// reached by following the instructions.
+type editHandle struct {
+	// truncatedRestore says a refused flush on THIS handle put the entity's render
+	// back into the buffer this handle had emptied (or, on the zero-fill arm, left
+	// refused), so what content holds is bytes NOBODY WROTE and the file this
+	// handle writes next starts empty again. Guarded by the owning editBuffer's mu,
+	// not by the handle: every reader and writer of it (Write, Setattr, editFlush)
+	// already runs under that lock, and a handle belongs to exactly one buffer.
+	truncatedRestore bool
+}
+
 // editable exposes the embedded buffer to newFileInode, the one builder every
 // editable file node passes through. Having the buffer reachable from the
 // generic builder is what lets serve-your-own-writes seed in a single place
@@ -86,6 +134,33 @@ func (b *editBuffer) truncateBuffer() {
 	b.dirty = true
 }
 
+// openHandle mints the per-open handle (see editHandle). Open returns one, and
+// collectionDir's overwrite-in-place Create returns one too: that Create IS an
+// open, and a Create that handed back nil would leave the write it opens for
+// unattributable — the one path where #454 could still splice.
+func (b *editBuffer) openHandle() fs.FileHandle { return &editHandle{} }
+
+// takeTruncation reports whether f carries a pending truncation and consumes it.
+// The caller holds b.mu.
+func (b *editBuffer) takeTruncation(f fs.FileHandle) bool {
+	h, ok := f.(*editHandle)
+	if !ok || !h.truncatedRestore {
+		return false
+	}
+	h.truncatedRestore = false
+	return true
+}
+
+// markRestored attributes a just-restored image to the handle whose refused
+// flush restored it (see editHandle). The caller holds b.mu. A nil or foreign
+// handle — the atomic-save path flushes with none — records nothing, which is
+// correct: there is no writer to continue.
+func (b *editBuffer) markRestored(f fs.FileHandle) {
+	if h, ok := f.(*editHandle); ok {
+		h.truncatedRestore = true
+	}
+}
+
 // Open clears this node's serve-your-own-writes flag (#365): a fresh open means
 // the write→verify cycle that authored the buffer is over, so let the next
 // background refresh converge to what actually persisted. The write's own Open
@@ -100,7 +175,7 @@ func (b *editBuffer) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 	b.mu.Lock()
 	b.authored = false
 	b.mu.Unlock()
-	return nil, fuse.FOPEN_KEEP_CACHE, 0
+	return b.openHandle(), fuse.FOPEN_KEEP_CACHE, 0
 }
 
 func (b *editBuffer) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (res fuse.ReadResult, errno syscall.Errno) {
@@ -127,6 +202,18 @@ func (b *editBuffer) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// This handle's pending truncation still bounds its write (#454). If a refused
+	// flush restored the entity's render into the buffer THIS handle emptied, the
+	// file is nonetheless logically empty, so empty it again before
+	// applying the data: the result is exactly what writing into the truncated
+	// buffer would have produced — the data at off, and a zero-filled hole before
+	// it, with no byte of the restored image showing through at either end. A
+	// write on any OTHER handle truncated nothing and edits the buffer as it finds
+	// it.
+	if b.takeTruncation(f) {
+		b.content = b.content[:0]
+	}
+
 	newLen := int(off) + len(data)
 	if newLen > len(b.content) {
 		grown := make([]byte, newLen)
@@ -143,6 +230,14 @@ func (b *editBuffer) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetA
 	defer b.mu.Unlock()
 
 	if sz, ok := in.GetSize(); ok {
+		// A resize under this handle's pending truncation resizes the LOGICALLY
+		// EMPTY file, not the image an intervening flush restored on top of it —
+		// so consume the truncation first and let the branches below zero-fill.
+		// Sizing the restored render instead would hand a following flush the old
+		// body back, with nothing left armed to correct it.
+		if b.takeTruncation(f) {
+			b.content = b.content[:0]
+		}
 		if int(sz) < len(b.content) {
 			b.content = b.content[:sz]
 		} else if int(sz) > len(b.content) {

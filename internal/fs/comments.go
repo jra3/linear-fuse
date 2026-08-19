@@ -151,7 +151,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	// first, then commitWriteBack fetches the echoed response and compares body).
 	var body string
 	var updatedComment *api.Comment
-	return editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[api.Comment]{
+	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.Comment]{
 		mutate: func(ctx context.Context) (bool, syscall.Errno) {
 			// Extract body from the markdown (skip frontmatter).
 			body = extractCommentBody(n.content)

@@ -65,7 +65,9 @@ stale-repopulation window — a racing read could reload the not-yet-written row
 and re-cache it), and the invalidation set lived as loose `InvalidateUpdated`
 calls each handler had to remember. `editFlush` (`internal/fs/editflush.go`,
 generic over `T`) concentrates the shell; each `Flush` becomes `return
-editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[T]{…})`.
+editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[T]{…})` — `f` being the
+FUSE file handle the flush arrived on, which the refused-write restore below
+attributes its bytes to.
 
 The **front half is one `mutate` closure** returning `(proceed bool, errno
 syscall.Errno)`: `errno != 0` → return it and **keep dirty** (a corrected
@@ -98,7 +100,23 @@ writer's text dirty for a corrected re-save, but a refused buffer holds no text
 worth preserving, and leaving it dirty would strand the
 node serving zero bytes for its lifetime ([[edit-buffer]]'s `refresh` refuses a
 dirty buffer) — defeating the very recovery the `.error` prescribes, "re-read the
-file to get its current contents". Projects/initiatives
+file to get its current contents".
+
+That restore is a **read-side** convenience only, and [[edit-buffer]]'s
+**pending truncation** is what keeps it one (#454). The kernel's sequence for
+a shell `>` redirect is OPEN, SETATTR(size 0), FLUSH, WRITE, FLUSH — the shell
+emits that middle FLUSH by closing a duplicated descriptor, so the rejection fires
+on a buffer nobody meant to empty, and the write that follows used to land at
+offset 0 of the resurrected image. What persisted was a splice: a shorter `>`
+rewrite kept the old description's tail, and a shorter one after that pushed the
+previous *frontmatter* into the body, compounding per write and reaching Linear.
+So the restoring flush **attributes the restored bytes to the file handle it
+arrived on**, and only that handle's own next write re-applies the truncation — a
+`>` redirect truncates, while a genuinely emptied file still gets the `#397`
+rejection and its readable contents back. Attributing it to the BUFFER instead is
+the trap: the mark then outlives the writer, and the next ordinary `>>` — which
+truncated nothing — is written into a cleared buffer, sending Linear a NUL-padded
+document whose absent frontmatter also nils every removable field. Projects/initiatives
 put their whole multi-mutation front half (labels + links-reconcile + scalar) in
 `mutate` and always return `proceed=true` (they re-fetch to catch link changes);
 the front-half result reaches the commit-tail `compare` through a method-local
@@ -894,7 +912,33 @@ rebuild inside the [[authored-pin]]'s TTL re-arms it from the pin (#388).
 The flag protects the bytes only as long as **this node** lives — a dentry forget
 rebuilds the node with an empty buffer and no flag — so [[edit-flush]] arms the
 [[authored-pin]] on the same condition, and a Lookup re-seeds both from it; that
-pin, not this flag, is what survives the node. See [[node-refresh]]. Each of the seven editable file
+pin, not this flag, is what survives the node. See [[node-refresh]].
+`Open` returns an **`editHandle`**, the per-open handle that carries the
+**pending truncation** of #454. A truncation empties the buffer (a `Setattr` to
+size 0, or `truncateBuffer` for a `collectionDir` O_TRUNC `Create`), and if
+[[edit-flush]]'s refused-write rejection then RESTORES the entity's render into
+it — which the kernel interleaves between a `>` redirect's truncate and its
+write — the buffer holds bytes nobody wrote while the FILE is still logically
+zero. `editFlush` marks that on the handle its flush arrived on; that handle's
+next `Write` or `Setattr` empties the buffer again first, so the restored image
+never shows through — neither as a surviving tail nor as a zero-filled hole's
+contents — and a resize sizes the emptied file rather than the resurrected one.
+Both arms of the rejection arm it, the zero-filled one included (#472): its
+`.error` prescribes writing the whole document back **from offset 0**, and on the
+same descriptor a document shorter than the restored render would otherwise keep
+that render's tail — #454's splice, reached by following the instructions.
+**Scoping it to the handle is the contract.** A mark on the buffer outlives its
+writer and clips the next unrelated write; clearing one on `Open` or `refresh`
+hands it to any concurrent `cat` in the restore→write window and reopens #454.
+It is armed by the restoring FLUSH rather than by `Setattr` because the kernel
+sends no file handle on an open-time truncate (measured: `FATTR_FH` is unset
+there, though an explicit `ftruncate(2)` does carry one) — and it need not be
+armed earlier, since until something restores, an emptied buffer really is empty.
+`collectionDir`'s overwrite-in-place `Create` hands back the same handle for the
+same reason: that Create is an open, and a `nil` there would leave its write
+unattributable. Per-open state is the idiom `createFileNode` already uses for its
+own buffer, and for the same underlying reason — a dup'd descriptor and a
+genuinely new open are the two things a node-scoped flag cannot tell apart. Each of the seven editable file
 nodes (`IssueFileNode`, `ProjectInfoNode`, `InitiativeInfoNode`, `CommentNode`,
 `LabelFileNode`, `MilestoneFileNode`, `DocumentFileNode`) embeds it and keeps
 only its **`Getattr`** (a one-liner: `fileAttr(n.size(), created, updated).fill`
@@ -914,7 +958,10 @@ regenerate on first Read — a live double-compute this fix removed by seeding.
 `labelfile`/`milestonefile` remain the timestamp-less exception (their API types
 carry no `CreatedAt`/`UpdatedAt`, so `Getattr` reports `now()` — see
 [[attr-construction]]). Unit-tested directly (write-expands, in-place,
-truncate-grow/shrink, read-clamps-at-EOF), no FUSE mount.
+truncate-grow/shrink, read-clamps-at-EOF, and the pending truncation's
+handle-scoping: a truncating write at an offset, a restore that must not follow
+the writer onto another handle, distinct handles per `Open`, and a non-zero
+resize sizing the emptied file), no FUSE mount.
 
 ### Authored-write pin (`authoredPins`)
 The **deep module** that carries serve-your-own-writes across a node boundary the
