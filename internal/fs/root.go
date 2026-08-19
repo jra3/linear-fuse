@@ -422,8 +422,8 @@ Failure model (every writable surface follows this contract):
   name) -- fix the name. Or LINEAR no longer has the entity you edited, renamed, or
   referenced: it was archived or deleted after this listing was read, so like
   EDQUOT below and unlike EAGAIN, retrying will NOT help -- drop or repoint the
-  reference. The listing is served from the local cache, so it may keep showing the
-  entity until the next sync cycle reconciles it.
+  reference. The listing is served from the local store, so it may keep showing the
+  entity until a sync cycle or a background refresh reconciles it away.
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
   the workspace has room: archive or delete entities, or raise the plan limit.
@@ -478,7 +478,12 @@ project-labels.md (valid project labels), initiatives/ (valid initiatives)
 - Link initiative to projects: edit "projects: [slugs]" in initiative.md
 - Relation types: blocks, duplicate, related, similar
 - Inverse relations shown as: blocked-by, duplicated-by, related-to, similar-to
-- Cache TTL: 60s for issues, 10min for states/labels/users
+- Freshness: every read is served from the local store and never blocks on
+  Linear, so a change someone else made appears only once a background sync or
+  refresh has landed it -- usually within minutes. A read that finds its data
+  stale still returns the bytes it has and kicks the refresh off behind you, so
+  re-read to see it. Your own writes through this filesystem are visible
+  immediately.
 - Timestamps: mtime=updatedAt, ctime=createdAt from Linear
 - Project slugs: Use slug (e.g., "api-gateway"), not name, in initiative.md
 - Project labels are workspace-wide (see project-labels.md). A label group cannot

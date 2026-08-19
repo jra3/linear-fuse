@@ -323,9 +323,11 @@ the newest-first probes — the full-cycle workspace drain is the *only* thing
 keeping links fresh, and cannot be "optimized away".
 
 Scheduling is persisted in the **`sync_schedule`** key/value table: the
-full-cycle cadence stamp, per-team probe watermarks, and the issue-ID-reconcile
-stamp — all stamp-on-completion and restart-safe (a restart mid-window starts
-lean; no full-cycle storm).
+full-cycle cadence stamp, per-team probe watermarks, the issue-ID-reconcile
+stamp, and the per-team label-catalog freshness stamp (the one key written from
+outside this package — see the Repository's SWR notes below) — all
+stamp-on-completion and restart-safe (a restart mid-window starts lean; no
+full-cycle storm).
 
 "Completion" for the full-cycle stamp is **deliberately asymmetric**: a cycle
 whose workspace or team-metadata drain was refused by the admission ladder

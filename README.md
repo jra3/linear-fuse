@@ -482,46 +482,46 @@ labels:
 
 Save the file to update the issue's labels in Linear.
 
-## Caching Strategy
+## Freshness and Caching
 
-LinearFS caches data locally to minimize API calls and provide responsive filesystem operations. Since Linear's real-time sync engine is not exposed in their public API, LinearFS uses a TTL-based polling strategy with immediate invalidation on writes.
+Metadata reads never touch the Linear API. Every listing, and every issue,
+project, comment, document and label, is served from a local SQLite store, so
+`ls` and `cat` are local operations that cannot hang on a slow or unreachable
+Linear — and cannot show you anything newer than what the store holds. (The
+exception is an embedded attachment's *bytes*: a `*.png` or `*.pdf` under an
+issue's `attachments/` is fetched from Linear's CDN on first read and cached on
+disk after that.) Three things keep the store current:
 
-### How It Works
+- **The background sync worker** polls Linear and reconciles what it fetches into
+  SQLite. Most cycles are lean (recently-changed issues and their details) and
+  run every couple of minutes; a fuller cycle that re-drains team metadata —
+  states, labels, cycles, projects, members — and the workspace runs roughly
+  every ten minutes.
+- **Read-triggered refreshes** cover the surfaces a cycle reaches slowly. When a
+  read finds its surface stale (older than five minutes, or thirty while the
+  mount is catching up on a large backlog), it kicks a refresh off in the
+  background and **still returns the bytes it already has** —
+  stale-while-revalidate, never a blocking fetch. The refresh lands behind you,
+  so a teammate's change shows up on a *later* read, not on the one that noticed
+  it was stale. Issue detail and history, project/initiative/team documents,
+  status updates, external links, and the team label catalog work this way.
+- **Your own writes** go to Linear and into SQLite in the same operation, so
+  anything you change through the mount is visible immediately.
 
-```
-Read:   Filesystem → Cache hit? → Return cached data
-                   → Cache miss? → Fetch from Linear API → Cache → Return
+Remote *deletions* are the one thing that can linger: most read-triggered
+refreshes only add and update, so an entity deleted in Linear may keep listing
+until a sync cycle licensed to prune reconciles it. The team label catalog is
+the exception — its refresh fetches the whole catalog, so it prunes too, and a
+label deleted in Linear can disappear between full cycles.
 
-Write:  Filesystem → Update via Linear API → Invalidate relevant caches
-```
-
-### TTL Values
-
-| Data Type | Default TTL | Rationale |
-|-----------|-------------|-----------|
-| Issues | 60s | Change frequently |
-| Comments | 60s | Change frequently |
-| Documents | 60s | Change frequently |
-| Projects | 60s | Moderate change rate |
-| Cycles | 60s | Change with issues |
-| **States** | **10 minutes** | Workflow states rarely change |
-| **Labels** | **10 minutes** | Team labels rarely change |
-| **Users** | **10 minutes** | Team membership rarely changes |
-
-### Write-Through Invalidation
-
-When you modify data through LinearFS, caches are immediately invalidated:
-
-- **Edit issue** → Invalidates team issues, my issues, user issues caches
-- **Add comment** → Invalidates comment cache for that issue
-- **Archive issue** → Invalidates team, my, and assignee issue caches
-- **Create/delete label** → Invalidates team labels cache
-
-This means your own changes appear immediately, but changes made by others (in the Linear app or API) appear after TTL expiry.
+For the detail — which surfaces refresh on read, how staleness is decided for
+each, and what licenses a prune — see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### FUSE Kernel Caching
 
-In addition to the application-level cache, the Linux kernel caches filesystem attributes:
+Underneath all of that, the Linux kernel caches filesystem attributes and
+directory entries on its own:
 
 Mount defaults are **60s attr / 30s entry**, overridable per mount
 (`fs.WithKernelCacheTimeouts`). Each surface then picks one named policy
@@ -543,27 +543,21 @@ Mount defaults are **60s attr / 30s entry**, overridable per mount
 No surface is uncached: `mountDefaultTimeout` and `inheritTimeout` are two
 spellings of one policy, and both resolve to the mount's configured defaults.
 
-This reduces kernel-to-userspace calls but means `ls` output may lag slightly behind cache invalidations.
-
-### Configuring TTL
-
-Adjust the base TTL in your config file:
-
-```yaml
-cache:
-  ttl: 60s    # Base TTL (states/labels/users get 10x this value)
-```
-
-Lower values = fresher data but more API calls. Higher values = better performance but staler data.
+This reduces kernel-to-userspace calls, but means `ls` output can lag slightly
+behind a refresh that has already landed in SQLite. Writes through the mount
+punch through it: the write tails invalidate the affected kernel entries and
+inodes, which is why your own changes are visible right away.
 
 ### Limitations
 
 - **No real-time sync**: Linear's WebSocket-based sync engine is internal only; the public API offers webhooks (requires HTTP server) but not subscriptions
-- **Eventual consistency**: Changes by teammates appear after TTL expiry
+- **Eventual consistency**: a teammate's change appears once a sync cycle or a
+  read-triggered refresh has landed it, not on the read that first sees it stale
 - **Rate limits**: Linear meters API keys on two axes — request count and query *complexity* —
   and reports both on every response. LinearFS governs itself against the live limits from
   those headers (a priority ladder sheds background detail fetches first). Bulk reads over a
-  large workspace can still exhaust the hourly budget; reads then fall back to the local cache.
+  large workspace can still exhaust the hourly budget; reads keep working — they are served
+  from SQLite regardless — but the store then falls further behind Linear until the budget recovers.
 
 ## Configuration
 
