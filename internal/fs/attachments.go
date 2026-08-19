@@ -148,11 +148,12 @@ func (n *AttachmentsNode) buildAttachment(ctx context.Context, name string, entr
 	}
 	// The mount's configured bound, not a literal: a hardcode here silently
 	// overrides WithKernelCacheTimeouts for this surface — the #414 defect
-	// class. Same for the external .link below; the sites it was fixed at, and
-	// the ones still pinning a literal, are inventoried on fixtureEntryTimeout
-	// (internal/integration/integration_test.go).
-	out.SetAttrTimeout(n.lfs.entryTimeout())
-	out.SetEntryTimeout(n.lfs.entryTimeout())
+	// class. Same for the external .link below. #414 and #449 between them
+	// retired the last literal; what keeps a new one from appearing is
+	// TestNoHardcodedKernelTimeouts (internal/fs/kerneltimeout_test.go), which
+	// reads this package's source and requires every timeout argument — here
+	// and at every node builder — to be a named policy.
+	applyNodeTimeout(out, n.lfs.entryTimeout())
 
 	// The bridge dedups AFTER this handler returns: push the fresh file
 	// metadata into the node it will keep (see refresh.go).

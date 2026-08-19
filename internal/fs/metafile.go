@@ -30,8 +30,12 @@ import (
 
 // lookupMetaFile mounts a read-only `.meta` virtual file backed by a render
 // closure as a child of parent. render is called on demand (Lookup/Read/Getattr)
-// and must return the current meta bytes and times from a live source. Timeouts
-// are zero (like .error/.last) so the file never serves a stale cached size.
+// and must return the current meta bytes and times from a live source. Its
+// timeout is mountDefaultTimeout (like .error/.last), which resolves to the
+// mount's configured bound rather than to "uncached": what keeps the bytes
+// current is the render closure running on every read under FOPEN_DIRECT_IO,
+// plus the explicit InvalidateUpdated(metaIno(key)) above. Within that bound a
+// stat can still be answered from the kernel's attr cache.
 func (lfs *LinearFS) lookupMetaFile(ctx context.Context, parent fs.InodeEmbedder, name, key string, render renderFunc, out *fuse.EntryOut) *fs.Inode {
-	return lfs.mountRenderFile(ctx, parent, name, render, metaIno(key), 0, out)
+	return lfs.mountRenderFile(ctx, parent, name, render, metaIno(key), mountDefaultTimeout, out)
 }

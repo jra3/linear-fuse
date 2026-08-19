@@ -69,9 +69,13 @@ func collectionErrorKey(kind, parentID string) string {
 
 // lookupErrorFile mounts the read-only `.error` virtual file for an entity as a
 // child of parent. Reading it returns the last failed-write message (empty if
-// the most recent write succeeded), keyed by entityID. It is a plain renderFile
-// with zero timeouts, so it always reflects the most recent write rather than a
-// stale cached (often empty) value; the reported time is when the error was set.
+// the most recent write succeeded), keyed by entityID; the reported time is when
+// the error was set. It is a plain renderFile at mountDefaultTimeout — the
+// mount's configured bound, not "uncached" — so what makes a read reflect the
+// most recent write rather than a stale cached (often empty) value is the render
+// closure running on every read under FOPEN_DIRECT_IO, plus the
+// wf.invalidate(errorIno(entityID)) each write does. Within that bound a stat
+// can still be answered from the kernel's attr cache.
 func (lfs *LinearFS) lookupErrorFile(ctx context.Context, parent fs.InodeEmbedder, entityID string, out *fuse.EntryOut) *fs.Inode {
 	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		if e := lfs.GetWriteError(entityID); e != nil {
@@ -79,5 +83,5 @@ func (lfs *LinearFS) lookupErrorFile(ctx context.Context, parent fs.InodeEmbedde
 		}
 		return nil, time.Time{}, time.Time{}
 	}
-	return lfs.mountRenderFile(ctx, parent, ".error", render, errorIno(entityID), 0, out)
+	return lfs.mountRenderFile(ctx, parent, ".error", render, errorIno(entityID), mountDefaultTimeout, out)
 }

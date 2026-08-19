@@ -123,10 +123,7 @@ type editableFile interface {
 func (b *BaseNode) newDirInode(ctx context.Context, out *fuse.EntryOut, name string, child dirChild, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
 	child.setAttr(na)
 	child.fillAttr(&out.Attr)
-	if timeout >= 0 {
-		out.SetAttrTimeout(timeout)
-		out.SetEntryTimeout(timeout)
-	}
+	applyNodeTimeout(out, timeout)
 	// The bridge dedups AFTER this handler returns: if it still knows a node
 	// under this name, that one will serve — push the freshly-fetched times
 	// and entity into it (see refresh.go).
@@ -144,10 +141,15 @@ func (b *BaseNode) newDirInode(ctx context.Context, out *fuse.EntryOut, name str
 // legitimately dynamic edit-buffer value that is meant to diverge from what
 // Lookup first reported — so this installs no inherited Getattr; it only shares
 // the immutable-field construction (mode/uid/gid/times) and the initial size.
+//
+// The timeout goes through applyNodeTimeout like its two siblings, so
+// inheritTimeout means the same thing here as it does at a directory or render
+// build site. It did not until #449's rework: this builder set the timeouts
+// unconditionally, and a negative bound became a ~584-billion-year TTL rather
+// than "leave the mount default alone".
 func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, name string, child fs.InodeEmbedder, na nodeAttr, ino uint64, timeout time.Duration) *fs.Inode {
 	na.fill(&out.Attr, b)
-	out.SetAttrTimeout(timeout)
-	out.SetEntryTimeout(timeout)
+	applyNodeTimeout(out, timeout)
 	// Serve-your-own-writes, seeded for every editable file in ONE place (#387).
 	// A committed write pins its bytes under the file's inode (editFlush), and the
 	// next Lookup that BUILDS that file must serve them rather than Linear's

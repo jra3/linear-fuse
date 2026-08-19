@@ -262,19 +262,30 @@ func sweepAbandonedTestDirs() {
 // IssuesNode.Lookup, IssuesNode.Mkdir, ChildrenNode.Mkdir), project directories
 // (projects.go — ProjectsNode.Lookup and .Mkdir), initiative directories
 // (initiatives.go — InitiativesNode.Lookup), and both attachment kinds
-// (attachments.go — embedded files and external .link files). NOT fixed, and so
-// still deaf to this constant: the three render-file sites that pin a literal
-// 30s — relations.go (.rel), links.go (.link on projects/initiatives) and
-// updates.go (status updates). No revalidation test walks those files (they
-// read issue.md, project.md and team.md), so the gap costs nothing here.
+// (attachments.go — embedded files and external .link files). #449 finished the
+// sweep on the render-file side — relations.go (.rel), links.go (.link on
+// projects/initiatives) and updates.go (status updates) — so no site pins a
+// literal any more.
 // Every "failure" was simply a test whose wait budget (this timeout + a 10s
 // poll) fell short of the 30s that was actually in force — which is also why it
 // looked order-dependent rather than constant. Raise the poll to 90s against
 // the old code and it passes in 30.5s, every time.
 //
 // So: if the entry timeout is ever shortened further and a revalidation test
-// starts failing, suspect a site pinning its own timeout — one of the three
-// above, or a new one — before suspecting the refresh path.
+// starts failing, suspect a site pinning its own timeout before suspecting the
+// refresh path — but check the guard first, because a new one should not have
+// been able to appear. TestNoHardcodedKernelTimeouts and
+// TestTimeoutSettersGoThroughOneChokePoint (internal/fs/kerneltimeout_test.go)
+// read the fs package's source and require every kernel timeout to be a named
+// policy written through the one helper, which is what replaced grep as the
+// thing standing between #414 and the next #449.
+//
+// One class this constant still does not reach, and by design: the sites that
+// pass mountDefaultTimeout or inheritTimeout. Both leave the reply's timeouts
+// reading back as zero, which is go-fuse's signal to substitute the MOUNT
+// defaults — fixtureAttrTimeout/fixtureEntryTimeout as configured here, so they
+// do track this constant, unlike the literals above. What neither expresses is
+// "do not cache": there is no way to ask the kernel for that through a zero.
 const (
 	fixtureAttrTimeout  = fs.DefaultAttrTimeout
 	fixtureEntryTimeout = 1 * time.Second

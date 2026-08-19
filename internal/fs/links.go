@@ -166,7 +166,7 @@ func (n *LinksNode) createExternalLinkNode(ctx context.Context, name string, lin
 		projectID:    n.projectID,
 		initiativeID: n.initiativeID,
 	}
-	return n.newRenderInode(ctx, out, name, node, externalLinkIno(link.ID), 30*time.Second)
+	return n.newRenderInode(ctx, out, name, node, externalLinkIno(link.ID), n.lfs.entryTimeout())
 }
 
 // ExternalLinkNode represents a .link file for a project/initiative external

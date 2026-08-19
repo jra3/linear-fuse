@@ -251,11 +251,13 @@ func (p *ProjectNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 // manifest declares a project directory's static children: the editable
 // project.md, the read-through project.meta, the .error sidecar, and the
 // docs/updates/milestones subdirs. The dynamic tail (issue symlinks) is appended
-// by Readdir/Lookup, not the manifest. Project children have a 0 timeout.
+// by Readdir/Lookup, not the manifest. Project children take
+// mountDefaultTimeout — the mount's configured bound, not "uncached"
+// (renderfile.go).
 func (p *ProjectNode) manifest() *dirManifest {
 	team, project := p.entity() // snapshot captured by the build closures
 	lfs := p.lfs
-	m := newDirManifest(&p.BaseNode, project.ID, project.CreatedAt, project.UpdatedAt, 0)
+	m := newDirManifest(&p.BaseNode, project.ID, project.CreatedAt, project.UpdatedAt, mountDefaultTimeout)
 
 	// project.md is editable-only; identity/status/dates live in project.meta.
 	m.file("project.md", projectInfoIno(project.ID), func(ctx context.Context) (fs.InodeEmbedder, []byte, syscall.Errno) {

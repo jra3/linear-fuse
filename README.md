@@ -523,10 +523,25 @@ This means your own changes appear immediately, but changes made by others (in t
 
 In addition to the application-level cache, the Linux kernel caches filesystem attributes:
 
-- **Entry timeout**: 30 seconds (directory listings)
-- **Attr timeout**: 60 seconds (file metadata) — issue/project/initiative
-  directories, and everything inside an issue directory, use the entry timeout
-  (30 seconds) for both
+Mount defaults are **60s attr / 30s entry**, overridable per mount
+(`fs.WithKernelCacheTimeouts`). Each surface then picks one named policy
+(`internal/fs/renderfile.go`):
+
+- `inheritTimeout` — everything not listed below: teams and their subdirectories,
+  cycles, `my/`, `by/`, users, the root views. Mount defaults, 60s attr / 30s entry.
+- `mountDefaultTimeout` — the `.meta`/`.error`/`.last` sidecars, `teams/<KEY>/docs`,
+  `teams/<KEY>/labels`, and the project and initiative directories' own children
+  (`project.md`, `initiative.md`, their sidecars and subdirs). Also mount defaults.
+- the mount's **entry** bound — the issue, project and initiative directories
+  themselves, the issue directory's children (`issue.md` and its static siblings),
+  and both attachment kinds. 30s by default, for *both* attr and entry.
+- `editableFileTimeout` — the editable `.md` files under `comments/`, `docs/`,
+  `labels/` and `milestones/`. 5 seconds for both.
+- `transientFileTimeout` — `_create` and the scratch file an editor's atomic save
+  renames over. 1 second for both.
+
+No surface is uncached: `mountDefaultTimeout` and `inheritTimeout` are two
+spellings of one policy, and both resolve to the mount's configured defaults.
 
 This reduces kernel-to-userspace calls but means `ls` output may lag slightly behind cache invalidations.
 

@@ -54,8 +54,13 @@ type LinearFS struct {
 	// the serve loop starts, like mountPoint) so nodes that set a per-directory
 	// timeout read the SAME policy the mount was given, rather than a literal of
 	// their own: the issue directory carried a second hardcoded 30s, and a mount
-	// configured otherwise silently did not apply to it.
-	kernelEntryTimeout time.Duration
+	// configured otherwise silently did not apply to it. It is a pointer because
+	// 0 is a legitimate configured value ("do not let the kernel cache entries"):
+	// a plain duration cannot tell that apart from "never mounted", and the
+	// <= 0 guard it forced made WithKernelCacheTimeouts(0, 0) yield 30s on every
+	// surface routed through entryTimeout() while inheritTimeout sites got 0
+	// (#449).
+	kernelEntryTimeout *time.Duration
 
 	// userFeedback (config UserFeedback / env USER_FEEDBACK, default off) makes
 	// the generated README carry the agent self-reporting protocol. Read only
@@ -821,13 +826,23 @@ const (
 )
 
 // entryTimeout is the kernel-entry cache bound a node should hand its children.
-// It falls back to the default so a LinearFS built without MountFS (unit tests)
-// behaves like production.
+// Unset (nil) means no MountFS ran — a LinearFS built directly by a unit test —
+// and falls back to the default so that path behaves like production. A mount
+// that configured 0 gets 0, which is the point of the pointer.
+//
+// It never returns a negative. A build site reads this as a concrete bound, not
+// as the inheritTimeout sentinel, and a negative reaching the FUSE setters is a
+// ~584-billion-year TTL rather than a short one (applyNodeTimeout has the other
+// half of that guard). The pre-#449 `<= 0` test covered this incidentally; it
+// had to go so a configured 0 would stop being read as "never mounted", and the
+// clamp is what it left behind. mountConfig.resolve now clamps first, so for a
+// mounted filesystem this is redundant defence in depth; it still covers a
+// LinearFS whose kernelEntryTimeout a unit test set directly.
 func (lfs *LinearFS) entryTimeout() time.Duration {
-	if lfs.kernelEntryTimeout <= 0 {
+	if lfs.kernelEntryTimeout == nil || *lfs.kernelEntryTimeout < 0 {
 		return DefaultEntryTimeout
 	}
-	return lfs.kernelEntryTimeout
+	return *lfs.kernelEntryTimeout
 }
 
 // MountOption tunes a mount. The defaults are production's; the options exist
@@ -836,6 +851,44 @@ type MountOption func(*mountConfig)
 
 type mountConfig struct {
 	attrTimeout, entryTimeout time.Duration
+}
+
+// resolveMountTimeouts seeds the mount's defaults, applies the options, and
+// clamps the result. MountFS calls it for the bounds it hands both fs.Options
+// and lfs.kernelEntryTimeout, and TestMountConfigClampsNegativeTimeouts calls
+// the same function — so the clamp test exercises the bounds the mount actually
+// uses instead of re-seeding a mountConfig of its own and testing resolve() in
+// isolation. That copy is the shape this package keeps finding defects in: a
+// guard that still passes after the wiring it guards has been reverted.
+// TestMountFSResolvesItsTimeouts pins the call itself.
+func resolveMountTimeouts(opts ...MountOption) (attr, entry time.Duration) {
+	mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
+	for _, o := range opts {
+		o(&mc)
+	}
+	return mc.resolve()
+}
+
+// resolve returns the bounds the mount will actually use, clamping a negative
+// configured value back to its default.
+//
+// WithKernelCacheTimeouts is exported and accepts any duration, and both halves
+// of the mount convert what it lands on to unsigned with no sign check —
+// go-fuse's setEntryOutTimeout applies *fs.Options.EntryTimeout through the same
+// fuse.EntryOut setters applyNodeTimeout guards. So a negative here is not a
+// short cache but a ~584-billion-year one, at every inheritTimeout and
+// mountDefaultTimeout site, which is most of the tree. Clamping once at the
+// point the option lands is what keeps fsOpts and lfs.kernelEntryTimeout
+// agreeing on the same input instead of disagreeing about it.
+func (c mountConfig) resolve() (attr, entry time.Duration) {
+	attr, entry = c.attrTimeout, c.entryTimeout
+	if attr < 0 {
+		attr = DefaultAttrTimeout
+	}
+	if entry < 0 {
+		entry = DefaultEntryTimeout
+	}
+	return attr, entry
 }
 
 // WithKernelCacheTimeouts overrides how long the kernel may serve attrs and
@@ -864,12 +917,8 @@ func MountFS(mountpoint string, lfs *LinearFS, debug bool, opts ...MountOption) 
 	// — a plain data race the first README lookup can hit.
 	lfs.mountPoint = mountpoint
 
-	mc := mountConfig{attrTimeout: DefaultAttrTimeout, entryTimeout: DefaultEntryTimeout}
-	for _, o := range opts {
-		o(&mc)
-	}
-	attrTimeout, entryTimeout := mc.attrTimeout, mc.entryTimeout
-	lfs.kernelEntryTimeout = entryTimeout // published before the serve loop, as above
+	attrTimeout, entryTimeout := resolveMountTimeouts(opts...)
+	lfs.kernelEntryTimeout = &entryTimeout // published before the serve loop, as above
 
 	fsOpts := &fs.Options{
 		AttrTimeout:  &attrTimeout,

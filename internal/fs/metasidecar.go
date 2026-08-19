@@ -24,8 +24,9 @@ import (
 // the item entries, and Lookup routes a metaSidecarSource hit back through the
 // same listing find() — so the listed⇔openable round-trip the listings
 // guarantee for the .md files extends to their sidecars by construction. Each
-// sidecar is a plain renderFile (0444, DIRECT_IO, timeout 0, like the entity
-// .meta files), so it renders current state on every read and vanishes with
+// sidecar is a plain renderFile (0444, DIRECT_IO, mountDefaultTimeout like the
+// entity .meta files — the mount's configured bound, not "uncached"), so
+// DIRECT_IO renders current state on every read and it vanishes with
 // its entity: rm of the .md deletes the entity, and the delete/rename paths
 // invalidate the sidecar's kernel entry alongside the item's.
 

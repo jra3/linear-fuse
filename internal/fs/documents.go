@@ -162,7 +162,7 @@ func (n *DocsNode) newDocumentInode(ctx context.Context, name string, doc api.Do
 		editBuffer:   editBuffer{content: content},
 	}
 	// Shorter timeout for writable files.
-	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), doc.CreatedAt, doc.UpdatedAt), documentIno(doc.ID), 5*time.Second), 0
+	return n.newFileInode(ctx, out, name, node, fileAttr(len(content), doc.CreatedAt, doc.UpdatedAt), documentIno(doc.ID), editableFileTimeout), 0
 }
 
 func (n *DocsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {

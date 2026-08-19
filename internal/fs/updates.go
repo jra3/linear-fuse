@@ -19,7 +19,7 @@ func (b *BaseNode) lookupUpdateFile(ctx context.Context, out *fuse.EntryOut, nam
 	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		return updateMarkdown(id, health, created, updated, user, body), updated, created
 	}
-	return b.lookupRenderFile(ctx, out, name, render, ino, 30*time.Second)
+	return b.lookupRenderFile(ctx, out, name, render, ino, b.lfs.entryTimeout())
 }
 
 // updateMarkdown renders a status update (project or initiative) as
