@@ -312,6 +312,20 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		t.Errorf("project-labels.md mode = %v, want 0444 (README: read-only)", info.Mode().Perm())
 	}
 
+	// #475: the freshness contract. Nothing pinned its predecessor ("Cache TTL:
+	// 60s for issues, 10min for states/labels/users"), which is how it outlived
+	// the in-memory cache it described. Two claims here are ones an agent acts
+	// on: "never blocks on" pins that a read is served locally and never waits
+	// on Linear (so a hung workspace is not a hung mount); "still returns the
+	// bytes it has" plus "re-read to see it" pin the stale-while-revalidate
+	// half — a stale read hands back what it has and refreshes behind you, so
+	// someone else's edit needs a LATER read, not a longer one.
+	for _, want := range []string{"never blocks on", "still returns the bytes it has", "re-read to see it"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not document the freshness contract: missing %q", want)
+		}
+	}
+
 	// #366: the agent self-reporting protocol is opt-in (USER_FEEDBACK). The
 	// suite mounts without it, so the served README must not carry it — a
 	// default mount never tells an agent to file issues on this repo. The

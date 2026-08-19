@@ -640,12 +640,115 @@ func (r *SQLiteRepository) GetStateByName(ctx context.Context, teamID, name stri
 // Labels
 // =============================================================================
 
+// GetTeamLabels serves the team's label catalog from SQLite and triggers a
+// stale-while-revalidate refresh behind the answer (#475).
+//
+// The trigger lives HERE, not at the FUSE node, because collectionDir.refresh
+// fires only on Readdir: `cat teams/K/labels/@home.md` is a bare Lookup, and
+// that — reading one label's description — is the access pattern the staleness
+// was reported against. Every reader of the catalog goes through this method
+// (the labels/ listing, each label file's Lookup, the labels.md render, the
+// by/label views, the write path's name resolver), so one hook covers them all
+// and the kind:teamID dedup collapses them into a single in-flight refresh.
+//
+// Before this, labels reached SQLite only on the sync worker's FULL cycle
+// (syncTeamMetadata, skipped by lean cycles), so a remote label edit could go
+// unseen for FullSyncInterval + Interval — measured at ~12 minutes against a
+// live mount, with no marker distinguishing a stale description from a current
+// one.
 func (r *SQLiteRepository) GetTeamLabels(ctx context.Context, teamID string) ([]api.Label, error) {
 	labels, err := r.store.Queries().ListTeamLabels(ctx, sql.NullString{String: teamID, Valid: true})
 	if err != nil {
 		return nil, fmt.Errorf("list team labels: %w", err)
 	}
+
+	r.maybeRefreshSWR(swrSpec{
+		kind: kindTeamLabels,
+		id:   teamID,
+		// TTL flavor: api.Label carries no timestamps, so there is no change
+		// event to compare against — the same reason the catalog has no
+		// mtime worth reporting (see LabelsNode.collection's metaTimes).
+		//
+		// Freshness is the team's own catalog stamp, not an aggregate over
+		// the rows it serves: the rows are shared (workspace labels appear in
+		// every team's catalog) and an empty catalog has no rows to carry a
+		// timestamp at all. See db.TeamLabelsScheduleKey. A missing stamp is a
+		// query error here, which swrStale already reads as never-synced, so
+		// one refresh fires, stamps, and the surface goes quiet.
+		syncedAt: func() (interface{}, error) {
+			stamp, err := r.store.Queries().GetSyncSchedule(context.Background(), db.TeamLabelsScheduleKey(teamID))
+			if err != nil {
+				return nil, err
+			}
+			return stamp, nil
+		},
+		refresh: func(ctx context.Context) error {
+			return r.refreshTeamLabels(ctx, teamID)
+		},
+		// No orphan handler: a team is the sync root, not a sub-resource, so a
+		// not-found on its labels must not cascade-delete anything (the
+		// kindTeamDocs precedent).
+	})
+
 	return db.DBLabelsToAPILabels(labels), nil
+}
+
+// refreshTeamLabels fetches the team's labels and reconciles them into SQLite.
+//
+// Unlike the doc/update refreshes this one PRUNES: api.Client.GetTeamLabels
+// drains the connection, so the fetched set is complete, and completeness is
+// what licenses a prune (the reconcile contract). "Does this label still
+// exist" is one of the questions the mount is read for, so a label deleted in
+// Linear must be able to disappear between full cycles, not only at one.
+//
+// The prune is the sync worker's own, with the worker's scoping: team_id comes
+// from label.Team (APILabelToDBLabel), never from the team asked about, because
+// team.labels mixes workspace labels in — and PruneTeamLabels matches team_id
+// = ?, so those workspace rows (team_id NULL) are untouched by it, exactly as
+// in syncTeamMetadata. The cutoff is taken BEFORE the fetch so a row this pass
+// re-stamps cannot fall behind its own cutoff.
+//
+// A clean pass then stamps the team's catalog key — including a pass that
+// fetched ZERO labels, which is the whole reason the stamp is not derived
+// from the rows. The clean gate is the detail_synced_at discipline
+// (refreshIssueDetails): a pass whose upserts did not all land stays
+// unstamped, so it reads stale and retriggers, and a FAILED fetch returns
+// above without touching the previous stamp.
+func (r *SQLiteRepository) refreshTeamLabels(ctx context.Context, teamID string) error {
+	pruneCutoff := db.Now()
+	labels, err := r.client.GetTeamLabels(ctx, teamID)
+	if err != nil {
+		return err
+	}
+
+	clean := reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
+		Label: "team label " + teamID,
+		Kind:  "label",
+		Items: labels,
+		Upsert: func(ctx context.Context, label api.Label) error {
+			params, err := db.APILabelToDBLabel(label)
+			if err != nil {
+				return err
+			}
+			return r.store.Queries().UpsertLabel(ctx, params)
+		},
+		Prune: func(ctx context.Context) error {
+			return r.store.Queries().PruneTeamLabels(ctx, db.PruneTeamLabelsParams{
+				TeamID:   sql.NullString{String: teamID, Valid: true},
+				SyncedAt: pruneCutoff,
+			})
+		},
+	})
+
+	if clean {
+		if err := r.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+			Key:     db.TeamLabelsScheduleKey(teamID),
+			LastRun: db.Now(),
+		}); err != nil {
+			log.Printf("[repo] stamp label catalog for team %s: %v", teamID, err)
+		}
+	}
+	return nil
 }
 
 // GetProjectLabels returns the workspace project-label catalog, sorted by

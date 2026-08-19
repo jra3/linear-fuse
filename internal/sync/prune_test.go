@@ -289,6 +289,58 @@ func TestTeamMetadataSyncPrunesStaleLabels(t *testing.T) {
 	}
 }
 
+// TestTeamMetadataSyncStampsLabelCatalog: the full cycle's metadata drain
+// reconciles the same catalog the repo's read-path label SWR refreshes
+// (#475), so it must stamp that catalog's freshness key too — otherwise the
+// first label read after a cycle re-drains data the cycle just persisted. The
+// stamp is per team and gated on the labels reconcile's clean verdict, so a
+// failed fetch (which reconciles nothing) leaves no stamp and the read path
+// still refreshes.
+func TestTeamMetadataSyncStampsLabelCatalog(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.labelsByTeam["team-1"] = []api.Label{{ID: "label-live", Name: "Live"}}
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncTeamMetadata(ctx, api.Team{ID: "team-1", Key: "T1"}); err != nil {
+		t.Fatalf("syncTeamMetadata: %v", err)
+	}
+
+	if _, err := store.Queries().GetSyncSchedule(ctx, db.TeamLabelsScheduleKey("team-1")); err != nil {
+		t.Errorf("full-cycle drain left team-1's label catalog unstamped: %v", err)
+	}
+	// Another team's catalog was not drained by this pass, so it must not read
+	// as fresh off it.
+	if _, err := store.Queries().GetSyncSchedule(ctx, db.TeamLabelsScheduleKey("team-2")); err == nil {
+		t.Error("team-1's drain stamped team-2's label catalog")
+	}
+}
+
+// TestTeamMetadataSyncFailureLeavesLabelCatalogUnstamped: a drain that never
+// fetched reconciles nothing, so stamping would suppress the read path's
+// refresh on data nobody looked at.
+func TestTeamMetadataSyncFailureLeavesLabelCatalogUnstamped(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	mock := newMockAPIClient()
+	mock.teamMetadataErr = errors.New("metadata fetch failed")
+	worker := NewWorker(mock, store, Config{Interval: time.Hour})
+
+	if err := worker.syncTeamMetadata(ctx, api.Team{ID: "team-1", Key: "T1"}); err == nil {
+		t.Fatal("expected the failed metadata fetch to return an error")
+	}
+	if _, err := store.Queries().GetSyncSchedule(ctx, db.TeamLabelsScheduleKey("team-1")); err == nil {
+		t.Error("a failed metadata drain stamped the label catalog")
+	}
+}
+
 // TestTeamMetadataSyncPrunesStaleCycles: a cycle absent from the drained fetch
 // is pruned; a returned cycle survives.
 func TestTeamMetadataSyncPrunesStaleCycles(t *testing.T) {

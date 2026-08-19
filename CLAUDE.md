@@ -157,14 +157,19 @@ LinearFS exposes Linear as a FUSE filesystem with SQLite as the persistent data 
 ```
 Linear API → api.Client → Sync Worker → SQLite → Repository → LinearFS → FUSE
                 ↓
-           (mutations only)
+           (mutations)
 ```
 
 **Data Flow:**
 - **Sync Worker**: Background process fetches data from Linear API and stores in SQLite
-- **Repository**: Abstraction layer for all data access (reads from SQLite)
+- **Repository**: Abstraction layer for all data access (serves reads from SQLite;
+  also calls `api.Client` for its non-blocking stale-while-revalidate refreshes)
 - **LinearFS**: FUSE implementation that serves data via Repository
-- **API Client**: Used directly only for mutations (create, update, delete)
+- **API Client**: Mutations go through it directly; reads reach it only via the
+  Sync Worker and the Repository's SWR refreshes
+
+`docs/ARCHITECTURE.md` owns this map — which surfaces refresh on read, where the
+network is reached, and what blocks. Read it before reasoning about the data path.
 
 ### Directory Structure
 

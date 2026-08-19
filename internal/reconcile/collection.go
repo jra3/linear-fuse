@@ -1,9 +1,10 @@
 // Package reconcile owns the reconcile-into-SQLite tails shared by the sync
-// worker and (in a later step) the repo's SWR refresh path: the
-// upsert-all/prune-if-clean collection tail (Collection), the per-issue
-// detail persist composed from it (PersistIssueDetails), and the
-// embedded-file extraction module (Extractor). Neither internal/sync nor
-// internal/repo imports the other, so the shared policy lives here.
+// worker and the repo's SWR refresh path (the label refresh of #475 is the
+// first repo-side caller with a prune): the upsert-all/prune-if-clean
+// collection tail (Collection), the per-issue detail persist composed from
+// it (PersistIssueDetails), and the embedded-file extraction module
+// (Extractor). Neither internal/sync nor internal/repo imports the other, so
+// the shared policy lives here.
 package reconcile
 
 import (

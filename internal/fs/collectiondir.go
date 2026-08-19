@@ -47,8 +47,12 @@ type collectionDir[T any] struct {
 	// (kind is plural: "comments" vs "comment").
 	noun string
 
-	// refresh kicks a background staleness refresh before a Readdir; nil for
-	// collections that are not SWR sub-resources (labels, milestones).
+	// refresh kicks a background staleness refresh before a Readdir. Only
+	// comments/ sets it (the issue-details surface): docs/ triggers the same
+	// refresh inside its own fetch, milestones have no SWR surface, and the
+	// label catalog's refresh is hooked in the repository's GetTeamLabels
+	// (#475) because this seam fires only on Readdir — reading one label file
+	// is a bare Lookup.
 	refresh func(ctx context.Context)
 	// fetch returns the collection's current items (the SQLite-backed read).
 	fetch func(ctx context.Context) ([]T, error)

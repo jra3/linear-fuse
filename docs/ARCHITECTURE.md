@@ -130,9 +130,10 @@ Two rules govern the whole design:
 
 1. **Reads never touch the Linear API.** Every metadata read is served from
    SQLite via the Repository, with no blocking cold-cache fetch: a read returns
-   whatever SQLite holds and, when a sub-resource looks stale, kicks a
-   **non-blocking** background refresh (stale-while-revalidate). The Sync Worker
-   keeps SQLite fresh. Two deliberate exceptions block on the network: embedded
+   whatever SQLite holds and, when the surface it serves looks stale, kicks a
+   **non-blocking** background refresh (stale-while-revalidate — sub-resources
+   mostly, plus the team label catalog). The Sync Worker keeps SQLite fresh.
+   Two deliberate exceptions block on the network: embedded
    attachment bytes (`*.png`, `*.pdf`) fall through memory → disk → a lazy CDN
    GET (`embeddedFileCache`), and a handful of interactive-tier synchronous
    reads (a few write-flow re-checks, e.g. the attachment-listing live
@@ -173,10 +174,12 @@ Authorization key onto the redirect target (SSRF / http-downgrade). The CDN
 client additionally **caps each GET body at 100 MiB** (`maxCDNBytes`), erroring
 rather than caching a truncated entry. The package's only internal dependency
 is the small `internal/telemetry` instrument-constructor helpers. It exposes
-26 query methods (`GetTeamIssuesPage`,
+~28 query methods (`GetTeamIssuesPage`,
 `GetTeamMetadata`, `GetInitiativesProbe`, `GetIssueDetailsBatch`, …) backed by
 31 named GraphQL operations — combined fetches like `GetTeamMetadata` issue
-several (metadata query + drain-page twins) — and ~30 mutation methods
+several (metadata query + drain-page twins), and a narrow method can reuse an
+existing one (`GetTeamLabels` drains `queryTeamLabelsPage`, the same page query
+the combined metadata fetch drains) — and ~30 mutation methods
 (`UpdateIssue`, `CreateComment`, `CreateLabel`, …). Types in `types.go` mirror
 Linear's schema; queries in `queries.go` are built from 17 shared GraphQL
 fragments (`IssueFields`, `IssueFieldsLite`, `CommentFields`, …) concatenated as
@@ -310,16 +313,21 @@ server-reported reset. Cycles come in two sizes:
   members).
 
 **Probes never license a prune**, so metadata deletions and link changes are
-bounded by the full-cycle interval by design. That bound is load-bearing for
+bounded by the full-cycle interval by design — with one carve-out: the label
+catalog also refreshes (and prunes) on demand from the read path, because
+label names and descriptions steer how agents file work and a 12-minute lie
+was measured as harmful (#475). That bound is load-bearing for
 one live-verified Linear quirk: linking/unlinking a project↔initiative bumps
 *neither* entity's `updatedAt`, so link changes are structurally invisible to
 the newest-first probes — the full-cycle workspace drain is the *only* thing
 keeping links fresh, and cannot be "optimized away".
 
 Scheduling is persisted in the **`sync_schedule`** key/value table: the
-full-cycle cadence stamp, per-team probe watermarks, and the issue-ID-reconcile
-stamp — all stamp-on-completion and restart-safe (a restart mid-window starts
-lean; no full-cycle storm).
+full-cycle cadence stamp, per-team probe watermarks, the issue-ID-reconcile
+stamp, and the per-team label-catalog freshness stamp (the one key written from
+outside this package — see the Repository's SWR notes below) — all
+stamp-on-completion and restart-safe (a restart mid-window starts lean; no
+full-cycle storm).
 
 "Completion" for the full-cycle stamp is **deliberately asymmetric**: a cycle
 whose workspace or team-metadata drain was refused by the admission ladder
@@ -415,8 +423,10 @@ prune is licensed at all (nil `Prune` for capped/partial fetches).
 
 **Called by:** the Sync Worker (workspace/metadata/details) and the
 Repository's SWR refreshes (issue details; project/initiative docs, updates,
-links). The fs write tails do **not** go through it — they upsert single
-entities directly, and the SWR refresh reconciles behind them.
+links; the team label catalog — the one repo-side reconcile that passes a
+`Prune`, licensed by its drained fetch). The fs write tails do **not** go
+through it — they upsert single entities directly, and the SWR refresh
+reconciles behind them.
 
 ### `internal/db` — SQLite persistence (sqlc)
 
@@ -521,12 +531,32 @@ appears.
   not-found → `(nil, nil)`, fetch errors labeled with the op, convert errors
   propagated.
 - **Stale-while-revalidate** (`swr.go`): `maybeRefreshSWR` is the single owner
-  of refresh policy — every sub-resource surface routes through it with an
+  of refresh policy — every refreshed surface routes through it with an
   `swrSpec` (staleness rule, refresh func, orphan classification). Refreshes are
   non-blocking, bounded by a 10-slot semaphore and a 30s timeout, and persist
   through the `reconcile` tails. Staleness is either TTL-based (5 min; 30 min
   in catch-up mode) or event-driven (`detail_synced_at` older than the entity's
   `updatedAt`).
+  Most surfaces are entity sub-resources; the **team label catalog**
+  (`GetTeamLabels`, TTL flavor) is the exception, and it is hooked on the
+  repository read rather than on the FUSE directory node because
+  `collectionDir.refresh` fires only on `Readdir` — reading one label file is a
+  bare `Lookup`. Its refresh drains the whole catalog, so unlike the
+  upsert-only doc/update refreshes it **prunes**: a label deleted in Linear can
+  leave the cache between full sync cycles. Without it, labels reached SQLite
+  only on the full cycle, so a remote label edit was invisible for
+  `FullSyncInterval + Interval` — ~12 min, measured (#475).
+  Its freshness is a **per-team stamp** in `sync_schedule`
+  (`db.TeamLabelsScheduleKey`), not an aggregate over the label rows: the rows
+  are shared (a team's catalog is its own labels plus the workspace ones), so a
+  row-derived signal lets one team's refresh declare every other team fresh,
+  and a legitimately empty catalog has no row to stamp at all — the permanent
+  per-browse refetch loop `detail_synced_at` exists to avoid. The refresh
+  stamps the key on a clean pass (a zero-label fetch included); **the sync
+  worker's `syncTeamMetadata` stamps the same key**, so a read moments after a
+  full cycle does not re-drain what the cycle just persisted. It is the one
+  schedule key written by both packages, which is why the factory lives in
+  `internal/db` — `internal/sync` and `internal/repo` do not import each other.
 - **Orphan handling:** a refresh that hits Linear's "Entity not found"
   cascade-deletes the local rows (issue → its comments/docs/attachments/
   relations/history; likewise projects and initiatives) and schedules a

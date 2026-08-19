@@ -1037,7 +1037,7 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 	// label.Team (fetched via the LabelFields fragment), not team.ID: team.labels
 	// returns workspace labels mixed in, so stamping team.ID here is what churned
 	// workspace labels between teams.
-	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
+	labelsClean := reconcile.Collection(ctx, reconcile.CollectionSpec[api.Label]{
 		Label: "label",
 		Kind:  "label",
 		Items: meta.Labels,
@@ -1055,6 +1055,23 @@ func (w *Worker) syncTeamMetadata(ctx context.Context, team api.Team) error {
 			})
 		},
 	})
+
+	// The catalog this drain just reconciled is also what the repo's read-path
+	// label SWR refreshes (#475), so stamp its freshness key here too —
+	// otherwise the first label read after a full cycle would re-drain data
+	// this pass had already persisted. Gated on the labels reconcile's own
+	// clean verdict, the same terms the drain's success is judged by: an
+	// unclean pass leaves the previous stamp, and the read path refreshes.
+	// db.Now(), like the cutoff above and like the repo-side writer of this
+	// same key, so one key never carries two zones.
+	if labelsClean {
+		if err := w.store.Queries().UpsertSyncSchedule(ctx, db.UpsertSyncScheduleParams{
+			Key:     db.TeamLabelsScheduleKey(team.ID),
+			LastRun: db.Now(),
+		}); err != nil {
+			log.Printf("[sync] stamp label catalog for team %s failed: %v", team.ID, err)
+		}
+	}
 
 	reconcile.Collection(ctx, reconcile.CollectionSpec[api.Cycle]{
 		Label: "cycle",

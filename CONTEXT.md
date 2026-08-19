@@ -1369,8 +1369,12 @@ Constructed per-call by each node's `collection()` method (the
 The module holds only the two things it needs to touch a live inode — `parent`
 (the collection node, for `NewInode`/`mountRenderFile`) and `lfs` — plus a
 per-collection spec of small closures: `trio` (also derives the delete's error
-key via kind+parentID — no separate field), `refresh?` (nil for the
-non-SWR labels/milestones), `fetch`, `listing` (the `collectionListing[T]` seam
+key via kind+parentID — no separate field), `refresh?` (set only by
+`comments/`: `docs/` triggers the same refresh inside its own fetch,
+milestones have no SWR surface, and the label catalog's refresh is hooked in
+`SQLiteRepository.GetTeamLabels` because this seam fires only on `Readdir`
+and reading one label file is a bare `Lookup` — see "SWR refresh
+coordinator"), `fetch`, `listing` (the `collectionListing[T]` seam
 that [[named-listing]] and [[indexed-listing]] both satisfy), `idOf`,
 `buildFile` (the **one opaque per-node closure** — the writable node *type* is
 the thing that genuinely varies, so each node owns it), `metaMarshal`/`metaTimes`/
@@ -1616,10 +1620,13 @@ there — prunes-when-complete, the clean guard, and embedded-file extraction,
 none of which its old hand-rolled upsert loops carried.
 
 ### SWR refresh coordinator (`swrRefresh`)
-The repo's six stale-while-revalidate surfaces — issue details, issue
-history, project/initiative documents, project/initiative updates — route
-through one coordinator, `maybeRefreshSWR(swrSpec)` in
-`internal/repo/swr.go`. Before it, two staleness policies lived in three
+EVERY stale-while-revalidate surface the repo has routes through one
+coordinator, `maybeRefreshSWR(swrSpec)` in `internal/repo/swr.go` — that is
+the invariant, and it is stated rather than tallied because the tally drifts
+each time a surface is added (this paragraph and the two code comments all
+still said "six" long after they weren't).
+
+Before it, two staleness policies lived in three
 implementations (the TTL `staleSince`/`maybeRefresh` pair; the event-driven
 `issue.updatedAt > synced_at` comparison hand-copied in
 `MaybeRefreshIssueDetails` and `maybeRefreshHistory`), the history fetch
@@ -1667,15 +1674,23 @@ the SWR path prunes-when-complete, the clean guard, and embedded-file
 extraction, three recorded behavior improvements over its old hand-rolled
 upsert loops. Its `clean` return gates the `detail_synced_at` stamp
 (symmetric with the worker's `syncDetails`): an unclean pass stays unstamped,
-reads stale, and retriggers. The four doc/update tails run
+reads stale, and retriggers. The doc/update/link tails run
 `reconcile.Collection` with nil `Prune` (upsert-only; nothing licenses a
-prune for these fetches — and convert errors now log-and-mark-unclean
-instead of a silent `continue`). The repo constructs its
-`reconcile.Extractor{Q, AuthHeader}` only when it has a client; fixture mode
-leaves `Deps.Extract` nil, which skips extraction. The coordinator also
-emits the SWR metrics (`linearfs.swr.triggers{kind,decision}` at the
-staleness check and `triggerBackgroundRefresh`'s three exits — which now
-takes the `refreshKind` and mints the dedup key itself — and
+prune for those fetches — and convert errors now log-and-mark-unclean
+instead of a silent `continue`). `refreshTeamLabels` (#475) is the one
+repo-side tail that DOES pass a `Prune` — `api.Client.GetTeamLabels` drains
+the whole catalog, and completeness is the prune's license. It is a
+whole-catalog surface rather than an entity sub-resource, so it carries no
+orphan handler (the `kindTeamDocs` precedent), and its freshness is a
+per-team `sync_schedule` stamp (`db.TeamLabelsScheduleKey`, written by the
+repo AND by the worker's `syncTeamMetadata`) instead of an aggregate over
+rows the catalog shares across teams. Rationale: `docs/ARCHITECTURE.md`.
+The repo constructs its `reconcile.Extractor{Q, AuthHeader}` only when it
+has a client; fixture mode leaves `Deps.Extract` nil, which skips
+extraction. The coordinator also emits the SWR metrics
+(`linearfs.swr.triggers{kind,decision}` at the staleness check and
+`triggerBackgroundRefresh`'s three exits — which now takes the `refreshKind`
+and mints the dedup key itself — and
 `.refresh_outcomes{kind,outcome}` from the refresh goroutine).
 
 ### Detail sync outcome (`syncDetails`)
@@ -1739,20 +1754,15 @@ pre-diet behavior verbatim: `syncWorkspace` (users + initiatives +
 project-label catalog) and per-team `syncTeamMetadata`
 (states/labels/cycles/projects/members) — with every prune license — plus
 the incremental issues sync. A **lean** cycle (the steady-state default)
-runs only the cheap `GetTeams` enumeration, each team's projects
-change-detection probe (see "Projects probe" below), and each team's
-incremental issues sync: no `GetWorkspace`, no `GetTeamMetadata`, and
-therefore no metadata prunes (pruning stays licensed exclusively by the full
-cycle's complete drains, so the metadata deletion/staleness bound is the
-full-cycle interval). The decision is **time-based off a persisted timestamp**, not an
-
 runs only the cheap `GetTeams` enumeration, each team's incremental
 issues sync, and the change-detection probes (see "Initiatives probe"
 below): no `GetTeamMetadata`, and `GetWorkspace` only when a probe detects
 change — and therefore no unconditional metadata prunes (pruning stays
 licensed exclusively by complete drains — the full cycle's, or a
 probe-escalated `syncWorkspace`'s — so the metadata deletion/staleness
-bound is the full-cycle interval). The decision is **time-based off a
+bound is the full-cycle interval, with labels the one carve-out since
+#475: the repo's read-path catalog refresh is itself a complete drain and
+prunes, see "SWR refresh coordinator"). The decision is **time-based off a
 persisted timestamp**, not an
 in-memory counter: `nextCycleMode` reads the `sync_schedule` row keyed
 `full_cycle` and answers full when the row is missing (cold start — a fresh
@@ -1788,14 +1798,14 @@ condition that decides the stamp.
 
 The asymmetry is the point. Prunes are licensed exclusively by complete
 drains, so the metadata deletion/staleness bound IS the full-cycle
-interval, and a starved-but-stamped cycle stretches that bound by a whole
-interval with nothing to show for it. Withholding is safe for a deferral —
-refused at the preflight *before* the query is paid for, and self-clearing
-at the window reset — and unsafe for a real failure, which pays full price
-per attempt: withholding there would pin the worker in the expensive full
-mode for the length of the outage, converting a partial failure into
-permanent maximum budget consumption. So a failed drain stamps and logs,
-exactly as before.
+interval (labels excepted, above), and a starved-but-stamped cycle stretches
+that bound by a whole interval with nothing to show for it. Withholding is
+safe for a deferral — refused at the preflight *before* the query is paid
+for, and self-clearing at the window reset — and unsafe for a real failure,
+which pays full price per attempt: withholding there would pin the worker in
+the expensive full mode for the length of the outage, converting a partial
+failure into permanent maximum budget consumption. So a failed drain stamps
+and logs, exactly as before.
 
 Withholding has a cost the stamp rule has to pay for: the stamp is also what
 selects the next cycle's mode, so a withheld stamp keeps the worker in FULL
@@ -2115,7 +2125,8 @@ observable `COUNT(*)` of `pending_detail_sync`, registered at Worker
 construction), and `linearfs.swr.triggers{kind,
 decision=triggered|fresh|deduped|sem_dropped}` /
 `.refresh_outcomes{kind, outcome=ok|error|orphaned}` bound at
-`SQLiteRepository` construction (kind = the six `refreshKind` constants).
+`SQLiteRepository` construction (kind = the `refreshKind` constants, one per
+SWR surface — a set that grows, which is why it is not tallied here).
 The sync instruments bind at Worker construction; `prunes` binds lazily on
 the first firing prune (the reconcile package has no construction point);
 the shared must-create helpers live in `telemetry/instruments.go`. That

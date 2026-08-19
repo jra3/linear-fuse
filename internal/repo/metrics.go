@@ -7,8 +7,9 @@ package repo
 // construction, from the globally registered provider (otel.Meter); with no
 // provider the global no-op makes every record free.
 //
-// Cardinality: kind is the six refreshKind constants; decision and outcome
-// are the closed enums below. Nothing else becomes an attribute.
+// Cardinality: kind is the refreshKind constants (one per SWR surface);
+// decision and outcome are the closed enums below. Nothing else becomes an
+// attribute.
 
 import (
 	"context"
