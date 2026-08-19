@@ -1,16 +1,10 @@
 package integration
 
 import (
-	"context"
-	"fmt"
 	"os"
 	"strings"
 	"syscall"
 	"testing"
-	"time"
-
-	"github.com/jra3/linear-fuse/internal/db"
-	"github.com/jra3/linear-fuse/internal/testutil/fixtures"
 )
 
 // TestTruncatingWriteWithInterveningFlush pins #454: a flush that arrives
@@ -44,26 +38,9 @@ func TestTruncatingWriteWithInterveningFlush(t *testing.T) {
 
 	const longBody = "AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ KKKK\n\nLong tail: ZZZZ-TAIL-MARKER-454."
 
-	ctx := context.Background()
-	team := fixtures.FixtureAPITeam()
-	uniq := time.Now().UnixNano()
-	issueID := fmt.Sprintf("trunc-flush-%d", uniq)
-	identifier := fmt.Sprintf("TST-%d", 30000+uniq%10000)
-	row, err := db.APIIssueToDBIssue(fixtures.FixtureAPIIssue(
-		fixtures.WithIssueID(issueID, identifier),
-		fixtures.WithTitle("Truncate flush probe"),
-		fixtures.WithDescription(longBody),
-		fixtures.WithTeam(&team),
-	))
-	if err != nil {
-		t.Fatalf("convert seed: %v", err)
-	}
-	if err := testStore.Queries().UpsertIssue(ctx, row.ToUpsertParams()); err != nil {
-		t.Fatalf("seed upsert: %v", err)
-	}
-	t.Cleanup(func() { _ = testStore.Queries().DeleteIssue(context.Background(), issueID) })
+	probe := seedIssueProbe(t, "trunc-flush", "Truncate flush probe", longBody)
 
-	path := mountPoint + "/teams/" + testTeamKey + "/issues/" + identifier + "/issue.md"
+	path := probe.Path
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("prime read: %v", err)
@@ -93,8 +70,8 @@ func TestTruncatingWriteWithInterveningFlush(t *testing.T) {
 	}
 
 	var sent string
-	for _, u := range mock.Updates() {
-		if u.ID == issueID && u.Body != nil {
+	for _, u := range updatesFor(mock, probe.ID) {
+		if u.Body != nil {
 			sent = *u.Body
 		}
 	}

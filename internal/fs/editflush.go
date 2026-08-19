@@ -26,6 +26,74 @@ func emptyWriteMessage(op string) string {
 		"the whole document back. To clear a single field, omit that field's key and keep the rest.", op)
 }
 
+// holeWriteMessage is the .error a zero-filled write gets (#472). Same shape and
+// same recovery as emptyWriteMessage — the buffer is restored on this rejection
+// too — but it names the cause, because the writer's mistake is not "I wrote
+// nothing", it is "I wrote at an offset past the end of the file", and only the
+// second sentence tells them which syscall to change.
+func holeWriteMessage(op string) string {
+	return fmt.Sprintf("Zero-filled write rejected\nOperation: %s\n"+
+		"Error: the file contains NUL bytes. A NUL is what the filesystem fills a hole with when a write "+
+		"starts past the end of the file, or when a resize grows it — not something a writer composes. "+
+		"Applying it would store those bytes as the body, and because the document no longer starts with "+
+		"its frontmatter it would clear every removable field at once as well. Nothing was written.\n"+
+		"Fix: re-read the file to get its current contents, change what you mean to change, and write the "+
+		"WHOLE document back from offset 0 (truncate first, rather than seeking past the end or resizing). "+
+		"To clear a single field, omit that field's key and keep the rest.", op)
+}
+
+// writeVerdict classifies a dirty buffer before the front half ever sees it:
+// either it is a document the writer composed, or it is one of the two accidents
+// the shell refuses outright.
+type writeVerdict int
+
+const (
+	// writeIsDocument — flush it.
+	writeIsDocument writeVerdict = iota
+	// writeIsEmpty — nothing but whitespace (#397).
+	writeIsEmpty
+	// writeIsHole — the buffer carries filesystem zero-fill (#472).
+	writeIsHole
+)
+
+// classifyWrite is the pure predicate behind the shell's rejection. It is the
+// whole decision, extracted so the contract all seven editable surfaces share is
+// tested as a table rather than through a mount.
+//
+// The NUL arm is #472, and it exists because bytes.TrimSpace does NOT strip NUL:
+// a buffer of nothing but zero-fill sailed past the empty guard that exists
+// precisely to stop a fieldless document from wiping every field, and was
+// persisted to Linear as a description of NUL bytes plus assignee/dueDate/
+// parent/project/milestone/cycle/labels all cleared — exit 0, no .error. The
+// zero-fill itself is correct filesystem behavior (a write starting past EOF, or
+// a grow-resize, leaves a hole), which is why the accident is invisible to the
+// writer: the document just no longer begins with `---`, so marshal.Parse reads
+// it as empty frontmatter with the whole string as body.
+//
+// The predicate is "a NUL anywhere", not "a leading NUL". The measured case is a
+// hole at offset 0, but a hole in the MIDDLE of an otherwise-parseable document
+// is the same accident with a smaller blast radius — it keeps the frontmatter
+// and stores the zero-fill as the body — and NUL is never a byte one of these
+// markdown surfaces should carry either way. One predicate, no offset subtlety.
+func classifyWrite(content []byte) writeVerdict {
+	if len(bytes.TrimSpace(content)) == 0 {
+		return writeIsEmpty
+	}
+	if bytes.IndexByte(content, 0) >= 0 {
+		return writeIsHole
+	}
+	return writeIsDocument
+}
+
+// rejectedWriteMessage renders the .error for a refused buffer. Not called for
+// writeIsDocument.
+func rejectedWriteMessage(v writeVerdict, op string) string {
+	if v == writeIsHole {
+		return holeWriteMessage(op)
+	}
+	return emptyWriteMessage(op)
+}
+
 // The edit-flush shell.
 //
 // Every editable file node (issue.md, project.md, initiative.md, and a
@@ -106,17 +174,18 @@ type editFlushSpec[T any] struct {
 	invalidateExtra func(fresh *T)
 	// restore re-renders the entity's CURRENT content, exactly as the node's
 	// construction seam rendered it. The shell calls it on one path only: the
-	// empty-write rejection below, where it puts those bytes back into the buffer
-	// and clears dirty. Return nil (or an empty render) to decline, and the buffer
-	// is left as-is.
+	// refused-write rejection below — an emptied or a zero-filled buffer, both
+	// arms of classifyWrite — where it puts those bytes back into the buffer and
+	// clears dirty. Return nil (or an empty render) to decline, and the buffer is
+	// left as-is.
 	//
 	// This is the difference between the two rejections. A parse failure holds a
 	// document the writer meant, so the buffer stays dirty for a corrected
-	// re-save; an emptied file holds nothing worth preserving, and leaving it
+	// re-save; a refused buffer holds nothing worth preserving, and leaving it
 	// would strand the canonical node serving zero bytes for its whole lifetime —
 	// refresh refuses a dirty buffer, and only a successful editFlush clears the
-	// flag — which is exactly the state emptyWriteMessage tells the writer to
-	// recover from by re-reading.
+	// flag — which is exactly the state the rejection's .error tells the writer
+	// to recover from by re-reading.
 	restore func() []byte
 	// pinIno is the inode of the canonical file whose Lookup seeds from
 	// authoredPins. A committed clean write pins its bytes there, which is what
@@ -185,8 +254,16 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, s
 	// target hands the flush nil bytes). Treating nil as "nothing to do" while an
 	// O_TRUNC of the same file was a real edit gave the two save paths opposite
 	// answers to `> issue.md` — silent success on one, a mutation on the other.
-	if len(bytes.TrimSpace(eb.content)) == 0 {
-		sink.SetWriteError(spec.writeBack.errKey, emptyWriteMessage(spec.writeBack.op))
+	//
+	// A zero-filled buffer is the same accident wearing a different mask (#472),
+	// and it is rejected on the same terms: bytes.TrimSpace does not strip NUL, so
+	// an all-NUL buffer is not "empty", but a document that begins with NUL does
+	// not begin with `---` either — marshal.Parse hands back empty frontmatter
+	// with the whole string as body, and the mutation that follows sends a
+	// description of NUL bytes AND clears assignee, due date, parent, project,
+	// milestone, cycle and labels together. classifyWrite owns both predicates.
+	if verdict := classifyWrite(eb.content); verdict != writeIsDocument {
+		sink.SetWriteError(spec.writeBack.errKey, rejectedWriteMessage(verdict, spec.writeBack.op))
 		if spec.restore != nil {
 			if current := spec.restore(); len(current) > 0 {
 				eb.content = current

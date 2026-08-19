@@ -188,6 +188,14 @@ var fixtureLiterals = []string{`"TST-`, `"test-project"`, `"SUB"`, `"SUB-`}
 // It reads the suite's own source rather than its behavior, because the thing
 // being guarded is unobservable from inside a fixture-mode run: that is exactly
 // why it went unnoticed until someone spent a live workspace to find out.
+//
+// The scan FOLLOWS CALLS into the suite's own helpers, not just Test bodies: a
+// shared seeder like seedIssueProbe spells "TST-" once on behalf of every test
+// that uses it, and a rule that only read Test bodies would let the next caller
+// arrive unguarded — the precise failure #395 exists to prevent, reintroduced
+// by the refactor that made the seeding shared. A test is held to the rule if
+// it reaches a fixture literal through ANY chain of package-local calls, and
+// the failure names the chain so the fix is still a one-line decision.
 func TestFixtureLiteralsCarryTheGuard(t *testing.T) {
 	files, err := filepath.Glob("*_test.go")
 	if err != nil {
@@ -197,8 +205,20 @@ func TestFixtureLiteralsCarryTheGuard(t *testing.T) {
 		t.Fatal("no test sources found; the check would pass vacuously")
 	}
 
+	// Every package-level func in the suite, by name — Go guarantees the names
+	// are unique within the package, so the name is the whole identity. Closures
+	// bound to locals (`seed := func(...)`) are not declarations and need no
+	// entry: their source sits inside the body that declares them, so the body
+	// scan already sees whatever they spell.
+	type suiteFunc struct {
+		file  string
+		body  string   // source text of the body, for the literal and guard scans
+		calls []string // package-local functions it calls, in source order
+	}
+	funcs := map[string]*suiteFunc{}
+	var declared []string // declaration order, so failures are deterministic
+
 	fset := token.NewFileSet()
-	checked := 0
 	for _, file := range files {
 		src, err := os.ReadFile(file)
 		if err != nil {
@@ -210,29 +230,91 @@ func TestFixtureLiteralsCarryTheGuard(t *testing.T) {
 		}
 		for _, decl := range parsed.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
+			if !ok || fn.Recv != nil || fn.Body == nil {
 				continue
 			}
-			checked++
 			// Positions are FileSet-global; convert to this file's byte offsets.
 			body := string(src[fset.Position(fn.Body.Pos()).Offset:fset.Position(fn.Body.End()).Offset])
-			// This file spells the literals to define them; skip its own bodies.
-			if file == "modes_test.go" {
-				continue
+			var calls []string
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if ident, ok := call.Fun.(*ast.Ident); ok {
+						calls = append(calls, ident.Name)
+					}
+				}
+				return true
+			})
+			funcs[fn.Name.Name] = &suiteFunc{file: file, body: body, calls: calls}
+			declared = append(declared, fn.Name.Name)
+		}
+	}
+
+	// reachesLiteral walks the call graph breadth-first from start and returns
+	// the shortest chain to a body that spells a fixture literal, plus the
+	// literal. Breadth-first so the reported chain is the shortest explanation,
+	// and `seen` keeps recursion (and mutual recursion) from looping.
+	reachesLiteral := func(start string) (chain []string, lit string) {
+		type step struct {
+			name string
+			via  []string
+		}
+		seen := map[string]bool{start: true}
+		for queue := []step{{start, []string{start}}}; len(queue) > 0; queue = queue[1:] {
+			cur := queue[0]
+			fn := funcs[cur.name]
+			if fn == nil {
+				continue // a closure local, a stdlib call, or a builtin
 			}
-			for _, lit := range fixtureLiterals {
-				if !strings.Contains(body, lit) {
+			// This file spells the literals to define them; its own bodies are
+			// the definition, not a use.
+			if fn.file != "modes_test.go" {
+				for _, l := range fixtureLiterals {
+					if strings.Contains(fn.body, l) {
+						return cur.via, strings.Trim(l, `"`)
+					}
+				}
+			}
+			for _, callee := range fn.calls {
+				if seen[callee] {
 					continue
 				}
-				if strings.Contains(body, "skipIfLiveAPI") || strings.Contains(body, "skipIfNoWriteTests") {
-					continue
-				}
-				t.Errorf("%s: %s names the fixture-seeded %s but carries no mode guard.\n"+
-					"  Either add skipIfLiveAPI(t, fixtureSeededData) — a live workspace has no such row —\n"+
-					"  or take the identifier from someIssueID(t)/someProjectSlug(t) if the contract holds live too.",
-					file, fn.Name.Name, strings.Trim(lit, `"`))
+				seen[callee] = true
+				queue = append(queue, step{callee, append(append([]string(nil), cur.via...), callee)})
 			}
 		}
+		return nil, ""
+	}
+
+	checked := 0
+	for _, name := range declared {
+		fn := funcs[name]
+		// TestMain is the suite's entry point, not a test: it seeds the fixture
+		// population itself, and already branches on liveAPIMode to decide
+		// whether to.
+		if !strings.HasPrefix(name, "Test") || name == "TestMain" || fn.file == "modes_test.go" {
+			continue
+		}
+		checked++
+		chain, lit := reachesLiteral(name)
+		if lit == "" {
+			continue
+		}
+		// The guard must be in the TEST's own body: that is where a reader
+		// looks, and it is what `grep skipIf` over the file answers.
+		if strings.Contains(fn.body, "skipIfLiveAPI") || strings.Contains(fn.body, "skipIfNoWriteTests") {
+			continue
+		}
+		where := "names"
+		if len(chain) > 1 {
+			where = "reaches, via " + strings.Join(chain[1:], " → ") + ","
+		}
+		t.Errorf("%s: %s %s the fixture-seeded %s but carries no mode guard.\n"+
+			"  Either add skipIfLiveAPI(t, fixtureSeededData) — a live workspace has no such row —\n"+
+			"  or take the identifier from someIssueID(t)/someProjectSlug(t) if the contract holds live too.",
+			fn.file, name, where, lit)
+	}
+	if checked == 0 {
+		t.Fatal("no test functions found outside modes_test.go; the check would pass vacuously")
 	}
 	t.Logf("checked %d test functions across %d files", checked, len(files))
 }

@@ -940,16 +940,25 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and an
   `EDQUOT` has to say that retrying will NOT help until the workspace has room,
   which is the one next-action no other arm's phrasing covers (#409).
-- **Empty writes are refused at the shell:** `editFlush` rejects a flush whose
-  buffer is empty or whitespace-only with `EINVAL` before any handler's front
-  half runs. An empty document has no fields, so applying it diffs as "remove
-  every removable field" — a measured five-field wipe on `issue.md` — and it is
-  exactly what a crashed editor or a botched tool call produces. The guard sits
+- **Empty and zero-filled writes are refused at the shell:** `editFlush` rejects
+  a flush whose buffer is empty, whitespace-only, or carries NUL bytes with
+  `EINVAL` before any handler's front half runs. The predicate is the pure
+  `classifyWrite`, and its verdict picks the `.error` wording. An empty document
+  has no fields, so applying it diffs as "remove every removable field" — a
+  measured five-field wipe on `issue.md` — and it is exactly what a crashed
+  editor or a botched tool call produces. The guard sits
   on the shared shell rather than per-handler so the in-place (`O_TRUNC`, empty
   buffer) and atomic-save (renamed zero-byte scratch, nil buffer) paths cannot
-  give `> issue.md` opposite answers (#397). The rejection also RESTORES the
-  buffer from the spec's `restore` closure (the entity's current render) and
-  clears `dirty`, which is what separates it from a parse failure: a parse
+  give `> issue.md` opposite answers (#397). NUL is the second arm (#472):
+  `bytes.TrimSpace` does not strip it, so a buffer of filesystem zero-fill — what
+  a write starting past EOF or a grow-resize leaves — sailed past the guard, and
+  since a document beginning with NUL does not begin with `---`, the mutation
+  sent a NUL description AND cleared assignee/due date/parent/project/milestone/
+  cycle/labels together at exit 0. Its `.error` names the hole rather than
+  claiming the file was empty, because the writer's mistake was the offset. The
+  rejection also RESTORES the buffer from the spec's `restore` closure (the
+  entity's current render) and clears `dirty`, which is what separates it from a
+  parse failure: a parse
   failure holds text the writer meant and keeps the buffer dirty for a corrected
   re-save, while an emptied buffer on the in-place path belongs to the canonical
   node and would otherwise serve zero bytes for the node's whole lifetime —

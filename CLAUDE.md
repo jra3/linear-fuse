@@ -113,9 +113,14 @@ Which mode a test runs in is declared in exactly one place —
   Never convert one guard to the other: `skipIfNoWriteTests` on a fixture-mode
   guard deletes it from the default offline suite, the only place it runs.
 - **no guard** — the test runs in every mode, and therefore may not name a
-  seeded row. Take the identifier from the workspace with `someIssueID(t)` /
-  `someProjectSlug(t)` (or their `…Dir` forms), which return the fixture's
-  `TST-1`/`test-project` offline and the first listed issue/project live.
+  seeded row, nor REACH one through a package-local helper: a shared seeder like
+  `seedIssueProbe` spells `TST-` on its callers' behalf, and
+  `TestFixtureLiteralsCarryTheGuard` follows the call chain, so a caller carries
+  the guard in its own body exactly as if it had spelled the literal inline (the
+  failure names the chain). Take the identifier from the workspace with
+  `someIssueID(t)` / `someProjectSlug(t)` (or their `…Dir` forms), which return
+  the fixture's `TST-1`/`test-project` offline and the first listed
+  issue/project live.
 
 So `grep skipIf` over a test file answers "does this run live?" per test. #395
 is what the alternative costs: four files asserted seeded fixture data with no

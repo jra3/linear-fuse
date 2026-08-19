@@ -56,16 +56,16 @@ issues the resolve step is itself a deep module — see Name→ID resolution bel
 ### Edit-flush shell (`editFlush`)
 The **deep module** owning the invariant *shell* every editable file node's FUSE
 `Flush` wraps around its front half and the [[writeback-tail]]: take the buffer
-lock, skip a clean buffer, reject an emptied one, bound the API work with a 30s
-timeout, run the front half, and on success run the commit tail, adopt the fresh
-value, invalidate the node's kernel-cache set, and clear dirty. All seven handlers
-(issue/comment/label/document/milestone/project/initiative) hand-copied it, and
-it had drifted: issues invalidated **before** persisting (a stale-repopulation
-window — a racing read could reload the not-yet-written row and re-cache it),
-and the invalidation set lived as loose `InvalidateUpdated` calls each handler
-had to remember. `editFlush` (`internal/fs/editflush.go`, generic over `T`)
-concentrates the shell; each `Flush` becomes `return editFlush(ctx, n.lfs,
-&n.editBuffer, editFlushSpec[T]{…})`.
+lock, skip a clean buffer, reject an emptied or zero-filled one, bound the API
+work with a 30s timeout, run the front half, and on success run the commit tail,
+adopt the fresh value, invalidate the node's kernel-cache set, and clear dirty.
+All seven handlers (issue/comment/label/document/milestone/project/initiative)
+hand-copied it, and it had drifted: issues invalidated **before** persisting (a
+stale-repopulation window — a racing read could reload the not-yet-written row
+and re-cache it), and the invalidation set lived as loose `InvalidateUpdated`
+calls each handler had to remember. `editFlush` (`internal/fs/editflush.go`,
+generic over `T`) concentrates the shell; each `Flush` becomes `return
+editFlush(ctx, n.lfs, &n.editBuffer, editFlushSpec[T]{…})`.
 
 The **front half is one `mutate` closure** returning `(proceed bool, errno
 syscall.Errno)`: `errno != 0` → return it and **keep dirty** (a corrected
@@ -76,16 +76,26 @@ re-save retries; mutate owns its own `.error` message); `errno == 0 && !proceed`
 sidecar is a visible one-line omission), and **`restore`** round out the spec.
 
 `restore` re-renders the entity's current content and exists for one case: the
-**emptied-buffer rejection** (#397). An empty document has no fields, so applying
-it diffs as "remove every removable field" — a measured five-field wipe on
-`issue.md` — and it is what a crashed editor or a botched tool call produces. The
+**refused-buffer rejection** (#397, #472). An empty document has no fields, so
+applying it diffs as "remove every removable field" — a measured five-field wipe
+on `issue.md` — and it is what a crashed editor or a botched tool call produces. The
 shell refuses it with `EINVAL` before the front half runs, which also subsumes the
 old `content == nil` skip: nil is not a third state, it is how the atomic-save
 path spells an emptied file, and treating it as "nothing to do" gave the two save
-paths opposite answers to `> issue.md`. The rejection then **restores the buffer
-and clears dirty**, which is where it deliberately *differs* from a parse failure:
-a parse failure keeps the writer's text dirty for a corrected re-save, but an
-empty buffer holds no text worth preserving, and leaving it dirty would strand the
+paths opposite answers to `> issue.md`. A **zero-filled** buffer is refused on the
+same terms (#472): `bytes.TrimSpace` does not strip NUL, so a buffer holding
+filesystem zero-fill — a write starting past EOF, a grow-resize — was not
+"empty", but it no longer starts with `---` either, so `marshal.Parse` read it as
+empty frontmatter with the whole string as body and the mutation sent a NUL
+description *plus* assignee, due date, parent, project, milestone, cycle and
+labels all cleared, at exit 0 with no `.error`. One pure predicate,
+`classifyWrite`, owns both arms and returns the verdict the `.error` wording keys
+off — a hole is diagnosed as a hole ("write the whole document back from offset
+0"), not as an empty write, because the writer's mistake was the offset, not the
+content. The rejection then **restores the buffer and clears dirty**, which is
+where it deliberately *differs* from a parse failure: a parse failure keeps the
+writer's text dirty for a corrected re-save, but a refused buffer holds no text
+worth preserving, and leaving it dirty would strand the
 node serving zero bytes for its lifetime ([[edit-buffer]]'s `refresh` refuses a
 dirty buffer) — defeating the very recovery the `.error` prescribes, "re-read the
 file to get its current contents". Projects/initiatives
@@ -874,8 +884,8 @@ interface at compile time next to its `fs.NodeWriter` assertion, and every
 `editFlushSpec` literal in the package must set `pinIno` (an AST rule over the
 package source, in the spirit of `scripts/check-safename.sh`). A second AST rule
 of the same shape requires every spec to set `restore`, for the same reason —
-the empty-write rejection (#397) is a behavior a new surface inherits only by
-declaring the field, and without it a rejected write strands the buffer. Both
+the refused-write rejection (#397, #472) is a behavior a new surface inherits
+only by declaring the field, and without it a rejected write strands the buffer. Both
 rules want an explicit `pinIno: 0` / `restore: nil` plus a comment for a spec
 that genuinely has neither. Unit-tested directly (window, expiry, sweep,
 unaliased copies, seed-beats-render) and at the flush seam (the supersede rule) plus

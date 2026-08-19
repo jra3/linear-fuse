@@ -196,6 +196,15 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 			t.Errorf("README failure model does not document the empty-write contract: missing %q", want)
 		}
 	}
+	// #472: the third verdict of the same family. A zero-filled write is the one
+	// an agent makes without noticing — a pwrite past EOF, a grow-resize — and
+	// before the guard it cleared every removable field at exit 0, so the README
+	// has to name it too.
+	for _, want := range []string{"ZERO-FILLED editable file", "NUL", "offset 0"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README failure model does not document the zero-fill rejection: missing %q", want)
+		}
+	}
 	// #399: EAGAIN covers two situations with different safe follow-ups, and the
 	// README must not collapse them back into one "the write did not take effect"
 	// promise — that promise is false for a request interrupted after it was sent,
