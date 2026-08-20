@@ -554,7 +554,8 @@ accepted `parent:`, typos, `.meta` keys and prose alike. The key set is exactly
 what the render side emits, which is what keeps render → parse a fixpoint.
 
 **Clearing is per surface, and the mount must not claim otherwise.** On issue.md
-and milestones an omitted key clears the field; on labels/*.md an ABSENT key
+and milestones an omitted key clears the field; on labels/*.md — and on
+docs/*.md, whose diff likewise only emits a key it was given — an ABSENT key
 means "leave that field alone" and `description: ""` is how the mount SENDS an
 empty description (whether Linear stores it is the server's call, so the docs
 describe what is sent, never what is stored). The shared rejection messages
