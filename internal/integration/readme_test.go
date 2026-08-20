@@ -205,6 +205,24 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 			t.Errorf("README failure model does not document the zero-fill rejection: missing %q", want)
 		}
 	}
+	// #476: labels/*.md had no documented key set at all, so an agent editing a
+	// label had no contract to follow — and the surface silently accepted whatever
+	// it wrote. The README must now name the accepted keys, say the surface rejects
+	// unknown keys and a body, and NOT tell a label writer that omitting a key
+	// clears the field (on this surface an absent key means "unchanged").
+	for _, want := range []string{
+		"<label_frontmatter>", "labels/{name}.md", "name, color, description",
+		"non-empty body is rejected", "description: \"\"",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not document the label frontmatter contract: missing %q", want)
+		}
+	}
+	if strings.Contains(readme, "omit that field's key and keep the rest") {
+		t.Error("README still asserts one clearing mechanism for every surface; " +
+			"omitting a key does not clear a field on labels/*.md")
+	}
+
 	// #399: EAGAIN covers two situations with different safe follow-ups, and the
 	// README must not collapse them back into one "the write did not take effect"
 	// promise — that promise is false for a request interrupted after it was sent,

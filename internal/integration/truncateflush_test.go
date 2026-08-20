@@ -451,3 +451,53 @@ func TestTruncatingWriteWithInterveningFlushOnInitiativeMD(t *testing.T) {
 		t.Errorf("sent description = %q, want %q", got, "SHORTINITIATIVEBODY")
 	}
 }
+
+// TestTruncatingWriteWithInterveningFlushOnLabelMD is the shell-invariance guard
+// for the label surface (#476). The mechanism #454 named was fixed in the shared
+// edit-flush shell, and LabelFileNode inherits it purely by embedding editBuffer
+// and routing Flush through editFlush — so this asserts that structure still
+// holds rather than re-testing the fix: a LabelFileNode that grew its own flush,
+// or a spec that declined to set `restore`, would splice the previous image onto
+// a shorter rewrite here exactly as it once did on issue.md.
+func TestTruncatingWriteWithInterveningFlushOnLabelMD(t *testing.T) {
+	skipIfLiveAPI(t, fixtureWriteContract)
+	mock := enableMockMutations(t)
+
+	filename, name := seedGuardLabel(t, "trunc-label-probe",
+		"A description long enough to leave a tail behind - "+truncMarker)
+	path := labelsPath(testTeamKey) + "/" + filename
+
+	short := "---\ncolor: '#ff0000'\ndescription: SHORTLABELDESC\nname: " + name + "\n---\n"
+	if err := truncateWriteViaShellSequence(t, path, short); err != nil {
+		t.Fatalf("close/commit: %v", err)
+	}
+
+	var sent string
+	for _, u := range mock.Updates() {
+		if u.Kind == "label" && u.Input != nil {
+			if d, ok := u.Input["description"].(string); ok {
+				sent = d
+			}
+		}
+	}
+	if sent == "" {
+		t.Fatal("no label update reached the mutator")
+	}
+	if strings.Contains(sent, truncMarker) {
+		t.Errorf("previous image survived the truncate on labels/*.md: %q", sent)
+	}
+	if sent != "SHORTLABELDESC" {
+		t.Errorf("sent description = %q, want %q", sent, "SHORTLABELDESC")
+	}
+
+	// And the file itself carries no tail — the corruption #454 was reported for
+	// on this surface was visible only in the readback, because the label parser
+	// reads frontmatter and a spliced tail lands past the closing ---.
+	back, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if bytes.Contains(back, []byte(truncMarker)) {
+		t.Errorf("labels/%s reads back with the previous image spliced on:\n%s", filename, back)
+	}
+}

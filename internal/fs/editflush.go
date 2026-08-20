@@ -18,14 +18,22 @@ import (
 // It deliberately does NOT offer "or empty the body" as a way to clear one
 // field: it is shared by all seven editable surfaces, and on project.md /
 // initiative.md emptying the body is the one write Linear declines to apply
-// (#398). Removing a frontmatter key is the advice that holds everywhere, and it
-// is the wording the generated README already uses.
+// (#398).
+//
+// It also does not assert ONE clearing mechanism for all seven surfaces (#476).
+// Omitting a key clears the field on issue.md and milestones/*.md, but on
+// labels/*.md an absent key means "leave that field alone" — a label writer who
+// followed the old wording got a silent no-op, which is the failure family this
+// message exists to prevent. So it points at the surface's own documented
+// clearing idiom instead of naming one.
 func emptyWriteMessage(op string) string {
 	return fmt.Sprintf("Empty write rejected\nOperation: %s\n"+
 		"Error: the file was written with no content. An empty file carries no fields, so applying it "+
 		"would clear every removable field at once rather than change the one you meant. Nothing was written.\n"+
 		"Fix: re-read the file to get its current contents, change the field you mean to change, and write "+
-		"the whole document back. To clear a single field, omit that field's key and keep the rest.", op)
+		"the whole document back. To clear one field, use the clearing idiom this "+
+		"file documents — on issue.md omit the key; on labels/*.md write description: \"\". See the README's "+
+		"frontmatter section for this surface.", op)
 }
 
 // holeWriteMessage is the .error a zero-filled write gets (#472). Same shape and
@@ -41,7 +49,9 @@ func holeWriteMessage(op string) string {
 		"its frontmatter it would clear every removable field at once as well. Nothing was written.\n"+
 		"Fix: re-read the file to get its current contents, change what you mean to change, and write the "+
 		"WHOLE document back from offset 0 (truncate first, rather than seeking past the end or resizing). "+
-		"To clear a single field, omit that field's key and keep the rest.", op)
+		"To clear one field, use the clearing idiom this "+
+		"file documents — on issue.md omit the key; on labels/*.md write description: \"\". See the README's "+
+		"frontmatter section for this surface.", op)
 }
 
 // writeVerdict classifies a dirty buffer before the front half ever sees it:

@@ -538,6 +538,30 @@ project/initiative). Comments' `extractCommentBody` deliberately stays in fs:
 its lenient strip-leading-frontmatter policy is a comment-surface tolerance
 (recorded under "Collection meta split"), not a parse contract.
 
+**Whole-document key guarding** (`checkIssueFrontmatter`,
+`checkLabelFrontmatter`) is the third loud-over-silent change, and the one that
+closes the failure model's missing third outcome: a key the surface does not
+accept used to be dropped on the floor — write accepted, nothing sent, key gone
+on the next render — so a typo read as a successful edit. The guard partitions
+frontmatter into editable / read-only-`.meta` / unknown, reports the first
+SORTED offender (a `.error` that changes between identical writes is not a
+contract) and names the rest, and runs BEFORE any field is diffed, so a document
+with one bad key and one good change applies neither. Its `ignoreMeta` arm is
+what keeps `_create` accepting a spec pasted from a rendered `.md` + `.meta`.
+issue.md got it first; labels/*.md got it (plus a body rejection — it is a
+frontmatter-only surface with no content field) because that surface silently
+accepted `parent:`, typos, `.meta` keys and prose alike. The key set is exactly
+what the render side emits, which is what keeps render → parse a fixpoint.
+
+**Clearing is per surface, and the mount must not claim otherwise.** On issue.md
+and milestones an omitted key clears the field; on labels/*.md an ABSENT key
+means "leave that field alone" and `description: ""` is how the mount SENDS an
+empty description (whether Linear stores it is the server's call, so the docs
+describe what is sent, never what is stored). The shared rejection messages
+(`emptyWriteMessage`/`holeWriteMessage`) and the generated README therefore
+point at the surface's own documented idiom instead of asserting one mechanism
+for all seven.
+
 ### Collection meta split (`{base}.meta` sidecars)
 The editable-only split, extended to the four small collection entities —
 documents, comments, milestones, labels. Their editable `.md` files used to
@@ -2160,6 +2184,16 @@ The minimal seam the WriteBack tail uses to record validation/divergence message
 `.error` files: `SetWriteError(key, msg)` / `ClearWriteError(key)`. `*LinearFS`
 satisfies it directly (no adapter), so production wiring is zero-cost while tests
 inject a 2-method fake.
+
+The rendered `.error` content is the recorded message plus a `Time: <RFC3339>`
+line (`renderWriteError`, split out of the render closure so it is testable
+without a mount). The timestamp was always the file's atime/mtime, but agents
+`cat`, they do not `stat` — and a COLLECTION `.error` is directory-scoped and
+retired only by the next successful write to that directory, so a reader who
+finds one after an unrelated write needs the content itself to say when it was
+recorded. Absolute, never a computed "x ago": the rendered length must be
+identical between two reads of the same error, or the attr-cached size disagrees
+with the content.
 
 ### Kernel-cache coherence policy (`invalidateCreated`/`Deleted`/`Updated`)
 After a mutation the kernel still caches the old directory listing and name lookups.
