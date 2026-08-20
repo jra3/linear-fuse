@@ -331,6 +331,32 @@ Usage:
 - Read-only server fields (id, slug, status, owner, description, dates) live in initiative.meta
 </initiative_frontmatter>
 
+<label_frontmatter>
+labels/{name}.md holds only editable fields (below) and NO body. The read-only
+identity lives in the sibling {name}.meta (id, team).
+---
+name: "Bug"                         [editable; renaming also renames the file]
+color: '#FF0000'                    [editable; QUOTE it — unquoted #RRGGBB is a YAML comment]
+description: "Something is broken"  [editable]
+---
+                                    (no body — text below the closing --- is rejected)
+
+That list is EXHAUSTIVE and enforced, same as issue.md: a key labels/*.md does
+not accept — a misspelling (descriptoin:), a field this surface cannot express
+(parent:, i.e. label groups), or a read-only key that lives in {name}.meta (id,
+team) — fails the whole write with EINVAL, and .error names the key and lists
+the accepted ones. Nothing partially applies. A non-empty body is rejected the
+same way: a label has no content field, so prose below the --- would be accepted
+and sent nowhere. (labels/_create is laxer in the same one way issues/_create
+is: it IGNORES id and team, so a spec pasted from a rendered {name}.md +
+{name}.meta still creates. A misspelled key and a body are rejected there too.)
+
+CLEARING A FIELD IS DIFFERENT HERE. Omitting a key on this surface leaves that
+field UNCHANGED — it does not clear it. To send an empty description, write
+description: "" explicitly. (Whether Linear stores an empty description or keeps
+the previous one is the server's call; read the file back to see what it did.)
+</label_frontmatter>
+
 <permissions>
 -r--r--r--  Read-only     team.md, states.md, user.md, every *.meta sidecar
 -rw-r--r--  Editable      issue.md, project.md, initiative.md, comments/*.md, docs/*.md, milestones/*.md, labels/*.md
@@ -398,18 +424,28 @@ cat the .error next to the file (or _create) you wrote to see what went wrong:
   Field: priority
   Value: "critical"
   Error: invalid priority "critical": must be none, low, medium, high, or urgent
+  Time: 2025-01-15T09:41:07Z
+
+The Time: line is when the error was RECORDED. Read it: a collection .error
+(comments/, docs/, labels/, milestones/) is directory-level, and it is retired
+only by the next SUCCESSFUL write to that directory -- so an error left by an
+earlier write to a DIFFERENT file in it is still there when you cat it, and the
+timestamp plus the Operation: line are what tell you it is not about your write.
 
 Failure model (every writable surface follows this contract):
 - Bad input (invalid field, unknown name, missing required field) -> EINVAL
-- A frontmatter key issue.md does not accept — a typo, or a server-managed field
-  that lives in issue.meta -> EINVAL, and .error names the key plus the accepted
-  ones. The document is rejected WHOLE: none of its other keys apply either, so
-  fix the key and write the whole document back.
+- A frontmatter key issue.md or labels/*.md does not accept — a typo, or a
+  server-managed field that lives in the .meta sidecar -> EINVAL, and .error
+  names the key plus the accepted ones. The document is rejected WHOLE: none of
+  its other keys apply either, so fix the key and write the whole document back.
+  On labels/*.md a non-empty BODY is rejected the same way — that surface is
+  frontmatter-only (see <label_frontmatter>).
 - An EMPTIED editable file (0 bytes, or only whitespace) -> EINVAL, and NOTHING is
   written. An empty document has no fields, so applying it would clear every
   removable field at once instead of the one you meant. The file KEEPS ITS CURRENT
   CONTENTS -- re-read it, change what you mean to change, and write the whole
-  document back. To clear one field, omit that field's key and keep the rest.
+  document back. To clear one field, use the clearing idiom that surface
+  documents: on issue.md omit the key; on labels/*.md write description: "".
 - A ZERO-FILLED editable file (it contains NUL bytes) -> EINVAL, and NOTHING is
   written. NUL is what the filesystem fills a hole with when a write starts past
   the end of the file, or when a resize grows it, so the document it makes is an
@@ -472,7 +508,8 @@ project-labels.md (valid project labels), initiatives/ (valid initiatives)
 </validation_errors>
 
 <important_notes>
-- Clear optional fields by deleting the line entirely
+- Clear optional fields by deleting the line entirely (issue.md, milestones/*.md;
+  NOT labels/*.md, where an absent key means unchanged -- see <label_frontmatter>)
 - Set parent: add "parent: ENG-100" | Remove: delete line
 - Link project to initiative: add "initiatives: [Name]" to project.md
 - Link initiative to projects: edit "projects: [slugs]" in initiative.md

@@ -176,7 +176,16 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			update, err = marshal.MarkdownToLabelUpdate(n.content, &n.label)
 			if err != nil {
 				log.Printf("Failed to parse label: %v", err)
-				n.lfs.SetWriteError(labelErrKey, "Operation: update label "+labelFilename(n.label)+"\nParse error: "+err.Error())
+				// A *FieldError already names the offending key in the
+				// Field/Value/Error shape (the unknown-key and body guards,
+				// #476); only a shapeless parse failure needs the prefix to
+				// explain itself.
+				detail := "Parse error: " + err.Error()
+				var ferr *FieldError
+				if errors.As(err, &ferr) {
+					detail = ferr.Detail()
+				}
+				n.lfs.SetWriteError(labelErrKey, "Operation: update label "+labelFilename(n.label)+"\n"+detail)
 				return false, syscall.EINVAL
 			}
 			if len(update) == 0 {

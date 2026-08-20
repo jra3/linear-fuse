@@ -466,9 +466,28 @@ func TestEditFlushEmptyWriteWithoutRestoreLeavesBufferAlone(t *testing.T) {
 func TestEmptyWriteMessageIsActionable(t *testing.T) {
 	t.Parallel()
 	msg := emptyWriteMessage("save issue ENG-1")
-	for _, want := range []string{"save issue ENG-1", "Nothing was written", "re-read the file", "clear a single field"} {
+	for _, want := range []string{"save issue ENG-1", "Nothing was written", "re-read the file", "clear one field"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("empty-write .error does not mention %q:\n%s", want, msg)
+		}
+	}
+	assertClearingAdviceIsPerSurface(t, msg)
+}
+
+// assertClearingAdviceIsPerSurface pins the #476 correction on both rejection
+// messages: they are shared by all seven editable surfaces, so neither may
+// assert ONE clearing mechanism. "Omit the key" is true on issue.md and false on
+// labels/*.md, where an absent key means "leave that field alone" — a label
+// writer who followed the old sentence got exactly the silent no-op these
+// messages exist to prevent.
+func assertClearingAdviceIsPerSurface(t *testing.T, msg string) {
+	t.Helper()
+	if strings.Contains(msg, "omit that field's key and keep the rest") {
+		t.Errorf("rejection message still asserts one clearing mechanism for every surface:\n%s", msg)
+	}
+	for _, want := range []string{"issue.md omit the key", `labels/*.md write description: ""`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("rejection message does not name the per-surface clearing idiom %q:\n%s", want, msg)
 		}
 	}
 }
@@ -614,12 +633,13 @@ func TestHoleWriteMessageNamesTheCause(t *testing.T) {
 	msg := rejectedWriteMessage(writeIsHole, "save issue ENG-1")
 	for _, want := range []string{
 		"Zero-filled write rejected", "save issue ENG-1", "NUL", "past the end of the file",
-		"Nothing was written", "offset 0", "clear a single field",
+		"Nothing was written", "offset 0", "clear one field",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("zero-fill .error does not mention %q:\n%s", want, msg)
 		}
 	}
+	assertClearingAdviceIsPerSurface(t, msg)
 	if got := rejectedWriteMessage(writeIsEmpty, "save issue ENG-1"); !strings.Contains(got, "Empty write rejected") {
 		t.Errorf("empty verdict rendered the wrong message:\n%s", got)
 	}
