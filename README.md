@@ -285,7 +285,13 @@ $ cat ~/linear/teams/TEAM/issues/TEAM-123/.error
 Field: priority
 Value: "critical"
 Error: invalid priority "critical": must be none, low, medium, high, or urgent
+Time: 2025-01-15T09:41:07Z
 ```
+
+`Time:` is when the error was recorded. It matters for a collection `.error`
+(`comments/`, `docs/`, `labels/`, `milestones/`), which is directory-level and is
+retired only by the next successful write to that directory — the timestamp and the
+`Operation:` line are how you tell an earlier file's failure from your own.
 
 **Validated fields:** status, assignee, labels, priority, project, milestone, cycle, parent
 
