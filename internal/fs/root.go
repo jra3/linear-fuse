@@ -509,7 +509,8 @@ project-labels.md (valid project labels), initiatives/ (valid initiatives)
 
 <important_notes>
 - Clear optional fields by deleting the line entirely (issue.md, milestones/*.md;
-  NOT labels/*.md, where an absent key means unchanged -- see <label_frontmatter>)
+  NOT labels/*.md or docs/*.md, where an absent key means UNCHANGED -- write the
+  empty value explicitly instead, e.g. description: "" -- see <label_frontmatter>)
 - Set parent: add "parent: ENG-100" | Remove: delete line
 - Link project to initiative: add "initiatives: [Name]" to project.md
 - Link initiative to projects: edit "projects: [slugs]" in initiative.md

@@ -146,8 +146,8 @@ Use `ls -l` to see what operations are allowed on each file:
 
 | Permission | Meaning | Example |
 |------------|---------|---------|
-| `-r--r--r--` | Read-only | `team.md`, `states.md`, `initiative.md` |
-| `-rw-r--r--` | **Editable** | `issue.md`, `project.md`, existing docs/comments |
+| `-r--r--r--` | Read-only | `team.md`, `states.md`, every `*.meta` sidecar |
+| `-rw-r--r--` | **Editable** | `issue.md`, `project.md`, `initiative.md`, existing docs/comments/labels |
 | `--w-------` | Write-only trigger | `_create` (creates new items) |
 | `lrwxrwxrwx` | Symlink | Issues in cycles/projects/filtered views |
 
@@ -199,33 +199,41 @@ Timestamps are preserved across all views:
 │       │   └── assignee/<name>/ # Issues by assignee (includes "unassigned")
 │       ├── issues/
 │       │   └── <TEAM-nnn>/       # Issue identifier (e.g., TEAM-123)
-│       │       ├── issue.md     # Issue content (read/write)
+│       │       ├── issue.md     # Editable fields + description (read/write)
+│       │       ├── issue.meta   # Server-managed fields (read-only)
 │       │       ├── comments/
-│       │       │   ├── 001-*.md # Comments (read/write/delete)
-│       │       │   └── _create   # Write here to create comment
+│       │       │   ├── 001-*.md   # Comments (read/write/delete)
+│       │       │   ├── 001-*.meta # Server-managed comment fields (read-only)
+│       │       │   └── _create    # Write here to create comment
 │       │       ├── docs/
 │       │       │   ├── *.md     # Issue documents (read/write/rename/delete)
+│       │       │   ├── *.meta   # Server-managed document fields (read-only)
 │       │       │   └── _create   # Write here to create document
 │       │       ├── children/    # Sub-issues (symlinks to sibling issues)
-│       │       └── .error       # Last validation error (read-only)
+│       │       ├── .error       # Last validation error (read-only)
+│       │       └── .last        # Outcome log for recent creates (read-only)
 │       ├── labels/              # Label management
 │       │   ├── *.md             # Labels (read/write/rename/delete)
+│       │   ├── *.meta           # Server-managed label fields (read-only)
 │       │   └── _create           # Write here to create label
 │       ├── docs/                # Team documents
 │       │   ├── *.md             # Documents (read/write/rename/delete)
+│       │   ├── *.meta           # Server-managed document fields (read-only)
 │       │   └── _create           # Write here to create document
 │       ├── cycles/              # Sprint cycles
 │       │   ├── current          # Symlink to active cycle (if any)
 │       │   └── <cycle-name>/    # Cycle directories with issue symlinks
 │       └── projects/
 │           └── <project-slug>/
-│               ├── project.md   # Project metadata (read/write)
+│               ├── project.md   # Editable fields + content (read/write)
+│               ├── project.meta # Server-managed fields (read-only)
 │               ├── docs/        # Project documents
 │               ├── updates/     # Status updates (write to _create)
 │               └── TEAM-*       # Symlinks to issue directories
 ├── initiatives/
 │   └── <initiative-slug>/
-│       ├── initiative.md        # Initiative metadata (read-only)
+│       ├── initiative.md        # Editable fields + content (read/write)
+│       ├── initiative.meta      # Server-managed fields (read-only)
 │       ├── projects/            # Symlinks to team projects
 │       └── updates/             # Status updates (write to _create)
 ├── users/
@@ -240,13 +248,12 @@ Timestamps are preserved across all views:
 
 ## Issue File Format
 
+Every editable file is split in two: the `.md` holds only the fields you can
+change, and a read-only `.meta` sidecar next to it holds the server-managed
+ones. So `issue.md` is the editable frontmatter plus the description body:
+
 ```markdown
 ---
-id: "abc123-def456"
-identifier: TEAM-123
-url: "https://linear.app/myworkspace/issue/TEAM-123"
-created: 2025-01-10T10:30:00Z
-updated: 2025-01-11T14:22:00Z
 title: "Fix authentication bug"
 status: "In Progress"
 assignee: "alice@example.com"
@@ -260,9 +267,28 @@ parent: TEAM-100
 The login flow fails when users attempt to authenticate with SSO.
 ```
 
+and `issue.meta` holds what Linear owns — identity and timestamps, plus
+`creator`, `branch`, `links` and `relations` when the issue has them:
+
+```markdown
+---
+id: "abc123-def456"
+identifier: TEAM-123
+url: "https://linear.app/myworkspace/issue/TEAM-123"
+created: 2025-01-10T10:30:00Z
+updated: 2025-01-11T14:22:00Z
+---
+```
+
+The same split applies to `project.md`/`project.meta`,
+`initiative.md`/`initiative.meta`, and `<name>.md`/`<name>.meta` for each
+comment, document, label and milestone.
+
 ### Editable Fields
 
 - `title` - Issue title
+- `team` - Team key; changing it **moves** the issue, and Linear re-numbers it
+  (TEAM-123 becomes OTHER-45), so the old path stops existing
 - `status` - Workflow state name (check states.md for valid values)
 - `assignee` - User email or name
 - `priority` - none/low/medium/high/urgent
@@ -270,7 +296,17 @@ The login flow fails when users attempt to authenticate with SSO.
 - `due` - Due date (YYYY-MM-DD format)
 - `estimate` - Point estimate
 - `parent` - Parent issue identifier (e.g., TEAM-100)
+- `project` - Project name
+- `milestone` - Milestone name within the project
+- `cycle` - Cycle name
 - Description (content after frontmatter)
+
+That list is exhaustive and enforced. A frontmatter key `issue.md` does not
+accept — a misspelling, or a server-managed key that belongs in `issue.meta` —
+fails the whole write with `EINVAL`; nothing partially applies, and `.error`
+names the offending key and lists the accepted ones. (`issues/_create` is laxer
+in one way: it ignores the read-only keys, so a spec assembled from a rendered
+`issue.md` plus its `issue.meta` still creates.)
 
 ### Validation Errors
 
@@ -396,6 +432,16 @@ mv docs/old-name.md docs/new-name.md
 | Delete label | `rm labels/OldLabel.md` | Deletes label |
 
 > **Note:** `_create` is a write-only trigger file (see Comments section above).
+
+`labels/<name>.md` accepts exactly `name`, `color` and `description`, and has no
+body — a label has no content field. Any other key, or text below the closing
+`---`, fails the whole write with `EINVAL` and the reason lands in
+`labels/.error`. Quote hex colors (`color: '#FF0000'`); unquoted, YAML reads
+`#FF0000` as a comment.
+
+Clearing works differently here than on `issue.md`: an **absent** key leaves that
+field unchanged rather than clearing it, so write `description: ""` to send an
+empty description.
 
 ```bash
 # Create a new label
