@@ -958,9 +958,10 @@ gate above.
   instead.
 - **`.error` / `.last` sidecars** (read-only, backed by `writeFeedback`): every
   writable surface exposes the last failure's reason in `.error` (cleared on
-  success), rendered as the message plus a `Time: <RFC3339>` line — a collection
+  success, rendered as the message plus a `Time: <RFC3339>` line — a collection
   `.error` is directory-scoped and only the next successful write to that
-  directory retires it, so the content has to say when it was recorded and, where the surface mints an entity, a per-create outcome log in
+  directory retires it, so the content has to say when it was recorded) and,
+  where the surface mints an entity, a per-create outcome log in
   `.last` — the created identity/URL on success, an `outcome: failed` entry on a
   clean create failure — so a scripted batch reads back how many of N creates
   succeeded and scripts and LLMs never have to parse an errno. The one exception
