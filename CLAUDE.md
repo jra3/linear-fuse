@@ -506,7 +506,7 @@ After schema changes:
 1. Update `internal/db/queries.sql` with CRUD queries
 2. Run `sqlc generate`
 3. Add conversion functions to `internal/db/convert.go`
-4. Add repository methods to `internal/repo/repo.go` and implementations
+4. Add repository methods to `internal/repo/sqlite.go`
 
 ## Development Notes
 
