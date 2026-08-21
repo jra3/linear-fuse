@@ -58,7 +58,22 @@ var summaryAttrKeys = map[string]bool{
 	"version":    true, // build.info
 	"commit":     true, // build.info
 	"artifact":   true, // atrest.chmod_failures (#352) — 3 bounded values
+	"in_tx":      true, // db.ops/op_duration (#490) — 2 values, the batching ratio
+	"caller":     true, // db.write_burst (#490) — only present when a burst trips
 }
+
+// Deliberately NOT projected: "op". The persistence layer's op is four values
+// (the DBTX methods), but the key is shared with internal/api's ~30 operation
+// names across three instruments — admitting it here to read the db layer's
+// read/write split would un-bound the api instruments this projection exists
+// to keep out. The split stays in the JSONL export; the summary carries the
+// in_tx ratio, which is #489's headline number.
+//
+// "caller" is admitted despite being unbounded in principle. Its values are a
+// property of the code, not of the workspace — only a function that lands 64
+// autocommit writes in a second can produce one, single digits of them exist,
+// and a burst is the event most worth naming in the always-on line, which is
+// the only rendering a user gets without opting into the file export.
 
 // renderSummary is the pure projection from collected metric data to the one
 // summary line: "metrics: name{attrs}=value ..." with histograms rendered as

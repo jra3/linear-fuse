@@ -30,6 +30,9 @@ type Store struct {
 	// caller can wedge a local read/write into a spurious EIO on a cancelled
 	// FUSE request (#296). db stays raw for lifecycle (Close) and the test seam.
 	qdb DBTX
+	// metrics are the persistence-layer instruments, bound once at Open and
+	// shared with every transaction-bound Queries WithTx builds (metrics.go).
+	metrics dbMetrics
 }
 
 // Open opens or creates a SQLite database at the given path.
@@ -172,11 +175,15 @@ func openDB(dbPath string) (*Store, error) {
 	// created later are still inside the 0700 dir, out of group/other reach.
 	tightenDBFiles(dbPath)
 
-	qdb := ctxDetachDBTX{inner: db}
+	// Instruments bind once, here, from whatever provider is registered — not
+	// per query and not per transaction (metrics.go).
+	metrics := newDBMetrics()
+	qdb := ctxDetachDBTX{inner: db, metrics: metrics}
 	return &Store{
 		db:      db,
 		queries: New(qdb),
 		qdb:     qdb,
+		metrics: metrics,
 	}, nil
 }
 
@@ -336,13 +343,16 @@ func (s *Store) DB() *sql.DB {
 // The transaction's queries are ctx-detached exactly like the store's own
 // (ctxdetach.go), so cancellation stays cooperative: a caller that wants to
 // abort mid-transaction checks ctx itself and returns an error, and gets a
-// deterministic rollback instead of racing database/sql's async unwind.
+// deterministic rollback instead of racing database/sql's async unwind. This
+// is also the only place a transaction-bound wrapper is built, so it is where
+// the in_tx metric attribute is set — the ratio of in_tx operations is how
+// #489 measures whether batching has spread past this one caller.
 func (s *Store) WithTx(ctx context.Context, fn func(*Queries) error) error {
 	tx, err := s.db.BeginTx(context.WithoutCancel(ctx), nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	if err := fn(New(ctxDetachDBTX{inner: tx})); err != nil {
+	if err := fn(New(ctxDetachDBTX{inner: tx, inTx: true, metrics: s.metrics})); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
 		}
