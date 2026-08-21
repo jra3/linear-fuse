@@ -611,13 +611,22 @@ func (lfs *LinearFS) lookupUserID(ctx context.Context, identifier string) (strin
 	return "", &unknownNameError{label: "user", name: identifier}
 }
 
-// ResolveIssueID converts an issue identifier (e.g., "ENG-123") to its UUID
+// ResolveIssueID converts an issue identifier (e.g., "ENG-123") to its UUID.
+//
+// The ID it returns goes straight into a mutation — this is what turns
+// issue.md's `parent:` line into IssueUpdateInput.parentId — so the same
+// identifier-consistency guard IssuesNode.resolveIssue applies belongs here
+// (#427): the resolution is workspace-wide, and a stale identifier a team-key
+// rename left behind resolves to a DIFFERENT team's issue once the freed key
+// is reused, which would re-parent the wrong issue. A stale identifier reads
+// as unknown, because that is what it is — a resolution miss, reported through
+// the caller's existing "unknown issue" shape rather than a new error class.
 func (lfs *LinearFS) ResolveIssueID(ctx context.Context, identifier string) (string, error) {
 	issue, err := lfs.repo.GetIssueByIdentifier(ctx, identifier)
 	if err != nil {
 		return "", err
 	}
-	if issue == nil {
+	if issue == nil || lfs.identifierIsStale(ctx, identifier, issue.ID) {
 		return "", fmt.Errorf("unknown issue: %s", identifier)
 	}
 	return issue.ID, nil

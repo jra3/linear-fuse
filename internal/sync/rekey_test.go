@@ -402,6 +402,58 @@ func TestRebuildFailureRetriesNextCycle(t *testing.T) {
 	}
 }
 
+// TestRebuildCancelMidwayLeavesCacheIntact pins the atomicity the repair rests
+// on. The rebuild drops a team's watermark and deletes its issues in ONE
+// transaction, so a cancel mid-way (shutdown, unmount) must roll the whole
+// thing back rather than commit what it got through.
+//
+// Rows-gone-and-watermark-gone is fine and rows-and-watermark-both-standing is
+// fine — both re-arm, one through the missing watermark and one through the
+// stale prefixes the drift check still counts. The state that must not exist
+// is the partial delete: rows gone with the watermark still standing leaves a
+// half-emptied team the incremental cursor believes is up to date and the
+// drift check can no longer see.
+func TestRebuildCancelMidwayLeavesCacheIntact(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t)
+	defer store.Close()
+	at := rekeyTime(t)
+
+	seedTeamRow(t, store, "team-1", "QA", "Quality")
+	for i := 1; i <= 3; i++ {
+		seedCachedIssue(t, store, "team-1", "TST", fmt.Sprintf("issue-%d", i), fmt.Sprintf("TST-%d", i), at)
+	}
+	seedWatermark(t, store, "team-1", at)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	worker := NewWorker(newMockAPIClient(), store, Config{Interval: time.Hour})
+	worker.rebuildTeamIssues(cancelled, api.Team{ID: "team-1", Key: "QA", Name: "Quality"})
+
+	ctx := context.Background()
+	for i := 1; i <= 3; i++ {
+		if _, err := store.Queries().GetIssueByIdentifier(ctx, fmt.Sprintf("TST-%d", i)); err != nil {
+			t.Errorf("TST-%d deleted by a cancelled rebuild: %v", i, err)
+		}
+	}
+	if _, err := store.Queries().GetSyncMeta(ctx, "team-1"); err != nil {
+		t.Errorf("watermark dropped by a cancelled rebuild: %v", err)
+	}
+
+	// And the cache it left is exactly the one the next cycle repairs.
+	stale, err := store.Queries().CountTeamIssuesWithForeignIdentifier(ctx, db.CountTeamIssuesWithForeignIdentifierParams{
+		TeamID:    "team-1",
+		KeyPrefix: "QA-",
+	})
+	if err != nil {
+		t.Fatalf("drift check after a cancelled rebuild: %v", err)
+	}
+	if stale != 3 {
+		t.Errorf("drift count after a cancelled rebuild = %d, want 3 (the check must still re-arm)", stale)
+	}
+}
+
 // TestWatermarkWithheldOnUpsertFailure covers the silent mode of key reuse: a
 // team takes a key another team's stale rows still hold, its colliding issue
 // is NOT the team's newest, and MAX(updated_at) over the rows that landed

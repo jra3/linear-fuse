@@ -167,7 +167,7 @@ func (n *IssuesNode) resolveIssue(ctx context.Context, name string) (*api.Issue,
 	// resolve to a DIFFERENT team's issue once the freed key is reused — and
 	// the entity returned here is the one a later Flush mutates, which makes
 	// a mis-resolution a wrong-issue write, not merely a wrong-issue read.
-	if !identifierMatchesTeamKey(name, n.lfs.owningTeamKey(ctx, issue.ID)) {
+	if n.lfs.identifierIsStale(ctx, name, issue.ID) {
 		return nil, syscall.ENOENT
 	}
 

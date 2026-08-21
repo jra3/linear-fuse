@@ -129,15 +129,21 @@ detail data re-fetched, not a corrupted path. And the detection predicate is
 interpolation, and deliberately not `LIKE`/`GLOB`, in which `_`, `%` and `[` in
 a remote key would be wildcards.
 
-The same ticket closes a *read* hazard at this boundary. `issues/` Lookup
-resolves an identifier workspace-wide (it must: cross-team project members and
-sub-issues are reached through a containing team's directory), so a stale
-identifier left by a rename could resolve to another team's issue once the
-freed key was reused — and because the entity captured at Lookup is what
-`Flush` mutates, that was a wrong-issue **write** reachable by path. Resolution
-now validates that the requested prefix equals the current key of the team that
-owns the resolved issue, read from the `teams` row rather than from the issue's
-own blob, which goes stale in lockstep with the identifier.
+The same ticket closes the mis-resolution hazard on the other side of this
+boundary. Identifier resolution is workspace-wide (it must be: cross-team
+project members, sub-issues, parents and relations are all reached through a
+containing team's directory), so a stale identifier left by a rename could
+resolve to another team's issue once the freed key was reused — and every path
+that resolves one hands the result to a mutation, so that was a wrong-issue
+**write** reachable by writing a path or a line: `issues/` Lookup captures the
+entity `Flush` writes back, issue.md's `parent:` line becomes
+`IssueUpdateInput.parentId`, and the relations create surface names the far end
+of a relation. All three now validate, through one shared predicate, that the
+requested prefix equals the current key of the team that owns the resolved
+issue, read from the `teams` row rather than from the issue's own blob, which
+goes stale in lockstep with the identifier. A stale identifier reads as an
+unknown issue in each — a resolution miss, in the error shape that path already
+had.
 
 Note the in-scope sliver of the "malicious server" idea lives here too: the
 GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear

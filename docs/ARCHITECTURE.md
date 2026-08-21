@@ -396,12 +396,21 @@ staleness is bounded at `len(teams)` cycles.
   a cache damaged before the check existed. A nonzero count rebuilds that team —
   drop its watermark, delete its issues and every row keyed off them
   (`db.DeleteIssueCascade`, shared with the repo's orphan cleanup), then let the
-  ordinary `syncTeam` in the same cycle refill from the server. **The watermark
-  is dropped first, and that ordering is load-bearing:** it is the only thing
-  that re-arms a rebuild that dies partway, because once the rows are deleted no
-  stale prefix survives for the drift check to count. Repair is delete-and-refill
-  rather than a local identifier rewrite: the refilled names come from the
-  server instead of being invented in a namespace LinearFS does not own.
+  ordinary `syncTeam` in the same cycle refill from the server. **The rebuild is
+  atomic** — the watermark drop and every issue cascade share one `Store.WithTx`
+  transaction — **and that is what makes it self-healing:** the cache lands in
+  exactly one of two states, and both re-arm the repair. Either the team is
+  fully dropped, and the now-absent watermark makes the next cycle walk it in
+  full; or nothing changed, and the stale prefixes are still there for the next
+  cycle's drift check to count. The state that must not exist is the partial
+  delete — rows gone with the watermark still standing would leave a half-emptied
+  team that the incremental cursor believes is up to date and the drift check
+  can no longer see — so a cancel mid-rebuild rolls back rather than committing
+  what it got through. One transaction is also what keeps the cost sane:
+  committing per statement under WAL means an fsync per statement. Repair is
+  delete-and-refill rather than a local identifier rewrite: the refilled names
+  come from the server instead of being invented in a namespace LinearFS does
+  not own.
 - **Detail batching:** comments/docs/attachments/relations are fetched 10 issues
   at a time (`GetIssueDetailsBatch`); 15 exceeded Linear's 10k per-query
   complexity cap.
@@ -785,6 +794,19 @@ building blocks:
   be the wrong check: it would dangle every legitimate cross-team symlink. A
   mismatch is ENOENT — a resolution miss, not a write failure, so it leaves
   `.error` alone.
+- **Every path that resolves a caller-supplied identifier carries that same
+  guard**, because every one of them hands the issue it resolved to a mutation:
+  `IssuesNode.resolveIssue` (the entity `Flush` writes back),
+  `LinearFS.ResolveIssueID` (issue.md's `parent:` line becoming
+  `IssueUpdateInput.parentId`) and `RelationsNode.resolveRelatedIssue` (the far
+  end of a created relation). They share one predicate,
+  `LinearFS.identifierIsStale` (`internal/fs/identguard.go`), so a new
+  resolution path cannot invent its own idea of "the owning team's key". Each
+  keeps its own error shape — ENOENT, a `*FieldError` for field `parent`, and
+  the create surface's `notFoundError` respectively — because a stale identifier
+  is a resolution miss in all three, not a new error class. Cross-team parents
+  and cross-team relations stay legitimate and keep resolving, for the same
+  reason cross-team symlinks do.
 
 **Read flow:** kernel → `Lookup`/`Readdir`/`Read` → Repository → SQLite →
 marshal to markdown bytes. `mtime` = `updatedAt`, `ctime` = `createdAt`.

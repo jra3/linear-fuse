@@ -65,28 +65,50 @@ func (w *Worker) maybeRebuildRenamedTeam(ctx context.Context, team api.Team) {
 // team's directories for the length of a cold start, and an empty directory is
 // a more confident lie than a stale prefix.
 //
-// ORDERING IS LOAD-BEARING. The watermark goes first, and it is the only thing
-// that re-arms a rebuild that dies partway — the drift check cannot, because
-// once the rows are deleted no stale prefix remains for it to count. A team
-// left with no watermark gets walked in full by the next cycle regardless.
+// THE REBUILD IS ATOMIC, and that is what makes it self-healing. The watermark
+// drop and every issue cascade share one transaction, so the cache lands in
+// exactly one of two states, and BOTH re-arm the repair. Either the team is
+// fully dropped, and the now-absent watermark makes the next cycle walk it in
+// full; or nothing changed at all, and the stale prefixes are still there for
+// the next cycle's drift check to count. The state that must not exist is the
+// partial delete — rows gone AND watermark gone is fine, but rows gone with
+// the watermark still standing would leave a half-emptied team that the
+// incremental cursor believes is up to date and the drift check can no longer
+// see. One transaction is also what keeps the cost sane: committing per
+// statement under WAL means an fsync per statement, thousands of them for a
+// large team, all while the team's issues/ directory is mid-repair.
 func (w *Worker) rebuildTeamIssues(ctx context.Context, team api.Team) {
-	q := w.store.Queries()
-	rows, err := q.ListTeamIssueIDs(ctx, team.ID)
+	dropped := 0
+	err := w.store.WithTx(ctx, func(q *db.Queries) error {
+		rows, err := q.ListTeamIssueIDs(ctx, team.ID)
+		if err != nil {
+			return fmt.Errorf("listing cached issues failed: %w", err)
+		}
+		if err := q.DeleteSyncMeta(ctx, team.ID); err != nil {
+			return fmt.Errorf("dropping the watermark failed: %w", err)
+		}
+		for _, row := range rows {
+			// A cancel mid-rebuild (shutdown, unmount) aborts rather than
+			// commits: the rows and the watermark both survive together, and
+			// the next full cycle's drift check re-fires on prefixes that are
+			// still stale.
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("cancelled after %d of %d issues: %w", dropped, len(rows), err)
+			}
+			db.DeleteIssueCascade(ctx, q, row.ID, func(family string, err error) {
+				log.Printf("[sync] team %s: rebuild cleanup: %s for issue %s: %v", team.Key, family, row.ID, err)
+			})
+			dropped++
+		}
+		return nil
+	})
 	if err != nil {
-		log.Printf("[sync] team %s: rebuild aborted, listing cached issues failed: %v", team.Key, err)
+		// Rolled back, so the rows and the watermark are intact and the drift
+		// check fires again next cycle.
+		log.Printf("[sync] team %s: rebuild aborted, cache left untouched: %v", team.Key, err)
 		return
 	}
-	if err := q.DeleteSyncMeta(ctx, team.ID); err != nil {
-		// Abort with the rows intact: the drift check fires again next cycle.
-		log.Printf("[sync] team %s: rebuild aborted, dropping the watermark failed: %v", team.Key, err)
-		return
-	}
-	for _, row := range rows {
-		db.DeleteIssueCascade(ctx, q, row.ID, func(family string, err error) {
-			log.Printf("[sync] team %s: rebuild cleanup: %s for issue %s: %v", team.Key, family, row.ID, err)
-		})
-	}
-	log.Printf("[sync] team %s: rebuild dropped %d cached issues; refilling from the server", team.Key, len(rows))
+	log.Printf("[sync] team %s: rebuild dropped %d cached issues; refilling from the server", team.Key, dropped)
 }
 
 // identifierHolder names the cached issue currently holding the incoming

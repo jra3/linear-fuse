@@ -2,6 +2,8 @@ package fs
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -197,5 +199,120 @@ func TestIssuesLookupAllowsCrossTeamIssue(t *testing.T) {
 	// A name that is not an identifier never reaches the store.
 	if _, errno := qaIssues.resolveIssue(ctx, "not-an-identifier"); errno != syscall.ENOENT {
 		t.Errorf("resolveIssue(not-an-identifier) = errno %v, want ENOENT", errno)
+	}
+}
+
+// TestResolveIssueIDRejectsStaleIdentifier is the `parent:` write path's twin
+// of TestIssuesLookupRejectsStaleIdentifier. resolveIssueFields turns the
+// frontmatter line into IssueUpdateInput.parentId through ResolveIssueID, and
+// the resolution is the same workspace-wide one, so a cache damaged by a
+// rename would re-parent the issue under a DIFFERENT team's issue that merely
+// inherited the freed key.
+//
+// This fails without the guard, where ResolveIssueID returns issue-renamed's
+// UUID and a nil error.
+func TestResolveIssueIDRejectsStaleIdentifier(t *testing.T) {
+	t.Parallel()
+	sqliteRepo, store := fixtures.NewTestSQLiteRepository(t)
+	lfs := &LinearFS{repo: sqliteRepo, store: store}
+	ctx := context.Background()
+
+	seedTeamWithIssue(t, store, "team-1", "QA", "issue-renamed", "TST-1")
+	seedTeamWithIssue(t, store, "team-2", "TST", "issue-taker", "TST-9")
+
+	id, err := lfs.ResolveIssueID(ctx, "TST-1")
+	if err == nil {
+		t.Fatalf("ResolveIssueID(TST-1) = %q, want an error; a stale identifier must not name a parent", id)
+	}
+	// The shape the caller wraps into a FieldError for field "parent": a
+	// resolution miss, not a new error class.
+	if !strings.Contains(err.Error(), "unknown issue") {
+		t.Errorf("ResolveIssueID(TST-1) error = %q, want it to read as an unknown issue", err)
+	}
+}
+
+// TestResolveIssueIDAllowsCrossTeamParent is the non-regression twin: a parent
+// in another team is legitimate (Linear allows it, and scoping the check to
+// the child's team would break every one of them), so a healthy ENG-3 named
+// from a QA issue still resolves.
+func TestResolveIssueIDAllowsCrossTeamParent(t *testing.T) {
+	t.Parallel()
+	sqliteRepo, store := fixtures.NewTestSQLiteRepository(t)
+	lfs := &LinearFS{repo: sqliteRepo, store: store}
+	ctx := context.Background()
+
+	seedTeamWithIssue(t, store, "team-qa", "QA", "issue-qa", "QA-7")
+	seedTeamWithIssue(t, store, "team-eng", "ENG", "issue-eng", "ENG-3")
+
+	id, err := lfs.ResolveIssueID(ctx, "ENG-3")
+	if err != nil {
+		t.Fatalf("ResolveIssueID(ENG-3) = %v, want a healthy cross-team parent to resolve", err)
+	}
+	if id != "issue-eng" {
+		t.Errorf("ResolveIssueID(ENG-3) = %q, want issue-eng", id)
+	}
+}
+
+// relationsNodeFor builds a RelationsNode standing in for
+// teams/<key>/issues/<ID>/relations/, wired to a store but not to a mounted
+// tree. resolveRelatedIssue is the create surface's resolution policy; the
+// rest of createRelation is the shared create tail.
+func relationsNodeFor(lfs *LinearFS, issueID, teamID string) *RelationsNode {
+	return &RelationsNode{
+		attrNode: attrNode{BaseNode: BaseNode{lfs: lfs}},
+		issueID:  issueID,
+		teamID:   teamID,
+	}
+}
+
+// TestCreateRelationRejectsStaleIdentifier is the relations write path's twin.
+// The identifier parsed out of the create command names the relation's other
+// end, and that end is sent to Linear, so a stale identifier would relate the
+// wrong team's issue — a wrong-issue write reachable by writing one line.
+//
+// This fails without the guard, where resolveRelatedIssue returns
+// issue-renamed and a nil error.
+func TestCreateRelationRejectsStaleIdentifier(t *testing.T) {
+	t.Parallel()
+	sqliteRepo, store := fixtures.NewTestSQLiteRepository(t)
+	lfs := &LinearFS{repo: sqliteRepo, store: store}
+	ctx := context.Background()
+
+	seedTeamWithIssue(t, store, "team-1", "QA", "issue-renamed", "TST-1")
+	seedTeamWithIssue(t, store, "team-2", "TST", "issue-taker", "TST-9")
+
+	related, err := relationsNodeFor(lfs, "issue-taker", "team-2").resolveRelatedIssue(ctx, "TST-1")
+	if err == nil {
+		t.Fatalf("resolveRelatedIssue(TST-1) = %+v, want an error; a stale identifier must not name a relation", related)
+	}
+	// The create surface's existing shape, so the reason reaches .error as an
+	// unknown issue rather than a new error class.
+	var nf *notFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("resolveRelatedIssue(TST-1) error = %T (%v), want *notFoundError", err, err)
+	}
+	if !strings.Contains(nf.Message, "unknown issue") {
+		t.Errorf("resolveRelatedIssue(TST-1) message = %q, want it to read as an unknown issue", nf.Message)
+	}
+}
+
+// TestCreateRelationAllowsCrossTeamIssue is the non-regression twin: relating
+// an issue in another team is an ordinary thing to do, so a healthy ENG-3
+// named from a QA issue's relations/ directory still resolves.
+func TestCreateRelationAllowsCrossTeamIssue(t *testing.T) {
+	t.Parallel()
+	sqliteRepo, store := fixtures.NewTestSQLiteRepository(t)
+	lfs := &LinearFS{repo: sqliteRepo, store: store}
+	ctx := context.Background()
+
+	seedTeamWithIssue(t, store, "team-qa", "QA", "issue-qa", "QA-7")
+	seedTeamWithIssue(t, store, "team-eng", "ENG", "issue-eng", "ENG-3")
+
+	related, err := relationsNodeFor(lfs, "issue-qa", "team-qa").resolveRelatedIssue(ctx, "ENG-3")
+	if err != nil {
+		t.Fatalf("resolveRelatedIssue(ENG-3) = %v, want a healthy cross-team relation to resolve", err)
+	}
+	if related.ID != "issue-eng" {
+		t.Errorf("resolveRelatedIssue(ENG-3) = %q, want issue-eng", related.ID)
 	}
 }
