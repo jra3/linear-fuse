@@ -111,6 +111,34 @@ name; the whole name→entity stack is assume-first. The heterogeneous collectio
 deduplicated name Lookup serves, closing a round-trip strand where a colliding
 create landed at a name the reader could not open.
 
+**A remote key now schedules local work (P1, #427).** `team.Key` was already a
+path component under this boundary; it is now also an input to the sync
+worker's team-key drift check, which counts a team's cached issues whose
+identifier prefix disagrees with the team's current key and, on a nonzero
+count, deletes and re-fetches that team's issues. So a remote value the
+attacker controls can cause local deletes and API refetches. Four things bound
+it. The check runs on **full cycles only**, so flipping a key in a loop buys at
+most one rebuild per full-cycle interval per team, not one per flip. The delete
+is cheap and **scoped to the one affected team** — other teams' directories are
+untouched, which is also why the repair is not a cache wipe. The refill takes
+its identifiers **from the server**, so a rebuild cannot invent a name in a
+namespace LinearFS does not own, and the refilled names re-enter through
+`safeName` exactly as fetched ones always have; the worst case is paid-for
+detail data re-fetched, not a corrupted path. And the detection predicate is
+`substr(identifier, 1, ?) <> ?` through **bound sqlc parameters** — never string
+interpolation, and deliberately not `LIKE`/`GLOB`, in which `_`, `%` and `[` in
+a remote key would be wildcards.
+
+The same ticket closes a *read* hazard at this boundary. `issues/` Lookup
+resolves an identifier workspace-wide (it must: cross-team project members and
+sub-issues are reached through a containing team's directory), so a stale
+identifier left by a rename could resolve to another team's issue once the
+freed key was reused — and because the entity captured at Lookup is what
+`Flush` mutates, that was a wrong-issue **write** reachable by path. Resolution
+now validates that the requested prefix equals the current key of the team that
+owns the resolved issue, read from the `teams` row rather than from the issue's
+own blob, which goes stale in lockstep with the identifier.
+
 Note the in-scope sliver of the "malicious server" idea lives here too: the
 GraphQL/CDN transport must stay HTTPS and must not follow redirects to non-Linear
 hosts, because that is the difference between "P1 sends hostile data" (in scope)

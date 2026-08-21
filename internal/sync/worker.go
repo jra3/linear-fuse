@@ -465,7 +465,25 @@ func (w *Worker) syncCycle(ctx context.Context, mode cycleMode) error {
 	for _, team := range teams {
 		// Upsert team
 		if err := w.store.Queries().UpsertTeam(ctx, db.APITeamToDBTeam(team)); err != nil {
-			log.Printf("[sync] upsert team %s failed: %v", team.Key, err)
+			// teams.key is UNIQUE and the upsert conflicts on id only, so a
+			// team taking a key another cached team still holds fails here
+			// every cycle. Name the holder: a message carrying only the
+			// incoming team cannot be told apart from an ordinary write
+			// error, which is how key reuse went undiagnosed (#427).
+			if holder := w.teamKeyHolder(ctx, team); holder != "" {
+				log.Printf("[sync] upsert team %s failed: key already held by %s: %v", team.Key, holder, err)
+			} else {
+				log.Printf("[sync] upsert team %s failed: %v", team.Key, err)
+			}
+		}
+
+		// Team-key drift check (#427). Full cycles only: a key change is an
+		// admin action, so the full-cycle interval is soon enough, and a
+		// rebuild that fails retries every full cycle rather than every lean
+		// one. Runs BEFORE syncTeam so the rebuild's refill is that same
+		// call, not a second sync path.
+		if mode == cycleFull {
+			w.maybeRebuildRenamedTeam(ctx, team)
 		}
 
 		// Sync team metadata (states, labels, cycles, projects, members) —
@@ -595,7 +613,7 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 		lastSyncedUpdatedAt = meta.LastIssueUpdatedAt.Time
 	}
 
-	added, updated, pages, err := w.syncTeamIssues(ctx, team.ID, lastSyncedUpdatedAt)
+	added, updated, failed, pages, err := w.syncTeamIssues(ctx, team.ID, lastSyncedUpdatedAt)
 
 	// Disable catch-up mode after sync completes (or fails)
 	if w.catchUp != nil && (added+updated) > 50 {
@@ -614,6 +632,21 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 	// handles them all.
 	lastIssueUpdatedAt := db.ParseSQLiteTimeAny(latestUpdatedAtRaw)
 
+	// Withhold the watermark advance when any issue this pass failed to land
+	// (#427). MAX(updated_at) is taken over the rows that DID land, so a
+	// sibling newer than the failed issue steps the cursor over it and the
+	// next cycle classifies it "unchanged" — the issue is dropped from the
+	// mount permanently after one log line. Holding the cursor where it was
+	// makes the next cycle re-offer the failed issue instead. Any failure
+	// counts, not only a UNIQUE collision: narrowing it would couple the
+	// worker to the driver's error type to save three lines. last_synced_at
+	// and issue_count still refresh, so the team's freshness reporting is
+	// unaffected.
+	if failed > 0 {
+		log.Printf("[sync] team %s: withholding watermark advance, %d issue upserts failed", team.Key, failed)
+		lastIssueUpdatedAt = lastSyncedUpdatedAt
+	}
+
 	if err := w.store.Queries().UpsertSyncMeta(ctx, db.UpsertSyncMetaParams{
 		TeamID:             team.ID,
 		LastSyncedAt:       db.Now(),
@@ -624,14 +657,14 @@ func (w *Worker) syncTeam(ctx context.Context, team api.Team) error {
 	}
 
 	duration := w.now().Sub(start)
-	log.Printf("[sync] team %s: added=%d updated=%d pages=%d duration=%s",
-		team.Key, added, updated, pages, duration.Round(time.Millisecond))
+	log.Printf("[sync] team %s: added=%d updated=%d failed=%d pages=%d duration=%s",
+		team.Key, added, updated, failed, pages, duration.Round(time.Millisecond))
 
 	return nil
 }
 
 // syncTeamIssues fetches issues ordered by updatedAt DESC and stops when hitting unchanged issues
-func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUpdatedAt time.Time) (added, updated, pages int, err error) {
+func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUpdatedAt time.Time) (added, updated, failed, pages int, err error) {
 	var cursor string
 	var pendingDetailIssues []issueRef
 
@@ -639,14 +672,14 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
-			return added, updated, pages, ctx.Err()
+			return added, updated, failed, pages, ctx.Err()
 		default:
 		}
 
 		// Fetch next page of issues ordered by updatedAt DESC
 		issues, pageInfo, fetchErr := w.client.GetTeamIssuesPage(ctx, teamID, cursor, 100)
 		if fetchErr != nil {
-			return added, updated, pages, fmt.Errorf("fetch issues: %w", fetchErr)
+			return added, updated, failed, pages, fmt.Errorf("fetch issues: %w", fetchErr)
 		}
 		pages++
 
@@ -677,11 +710,20 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 			data, convErr := db.APIIssueToDBIssue(issue)
 			if convErr != nil {
 				log.Printf("[sync] convert issue %s failed: %v", issue.Identifier, convErr)
+				failed++
 				continue
 			}
 
 			if upsertErr := w.store.Queries().UpsertIssue(ctx, data.ToUpsertParams()); upsertErr != nil {
-				log.Printf("[sync] upsert issue %s failed: %v", issue.Identifier, upsertErr)
+				// issues.identifier is UNIQUE and the upsert conflicts on id
+				// only, so an issue whose identifier a stale row from another
+				// team still holds fails here. Name the holder (#427).
+				if holder := w.identifierHolder(ctx, issue); holder != "" {
+					log.Printf("[sync] upsert issue %s failed: identifier already held by %s: %v", issue.Identifier, holder, upsertErr)
+				} else {
+					log.Printf("[sync] upsert issue %s failed: %v", issue.Identifier, upsertErr)
+				}
+				failed++
 				continue
 			}
 
@@ -733,7 +775,7 @@ func (w *Worker) syncTeamIssues(ctx context.Context, teamID string, lastSyncedUp
 		w.syncDetails(ctx, pendingDetailIssues)
 	}
 
-	return added, updated, pages, nil
+	return added, updated, failed, pages, nil
 }
 
 // CleanupArchivedIssues removes issues that have been archived in Linear

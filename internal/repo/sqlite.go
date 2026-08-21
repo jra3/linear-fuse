@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -413,6 +414,23 @@ func (r *SQLiteRepository) GetTeams(ctx context.Context) ([]api.Team, error) {
 		return nil, fmt.Errorf("list teams: %w", err)
 	}
 	return stitchParents(db.DBTeamsToAPITeams(teams)), nil
+}
+
+// GetIssueTeamKey returns the CURRENT key of the team that owns an issue, or
+// "" when the issue (or its team) is not cached. Resolved through the issues
+// row's team_id column, deliberately: a team-key rename leaves the identifier
+// and the team key inside the issue's data blob stale in lockstep (#427), so a
+// check that reads the blob agrees with itself. Only the teams row is
+// authoritative for a key.
+func (r *SQLiteRepository) GetIssueTeamKey(ctx context.Context, issueID string) (string, error) {
+	key, err := r.store.Queries().GetIssueTeamKey(ctx, issueID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get issue team key: %w", err)
+	}
+	return key, nil
 }
 
 // GetTeamChildren returns the sub-teams of a team — the inverse of the
@@ -940,30 +958,9 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 // but not propagated — partial cleanup beats no cleanup, and the caller has
 // no recovery action available.
 func (r *SQLiteRepository) deleteOrphanIssue(ctx context.Context, issueID string) {
-	q := r.store.Queries()
-	if err := q.DeleteIssueComments(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: comments for %s: %v", issueID, err)
-	}
-	if err := q.DeleteIssueDocuments(ctx, sql.NullString{String: issueID, Valid: true}); err != nil {
-		log.Printf("[repo] orphan cleanup: documents for %s: %v", issueID, err)
-	}
-	if err := q.DeleteIssueAttachments(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: attachments for %s: %v", issueID, err)
-	}
-	if err := q.DeleteIssueEmbeddedFiles(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: embedded files for %s: %v", issueID, err)
-	}
-	if err := q.DeleteIssueRelations(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: relations for %s: %v", issueID, err)
-	}
-	if err := q.DeleteIssueHistoryCache(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: history for %s: %v", issueID, err)
-	}
-	if err := q.DeletePendingDetailSync(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: pending sync for %s: %v", issueID, err)
-	}
-	if err := q.DeleteIssue(ctx, issueID); err != nil {
-		log.Printf("[repo] orphan cleanup: issue %s: %v", issueID, err)
+	if !db.DeleteIssueCascade(ctx, r.store.Queries(), issueID, func(family string, err error) {
+		log.Printf("[repo] orphan cleanup: %s for issue %s: %v", family, issueID, err)
+	}) {
 		return
 	}
 	log.Printf("[repo] deleted orphan issue %s (no longer exists in Linear)", issueID)

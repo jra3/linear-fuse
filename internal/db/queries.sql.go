@@ -23,6 +23,36 @@ func (q *Queries) CountPendingDetailSync(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countTeamIssuesWithForeignIdentifier = `-- name: CountTeamIssuesWithForeignIdentifier :one
+SELECT COUNT(*) FROM issues
+WHERE team_id = ?
+  AND substr(identifier, 1, ?2) <> ?3
+`
+
+type CountTeamIssuesWithForeignIdentifierParams struct {
+	TeamID    string `json:"team_id"`
+	PrefixLen int64  `json:"prefix_len"`
+	KeyPrefix string `json:"key_prefix"`
+}
+
+// Team-key drift detection (#427). Counts a team's cached issues whose
+// identifier does not begin with the team's current key. A team-key rename
+// re-keys every issue server-side without bumping any issue's updatedAt, so
+// the incremental cursor can never see it; this reads the invariant (an
+// issue's identifier prefix equals its team's current key) rather than the
+// transition, which is what lets it repair a cache damaged before the check
+// existed.
+//
+// substr/length, never LIKE or GLOB: a team key is a remote string, and _, %
+// and [ are wildcards in those operators. The caller passes the key with its
+// trailing hyphen ("TST-"), so key TS does not match identifier TST-1.
+func (q *Queries) CountTeamIssuesWithForeignIdentifier(ctx context.Context, arg CountTeamIssuesWithForeignIdentifierParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTeamIssuesWithForeignIdentifier, arg.TeamID, arg.PrefixLen, arg.KeyPrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteAttachment = `-- name: DeleteAttachment :exec
 DELETE FROM attachments WHERE id = ?
 `
@@ -280,6 +310,19 @@ func (q *Queries) DeleteProjectUpdates(ctx context.Context, projectID string) er
 	return err
 }
 
+const deleteSyncMeta = `-- name: DeleteSyncMeta :exec
+DELETE FROM sync_meta WHERE team_id = ?
+`
+
+// Drops a team's incremental watermark so the next cycle walks the whole
+// team. The rebuild half of the drift repair (#427); also what re-arms a
+// rebuild that died partway, since after the delete no stale row survives for
+// the drift count to see.
+func (q *Queries) DeleteSyncMeta(ctx context.Context, teamID string) error {
+	_, err := q.db.ExecContext(ctx, deleteSyncMeta, teamID)
+	return err
+}
+
 const deleteTeamDocuments = `-- name: DeleteTeamDocuments :exec
 DELETE FROM documents WHERE team_id = ?
 `
@@ -466,6 +509,21 @@ func (q *Queries) GetIssueHistoryCache(ctx context.Context, issueID string) (Iss
 	var i IssueHistoryCache
 	err := row.Scan(&i.IssueID, &i.SyncedAt, &i.Data)
 	return i, err
+}
+
+const getIssueTeamKey = `-- name: GetIssueTeamKey :one
+SELECT t.key FROM teams t JOIN issues i ON i.team_id = t.id WHERE i.id = ?
+`
+
+// The CURRENT key of the team that owns an issue, resolved through the
+// durable team_id column. The identifier and the team key inside the issue's
+// data blob go stale together on a rename, so a guard comparing them agrees
+// with itself; only the teams row is authoritative.
+func (q *Queries) GetIssueTeamKey(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getIssueTeamKey, id)
+	var key string
+	err := row.Scan(&key)
+	return key, err
 }
 
 const getIssueUpdatedAt = `-- name: GetIssueUpdatedAt :one
@@ -743,6 +801,32 @@ func (q *Queries) GetSyncSchedule(ctx context.Context, key string) (time.Time, e
 	var last_run time.Time
 	err := row.Scan(&last_run)
 	return last_run, err
+}
+
+const getTeamByKey = `-- name: GetTeamByKey :one
+SELECT id, "key", name, icon, created_at, updated_at, synced_at, parent_id, description, data FROM teams WHERE key = ?
+`
+
+// The team currently holding a key. Read only to name the other side of a
+// UNIQUE(key) collision in the log (#427): key reuse after a rename means
+// two teams claim one key over the cache's lifetime, and a message naming
+// only the incoming team cannot be diagnosed.
+func (q *Queries) GetTeamByKey(ctx context.Context, key string) (Team, error) {
+	row := q.db.QueryRowContext(ctx, getTeamByKey, key)
+	var i Team
+	err := row.Scan(
+		&i.ID,
+		&i.Key,
+		&i.Name,
+		&i.Icon,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SyncedAt,
+		&i.ParentID,
+		&i.Description,
+		&i.Data,
+	)
+	return i, err
 }
 
 const getTeamDocumentsSyncedAt = `-- name: GetTeamDocumentsSyncedAt :one

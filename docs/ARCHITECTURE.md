@@ -371,7 +371,37 @@ staleness is bounded at `len(teams)` cycles.
 
 - **Incremental strategy:** issues are fetched ordered by `updatedAt DESC` and
   pagination stops at the first page whose issues are all older than the
-  `sync_meta.last_issue_updated_at` cursor.
+  `sync_meta.last_issue_updated_at` cursor. Two properties keep that cursor
+  honest:
+  - **It is withheld when anything failed to land.** The cursor is recomputed
+    as `MAX(updated_at)` over the rows that *did* land, so an issue whose upsert
+    failed while a newer sibling succeeded would be stepped over and classified
+    "unchanged" forever — dropped from the mount after a single log line. When
+    any upsert in a team's pass failed, the team keeps the cursor it started
+    with, so the next cycle re-offers the failed issue. `last_synced_at` and
+    `issue_count` still refresh.
+  - **It cannot see a team-key rename, so something else must.** See below.
+- **Team-key drift check and rebuild** (full cycles only): an issue's identifier
+  is `<teamKey>-<number>`, minted server-side and cached both as a column and
+  inside the issue's `data` blob — which is what the mount actually renders,
+  since `DBIssueToAPIIssue` is a bare unmarshal with no team join. Renaming a
+  team's key re-keys every one of its issues **without touching any issue's
+  `updatedAt`**, so the incremental cursor above can never see the change, while
+  the team row takes the new key on the very next cycle: a renamed team
+  directory full of old-prefixed issue directories, surviving restarts (#427).
+  The invariant is that **every cached issue's identifier prefix equals its
+  team's current key**, and the drift check owns it: one indexed local `COUNT`
+  per team per full cycle, no API calls. It is a *level* check on the invariant,
+  not an *edge* check on the rename event, so it re-arms every cycle and repairs
+  a cache damaged before the check existed. A nonzero count rebuilds that team —
+  drop its watermark, delete its issues and every row keyed off them
+  (`db.DeleteIssueCascade`, shared with the repo's orphan cleanup), then let the
+  ordinary `syncTeam` in the same cycle refill from the server. **The watermark
+  is dropped first, and that ordering is load-bearing:** it is the only thing
+  that re-arms a rebuild that dies partway, because once the rows are deleted no
+  stale prefix survives for the drift check to count. Repair is delete-and-refill
+  rather than a local identifier rewrite: the refilled names come from the
+  server instead of being invented in a namespace LinearFS does not own.
 - **Detail batching:** comments/docs/attachments/relations are fetched 10 issues
   at a time (`GetIssueDetailsBatch`); 15 exceeded Linear's 10k per-query
   complexity cap.
@@ -736,6 +766,25 @@ building blocks:
   stale is knowable only from what the mutation returned (old team's
   `issues/`+`recent/` under the old identifier, new team's under the new one).
   Every other edit is fully described by the inode list.
+- **`issues/` Lookup and Readdir do not have the same scope, and the identifier
+  guard is what makes that safe.** `Readdir` is team-scoped (`GetTeamIssues`),
+  but `Lookup` resolves a name through `GetIssueByIdentifier`, which is
+  workspace-wide — deliberately, because `ProjectNode.Lookup` and
+  `ChildrenNode.Lookup` build `../../issues/<IDENT>` from listings scoped by
+  `project_id` and `parent_id`, so cross-team project members and sub-issues are
+  routinely reached through a containing team's `issues/` directory and resolve
+  only because the lookup is unscoped. The hazard that leaves is a stale
+  identifier surviving a team-key rename and resolving to a *different* team's
+  issue once the freed key is reused — and since the entity captured at Lookup
+  is the one `IssueFileNode.Flush` mutates, that is a wrong-issue **write**, not
+  merely a wrong-issue read. `IssuesNode.resolveIssue` therefore checks the
+  identifier's own internal consistency (does the requested prefix equal the
+  *current* key of the team that owns the resolved issue, read from the `teams`
+  row via `team_id` — never from the issue's blob, which goes stale in lockstep
+  with the identifier and would agree with itself). Parent-team equality would
+  be the wrong check: it would dangle every legitimate cross-team symlink. A
+  mismatch is ENOENT — a resolution miss, not a write failure, so it leaves
+  `.error` alone.
 
 **Read flow:** kernel → `Lookup`/`Readdir`/`Read` → Repository → SQLite →
 marshal to markdown bytes. `mtime` = `updatedAt`, `ctime` = `createdAt`.
