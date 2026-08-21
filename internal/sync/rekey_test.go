@@ -532,7 +532,7 @@ func TestKeyReuseConvergesInBothTeamOrders(t *testing.T) {
 			for _, team := range mock.teams {
 				prefix := team.Key + "-"
 				n, err := store.Queries().CountTeamIssuesWithForeignIdentifier(ctx, db.CountTeamIssuesWithForeignIdentifierParams{
-					TeamID: team.ID, PrefixLen: int64(len(prefix)), KeyPrefix: prefix,
+					TeamID: team.ID, KeyPrefix: prefix,
 				})
 				if err != nil {
 					t.Fatalf("drift count for %s: %v", team.Key, err)

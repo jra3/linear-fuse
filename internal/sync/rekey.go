@@ -36,7 +36,6 @@ func (w *Worker) maybeRebuildRenamedTeam(ctx context.Context, team api.Team) {
 	prefix := team.Key + "-"
 	stale, err := w.store.Queries().CountTeamIssuesWithForeignIdentifier(ctx, db.CountTeamIssuesWithForeignIdentifierParams{
 		TeamID:    team.ID,
-		PrefixLen: int64(len(prefix)),
 		KeyPrefix: prefix,
 	})
 	if err != nil {

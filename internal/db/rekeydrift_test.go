@@ -32,7 +32,6 @@ func countForeign(t *testing.T, store *Store, teamID, key string) int64 {
 	prefix := key + "-"
 	n, err := store.Queries().CountTeamIssuesWithForeignIdentifier(context.Background(), CountTeamIssuesWithForeignIdentifierParams{
 		TeamID:    teamID,
-		PrefixLen: int64(len(prefix)),
 		KeyPrefix: prefix,
 	})
 	if err != nil {
@@ -64,6 +63,21 @@ func TestCountTeamIssuesWithForeignIdentifierIsExact(t *testing.T) {
 			if got := countForeign(t, store, "team-"+key, key); got != 1 {
 				t.Errorf("key %q: got %d stale issues, want 1", key, got)
 			}
+		}
+	})
+
+	// substr() on TEXT slices by character; Go's len() counts bytes. Passing a
+	// byte length in would take a longer substring than the prefix it is
+	// compared against, so <> would be true for every row of a healthy team
+	// and the drift check would rebuild it on every full cycle forever.
+	t.Run("a multi-byte key counts by character, not byte", func(t *testing.T) {
+		seedIdentifiedIssue(t, store, "mb-ok", "QÄ-1", "team-mb")
+		if got := countForeign(t, store, "team-mb", "QÄ"); got != 0 {
+			t.Errorf("healthy multi-byte key counted %d stale issues, want 0", got)
+		}
+		seedIdentifiedIssue(t, store, "mb-foreign", "ZZ-1", "team-mb")
+		if got := countForeign(t, store, "team-mb", "QÄ"); got != 1 {
+			t.Errorf("got %d stale issues, want 1", got)
 		}
 	})
 

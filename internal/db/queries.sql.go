@@ -26,13 +26,12 @@ func (q *Queries) CountPendingDetailSync(ctx context.Context) (int64, error) {
 const countTeamIssuesWithForeignIdentifier = `-- name: CountTeamIssuesWithForeignIdentifier :one
 SELECT COUNT(*) FROM issues
 WHERE team_id = ?
-  AND substr(identifier, 1, ?2) <> ?3
+  AND substr(identifier, 1, length(?2)) <> ?2
 `
 
 type CountTeamIssuesWithForeignIdentifierParams struct {
-	TeamID    string `json:"team_id"`
-	PrefixLen int64  `json:"prefix_len"`
-	KeyPrefix string `json:"key_prefix"`
+	TeamID    string      `json:"team_id"`
+	KeyPrefix interface{} `json:"key_prefix"`
 }
 
 // Team-key drift detection (#427). Counts a team's cached issues whose
@@ -46,8 +45,14 @@ type CountTeamIssuesWithForeignIdentifierParams struct {
 // substr/length, never LIKE or GLOB: a team key is a remote string, and _, %
 // and [ are wildcards in those operators. The caller passes the key with its
 // trailing hyphen ("TST-"), so key TS does not match identifier TST-1.
+//
+// length() is computed HERE, not passed in from Go. substr() on TEXT slices by
+// CHARACTER, while Go's len() counts BYTES, so a key holding any multi-byte
+// character would take a longer substring than the prefix it is compared
+// against, make <> true for every row, and rebuild the team on every full
+// cycle forever. Both units are SQLite's this way, so they cannot disagree.
 func (q *Queries) CountTeamIssuesWithForeignIdentifier(ctx context.Context, arg CountTeamIssuesWithForeignIdentifierParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTeamIssuesWithForeignIdentifier, arg.TeamID, arg.PrefixLen, arg.KeyPrefix)
+	row := q.db.QueryRowContext(ctx, countTeamIssuesWithForeignIdentifier, arg.TeamID, arg.KeyPrefix)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

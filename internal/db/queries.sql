@@ -110,9 +110,15 @@ SELECT MAX(updated_at) FROM issues WHERE team_id = ?;
 -- substr/length, never LIKE or GLOB: a team key is a remote string, and _, %
 -- and [ are wildcards in those operators. The caller passes the key with its
 -- trailing hyphen ("TST-"), so key TS does not match identifier TST-1.
+--
+-- length() is computed HERE, not passed in from Go. substr() on TEXT slices by
+-- CHARACTER, while Go's len() counts BYTES, so a key holding any multi-byte
+-- character would take a longer substring than the prefix it is compared
+-- against, make <> true for every row, and rebuild the team on every full
+-- cycle forever. Both units are SQLite's this way, so they cannot disagree.
 SELECT COUNT(*) FROM issues
 WHERE team_id = ?
-  AND substr(identifier, 1, sqlc.arg(prefix_len)) <> sqlc.arg(key_prefix);
+  AND substr(identifier, 1, length(sqlc.arg(key_prefix))) <> sqlc.arg(key_prefix);
 
 -- Sync metadata queries
 
