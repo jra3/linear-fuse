@@ -608,6 +608,12 @@ than silently treated as body text.
   drift.
 - **`FieldError`** lives here: a structured field/value/reason error the fs
   layer maps to errno + `.error` content (fs re-exports an alias).
+- **Whole-document key guards** (`checkIssueFrontmatter`,
+  `checkLabelFrontmatter`): a frontmatter key the surface does not accept
+  rejects the document *whole*, before any field is diffed, so nothing
+  half-applies and no key is ever silently dropped. Each guard's accepted set is
+  exactly what that surface's render emits, which keeps render → parse a
+  fixpoint.
 - **ID resolution is deferred:** frontmatter holds human-friendly values
   (assignee *email*, label *names*, project *name*); marshal leaves them as-is
   and the fs layer resolves them to Linear IDs before calling the API. Helpers
@@ -875,7 +881,10 @@ gate above.
   instead.
 - **`.error` / `.last` sidecars** (read-only, backed by `writeFeedback`): every
   writable surface exposes the last failure's reason in `.error` (cleared on
-  success) and, where the surface mints an entity, a per-create outcome log in
+  success, rendered as the message plus a `Time: <RFC3339>` line — a collection
+  `.error` is directory-scoped and only the next successful write to that
+  directory retires it, so the content has to say when it was recorded) and,
+  where the surface mints an entity, a per-create outcome log in
   `.last` — the created identity/URL on success, an `outcome: failed` entry on a
   clean create failure — so a scripted batch reads back how many of N creates
   succeeded and scripts and LLMs never have to parse an errno. The one exception

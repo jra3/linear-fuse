@@ -67,19 +67,40 @@ func collectionErrorKey(kind, parentID string) string {
 	return kind + ":" + parentID
 }
 
+// renderWriteError is the .error file's content: the recorded message, then the
+// `Time:` line. It is split out from the render closure so the rendering is
+// testable without a mount — the closure around it only decides WHETHER there is
+// an error to render.
+func renderWriteError(e *WriteError) []byte {
+	body := e.Message + "\n"
+	if !e.Timestamp.IsZero() {
+		body += "Time: " + e.Timestamp.Format(time.RFC3339) + "\n"
+	}
+	return []byte(body)
+}
+
 // lookupErrorFile mounts the read-only `.error` virtual file for an entity as a
 // child of parent. Reading it returns the last failed-write message (empty if
-// the most recent write succeeded), keyed by entityID; the reported time is when
-// the error was set. It is a plain renderFile at mountDefaultTimeout — the
-// mount's configured bound, not "uncached" — so what makes a read reflect the
-// most recent write rather than a stale cached (often empty) value is the render
-// closure running on every read under FOPEN_DIRECT_IO, plus the
+// the most recent write succeeded), keyed by entityID, followed by a `Time:`
+// line carrying when the error was set. The rendered timestamp is what makes a
+// STICKY error datable: a collection `.error` is retired only by the next
+// successful write to that collection, so an agent that reads one after an
+// unrelated write needs to see whether it is about the write it just made
+// (#476). It is also the file's atime/mtime, but agents cat, they do not stat.
+// It is deliberately absolute (RFC3339) and never a computed "x ago", so the
+// rendered length is identical between two reads of the same error and the
+// attr-cached size can never disagree with the content.
+//
+// It is a plain renderFile at mountDefaultTimeout — the mount's configured
+// bound, not "uncached" — so what makes a read reflect the most recent write
+// rather than a stale cached (often empty) value is the render closure running
+// on every read under FOPEN_DIRECT_IO, plus the
 // wf.invalidate(errorIno(entityID)) each write does. Within that bound a stat
 // can still be answered from the kernel's attr cache.
 func (lfs *LinearFS) lookupErrorFile(ctx context.Context, parent fs.InodeEmbedder, entityID string, out *fuse.EntryOut) *fs.Inode {
 	render := func(context.Context) ([]byte, time.Time, time.Time) {
 		if e := lfs.GetWriteError(entityID); e != nil {
-			return []byte(e.Message + "\n"), e.Timestamp, e.Timestamp
+			return renderWriteError(e), e.Timestamp, e.Timestamp
 		}
 		return nil, time.Time{}, time.Time{}
 	}

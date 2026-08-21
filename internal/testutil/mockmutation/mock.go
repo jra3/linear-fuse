@@ -79,7 +79,7 @@ type Client struct {
 // UpdateCall is one recorded update the fake received on an entity that exposes
 // an editable canonical .md.
 type UpdateCall struct {
-	Kind string  // "issue" | "project" | "initiative"
+	Kind string  // "issue" | "project" | "initiative" | "label"
 	ID   string  // the entity's ID
 	Body *string // the body/description the mutation carried; nil if it carried none
 	// Input is the raw issue-update map the mutation carried, copied. It is
@@ -90,12 +90,12 @@ type UpdateCall struct {
 	// same mutation that stores the wrong text (#454). A test asserting only the
 	// description would call that write correct.
 	//
-	// Issue updates only — project/initiative updates carry a typed input struct
-	// whose editable surface is Body — so it is nil for those kinds.
+	// Issue and label updates only — project/initiative updates carry a typed
+	// input struct whose editable surface is Body — so it is nil for those kinds.
 	Input map[string]any
 }
 
-// Updates returns, in order, every issue/project/initiative update the fake
+// Updates returns, in order, every issue/project/initiative/label update the fake
 // received. A save that reached Linear appears here; a save a handler decided
 // was a no-op does NOT — which is what makes a silently dropped write assertable
 // offline, where the stored value alone cannot tell the two apart (#415).
@@ -498,6 +498,12 @@ func (c *Client) CreateLabel(ctx context.Context, input map[string]any) (*api.La
 }
 
 func (c *Client) UpdateLabel(ctx context.Context, id string, input map[string]any) (*api.Label, error) {
+	// Recorded so a test can assert a label write was SENT — or, for the label
+	// frontmatter guard (#476), that a rejected document sent NOTHING. The stored
+	// row alone cannot tell a refused write from one that persisted the same value.
+	c.mu.Lock()
+	c.recordUpdateLocked("label", id, nil, input)
+	c.mu.Unlock()
 	// The real mutation returns the WHOLE updated label, so overlay the input onto
 	// the current stored state — echoing only the edited fields would zero the
 	// untouched ones (name/color/description), corrupting the upsert.

@@ -393,3 +393,181 @@ color: #0000FF
 		})
 	}
 }
+
+// TestLabelFrontmatterKeyGuard is the #476 regression baseline. Every case below
+// returned update={} err=nil before the guard: the write was accepted, no
+// mutation was sent, and the key vanished on the next fresh render — the third
+// outcome the failure model does not have. `parent:` is the reported one (label
+// groups, which this surface cannot express at all); the rest are the shapes it
+// generalizes to.
+func TestLabelFrontmatterKeyGuard(t *testing.T) {
+	t.Parallel()
+	original := &api.Label{ID: "label-123", Name: "Bug", Color: "#FF0000", Description: "Something broken"}
+
+	tests := []struct {
+		name      string
+		content   string
+		wantField string
+		wantIn    []string // substrings the message must carry
+	}{
+		{
+			name:      "label group parent is not an editable field",
+			content:   "---\nname: Bug\nparent: Context\n---",
+			wantField: "parent",
+			wantIn:    []string{"unknown field", "name, color, description"},
+		},
+		{
+			name:      "misspelled key",
+			content:   "---\ndescriptoin: NEW\n---",
+			wantField: "descriptoin",
+			wantIn:    []string{"unknown field"},
+		},
+		{
+			name:      "meta key id is read-only, and the message says where it lives",
+			content:   "---\nname: Bug\nid: pwned\n---",
+			wantField: "id",
+			wantIn:    []string{"read-only field", ".meta sidecar"},
+		},
+		{
+			name:      "meta key team is read-only",
+			content:   "---\nteam: team-1\n---",
+			wantField: "team",
+			wantIn:    []string{"read-only field"},
+		},
+		{
+			name:      "body is rejected, not dropped",
+			content:   "---\nname: Bug\n---\nSome prose the mount would send nowhere.",
+			wantField: "body",
+			wantIn:    []string{"frontmatter-only", "closing ---"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			update, err := MarkdownToLabelUpdate([]byte(tt.content), original)
+			var ferr *FieldError
+			if !errors.As(err, &ferr) {
+				t.Fatalf("MarkdownToLabelUpdate() = (%v, %v), want a *FieldError on %q", update, err, tt.wantField)
+			}
+			if ferr.Field != tt.wantField {
+				t.Errorf("FieldError.Field = %q, want %q", ferr.Field, tt.wantField)
+			}
+			for _, want := range tt.wantIn {
+				if !strings.Contains(ferr.Message, want) {
+					t.Errorf("FieldError.Message = %q, want it to carry %q", ferr.Message, want)
+				}
+			}
+			if update != nil {
+				t.Errorf("MarkdownToLabelUpdate() update = %v, want nil — the document is rejected whole", update)
+			}
+		})
+	}
+}
+
+// TestLabelFrontmatterGuardRejectsTheWholeDocument: a document carrying one bad
+// key and one good change applies neither, and one rejection names every key the
+// writer has to fix rather than one per retry — reported in sorted order, since a
+// .error that changes between identical writes is not a contract.
+func TestLabelFrontmatterGuardRejectsTheWholeDocument(t *testing.T) {
+	t.Parallel()
+	original := &api.Label{ID: "label-123", Name: "Bug", Color: "#FF0000", Description: "Something broken"}
+	content := "---\nname: Renamed\nzebra: 1\nalpha: 2\nid: pwned\n---"
+
+	update, err := MarkdownToLabelUpdate([]byte(content), original)
+	var ferr *FieldError
+	if !errors.As(err, &ferr) {
+		t.Fatalf("MarkdownToLabelUpdate() = (%v, %v), want a *FieldError", update, err)
+	}
+	if ferr.Field != "alpha" {
+		t.Errorf("FieldError.Field = %q, want the first SORTED unknown key %q", ferr.Field, "alpha")
+	}
+	for _, want := range []string{`(also unrecognized: "zebra")`, `(also read-only: "id")`} {
+		if !strings.Contains(ferr.Message, want) {
+			t.Errorf("FieldError.Message = %q, want it to also name %q", ferr.Message, want)
+		}
+	}
+	if update != nil {
+		t.Errorf("the good `name` change leaked through as %v; the document must be rejected whole", update)
+	}
+}
+
+// TestParseNewLabelIgnoresMetaKeys: labels/_create is laxer in exactly the one
+// way issues/_create is — a spec assembled from a rendered {name}.md plus its
+// {name}.meta still creates, because the server assigns id/team at birth. A
+// misspelled key and a body are still rejected there.
+func TestParseNewLabelIgnoresMetaKeys(t *testing.T) {
+	t.Parallel()
+
+	name, color, desc, err := ParseNewLabel([]byte("---\nid: lbl-1\nteam: team-1\nname: Bug\ncolor: '#FF0000'\ndescription: broken\n---"))
+	if err != nil {
+		t.Fatalf("ParseNewLabel() with .meta keys: %v — create must ignore them", err)
+	}
+	if name != "Bug" || color != "#FF0000" || desc != "broken" {
+		t.Errorf("ParseNewLabel() = (%q, %q, %q), want (Bug, #FF0000, broken)", name, color, desc)
+	}
+
+	for _, tt := range []struct{ name, content, wantField string }{
+		{"misspelled key", "---\nname: Bug\ncolro: red\n---", "colro"},
+		{"body", "---\nname: Bug\n---\nProse.", "body"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, _, err := ParseNewLabel([]byte(tt.content))
+			var ferr *FieldError
+			if !errors.As(err, &ferr) {
+				t.Fatalf("ParseNewLabel() err = %v, want a *FieldError on %q", err, tt.wantField)
+			}
+			if ferr.Field != tt.wantField {
+				t.Errorf("FieldError.Field = %q, want %q", ferr.Field, tt.wantField)
+			}
+		})
+	}
+}
+
+// TestLabelGuardAcceptsTheMountsOwnOutput: the guard's key set is exactly what
+// LabelToMarkdown renders, so render -> parse stays a fixpoint. If the two ever
+// drift, every label edit fails at the mount.
+func TestLabelGuardAcceptsTheMountsOwnOutput(t *testing.T) {
+	t.Parallel()
+	label := &api.Label{ID: "label-123", Name: "Bug", Color: "#FF0000", Description: "Something broken"}
+	content, err := LabelToMarkdown(label)
+	if err != nil {
+		t.Fatalf("LabelToMarkdown: %v", err)
+	}
+	update, err := MarkdownToLabelUpdate(content, label)
+	if err != nil {
+		t.Fatalf("the guard rejects the mount's own render: %v", err)
+	}
+	if len(update) != 0 {
+		t.Errorf("re-parsing an unedited render produced %v, want no changes", update)
+	}
+}
+
+// TestLabelClearingIdiomIsExplicitEmptyString pins the semantic this ticket
+// deliberately did NOT change: on this surface an ABSENT key means "leave that
+// field alone", and an explicit empty string is how the mount SENDS an empty
+// description. The generated README documents that split; changing it here would
+// silently wipe a description for any client that writes only `name:`.
+func TestLabelClearingIdiomIsExplicitEmptyString(t *testing.T) {
+	t.Parallel()
+	original := &api.Label{ID: "label-123", Name: "Bug", Color: "#FF0000", Description: "Something broken"}
+
+	untouched, err := MarkdownToLabelUpdate([]byte("---\nname: Bug\n---"), original)
+	if err != nil {
+		t.Fatalf("MarkdownToLabelUpdate() with an absent description: %v", err)
+	}
+	if len(untouched) != 0 {
+		t.Errorf("an absent description produced %v, want no change (absence is not a clear)", untouched)
+	}
+
+	cleared, err := MarkdownToLabelUpdate([]byte(`---
+name: Bug
+description: ""
+---`), original)
+	if err != nil {
+		t.Fatalf("MarkdownToLabelUpdate() with an explicit empty description: %v", err)
+	}
+	if !reflect.DeepEqual(cleared, map[string]any{"description": ""}) {
+		t.Errorf("explicit empty description produced %v, want map[description:]", cleared)
+	}
+}
