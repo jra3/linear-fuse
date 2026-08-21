@@ -153,6 +153,26 @@ func (n *RelationFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 	n.renderMu.Unlock()
 }
 
+// resolveRelatedIssue turns the identifier half of a relation command into the
+// issue it names. It is split out of the create closure below for the same
+// reason IssuesNode.resolveIssue is split out of Lookup: the decision worth
+// pinning is the resolution POLICY, and driving it through commitCreate needs
+// a fully wired LinearFS while this needs only a store.
+//
+// The identifier is caller-supplied and the issue it resolves to becomes one
+// end of a relation LinearFS then creates on Linear, so it carries the #427
+// consistency guard — a stale identifier a team-key rename left behind would
+// otherwise link the wrong team's issue. Cross-team relations stay legitimate:
+// the check is the identifier's own consistency, not equality with this
+// issue's team.
+func (n *RelationsNode) resolveRelatedIssue(ctx context.Context, identifier string) (*api.Issue, error) {
+	related, err := n.lfs.repo.GetIssueByIdentifier(ctx, identifier)
+	if err != nil || related == nil || n.lfs.identifierIsStale(ctx, identifier, related.ID) {
+		return nil, &notFoundError{FieldError{Field: "identifier", Value: identifier, Message: "unknown issue. Use an existing issue identifier like ENG-123."}}
+	}
+	return related, nil
+}
+
 // createRelation is the relations create surface's onFlush: parse the
 // command via parseRelationInput (relationlisting.go), resolve the target
 // issue, and run the create tail.
@@ -172,9 +192,9 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 				return nil, err
 			}
 
-			relatedIssue, err := n.lfs.repo.GetIssueByIdentifier(ctx, relatedIdentifier)
-			if err != nil || relatedIssue == nil {
-				return nil, &notFoundError{FieldError{Field: "identifier", Value: relatedIdentifier, Message: "unknown issue. Use an existing issue identifier like ENG-123."}}
+			relatedIssue, err := n.resolveRelatedIssue(ctx, relatedIdentifier)
+			if err != nil {
+				return nil, err
 			}
 			relatedID = relatedIssue.ID
 

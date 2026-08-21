@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -251,8 +252,41 @@ func (s *Store) Queries() *Queries {
 
 // DB returns the underlying database connection. Test seam only: no
 // production code calls it — tests and fixture loaders use it for raw SQL.
+// Production code that needs a transaction uses WithTx.
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+// WithTx runs fn against a Queries bound to a single transaction, committing
+// when fn returns nil and rolling back on any error.
+//
+// It exists for the writes whose intermediate states must not be observable or
+// survivable — the #427 team rebuild drops a team's issues and its incremental
+// watermark, and a crash between the two leaves a cache that is neither whole
+// nor re-armed. Committing once instead of once per statement is the other
+// half: under journal_mode=WAL a per-statement commit is a per-statement
+// fsync, so a whole-team delete run statement-by-statement costs thousands of
+// them.
+//
+// The transaction's queries are ctx-detached exactly like the store's own
+// (ctxdetach.go), so cancellation stays cooperative: a caller that wants to
+// abort mid-transaction checks ctx itself and returns an error, and gets a
+// deterministic rollback instead of racing database/sql's async unwind.
+func (s *Store) WithTx(ctx context.Context, fn func(*Queries) error) error {
+	tx, err := s.db.BeginTx(context.WithoutCancel(ctx), nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	if err := fn(New(ctxDetachDBTX{inner: tx})); err != nil {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
+		}
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }
 
 // ListIssuesByLabel returns issues that have a specific label

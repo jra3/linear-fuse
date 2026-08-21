@@ -233,12 +233,16 @@ network is reached, and what blocks. Read it before reasoning about the data pat
   - `schema.sql` - Table definitions (well-commented, see inline docs)
   - `queries.sql` - sqlc query definitions
   - `convert.go` - API ↔ DB type conversion functions
-- **internal/repo**: Repository pattern for data access
-  - `repo.go` - Repository interface (~50 methods)
-  - `sqlite.go` - SQLite-backed implementation
-  - `mock.go` - In-memory mock for testing
+- **internal/repo**: Data access, deliberately concrete — the read path is
+  `*repo.SQLiteRepository` with no interface and no mock in front of it. See
+  CONTEXT.md's "Repository read path" section, which owns that decision and the
+  reasons not to re-suggest one.
+  - `sqlite.go` - the SQLite-backed implementation
+  - `swr.go` - the stale-while-revalidate refreshes; every SWR surface routes
+    through `maybeRefreshSWR`
+  - `queryone.go` - the shared single-row read contract: not-found is `(nil, nil)`
+  - `metrics.go` - OTEL instruments for the SWR layer
 - **internal/sync**: Background sync worker for Linear → SQLite
-- **internal/cache**: Generic TTL cache (legacy, no longer imported - kept for reference)
 
 ### Generated README (agent-facing docs)
 
@@ -502,7 +506,7 @@ After schema changes:
 1. Update `internal/db/queries.sql` with CRUD queries
 2. Run `sqlc generate`
 3. Add conversion functions to `internal/db/convert.go`
-4. Add repository methods to `internal/repo/repo.go` and implementations
+4. Add repository methods to `internal/repo/sqlite.go`
 
 ## Development Notes
 

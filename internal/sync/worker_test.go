@@ -112,9 +112,10 @@ type mockAPIClient struct {
 	onWorkspace         func()                       // if set, runs inside GetWorkspace (simulates writes racing the fetch)
 	viewerErr           error                        // if set, GetViewer (the cold-start budget probe) fails with this
 	getViewerCalls      int32
-	projectsProbeErr    error               // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
-	issueIDsByTeam      map[string][]string // teamID -> authoritative bare issue IDs (the reconcile sweep's drain)
-	issueIDsErr         error               // if set, GetTeamIssueIDs fails with this (all-or-nothing drain tests)
+	projectsProbeErr    error                             // if set, GetTeamProjectsNewestPage fails with this (probe-error tests)
+	issuesPageErr       func(teamID, cursor string) error // if set, consulted before every GetTeamIssuesPage (mid-walk failure tests)
+	issueIDsByTeam      map[string][]string               // teamID -> authoritative bare issue IDs (the reconcile sweep's drain)
+	issueIDsErr         error                             // if set, GetTeamIssueIDs fails with this (all-or-nothing drain tests)
 	opMu                gosync.Mutex
 	opOrder             []string // call order across GetViewer/GetWorkspace/GetTeamMetadata/GetTeams/GetTeamProjectsNewestPage (probe-sequencing + lean/full cycle tests)
 }
@@ -160,6 +161,11 @@ func (m *mockAPIClient) GetTeamIssuesPage(ctx context.Context, teamID string, cu
 	atomic.AddInt32(&m.getIssuesCalls, 1)
 	if m.simulateError != nil {
 		return nil, api.PageInfo{}, m.simulateError
+	}
+	if m.issuesPageErr != nil {
+		if err := m.issuesPageErr(teamID, cursor); err != nil {
+			return nil, api.PageInfo{}, err
+		}
 	}
 
 	issues, ok := m.issuesByTeam[teamID]
@@ -1866,9 +1872,17 @@ func issueReconcileFixture(t *testing.T, store *db.Store) (*Worker, *mockAPIClie
 		t.Fatalf("seed team: %v", err)
 	}
 	now := clock.now()
-	for _, id := range []string{"issue-keep", "issue-gone"} {
+	// Identifiers are "<teamKey>-<number>", so a seeded row gets a real TST-
+	// one. A row whose identifier does not begin with its own team's key is
+	// what the #427 drift check reads as a renamed team, and it would rebuild
+	// this fixture out from under the sweep before the sweep ever ran.
+	for _, seed := range []struct{ id, identifier string }{
+		{"issue-keep", "TST-1"},
+		{"issue-gone", "TST-2"},
+	} {
+		id := seed.id
 		issue := api.Issue{
-			ID: id, Identifier: id, Title: id, Team: &team,
+			ID: id, Identifier: seed.identifier, Title: id, Team: &team,
 			State:     api.State{ID: "state-1", Name: "Todo", Type: "unstarted"},
 			CreatedAt: now, UpdatedAt: now,
 		}

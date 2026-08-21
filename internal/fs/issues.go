@@ -131,22 +131,47 @@ func (n *IssuesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return inode, 0
 	}
 
-	// Check if name looks like a valid issue identifier (e.g., "ENG-123")
-	// to avoid unnecessary API calls for invalid names
-	if !looksLikeIdentifier(name) {
-		return nil, syscall.ENOENT
-	}
-
-	// Use FetchIssueByIdentifier which checks: cache -> SQLite -> direct API
-	// This avoids loading ALL team issues just to access a single issue
-	issue, err := n.lfs.FetchIssueByIdentifier(ctx, name)
-	if err != nil {
-		// If API returns not found, return ENOENT
-		return nil, syscall.ENOENT
+	issue, errno := n.resolveIssue(ctx, name)
+	if errno != 0 {
+		return nil, errno
 	}
 
 	node := &IssueDirectoryNode{attrNode: attrNode{BaseNode: BaseNode{lfs: n.lfs}}, entityCell: entityCell[api.Issue]{val: *issue}}
 	return n.newDirInode(ctx, out, issue.Identifier, node, dirAttr(issue.CreatedAt, issue.UpdatedAt), issueDirIno(issue.ID), n.lfs.entryTimeout()), 0
+}
+
+// resolveIssue turns a directory name into the issue it names, or an errno.
+// It is the whole of Lookup's resolution POLICY, split from the inode
+// plumbing above so it can be driven without a mounted tree — building the
+// child inode needs a live bridge, and the decision this makes is the part
+// worth pinning.
+//
+// A miss here is always ENOENT and never touches .error: no write was
+// attempted, so there is no failure for a writer to read back.
+func (n *IssuesNode) resolveIssue(ctx context.Context, name string) (*api.Issue, syscall.Errno) {
+	// Reject names that cannot be identifiers (e.g. "ENG-123" passes,
+	// ".hidden" does not) before spending a query on them.
+	if !looksLikeIdentifier(name) {
+		return nil, syscall.ENOENT
+	}
+
+	// Resolve the identifier straight out of SQLite rather than loading ALL
+	// team issues just to reach one.
+	issue, err := n.lfs.FetchIssueByIdentifier(ctx, name)
+	if err != nil {
+		return nil, syscall.ENOENT
+	}
+
+	// Identifier consistency guard (#427). The resolution above is
+	// workspace-wide, so a stale identifier a team-key rename left behind can
+	// resolve to a DIFFERENT team's issue once the freed key is reused — and
+	// the entity returned here is the one a later Flush mutates, which makes
+	// a mis-resolution a wrong-issue write, not merely a wrong-issue read.
+	if n.lfs.identifierIsStale(ctx, name, issue.ID) {
+		return nil, syscall.ENOENT
+	}
+
+	return issue, 0
 }
 
 // looksLikeIdentifier checks if a name looks like a Linear issue identifier

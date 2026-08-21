@@ -98,10 +98,39 @@ SELECT COUNT(*) FROM issues WHERE team_id = ?;
 -- name: GetLatestTeamIssueUpdatedAt :one
 SELECT MAX(updated_at) FROM issues WHERE team_id = ?;
 
+-- name: CountTeamIssuesWithForeignIdentifier :one
+-- Team-key drift detection (#427). Counts a team's cached issues whose
+-- identifier does not begin with the team's current key. A team-key rename
+-- re-keys every issue server-side without bumping any issue's updatedAt, so
+-- the incremental cursor can never see it; this reads the invariant (an
+-- issue's identifier prefix equals its team's current key) rather than the
+-- transition, which is what lets it repair a cache damaged before the check
+-- existed.
+--
+-- substr/length, never LIKE or GLOB: a team key is a remote string, and _, %
+-- and [ are wildcards in those operators. The caller passes the key with its
+-- trailing hyphen ("TST-"), so key TS does not match identifier TST-1.
+--
+-- length() is computed HERE, not passed in from Go. substr() on TEXT slices by
+-- CHARACTER, while Go's len() counts BYTES, so a key holding any multi-byte
+-- character would take a longer substring than the prefix it is compared
+-- against, make <> true for every row, and rebuild the team on every full
+-- cycle forever. Both units are SQLite's this way, so they cannot disagree.
+SELECT COUNT(*) FROM issues
+WHERE team_id = ?
+  AND substr(identifier, 1, length(sqlc.arg(key_prefix))) <> sqlc.arg(key_prefix);
+
 -- Sync metadata queries
 
 -- name: GetSyncMeta :one
 SELECT * FROM sync_meta WHERE team_id = ?;
+
+-- name: DeleteSyncMeta :exec
+-- Drops a team's incremental watermark so the next cycle walks the whole
+-- team. The rebuild half of the drift repair (#427); also what re-arms a
+-- rebuild that died partway, since after the delete no stale row survives for
+-- the drift count to see.
+DELETE FROM sync_meta WHERE team_id = ?;
 
 -- name: UpsertSyncMeta :exec
 INSERT INTO sync_meta (team_id, last_synced_at, last_issue_updated_at, issue_count)
@@ -131,6 +160,13 @@ SELECT * FROM teams ORDER BY name;
 -- the directory name the caller renders.
 -- name: ListSubteams :many
 SELECT * FROM teams WHERE parent_id = ? ORDER BY key;
+
+-- name: GetTeamByKey :one
+-- The team currently holding a key. Read only to name the other side of a
+-- UNIQUE(key) collision in the log (#427): key reuse after a rename means
+-- two teams claim one key over the cache's lifetime, and a message naming
+-- only the incoming team cannot be diagnosed.
+SELECT * FROM teams WHERE key = ?;
 
 -- name: UpsertTeam :exec
 INSERT INTO teams (id, key, name, icon, created_at, updated_at, synced_at, parent_id, description, data)
@@ -167,6 +203,13 @@ SELECT updated_at, detail_synced_at FROM issues WHERE id = ?;
 
 -- name: DeleteIssueHistoryCache :exec
 DELETE FROM issue_history_cache WHERE issue_id = ?;
+
+-- name: GetIssueTeamKey :one
+-- The CURRENT key of the team that owns an issue, resolved through the
+-- durable team_id column. The identifier and the team key inside the issue's
+-- data blob go stale together on a rename, so a guard comparing them agrees
+-- with itself; only the teams row is authoritative.
+SELECT t.key FROM teams t JOIN issues i ON i.team_id = t.id WHERE i.id = ?;
 
 -- name: ListTeamIssueIDs :many
 SELECT id, updated_at FROM issues WHERE team_id = ? ORDER BY updated_at DESC;
