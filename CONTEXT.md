@@ -1749,11 +1749,13 @@ scan uses an explicit column list (sqlc expands `*` itself;
 
 ### Cycle taxonomy (`syncCycle`, lean/full)
 The worker's sync cycle has two speeds (`internal/sync/worker.go`, #242 —
-slice 1 of the #238 sync-cycle diet). A **full** cycle is the complete
-pre-diet behavior verbatim: `syncWorkspace` (users + initiatives +
+slice 1 of the #238 sync-cycle diet). A **full** cycle carries the complete
+pre-diet behavior — `syncWorkspace` (users + initiatives +
 project-label catalog) and per-team `syncTeamMetadata`
-(states/labels/cycles/projects/members) — with every prune license — plus
-the incremental issues sync. A **lean** cycle (the steady-state default)
+(states/labels/cycles/projects/members), with every prune license, plus
+the incremental issues sync — and, since #427, one step the pre-diet worker
+never had: the per-team team-key drift check and rebuild, described in
+`docs/ARCHITECTURE.md`. A **lean** cycle (the steady-state default)
 runs only the cheap `GetTeams` enumeration, each team's incremental
 issues sync, and the change-detection probes (see "Initiatives probe"
 below): no `GetTeamMetadata`, and `GetWorkspace` only when a probe detects

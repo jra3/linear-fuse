@@ -310,7 +310,7 @@ server-reported reset. Cycles come in two sizes:
 - **Full cycle** (every ~10 minutes): additionally re-syncs the workspace
   (users, initiatives with their project links, the project-label catalog) and
   full team metadata (states, labels, cycles, projects with milestones,
-  members).
+  members), and runs the per-team team-key drift check (below).
 
 **Probes never license a prune**, so metadata deletions and link changes are
 bounded by the full-cycle interval by design — with one carve-out: the label
@@ -361,13 +361,14 @@ gets no fallback either — it stamped, so the following cycles are lean and
 probe anyway.
 
 Each cycle, in order: drain the `pending_detail_sync` queue → workspace drain
-(or, lean, the initiatives probe) → teams list → per-team (metadata drain, or
-— lean/deferred — the projects probe, then issues) → the issue-ID
-reconcile sweep when due (hourly, all-or-nothing per team, and mutually
-exclusive with the repo's reactive reconcile via a CAS). Teams are synced in an
-order **rotated by a per-cycle counter**, so mid-cycle budget deferrals rotate
-across teams instead of permanently starving the last one — worst-case
-staleness is bounded at `len(teams)` cycles.
+(or, lean, the initiatives probe) → teams list → per-team (on a full cycle the
+team-key drift check first, then the metadata drain, or — lean/deferred — the
+projects probe, then issues) → the issue-ID reconcile sweep when due (hourly,
+all-or-nothing per team, and mutually exclusive with the repo's reactive
+reconcile via a CAS). Teams are synced in an order **rotated by a per-cycle
+counter**, so mid-cycle budget deferrals rotate across teams instead of
+permanently starving the last one — worst-case staleness is bounded at
+`len(teams)` cycles.
 
 - **Incremental strategy:** issues are fetched ordered by `updatedAt DESC` and
   pagination stops at the first page whose issues are all older than the
@@ -525,10 +526,15 @@ Design conventions:
   sub-millisecond and a committed mutation MUST reflect, so neither hinges on the
   liveness of the request that triggered it; the worker still checks its own
   context between operations, so cooperative shutdown is unaffected.
-- **No transaction wrapper:** multi-table writes are *not* transactional.
-  Durability is `busy_timeout` plus single-statement upserts, with the
-  reconcile clean-guard providing prune safety; a `Store.WithTx` helper was
-  deleted after accruing zero production callers.
+- **Transactions are the exception, not the default:** ordinary multi-table
+  writes are *not* transactional — durability is `busy_timeout` plus
+  single-statement upserts, with the reconcile clean-guard providing prune
+  safety. `Store.WithTx` exists for the one write whose intermediate state must
+  neither be observable nor survive a crash: the sync worker's team rebuild,
+  whose watermark drop and issue cascades have to land together or not at all
+  (see `internal/sync` above). Its `Queries` is cancellation-detached like the
+  store's own, so a caller that aborts mid-transaction returns an error and gets
+  a deterministic rollback instead of racing `database/sql`'s unwind.
 - **At-rest posture:** `cache.db` and its dir are owner-only (`0600`/`0700`).
   The SQLite driver creates the db file, so `Open` chmods it *after* open (the
   MkdirAll mode cannot reach it); the `-wal`/`-shm` sidecars are tightened
