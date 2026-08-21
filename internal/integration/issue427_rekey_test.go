@@ -155,10 +155,20 @@ type rekeyMount struct {
 // run executes one shell command with the mount as the working directory and
 // records it in the test log as a transcript line, exactly as a user would
 // have typed and seen it. The output is returned for assertions.
+//
+// The `cd` is inside the script rather than cmd.Dir, and that is load-bearing:
+// cmd.Dir makes the chdir happen in the pre-exec child, and Go's os/exec forks
+// with CLONE_VFORK|CLONE_VM, which freezes the forking thread inside a
+// RawSyscall until the child execs. A RawSyscall never enters syscall state, so
+// the scheduler cannot reclaim that thread's P — and the chdir the child is
+// waiting on is a FUSE request only THIS process can answer. With few enough
+// Ps (GOMAXPROCS=4 on a CI runner; deterministically at GOMAXPROCS=1) the
+// server goroutine never gets scheduled and the two sides deadlock forever.
+// Chdir-ing after exec costs nothing and cannot deadlock: by then the parent
+// thread is running again and the mount answers normally.
 func (m *rekeyMount) run(t *testing.T, cmdline string) string {
 	t.Helper()
-	cmd := exec.Command("sh", "-c", cmdline)
-	cmd.Dir = m.root
+	cmd := exec.Command("sh", "-c", "cd '"+m.root+"' && "+cmdline)
 	out, err := cmd.CombinedOutput()
 	text := strings.TrimRight(string(out), "\n")
 	// The mount lives in a temp dir; show it as the path a user has.
