@@ -612,6 +612,17 @@ appears.
   full cycle does not re-drain what the cycle just persisted. It is the one
   schedule key written by both packages, which is why the factory lives in
   `internal/db` — `internal/sync` and `internal/repo` do not import each other.
+- **Entity recheck** (`RecheckIssue`/`RecheckProject`/`RecheckInitiative`): the
+  one entry point the WRITE path may use to say "Linear just told me something
+  about this entity". Each triggers the entity's existing `swrSpec` (issue
+  details, project docs, initiative docs — the entity-scoped specs carrying the
+  orphan classification), so a mutation Linear rejected supplies a hint without
+  `internal/fs` mutating the cache: the prune stays owned here, behind
+  `orphanOnNotFound`. That indirection is the contract, not a detour — a recheck
+  re-asks Linear, where deleting off the fs-layer verdict would trust an
+  `api.IsNotFound` that answers on message text and could drop a live entity's
+  rows (#477). No recheck exists for a label or a milestone: nothing is scoped to
+  either, and those buffers converge on the sync worker instead.
 - **Orphan handling:** a refresh that hits Linear's "Entity not found"
   cascade-deletes the local rows (issue → its comments/docs/attachments/
   relations/history; likewise projects and initiatives) and schedules a
@@ -621,7 +632,8 @@ appears.
 
 **Reads from** `db.Store`; uses `api.Client` only in the background — SWR
 refreshes and the orphan-triggered reconcile pass — a read call itself never
-blocks on the network. **Consumed by:** LinearFS for every read.
+blocks on the network. **Consumed by:** LinearFS for every read, and by its
+failed-write arm for a recheck.
 
 ### `internal/marshal` — markdown ↔ Linear translation
 
@@ -851,8 +863,8 @@ a layer above the commit-tail primitives) and no telemetry (matching
    tool writes in place; a directory that rejects the temp-file create fails a
    save at its first syscall, before any of the failure model below is reachable
    (#145, #438). `renameSave` owns the tail (EXDEV → scratch lookup → resolve →
-   flush → adopt-on-`{0,EIO}` → consume → invalidate) and delegates only *where a
-   save may land*: `onlyFileTarget` for an entity directory's one writable file,
+   flush → adopt → consume-and-invalidate-on-`{0,EIO}`) and delegates only *where
+   a save may land*: `onlyFileTarget` for an entity directory's one writable file,
    `collectionDir.itemFileTarget` for a collection, where an existing `{name}.md`
    is a replace and a new one is a create — the same two outcomes, through the
    same closures, that the directory's named `Create` has. The entity-directory
@@ -866,7 +878,16 @@ a layer above the commit-tail primitives) and no telemetry (matching
    `adoptup.go`), not the read path reaching around it. Before that, an in-place
    save left the directory's copy stale and a later atomic save restoring what it
    replaced read as no change — no mutation, success returned, write lost
-   (#415). The consequence to know: "saving back what you read is a no-op" holds
+   (#415). Adopt runs on EVERY flush outcome, not on an errno whitelist (#406):
+   the same `EINVAL` comes back from a parse failure and from a body-clear
+   Linear declined to apply after renaming the entity remotely (#404), so the
+   errno cannot separate them — but it does not have to, because `adopt` copies
+   the flushed node's entity and `editFlush` replaces that only with what its
+   commit tail FETCHED back. A failure that never reached Linear therefore
+   copies the baseline onto itself. Consuming the scratch stays gated on
+   `{0, EIO}`, which is load-bearing twice over: the scratch surviving a refused
+   save is the corrected-re-save affordance the in-place path gave up in #494.
+   The consequence to know: "saving back what you read is a no-op" holds
    only while nothing else writes in between. Two writers are
    **last-writer-wins** — a save diffed against an entity another writer just
    adopted up clears the fields its own document has no key for. That is the
@@ -1154,13 +1175,31 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   cycle/labels together at exit 0. Its `.error` names the hole rather than
   claiming the file was empty, because the writer's mistake was the offset. The
   rejection also RESTORES the buffer from the spec's `restore` closure (the
-  entity's current render) and clears `dirty`, which is what separates it from a
-  parse failure: a parse
-  failure holds text the writer meant and keeps the buffer dirty for a corrected
-  re-save, while an emptied buffer on the in-place path belongs to the canonical
-  node and would otherwise serve zero bytes for the node's whole lifetime —
-  `refresh` refuses a dirty buffer, and only a successful flush clears the flag.
-  That restore is **read-side only**, and the restoring flush says so by
+  entity's current render) and clears `dirty` — which since #494 is what EVERY
+  failed write does, not this rejection's peculiarity. `dirty` is buffer-level
+  and FUSE turns every `close(2)` into a FLUSH, so a buffer left dirty made a
+  pure reader re-enter the write path and re-attempt the doomed mutation (#418
+  measured 20 and 18 repeats from single bad writes), and `refresh` refuses a
+  dirty buffer, freezing the file's content for the life of the node. What the
+  cleared buffer is left holding is the only thing that turns on the failure,
+  and it turns on ONE fact — whether the request reached Linear (the pure
+  `recoverFailedWrite`, off the `mutateOutcome` a front half reports). Unsent
+  (parse, unknown key, a name that resolved nowhere): restore, because the
+  entity's local render is still the truth. Sent: trigger the entity's SWR
+  refresh instead (`recheckIssue`/`recheckProject`/`recheckInitiative` →
+  `repo.Recheck*`), because `restore` renders locally and never fetches, so it
+  would assert pre-write content that may already be wrong upstream — and for
+  the `ENOENT` verdict that refresh is also what reaches the repo's
+  `orphanOnNotFound` prune (#477), keeping cache mutation owned by the repo
+  layer and re-asking Linear rather than trusting a not-found matched on message
+  text. The restore is best-effort — a spec that declines, or a render that
+  fails, leaves the already-clean buffer as it is, and being clean is what lets
+  `refresh` replace it — but it never BLANKS the buffer: content is eagerly
+  seeded at construction and `Read` has no fallback render, so nil content is a
+  zero-byte file. The affordance the dirty flag protected (fix bad frontmatter,
+  re-save without retyping) survives on the atomic-save path, where `renameSave`
+  leaves the scratch file unconsumed after a refused flush — and that is the
+  path editors and agent edit tools take. That restore is **read-side only**, and the restoring flush says so by
   attributing the bytes to the FILE HANDLE it arrived on (`editHandle`, #454): a
   flush can land between a truncate and the write it belongs to — a shell `>`
   redirect emits exactly that, closing a duplicated descriptor after the

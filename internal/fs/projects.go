@@ -422,7 +422,15 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 	var edit scalarEdit
 	var labels labelsEdit
 	return editFlush(ctx, p.lfs, &p.editBuffer, f, editFlushSpec[api.Project]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
+			// sent tracks whether any request in this front half has reached
+			// Linear, which is what editFlush's failure arm turns on. The project
+			// front half sends MORE THAN ONE — a link/unlink per initiative delta,
+			// then the scalar+labels update — so a later local failure (an
+			// initiative name that will not resolve) can follow an earlier link
+			// that already changed the workspace. Marked at dispatch, so "sent"
+			// covers a request whose outcome is unknown too.
+			sent := false
 			if p.lfs.debug {
 				log.Printf("Flush: project %s (saving changes)", p.project.Name)
 			}
@@ -432,7 +440,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			if err != nil {
 				log.Printf("Failed to parse project changes for %s: %v", p.project.Name, err)
 				p.lfs.SetWriteError(p.project.ID, "Parse error: "+err.Error())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 
 			// Labels front half: labelsEdit owns the label coercion, the
@@ -450,7 +458,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				})
 			if ferr != nil {
 				p.lfs.SetWriteError(p.project.ID, ferr.Detail())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 
 			// Scalar diff, computed before the initiative reconcile below so the
@@ -473,12 +481,14 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 				desired: newInitiatives,
 				resolve: p.lfs.ResolveInitiativeID,
 				link: func(ctx context.Context, initiativeID string) error {
+					sent = true
 					if err := p.lfs.mutator().AddProjectToInitiative(ctx, p.project.ID, initiativeID); err != nil {
 						return err
 					}
 					return p.lfs.persistInitiativeProjectLink(ctx, initiativeID, p.project.ID, true)
 				},
 				unlink: func(ctx context.Context, initiativeID string) error {
+					sent = true
 					if err := p.lfs.mutator().RemoveProjectFromInitiative(ctx, p.project.ID, initiativeID); err != nil {
 						return err
 					}
@@ -489,7 +499,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			}); err != nil {
 				msg, errno := classifyMutationErr("update project initiatives", err)
 				p.lfs.SetWriteError(p.project.ID, msg)
-				return false, errno
+				return mutateFailed(sent), errno
 			}
 
 			// Persist editable scalar fields plus the label set in ONE
@@ -498,10 +508,11 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			projectInput := api.ProjectUpdateInput{Name: edit.name, Content: edit.desc}
 			labels.applyTo(&projectInput)
 			if edit.changed() || labels.changed() {
+				sent = true
 				if err := p.lfs.mutator().UpdateProject(ctx, p.project.ID, projectInput); err != nil {
 					msg, errno := classifyMutationErr("update project", err)
 					p.lfs.SetWriteError(p.project.ID, msg)
-					return false, errno
+					return mutateFailed(sent), errno
 				}
 				if p.lfs.debug {
 					log.Printf("Updated project %s scalar fields", p.project.Name)
@@ -509,7 +520,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 			}
 			// Always commit: the re-fetch below catches initiative-link changes
 			// the scalar diff alone would miss.
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail: re-fetch the project, verify read-your-writes against
 		// the pre-write values still on p.project, upsert, and surface divergence
@@ -527,6 +538,7 @@ func (p *ProjectInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Er
 		},
 		adopt:     func(fresh *api.Project) { p.project = *fresh; p.adoptUp.adopt(*fresh) },
 		restore:   func() []byte { return p.generateContent(ctx) },
+		refresh:   func() { p.lfs.recheckProject(p.project.ID) },
 		coherence: []uint64{projectInfoIno(p.project.ID), metaIno(p.project.ID)}, // project.meta reflects the edit
 		pinIno:    projectInfoIno(p.project.ID),                                  // project.md's Lookup seeds from the pin
 	})

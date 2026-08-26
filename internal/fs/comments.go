@@ -152,20 +152,20 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 	var body string
 	var updatedComment *api.Comment
 	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.Comment]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
 			// Extract body from the markdown (skip frontmatter).
 			body = extractCommentBody(n.content)
 			if body == "" {
 				if n.lfs.debug {
 					log.Printf("Flush comment %s: empty body, skipping", n.comment.ID)
 				}
-				return false, 0
+				return mutateNoChange(), 0
 			}
 			if body == n.comment.Body {
 				if n.lfs.debug {
 					log.Printf("Flush comment %s: no changes", n.comment.ID)
 				}
-				return false, 0
+				return mutateNoChange(), 0
 			}
 			if n.lfs.debug {
 				log.Printf("Updating comment %s", n.comment.ID)
@@ -176,9 +176,9 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 				log.Printf("Failed to update comment: %v", err)
 				msg, errno := classifyMutationErr("update comment", err)
 				n.lfs.SetWriteError(commentErrKey, msg)
-				return false, errno
+				return mutateSent(), errno
 			}
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail: verify read-your-writes against the API's echoed
 		// response, persist, and surface divergence via .error.
@@ -195,6 +195,7 @@ func (n *CommentNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno 
 		},
 		adopt:     func(fresh *api.Comment) { n.comment = *fresh },
 		restore:   func() []byte { return marshal.CommentToMarkdown(&n.comment) },
+		refresh:   func() { n.lfs.recheckIssue(n.issueID) },
 		coherence: []uint64{commentIno(n.comment.ID), commentMetaIno(n.comment.ID)},
 		pinIno:    commentIno(n.comment.ID),
 	})

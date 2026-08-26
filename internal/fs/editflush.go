@@ -106,6 +106,101 @@ func rejectedWriteMessage(v writeVerdict, op string) string {
 	return emptyWriteMessage(op)
 }
 
+// mutateOutcome is what a front half reports back to the shell alongside its
+// errno. It carries two independent facts, because the shell needs both and
+// neither can be read off the errno: whether there is a write to commit, and —
+// when the front half failed — whether its request had already left the process.
+//
+// The second one is the whole of #439's "does the answer differ by failure
+// stage?". A parse failure, an unknown frontmatter key and a name that resolved
+// nowhere never touched Linear, so the entity's local render is still the truth
+// and the buffer can be restored from it. A mutation Linear rejected did reach
+// Linear — and #399 already established that "did it reach Linear" changes the
+// safe follow-up — so the local render is a guess, and the shell asks for fresh
+// data instead of asserting one.
+type mutateOutcome struct {
+	// proceed says the API accepted a write, so the commit tail must run.
+	proceed bool
+	// sent says the mutation request left the process. Read only on the failure
+	// arm; a committed write is sent by definition.
+	sent bool
+}
+
+// mutateUnsent reports a front half that failed BEFORE its request left the
+// process — a parse failure, an unknown key, a name that resolved nowhere.
+// Paired with a non-zero errno.
+func mutateUnsent() mutateOutcome { return mutateOutcome{} }
+
+// mutateSent reports a front half whose mutation reached Linear and came back a
+// failure. Paired with a non-zero errno.
+func mutateSent() mutateOutcome { return mutateOutcome{sent: true} }
+
+// mutateFailed reports a front half that failed, saying for itself whether any
+// of its requests had already reached Linear. The two named constructors above
+// are the readable spelling where the answer is fixed; this one is for a front
+// half that sends MORE THAN ONE request (the project/initiative link
+// reconciles), where a later step can fail locally after an earlier one has
+// already changed something upstream.
+func mutateFailed(sent bool) mutateOutcome { return mutateOutcome{sent: sent} }
+
+// mutateNoChange reports a document that resolved to no changes. Paired with a
+// zero errno: this is a success, not a failure.
+func mutateNoChange() mutateOutcome { return mutateOutcome{} }
+
+// mutateWrote reports a write the API accepted. Paired with a zero errno.
+func mutateWrote() mutateOutcome { return mutateOutcome{proceed: true} }
+
+// failedWriteRecovery names what the shell leaves in the buffer of a write that
+// failed. Clearing dirty is NOT one of the choices — that half is unconditional
+// (see editFlush) — so this is only the best-effort half.
+type failedWriteRecovery int
+
+const (
+	// recoverByRestore — put the entity's current local render back into the
+	// buffer, and attribute it to the flushing handle.
+	recoverByRestore failedWriteRecovery = iota
+	// recoverByRefresh — leave the (now clean) buffer alone and trigger the
+	// entity's SWR refresh, so what replaces it comes from Linear rather than
+	// from a local render of a possibly-stale entity.
+	recoverByRefresh
+)
+
+// recoverFailedWrite is the pure decision behind editFlush's failure arms, and
+// the reason it is a named function rather than an inline `if` is that the whole
+// contract of #494 lives in it: a failed write clears dirty either way, and what
+// it leaves behind turns on one fact — whether the request reached Linear.
+func recoverFailedWrite(sent bool) failedWriteRecovery {
+	if sent {
+		return recoverByRefresh
+	}
+	return recoverByRestore
+}
+
+// restoreBuffer puts the entity's current render back into a buffer whose write
+// was rejected, and records it against the handle the rejection arrived on
+// (#454, see editHandle): the bytes are ones NOBODY WROTE, so if the same open
+// goes on to write — the `>` redirect's kernel sequence puts a flush in the
+// middle of one — that write must re-apply the truncation instead of splicing
+// into the resurrected image. A flush with no handle (the atomic-save path)
+// records nothing; there is no writer to continue.
+//
+// Best effort by design: a spec with no restore, or a render that declines
+// (a marshal error), leaves the buffer as it is. The caller has already cleared
+// dirty, which is what lets a background refresh replace it.
+//
+// The caller holds eb.mu.
+func restoreBuffer(eb *editBuffer, fh fs.FileHandle, restore func() []byte) {
+	if restore == nil {
+		return
+	}
+	current := restore()
+	if len(current) == 0 {
+		return
+	}
+	eb.content = current
+	eb.markRestored(fh)
+}
+
 // The edit-flush shell.
 //
 // Every editable file node (issue.md, project.md, initiative.md, and a
@@ -155,15 +250,19 @@ type editFlushSink interface {
 // stay T-specific; the shell is fully generic.
 type editFlushSpec[T any] struct {
 	// mutate runs the per-entity front half — parse, resolve, and call the API —
-	// and reports one of three outcomes:
-	//   - errno != 0            → the front half failed (parse/resolve/mutation);
-	//     the shell returns errno and LEAVES the buffer dirty so a corrected
-	//     re-save retries. mutate owns its own .error message.
-	//   - errno == 0, !proceed  → nothing changed; the shell clears dirty and
-	//     returns 0 without committing.
-	//   - errno == 0, proceed   → the API accepted a write; the shell runs the
-	//     commit tail, adopts, invalidates, and clears dirty.
-	mutate func(ctx context.Context) (proceed bool, errno syscall.Errno)
+	// and reports one of four outcomes, each spelled by a mutateOutcome
+	// constructor:
+	//   - mutateUnsent(), errno != 0   → the front half failed BEFORE its request
+	//     left the process; the shell clears dirty and restores.
+	//   - mutateSent(), errno != 0     → the request reached Linear and came back
+	//     a failure; the shell clears dirty and refreshes instead of restoring.
+	//   - mutateNoChange(), 0          → nothing changed; the shell clears dirty
+	//     and returns 0 without committing.
+	//   - mutateWrote(), 0             → the API accepted a write; the shell runs
+	//     the commit tail, adopts, invalidates, and clears dirty.
+	//
+	// mutate owns its own .error message on either failure arm.
+	mutate func(ctx context.Context) (outcome mutateOutcome, errno syscall.Errno)
 	// writeBack is the commit tail spec (see commitWriteBack).
 	writeBack writeBackSpec[T]
 	// adopt installs the fresh value onto the node (n.entity = *fresh). Runs
@@ -185,20 +284,34 @@ type editFlushSpec[T any] struct {
 	// reason (createcommit.go, deletecommit.go).
 	invalidateExtra func(fresh *T)
 	// restore re-renders the entity's CURRENT content, exactly as the node's
-	// construction seam rendered it. The shell calls it on one path only: the
-	// refused-write rejection below — an emptied or a zero-filled buffer, both
-	// arms of classifyWrite — where it puts those bytes back into the buffer and
-	// clears dirty. Return nil (or an empty render) to decline, and the buffer is
-	// left as-is.
+	// construction seam rendered it. The shell calls it on every failure that
+	// never reached Linear (#439/#494): the refused-write rejection below — an
+	// emptied or a zero-filled buffer, both arms of classifyWrite — and a front
+	// half that failed at parse or resolve. It puts those bytes back into the
+	// buffer and attributes them to the flushing handle. Return nil (or an empty
+	// render) to decline, and the already-clean buffer is left as-is.
 	//
-	// This is the difference between the two rejections. A parse failure holds a
-	// document the writer meant, so the buffer stays dirty for a corrected
-	// re-save; a refused buffer holds nothing worth preserving, and leaving it
-	// would strand the canonical node serving zero bytes for its whole lifetime —
-	// refresh refuses a dirty buffer, and only a successful editFlush clears the
-	// flag — which is exactly the state the rejection's .error tells the writer
-	// to recover from by re-reading.
+	// Declining is safe; blanking the buffer would not be. Content is eagerly
+	// seeded at construction and Read has no fallback render, so nil content is a
+	// zero-byte file — the exact bug restore exists to prevent. A clean but
+	// unrestored buffer self-heals instead, because being clean is what
+	// re-permits refresh to replace it.
 	restore func() []byte
+	// refresh asks for fresh data about this entity — the entity's existing SWR
+	// trigger on the repo, never a cache mutation of the shell's own. The shell
+	// calls it on the one failure arm restore must not serve: a front half whose
+	// request REACHED Linear. Rendering the in-memory entity there would
+	// confidently show pre-write content that may already be wrong upstream
+	// (restore renders locally and never fetches), and for the ENOENT verdict —
+	// Linear saying the entity is gone — the refresh is also what reaches the
+	// repo's orphan prune (#477), which stays owned by the repo layer: it re-asks
+	// Linear rather than trusting a not-found that api.IsNotFound matched on
+	// message text.
+	//
+	// Optional. Nil where the entity has no SWR surface to trigger — project.md,
+	// initiative.md, labels/*.md and milestones/*.md today — and the clean buffer
+	// then converges on the sync worker's schedule instead.
+	refresh func()
 	// pinIno is the inode of the canonical file whose Lookup seeds from
 	// authoredPins. A committed clean write pins its bytes there, which is what
 	// makes serve-your-own-writes survive the node — a dentry forget and
@@ -278,20 +391,9 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, f
 	// milestone, cycle and labels together. classifyWrite owns both predicates.
 	if verdict := classifyWrite(eb.content); verdict != writeIsDocument {
 		sink.SetWriteError(spec.writeBack.errKey, rejectedWriteMessage(verdict, spec.writeBack.op))
-		if spec.restore != nil {
-			if current := spec.restore(); len(current) > 0 {
-				eb.content = current
-				eb.dirty = false
-				// The buffer now holds bytes NOBODY WROTE, put there only so the
-				// .error's "re-read the file" recovery works. Record that against the
-				// handle this flush arrived on, so if the same open goes on to write —
-				// the `>` redirect's kernel sequence puts this flush in the middle of
-				// one — the write re-applies the truncation instead of splicing into
-				// the resurrected image (#454). A flush with no handle (the atomic-save
-				// path) records nothing; there is no writer to continue.
-				eb.markRestored(fh)
-			}
-		}
+		// Nothing reached Linear, so the entity's local render is still the truth.
+		eb.dirty = false
+		restoreBuffer(eb, fh, spec.restore)
 		return syscall.EINVAL
 	}
 
@@ -303,12 +405,34 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, f
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	proceed, errno := spec.mutate(ctx)
+	outcome, errno := spec.mutate(ctx)
 	if errno != 0 {
-		// Front half failed: leave the buffer dirty for a corrected re-save.
+		// The front half failed. Clearing dirty is the invariant here, and it is
+		// unconditional (#439/#494): dirty is BUFFER-level, so a buffer left dirty
+		// makes every later close(2) on this node — including a pure reader's —
+		// re-enter the write path and re-attempt the doomed mutation (#418
+		// measured 20 and 18 repeats from single bad writes), and refresh refuses
+		// any buffer that is dirty, which freezes the file's content for the life
+		// of the node. The affordance the dirty flag protected — fix bad
+		// frontmatter and re-save without retyping — is already served on the
+		// rename path by the scratch file, which renameSave deliberately leaves
+		// unconsumed after a failed flush, and that is the path Edit, vim and VS
+		// Code all take.
+		//
+		// What the cleared buffer is left holding is the one thing that turns on
+		// the failure stage; recoverFailedWrite owns that decision.
+		eb.dirty = false
+		switch recoverFailedWrite(outcome.sent) {
+		case recoverByRestore:
+			restoreBuffer(eb, fh, spec.restore)
+		case recoverByRefresh:
+			if spec.refresh != nil {
+				spec.refresh()
+			}
+		}
 		return errno
 	}
-	if !proceed {
+	if !outcome.proceed {
 		// Nothing changed — but this IS a successful write, so it clears the
 		// entity's .error like any other (#400). Without the clear, a document
 		// rejected once (an unknown key, an unresolvable name) left its reason

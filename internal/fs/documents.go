@@ -226,25 +226,43 @@ func (n *DocumentFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 	}
 }
 
+// recheckOwner is editFlush's refresh hook for a document: a write Linear
+// rejected AFTER the request went out re-asks Linear about the entity the
+// document hangs off, rather than restoring a local render that may already be
+// wrong upstream. docs/ is the one editable collection with four possible
+// owners, so the dispatch lives here; a team document has no team-scoped
+// recheck (a team is the sync root, not a sub-resource, so its docs spec
+// carries no orphan handler) and converges on the sync worker instead.
+func (n *DocumentFileNode) recheckOwner() {
+	switch {
+	case n.issueID != "":
+		n.lfs.recheckIssue(n.issueID)
+	case n.projectID != "":
+		n.lfs.recheckProject(n.projectID)
+	case n.initiativeID != "":
+		n.lfs.recheckInitiative(n.initiativeID)
+	}
+}
+
 func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	docErrKey := collectionErrorKey("docs", docParentID(n.issueID, n.teamID, n.projectID, n.initiativeID))
 	// update + updatedDoc bridge the front half to the commit tail.
 	var update map[string]any
 	var updatedDoc *api.Document
 	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.Document]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
 			var err error
 			update, err = marshal.MarkdownToDocumentUpdate(n.content, &n.document)
 			if err != nil {
 				log.Printf("Failed to parse document: %v", err)
 				n.lfs.SetWriteError(docErrKey, "Operation: update document "+documentFilename(n.document)+"\nParse error: "+err.Error())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 			if len(update) == 0 {
 				if n.lfs.debug {
 					log.Printf("Flush document %s: no changes", n.document.ID)
 				}
-				return false, 0
+				return mutateNoChange(), 0
 			}
 			if n.lfs.debug {
 				log.Printf("Updating document %s", n.document.ID)
@@ -254,9 +272,9 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 				log.Printf("Failed to update document: %v", err)
 				msg, errno := classifyMutationErr("update document "+documentFilename(n.document), err)
 				n.lfs.SetWriteError(docErrKey, msg)
-				return false, errno
+				return mutateSent(), errno
 			}
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail: verify read-your-writes against the API's echoed
 		// response, persist, and surface divergence via .error.
@@ -284,6 +302,7 @@ func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.E
 			}
 			return content
 		},
+		refresh:   n.recheckOwner,
 		coherence: []uint64{documentIno(n.document.ID), documentMetaIno(n.document.ID)},
 		pinIno:    documentIno(n.document.ID),
 	})

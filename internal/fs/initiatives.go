@@ -276,7 +276,13 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 	// (which reads its divergences against the pre-write i.initiative).
 	var edit scalarEdit
 	return editFlush(ctx, i.lfs, &i.editBuffer, f, editFlushSpec[api.Initiative]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
+			// sent tracks whether any request in this front half has reached
+			// Linear — the initiative front half sends a link/unlink per project
+			// delta before its scalar update, so a later local failure can follow
+			// an earlier link that already changed the workspace. See the twin
+			// comment in ProjectInfoNode.Flush.
+			sent := false
 			if i.lfs.debug {
 				log.Printf("Flush: initiative %s (saving changes)", i.initiative.Name)
 			}
@@ -286,7 +292,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			if err != nil {
 				log.Printf("Failed to parse initiative changes for %s: %v", i.initiative.Name, err)
 				i.lfs.SetWriteError(i.initiativeID, "Parse error: "+err.Error())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 
 			// Scalar diff, computed before the project reconcile below so the
@@ -307,12 +313,14 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 				desired: newProjectSlugs,
 				resolve: i.lfs.ResolveProjectSlugToID,
 				link: func(ctx context.Context, projectID string) error {
+					sent = true
 					if err := i.lfs.mutator().AddProjectToInitiative(ctx, projectID, i.initiativeID); err != nil {
 						return err
 					}
 					return i.lfs.persistInitiativeProjectLink(ctx, i.initiativeID, projectID, true)
 				},
 				unlink: func(ctx context.Context, projectID string) error {
+					sent = true
 					if err := i.lfs.mutator().RemoveProjectFromInitiative(ctx, projectID, i.initiativeID); err != nil {
 						return err
 					}
@@ -323,7 +331,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			}); err != nil {
 				msg, errno := classifyMutationErr("update initiative projects", err)
 				i.lfs.SetWriteError(i.initiativeID, msg)
-				return false, errno
+				return mutateFailed(sent), errno
 			}
 
 			// Persist editable scalar fields. The body maps to Linear's uncapped
@@ -331,10 +339,11 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			// generateContent(); edit was diffed above.
 			initiativeInput := api.InitiativeUpdateInput{Name: edit.name, Content: edit.desc}
 			if edit.changed() {
+				sent = true
 				if err := i.lfs.mutator().UpdateInitiative(ctx, i.initiativeID, initiativeInput); err != nil {
 					msg, errno := classifyMutationErr("update initiative", err)
 					i.lfs.SetWriteError(i.initiativeID, msg)
-					return false, errno
+					return mutateFailed(sent), errno
 				}
 				if i.lfs.debug {
 					log.Printf("Updated initiative %s scalar fields", i.initiative.Name)
@@ -342,7 +351,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 			}
 			// Always commit: the re-fetch below catches project-link changes the
 			// scalar diff alone would miss.
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail: re-fetch the initiative, verify read-your-writes
 		// against the pre-write values still on i.initiative, upsert, and surface
@@ -362,6 +371,7 @@ func (i *InitiativeInfoNode) Flush(ctx context.Context, f fs.FileHandle) syscall
 		},
 		adopt:   func(fresh *api.Initiative) { i.initiative = *fresh; i.adoptUp.adopt(*fresh) },
 		restore: func() []byte { return i.generateContent() },
+		refresh: func() { i.lfs.recheckInitiative(i.initiativeID) },
 		// initiative.md, its meta, and the projects/ listing.
 		coherence: []uint64{initiativeInfoIno(i.initiativeID), metaIno(i.initiativeID), initiativeProjectsIno(i.initiativeID)},
 		pinIno:    initiativeInfoIno(i.initiativeID), // initiative.md's Lookup seeds from the pin

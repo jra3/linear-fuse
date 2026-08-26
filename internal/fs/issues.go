@@ -549,7 +549,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	prevTeam := i.issue.Team
 	prevIdentifier := i.issue.Identifier
 	return editFlush(ctx, i.lfs, &i.editBuffer, f, editFlushSpec[api.Issue]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
 			if i.lfs.debug {
 				log.Printf("Flush: %s (saving changes)", i.issue.Identifier)
 			}
@@ -566,13 +566,13 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				} else {
 					i.lfs.SetIssueError(i.issue.ID, "Parse error: "+err.Error())
 				}
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 			if len(updates) == 0 {
 				if i.lfs.debug {
 					log.Printf("Flush: %s no changes detected", i.issue.Identifier)
 				}
-				return false, 0
+				return mutateNoChange(), 0
 			}
 			// Capture the destination team KEY before resolution replaces it with
 			// an ID; the write-back compare below checks it against fresh.Team.Key.
@@ -587,18 +587,18 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			if ferr := resolveIssueUpdate(ctx, i.lfs, &i.issue, updates); ferr != nil {
 				log.Printf("Failed to resolve update for %s: %s", i.issue.Identifier, ferr.Message)
 				i.lfs.SetIssueError(i.issue.ID, ferr.Detail())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 			if err := i.lfs.mutator().UpdateIssue(ctx, i.issue.ID, updates); err != nil {
 				log.Printf("Failed to update issue %s: %v", i.issue.Identifier, err)
 				msg, errno := classifyMutationErr("update issue", err)
 				i.lfs.SetIssueError(i.issue.ID, msg)
-				return false, errno
+				return mutateSent(), errno
 			}
 			if i.lfs.debug {
 				log.Printf("Flush: %s updated successfully", i.issue.Identifier)
 			}
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail: re-fetch from the API (an independent read catches
 		// #136, where a large body silently reverts), verify read-your-writes
@@ -650,6 +650,7 @@ func (i *IssueFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 			}
 			return content
 		},
+		refresh:   func() { i.lfs.recheckIssue(i.issue.ID) },
 		coherence: []uint64{issueIno(i.issue.ID), metaIno(i.issue.ID)}, // issue.meta reflects the edit
 		pinIno:    issueIno(i.issue.ID),                                // issue.md's Lookup seeds from the pin
 		// A team move is the one edit whose stale entries a static inode list

@@ -77,24 +77,27 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 	cases := []struct {
 		name            string
 		flushErrno      syscall.Errno
-		wantAdopts      int
+		wantConsumes    int
 		wantInvalidates int
 	}{
-		// A clean save adopts the fresh entity and drops the kernel caches.
-		{"flush success adopts and invalidates", 0, 1, 1},
-		// The policy under test: Flush returns EIO only on a fatal
-		// read-your-writes divergence — the write still reached Linear, so the
-		// fresh entity is adopted (refusing would serve stale content while
-		// .error explains the divergence).
-		{"flush EIO still adopts", syscall.EIO, 1, 1},
-		// EINVAL means the write never reached Linear (parse/validation
-		// failure): nothing to adopt, nothing to invalidate.
-		{"flush EINVAL adopts nothing", syscall.EINVAL, 0, 0},
+		// A clean save persists, so it consumes the scratch and drops the
+		// kernel caches.
+		{"flush success consumes and invalidates", 0, 1, 1},
+		// Flush returns EIO only on a fatal read-your-writes divergence — the
+		// write still reached Linear, so the save counts as persisted.
+		{"flush EIO still consumes", syscall.EIO, 1, 1},
+		// A refused save keeps its scratch file usable for a corrected rename,
+		// and there is nothing moved into place to invalidate. Since #494 that
+		// surviving scratch IS the corrected-re-save affordance, so it is not an
+		// incidental detail of this branch.
+		{"flush EINVAL keeps the scratch", syscall.EINVAL, 0, 0},
 	}
-	// The scratch buffer is consumed exactly when the rename succeeds (the same
-	// {0, EIO} branch that adopts): go-fuse has moved the spent node over the
-	// canonical name, so it must reject further access. A rejected save leaves
-	// the scratch usable.
+	// adopt is deliberately NOT in the table: it runs on every outcome (#406).
+	// The errno cannot separate a post-mutation EINVAL from a parse failure, and
+	// it does not have to — adopt copies the flushed node's entity, which
+	// editFlush replaces only with what its commit tail fetched back, so on a
+	// failure that never reached Linear it copies the directory's own baseline
+	// onto itself.
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,11 +116,11 @@ func TestRenameSave_FlushOutcomes(t *testing.T) {
 			if string(rec.flushContent) != "scratch bytes" {
 				t.Errorf("flush content = %q, want the scratch buffer", rec.flushContent)
 			}
-			if rec.adoptCalls != tc.wantAdopts {
-				t.Errorf("adopt calls = %d, want %d", rec.adoptCalls, tc.wantAdopts)
+			if rec.adoptCalls != 1 {
+				t.Errorf("adopt calls = %d, want 1 — every outcome adopts (#406): a post-mutation EINVAL that renamed the entity remotely would otherwise re-render the stale name", rec.adoptCalls)
 			}
-			if rec.consumeCalls != tc.wantAdopts {
-				t.Errorf("consume calls = %d, want %d (consume rides the adopt branch)", rec.consumeCalls, tc.wantAdopts)
+			if rec.consumeCalls != tc.wantConsumes {
+				t.Errorf("consume calls = %d, want %d — the scratch survives a refused save", rec.consumeCalls, tc.wantConsumes)
 			}
 			if len(sink.invalidates) != tc.wantInvalidates {
 				t.Fatalf("invalidates = %v, want %d call(s)", sink.invalidates, tc.wantInvalidates)

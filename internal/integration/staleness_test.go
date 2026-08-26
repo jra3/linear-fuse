@@ -143,16 +143,23 @@ func TestRemoteUpdateVisibleAfterKernelRevalidation(t *testing.T) {
 	}
 }
 
-// TestRejectedSaveKeepsDirtyContentReadable pins the size half of the
-// dirty-buffer-wins rule: a rejected save (EINVAL) deliberately leaves the
-// user's content in the edit buffer so it can be corrected and re-saved — and
-// every subsequent Lookup must report THAT buffer's size, not the fresh
-// render's. newFileInode used to fill the Lookup answer from the fresh twin
-// while refreshExisting let the dirty buffer keep its content, so the kernel
-// clamped reads of the longer dirty content mid-file ("unclosed frontmatter"
-// on project.md) — a latent mismatch the view-dir normalization surfaced once
-// the whole directory chain became stably reusable.
-func TestRejectedSaveKeepsDirtyContentReadable(t *testing.T) {
+// TestRejectedSaveRestoresReadableContent pins what a rejected save leaves
+// behind, end to end through the mount, and the size invariant that rides on it.
+//
+// Since #494 the answer is: dirty cleared, the entity's current render put back
+// (the front half never reached Linear, so that render is still the truth), and
+// the writer's text preserved instead by the atomic-save path's surviving
+// scratch file. Every subsequent Lookup must report THAT buffer's size, not a
+// different one — newFileInode used to fill the Lookup answer from the fresh
+// twin while refreshExisting let the buffer keep its own content, so the kernel
+// clamped reads mid-file ("unclosed frontmatter" on project.md), a latent
+// mismatch the view-dir normalization surfaced once the whole directory chain
+// became stably reusable.
+//
+// And the mechanism #418 measured must be gone: a pure reader's close(2) is a
+// FLUSH like any other, so a buffer left dirty re-ran the doomed front half on
+// every later read of the file.
+func TestRejectedSaveRestoresReadableContent(t *testing.T) {
 	skipIfLiveAPI(t, "fixture-mode: seeds rows straight into the fixture store to stand in for the sync worker")
 	if testStore == nil {
 		t.Fatal("fixture mode left no test store; the sync-side write has nothing to seed into")
@@ -210,8 +217,19 @@ func TestRejectedSaveKeepsDirtyContentReadable(t *testing.T) {
 	if int64(len(got)) != st.Size() {
 		t.Errorf("stat size %d != read length %d — Lookup answered a different size than the serving buffer", st.Size(), len(got))
 	}
-	if string(got) != rejected {
-		t.Errorf("dirty content clamped or replaced after rejected save:\nwant %d bytes:\n%s\ngot %d bytes:\n%s", len(rejected), rejected, len(got), got)
+	if string(got) != string(orig) {
+		t.Errorf("rejected save did not restore the entity's render:\nwant %d bytes:\n%s\ngot %d bytes:\n%s", len(orig), orig, len(got), got)
+	}
+
+	// #418's mechanism, at the surface it was measured on: opening and closing
+	// the file — a pure read — must not re-enter the write path. A buffer left
+	// dirty would make this close re-run the front half and fail EINVAL again.
+	r, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("re-open after rejection: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Errorf("close of a read-only open returned %v — the failed write left the buffer dirty and a reader re-attempted it (#418)", err)
 	}
 
 	// The documented retry path: writing corrected content must succeed and

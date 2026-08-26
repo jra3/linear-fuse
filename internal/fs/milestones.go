@@ -162,24 +162,24 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 	var input api.ProjectMilestoneUpdateInput
 	var updated *api.ProjectMilestone
 	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.ProjectMilestone]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
 			var err error
 			input, err = marshal.MarkdownToMilestoneUpdate(n.content, &n.milestone)
 			if err != nil {
 				log.Printf("Failed to parse milestone: %v", err)
 				n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nParse error: "+err.Error())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 			if err := marshal.ValidateMilestoneUpdate(input); err != nil {
 				log.Printf("Milestone validation failed: %v", err)
 				n.lfs.SetWriteError(milestoneErrKey, "Operation: update milestone "+milestoneFilename(n.milestone)+"\nValidation error: "+err.Error())
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 			if input.Name == nil && input.Description == nil && input.TargetDate == nil && input.SortOrder == nil {
 				if n.lfs.debug {
 					log.Printf("Flush milestone %s: no changes", n.milestone.ID)
 				}
-				return false, 0
+				return mutateNoChange(), 0
 			}
 			if n.lfs.debug {
 				log.Printf("Updating milestone %s", n.milestone.ID)
@@ -189,9 +189,9 @@ func (n *MilestoneFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.
 				log.Printf("Failed to update milestone: %v", err)
 				msg, errno := classifyMutationErr("update milestone "+milestoneFilename(n.milestone), err)
 				n.lfs.SetWriteError(milestoneErrKey, msg)
-				return false, errno
+				return mutateSent(), errno
 			}
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail. Verify read-your-writes against the API's echoed
 		// response (milestones have no single-entity getter), then persist —

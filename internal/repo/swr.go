@@ -151,3 +151,43 @@ func (r *SQLiteRepository) issueChangedAt(issueID string) func() (time.Time, boo
 		return t, err == nil
 	}
 }
+
+// Entity recheck — the write path's one way to say "Linear just told me
+// something about this entity that the cache may not know".
+//
+// A mutation Linear rejects holds the most authoritative evidence there is,
+// and an ENOENT rejection ("Entity not found") means the local row is an
+// orphan: the mount would keep listing it, keep opening it, and keep failing
+// the same write until an unrelated read or a sync cycle rediscovered the
+// truth (#477). The recheck lets the failed write supply the hint without
+// letting internal/fs mutate the cache: it triggers the entity's EXISTING
+// SWR spec, so the prune stays owned by this layer, behind orphanOnNotFound.
+//
+// That indirection is the point, not a detour. api.IsNotFound answers on
+// message TEXT, so a misclassified rejection is possible; a recheck re-asks
+// Linear and prunes only on what Linear says, where deleting the row directly
+// off the fs-layer verdict would delete a live entity's cache.
+//
+// Each recheck reaches for the entity-scoped spec that carries the entity's
+// orphan classification. There is no recheck for a label or a milestone: no
+// SWR surface is scoped to either, and inventing one to serve a failure arm
+// would add a refresh nothing reads. Those buffers converge on the sync
+// worker's schedule instead.
+
+// RecheckIssue re-asks Linear about an issue (the issue-details spec, whose
+// orphan handler is deleteOrphanIssue).
+func (r *SQLiteRepository) RecheckIssue(issueID string) {
+	r.MaybeRefreshIssueDetails(issueID)
+}
+
+// RecheckProject re-asks Linear about a project (the project-docs spec, whose
+// orphan handler is deleteOrphanProject).
+func (r *SQLiteRepository) RecheckProject(projectID string) {
+	r.maybeRefreshSWR(r.projectDocsSpec(projectID))
+}
+
+// RecheckInitiative re-asks Linear about an initiative (the initiative-docs
+// spec, whose orphan handler is deleteOrphanInitiative).
+func (r *SQLiteRepository) RecheckInitiative(initiativeID string) {
+	r.maybeRefreshSWR(r.initiativeDocsSpec(initiativeID))
+}

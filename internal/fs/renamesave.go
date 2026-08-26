@@ -119,21 +119,44 @@ func renameSave(ctx context.Context, sink renameSink, name string, newParent fs.
 
 	errno = target.flush(ctx, content)
 
+	// Adopt on EVERY outcome, not on a whitelist of errnos (#406). The tail used
+	// to adopt only on 0 or EIO, reasoning that those are the two verdicts a
+	// write that REACHED Linear can carry — and #404 then added a third, the
+	// EINVAL a project/initiative body-clear Linear declines to apply. An atomic
+	// save that renames a project AND empties its body applied the rename
+	// remotely, returned EINVAL, skipped adopt, and left project.md rendering the
+	// stale name until an entry timeout forced a fresh Lookup.
+	//
+	// Widening the whitelist by errno is what is wrong here, not the whitelist's
+	// size: the SAME EINVAL comes back from a parse failure and from the
+	// empty-write guard, where nothing reached Linear. The errno cannot separate
+	// them — but it does not have to, because what adopt copies already does.
+	// adopt reads the flushed node's entity, and editFlush replaces that entity
+	// only with what its commit tail FETCHED back (see editFlushSpec.adopt). So
+	// on a failure that never reached Linear there is nothing fresh to adopt and
+	// this is a no-op copying the directory's own baseline onto itself; on one
+	// that did, it adopts what the refresh returned. Same rule as the flush's own
+	// failure arms: a local render is never asserted over a fetch.
+	if target.adopt != nil {
+		target.adopt()
+	}
+
 	if errno == 0 || errno == syscall.EIO {
-		// Adopt on EIO too: Flush returns EIO only on a fatal read-your-writes
-		// divergence, and by then the write has already reached Linear. Refusing
-		// to adopt would keep serving stale content while .error explains the
-		// divergence. Adopt the fresh entity so the canonical file re-renders
-		// the stored content, and drop the kernel caches: go-fuse will MvChild
-		// the spent scratch inode over the canonical file, so the file must
-		// re-Lookup to a fresh node rather than serve the consumed scratch node.
-		// Consume the scratch node so that, until the async invalidation lands,
-		// the spent node moved over the canonical name fails loud (ESTALE)
-		// instead of silently accepting writes it can no longer persist — that
-		// ESTALE drives the VFS to re-Lookup the real node.
-		if target.adopt != nil {
-			target.adopt()
-		}
+		// The scratch bytes PERSISTED (EIO here is a fatal read-your-writes
+		// divergence — by then the write has already reached Linear — not a
+		// refusal). Drop the kernel caches: go-fuse will MvChild the spent
+		// scratch inode over the canonical file, so the file must re-Lookup to a
+		// fresh node rather than serve the consumed scratch node. Consume the
+		// scratch node so that, until the async invalidation lands, the spent
+		// node moved over the canonical name fails loud (ESTALE) instead of
+		// silently accepting writes it can no longer persist — that ESTALE drives
+		// the VFS to re-Lookup the real node.
+		//
+		// Consuming stays gated on exactly these two, and that is now load-bearing
+		// twice over: it is also the corrected-re-save affordance the in-place
+		// path gave up when a failed write stopped leaving its buffer dirty
+		// (#494). A refused save keeps its scratch file, so the writer fixes the
+		// frontmatter and renames again without retyping.
 		consume()
 		// Serve-your-own-writes (#379) needs no work here: the flush above armed
 		// the pin under the destination's inode if — and only if — it committed a clean write

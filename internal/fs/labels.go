@@ -171,7 +171,7 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 	var update map[string]any
 	var updatedLabel *api.Label
 	return editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[api.Label]{
-		mutate: func(ctx context.Context) (bool, syscall.Errno) {
+		mutate: func(ctx context.Context) (mutateOutcome, syscall.Errno) {
 			var err error
 			update, err = marshal.MarkdownToLabelUpdate(n.content, &n.label)
 			if err != nil {
@@ -186,13 +186,13 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 					detail = ferr.Detail()
 				}
 				n.lfs.SetWriteError(labelErrKey, "Operation: update label "+labelFilename(n.label)+"\n"+detail)
-				return false, syscall.EINVAL
+				return mutateUnsent(), syscall.EINVAL
 			}
 			if len(update) == 0 {
 				if n.lfs.debug {
 					log.Printf("Flush label %s: no changes", n.label.ID)
 				}
-				return false, 0
+				return mutateNoChange(), 0
 			}
 			if n.lfs.debug {
 				log.Printf("Updating label %s", n.label.ID)
@@ -202,9 +202,9 @@ func (n *LabelFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errn
 				log.Printf("Failed to update label: %v", err)
 				msg, errno := classifyMutationErr("update label "+labelFilename(n.label), err)
 				n.lfs.SetWriteError(labelErrKey, msg)
-				return false, errno
+				return mutateSent(), errno
 			}
-			return true, 0
+			return mutateWrote(), 0
 		},
 		// Edit-commit tail: persist the label, verify read-your-writes against the
 		// API's echoed response (labels have no single-entity getter), and

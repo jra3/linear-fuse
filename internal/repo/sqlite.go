@@ -1084,7 +1084,16 @@ func (r *SQLiteRepository) GetProjectDocuments(ctx context.Context, projectID st
 		return nil, fmt.Errorf("list project documents: %w", err)
 	}
 
-	r.maybeRefreshSWR(swrSpec{
+	r.maybeRefreshSWR(r.projectDocsSpec(projectID))
+
+	return db.DBDocumentsToAPIDocuments(docs)
+}
+
+// projectDocsSpec is the single constructor behind the project-docs refresh —
+// the listing read above, and RecheckProject, which reaches for this spec
+// because it is the project-scoped one carrying deleteOrphanProject.
+func (r *SQLiteRepository) projectDocsSpec(projectID string) swrSpec {
+	return swrSpec{
 		kind: kindProjectDocs,
 		id:   projectID,
 		syncedAt: func() (interface{}, error) {
@@ -1094,9 +1103,7 @@ func (r *SQLiteRepository) GetProjectDocuments(ctx context.Context, projectID st
 			return r.refreshProjectDocuments(ctx, projectID)
 		},
 		orphan: func(ctx context.Context) { r.deleteOrphanProject(ctx, projectID) },
-	})
-
-	return db.DBDocumentsToAPIDocuments(docs)
+	}
 }
 
 // refreshProjectDocuments fetches documents from API and stores in SQLite.
@@ -1128,7 +1135,17 @@ func (r *SQLiteRepository) GetInitiativeDocuments(ctx context.Context, initiativ
 		return nil, fmt.Errorf("list initiative documents: %w", err)
 	}
 
-	r.maybeRefreshSWR(swrSpec{
+	r.maybeRefreshSWR(r.initiativeDocsSpec(initiativeID))
+
+	return db.DBDocumentsToAPIDocuments(docs)
+}
+
+// initiativeDocsSpec is the single constructor behind the initiative-docs
+// refresh — the listing read above, and RecheckInitiative, which reaches for
+// this spec because it is the initiative-scoped one carrying
+// deleteOrphanInitiative.
+func (r *SQLiteRepository) initiativeDocsSpec(initiativeID string) swrSpec {
+	return swrSpec{
 		kind: kindInitiativeDocs,
 		id:   initiativeID,
 		syncedAt: func() (interface{}, error) {
@@ -1138,9 +1155,7 @@ func (r *SQLiteRepository) GetInitiativeDocuments(ctx context.Context, initiativ
 			return r.refreshInitiativeDocuments(ctx, initiativeID)
 		},
 		orphan: func(ctx context.Context) { r.deleteOrphanInitiative(ctx, initiativeID) },
-	})
-
-	return db.DBDocumentsToAPIDocuments(docs)
+	}
 }
 
 // refreshInitiativeDocuments fetches documents from API and stores in SQLite.

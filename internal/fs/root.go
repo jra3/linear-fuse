@@ -503,6 +503,19 @@ Failure model (every writable surface follows this contract):
   Frontmatter fields still clear the normal way, by deleting the key.
 So an edit that "fails" or appears to no-op is explained at the sibling .error.
 
+What a failed write LEAVES BEHIND: the file goes back to showing what the entity
+currently is -- not the document you wrote. A rejection never parks your text in
+the file for you to fix in place, so re-read the file, re-apply your change to
+what it now says, and write the whole document back. (If your editor saves by
+writing a temp file and renaming it -- vim, VS Code, and the usual agent edit
+tools all do -- that temp file SURVIVES a rejection, so a corrected rename saves
+it without retyping.) Two things follow, and both are worth relying on: a later
+read of the file never re-attempts the failed write, and a background refresh is
+free to replace what the file shows. Where the rejection came back FROM Linear
+rather than from validation here, the file is left for a fetch to resettle
+instead of being re-rendered locally -- so re-read it before deciding what to
+write next.
+
 Stale-catalog self-healing: a name that resolves nowhere locally (a status,
 label, assignee, project, milestone, cycle, or initiative created in Linear
 moments ago) triggers ONE targeted catalog refresh and one retry before the

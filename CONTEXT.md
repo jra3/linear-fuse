@@ -69,13 +69,35 @@ editFlush(ctx, n.lfs, &n.editBuffer, f, editFlushSpec[T]{…})` — `f` being th
 FUSE file handle the flush arrived on, which the refused-write restore below
 attributes its bytes to.
 
-The **front half is one `mutate` closure** returning `(proceed bool, errno
-syscall.Errno)`: `errno != 0` → return it and **keep dirty** (a corrected
-re-save retries; mutate owns its own `.error` message); `errno == 0 && !proceed`
-→ nothing changed, clear dirty, return 0; `proceed` → commit path. The
+The **front half is one `mutate` closure** returning `(mutateOutcome, errno
+syscall.Errno)`, where the outcome is spelled by a constructor: `mutateWrote()`
+→ commit path; `mutateNoChange()` with errno 0 → nothing changed, clear dirty,
+return 0; and on failure `mutateUnsent()` or `mutateSent()` (or `mutateFailed(sent)`
+where a front half sends more than one request), which say whether the request
+had already reached Linear. mutate owns its own `.error` message either way. The
 `writeBack` (commit tail), `adopt` (`n.entity = *fresh`), **`coherence
 []uint64`** (the invalidation set, now declared as data — a forgotten `.meta`
-sidecar is a visible one-line omission), and **`restore`** round out the spec.
+sidecar is a visible one-line omission), **`restore`** and **`refresh`** round
+out the spec.
+
+**A failed write always clears dirty** (#439/#494), and what it leaves in the
+buffer is the pure decision `recoverFailedWrite(sent)`. The clear is the
+invariant: `dirty` is buffer-level and FUSE turns every `close(2)` into a FLUSH,
+so a buffer left dirty made a *pure reader* re-enter the write path and
+re-attempt the doomed mutation (#418 measured 20 and 18 repeats from single bad
+writes), while [[edit-buffer]]'s `refresh` refuses a dirty buffer, freezing the
+file's content for the life of the node. The recovery half turns on one fact —
+did the request reach Linear? **Unsent** (parse, unknown key, an unresolvable
+name): `restore`, because the entity's local render is still the truth.
+**Sent**: `refresh` instead — the [[entity-recheck]] hook — because `restore`
+renders locally and never fetches, so it would assert pre-write content that may
+already be wrong upstream. The restore is best-effort (a declining render leaves
+the already-clean buffer alone, and being clean is what re-permits `refresh`),
+but it never *blanks* the buffer: content is eagerly seeded at construction and
+`Read` has no fallback render, so nil content is a zero-byte file. The affordance
+the dirty flag protected — fix bad frontmatter, re-save without retyping — lives
+on [[rename-save]]'s surviving scratch file, which is the path editors and agent
+edit tools take.
 
 `restore` re-renders the entity's current content and exists for one case: the
 **refused-buffer rejection** (#397, #472). An empty document has no fields, so
@@ -94,13 +116,14 @@ labels all cleared, at exit 0 with no `.error`. One pure predicate,
 `classifyWrite`, owns both arms and returns the verdict the `.error` wording keys
 off — a hole is diagnosed as a hole ("write the whole document back from offset
 0"), not as an empty write, because the writer's mistake was the offset, not the
-content. The rejection then **restores the buffer and clears dirty**, which is
-where it deliberately *differs* from a parse failure: a parse failure keeps the
-writer's text dirty for a corrected re-save, but a refused buffer holds no text
-worth preserving, and leaving it dirty would strand the
-node serving zero bytes for its lifetime ([[edit-buffer]]'s `refresh` refuses a
-dirty buffer) — defeating the very recovery the `.error` prescribes, "re-read the
-file to get its current contents".
+content. The rejection then **restores the buffer and clears dirty** — which since #494
+is what every failed write does, not this rejection's peculiarity. It was
+originally the difference between the two: a parse failure kept the writer's text
+dirty for a corrected re-save, while a refused buffer holds no text worth
+preserving and leaving it dirty would strand the node serving zero bytes for its
+lifetime ([[edit-buffer]]'s `refresh` refuses a dirty buffer) — defeating the very
+recovery the `.error` prescribes, "re-read the file to get its current contents".
+That reasoning turned out to apply to *both*, which is what #439 settled.
 
 That restore is a **read-side** convenience only, and [[edit-buffer]]'s
 **pending truncation** is what keeps it one (#454). The kernel's sequence for
@@ -159,7 +182,17 @@ canonical files aren't renamable) → target-name guard (`.error` names the one
 writable target, `ENOTSUP`) → read the **save baseline** → flush the bytes
 through the file's normal edit path (a transient file node with a dirty edit
 buffer, so frontmatter validation, read-your-writes verification, and `.error`
-handling all apply) → **adopt + consume + `InvalidateRenamed`, all on {0, EIO}**.
+handling all apply) → **adopt, on every outcome** → **consume +
+`InvalidateRenamed`, on {0, EIO}**. Adopt used to ride the same `{0, EIO}` gate,
+until #404 added a third post-mutation errno — the `EINVAL` of a body-clear
+Linear declines to apply — and an atomic save that renamed a project *and*
+emptied its body re-rendered the stale name (#406). Widening the whitelist by
+errno is wrong (the same `EINVAL` means "nothing reached Linear" for a parse
+failure), and unnecessary: `adopt` copies the flushed node's entity, which
+[[edit-flush-shell]] replaces only with what its commit tail *fetched*, so an
+unsent failure copies the baseline onto itself. Consume stays gated, and that is
+load-bearing — the surviving scratch file is the corrected-re-save affordance the
+in-place path gave up in #494.
 The **save baseline** is the entity that transient node is built from, and
 therefore the value every `Flush` diffs the written document against to decide
 *what to send*. It is the **directory node's own entity** — the same copy the
@@ -1717,6 +1750,29 @@ extraction. The coordinator also emits the SWR metrics
 `triggerBackgroundRefresh`'s three exits — which now takes the `refreshKind`
 and mints the dedup key itself — and
 `.refresh_outcomes{kind,outcome}` from the refresh goroutine).
+
+### Entity recheck (`RecheckIssue`/`RecheckProject`/`RecheckInitiative`)
+The one entry point the **write** path may use to tell the cache something
+Linear just said. [[edit-flush-shell]]'s failure arm calls it when a mutation
+reached Linear and came back a failure; each method triggers the entity's
+existing [[swr-refresh-coordinator]] spec — issue details, project docs,
+initiative docs, the entity-scoped specs that carry the orphan classification —
+rather than touching a row.
+
+That indirection is the contract (#477). The rejection that matters is `ENOENT`:
+Linear has said the entity does not exist, so the local row is an orphan, and
+before this the mount kept listing it, kept opening it, and kept failing the same
+write until an unrelated read or a sync cycle rediscovered the truth. Letting
+`internal/fs` delete the row instead would add a second owner for an invariant
+the read/refresh and sync seams own — and `api.IsNotFound` answers on message
+TEXT, so a misclassified not-found would delete a *live* entity's cache. A
+recheck re-asks Linear and prunes only on what Linear says, behind
+`orphanOnNotFound`.
+
+There is deliberately no recheck for a label or a milestone: no SWR surface is
+scoped to either, and inventing one to serve a failure arm would add a refresh
+nothing reads. Those buffers are clean after the failure, so they converge on the
+sync worker's next cycle.
 
 ### Detail sync outcome (`syncDetails`)
 The single entry point for issue-detail syncing (`internal/sync/worker.go`):

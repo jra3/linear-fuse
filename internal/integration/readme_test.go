@@ -56,6 +56,19 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 		}
 	}
 
+	// What a failed write leaves behind (#494). An agent that has just been
+	// rejected has to know whether the file still holds its document: it does
+	// not, and re-editing in place would silently re-apply the change to the
+	// entity's render instead. "LEAVES BEHIND" pins the contract's presence;
+	// "never re-attempts" is the consequence #418 makes worth stating (a later
+	// read used to re-run the doomed write); "SURVIVES a rejection" points at
+	// where the un-retyped text actually is.
+	for _, want := range []string{"LEAVES BEHIND", "never re-attempts", "SURVIVES a rejection"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README does not mention %q (failed-write aftermath contract)", want)
+		}
+	}
+
 	// Team moves (#429): team: became editable, and it is the only edit that
 	// changes where the file lives. The re-numbering is the part an agent cannot
 	// discover by trying — it caches a path, the move invalidates it, and without
