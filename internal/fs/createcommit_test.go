@@ -298,6 +298,77 @@ func TestClassifyMutationErr_NotFoundJoin(t *testing.T) {
 	}
 }
 
+// TestClassifyMutationErr_EIODetail pins #446 part 1: the EIO fallthrough
+// renders the server's user-presentable message when it sent one, whether or
+// not Linear tagged the rejection userError. #409's lesson is the reason —
+// extensions.userError is the server's choice about how to LABEL a rejection,
+// not a fact about which text is useful, so no arm should let the tag decide
+// what the caller gets to read.
+//
+// The errno is deliberately untouched: reclassifying untagged validation
+// phrasings as EINVAL is #446 part 2 and needs its own judgement.
+func TestClassifyMutationErr_EIODetail(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantIn    string
+		wantNotIn string
+	}{
+		{
+			// The live shape, from CI run 30578999501 (documents_test.go): five
+			// occurrences of a rejection whose Message says nothing and whose
+			// UserPresentableMessage carries the field-specific reason.
+			//
+			// The reason is deliberately NOT a length complaint. #409 already
+			// hoisted the cap phrasings ("must be at most", "shorter than or
+			// equal to") into the EMSGSIZE arm above, which classifies on the
+			// CONDITION rather than the tag — so a too-long rejection never
+			// reaches this fallthrough regardless of how Linear tagged it. What
+			// lands here is every OTHER untagged validation rejection, which had
+			// no arm reading its user-presentable text at all.
+			name: "untagged rejection prefers the user-presentable message",
+			err: &api.GraphQLError{
+				Message:                "Argument Validation Error",
+				UserPresentableMessage: "color must be a valid hex color code",
+			},
+			wantIn:    "color must be a valid hex color code",
+			wantNotIn: "Argument Validation Error",
+		},
+		{
+			// No user-presentable text to prefer, so the terse message stands —
+			// but without Error()'s "GraphQL error: " wrapper, matching every
+			// other arm that renders through serverDetail.
+			name:      "untagged rejection with only a message drops the wrapper",
+			err:       &api.GraphQLError{Message: "Something broke server-side"},
+			wantIn:    "Something broke server-side",
+			wantNotIn: "GraphQL error:",
+		},
+		{
+			// serverDetail falls through to err.Error() for anything that is not
+			// a *api.GraphQLError, so non-GraphQL failures render exactly as before.
+			name:   "a non-GraphQL error is unchanged",
+			err:    errors.New("dial tcp: connection refused"),
+			wantIn: "dial tcp: connection refused",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, errno := classifyMutationErr("update document", tc.err)
+
+			if errno != syscall.EIO {
+				t.Fatalf("errno = %v, want EIO", errno)
+			}
+			if !strings.Contains(msg, tc.wantIn) {
+				t.Errorf(".error = %q, want it to contain %q", msg, tc.wantIn)
+			}
+			if tc.wantNotIn != "" && strings.Contains(msg, tc.wantNotIn) {
+				t.Errorf(".error = %q, want it NOT to contain %q", msg, tc.wantNotIn)
+			}
+		})
+	}
+}
+
 // TestCommitCreate_PersistFailureFailsLoud confirms a SQLite upsert failure is
 // fatal to the create (#276): the entity is live on Linear but unconfirmed
 // locally, so the tail must return EIO, write a de-dupe .error naming the

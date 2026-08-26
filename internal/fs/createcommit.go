@@ -281,7 +281,18 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	if errors.As(err, &gqlErr) && gqlErr.UserError {
 		return "Operation: " + op + "\nError: " + serverDetail(err), syscall.EINVAL
 	}
-	return "Operation: " + op + "\nError: " + err.Error(), syscall.EIO
+	// Everything else is a backend fault: EIO. The DETAIL still goes through
+	// serverDetail, because "did Linear tag this userError?" is a choice about
+	// how the server labelled the rejection, not a fact about which text is
+	// useful. An untagged rejection carries the same UserPresentableMessage the
+	// tagged one does, and err.Error() throws it away in favour of the terse
+	// internal message (live: "GraphQL error: Argument Validation Error", where
+	// the user-presentable text was "name must be at most 80 characters").
+	// Non-GraphQL errors are unaffected — serverDetail falls through to
+	// err.Error() for them. This changes the text only; the errno is unchanged,
+	// and reclassifying untagged validation phrasings as EINVAL is deliberately
+	// NOT done here (#446 part 2, which needs its own judgement).
+	return "Operation: " + op + "\nError: " + serverDetail(err), syscall.EIO
 }
 
 // serverDetail renders the most caller-useful text Linear supplied: its
