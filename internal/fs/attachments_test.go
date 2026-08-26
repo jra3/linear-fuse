@@ -47,7 +47,7 @@ func TestAttachmentURLsEqual(t *testing.T) {
 func TestCreateAttachmentIdempotentOnDuplicate(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{APIKey: "test-key", Cache: config.CacheConfig{TTL: 100 * time.Millisecond, MaxEntries: 100}}
+	cfg := &config.Config{APIKey: "test-key"}
 	lfs, err := NewLinearFS(cfg, true)
 	if err != nil {
 		t.Fatalf("NewLinearFS failed: %v", err)

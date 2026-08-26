@@ -313,7 +313,6 @@ func newRekeyMount(t *testing.T, endpoint string) *rekeyMount {
 
 	lfs, err := fs.NewLinearFS(&config.Config{
 		APIKey: "e2e427-key",
-		Cache:  config.CacheConfig{TTL: rekeyCacheTTL},
 	}, false)
 	if err != nil {
 		t.Fatalf("create linearfs: %v", err)
@@ -345,9 +344,11 @@ func newRekeyMount(t *testing.T, endpoint string) *rekeyMount {
 	return &rekeyMount{root: root, store: store}
 }
 
-// rekeyCacheTTL is both the repository TTL and the kernel's attr/entry
-// timeout, so a sync that changes rows behind the mount becomes visible after
-// one settle of this length rather than an unbounded wait.
+// rekeyCacheTTL is the kernel's attr/entry timeout (via
+// fs.WithKernelCacheTimeouts), so a sync that changes rows behind the mount
+// becomes visible after one settle of this length rather than an unbounded
+// wait. It is NOT a repository TTL: reads are served from SQLite and the
+// repository's own freshness is the SWR seam, not a configurable expiry (#482).
 const rekeyCacheTTL = 100 * time.Millisecond
 
 // settle waits out the caches above before reading a surface a sync just

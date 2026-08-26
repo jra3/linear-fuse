@@ -435,7 +435,10 @@ func dirLacks(path, name string) bool { return waitForNoDirEntry(path, name, def
 // the filesystem wasn't notified of the change. After filesystem writes,
 // cache invalidation is immediate - no wait needed.
 func waitForCacheExpiry() {
-	time.Sleep(150 * time.Millisecond) // Cache TTL is 100ms, wait a bit longer
+	// The wait is for the mount's kernel attr/entry timeout (100ms in tests via
+	// fs.WithKernelCacheTimeouts) — not a repository TTL, which does not exist
+	// (#482). Sleep a little past it.
+	time.Sleep(150 * time.Millisecond)
 }
 
 // Frontmatter helpers — thin delegations to the marshal seam. The tests must

@@ -618,9 +618,6 @@ Create `~/.config/linearfs/config.yaml`:
 ```yaml
 api_key: "lin_api_xxxxx"  # or use LINEAR_API_KEY env var
 
-cache:
-  ttl: 60s
-
 mount:
   default_path: ~/linear
 

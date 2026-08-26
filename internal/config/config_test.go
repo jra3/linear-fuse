@@ -24,16 +24,6 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() returned nil")
 	}
 
-	// Check default cache TTL
-	if cfg.Cache.TTL != 60*time.Second {
-		t.Errorf("DefaultConfig() Cache.TTL = %v, want %v", cfg.Cache.TTL, 60*time.Second)
-	}
-
-	// Check default cache max entries
-	if cfg.Cache.MaxEntries != 10000 {
-		t.Errorf("DefaultConfig() Cache.MaxEntries = %d, want 10000", cfg.Cache.MaxEntries)
-	}
-
 	// Check default mount settings
 	if cfg.Mount.DefaultPath != "" {
 		t.Errorf("DefaultConfig() Mount.DefaultPath = %q, want empty", cfg.Mount.DefaultPath)
@@ -220,9 +210,6 @@ func TestLoadWithConfigFile(t *testing.T) {
 	configPath := filepath.Join(configDir, "config.yaml")
 	configContent := `
 api_key: "test_api_key_from_file"
-cache:
-  ttl: 120s
-  max_entries: 5000
 mount:
   default_path: ~/linear
 log:
@@ -249,12 +236,6 @@ log:
 	if cfg.APIKey != "test_api_key_from_file" {
 		t.Errorf("LoadWithEnv() APIKey = %q, want %q", cfg.APIKey, "test_api_key_from_file")
 	}
-	if cfg.Cache.TTL != 120*time.Second {
-		t.Errorf("LoadWithEnv() Cache.TTL = %v, want %v", cfg.Cache.TTL, 120*time.Second)
-	}
-	if cfg.Cache.MaxEntries != 5000 {
-		t.Errorf("LoadWithEnv() Cache.MaxEntries = %d, want 5000", cfg.Cache.MaxEntries)
-	}
 	if cfg.Mount.DefaultPath != "~/linear" {
 		t.Errorf("LoadWithEnv() Mount.DefaultPath = %q, want %q", cfg.Mount.DefaultPath, "~/linear")
 	}
@@ -267,9 +248,11 @@ log:
 }
 
 // TestLoadToleratesRemovedKeys: existing user config files may still carry
-// keys whose fields have been removed — log.api_stats (died with APIStats)
-// and mount.allow_other (dead knob removed in #355; the mount was always
-// owner-only). yaml.v3 ignores unknown keys, so such a file must keep parsing.
+// keys whose fields have been removed — log.api_stats (died with APIStats),
+// mount.allow_other (dead knob removed in #355; the mount was always
+// owner-only), and cache.ttl / cache.max_entries (dead knobs removed in #482;
+// nothing read either one). yaml.v3 ignores unknown keys, so such a file must
+// keep parsing, and the keys around them must still take effect.
 func TestLoadToleratesRemovedKeys(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
@@ -279,6 +262,9 @@ func TestLoadToleratesRemovedKeys(t *testing.T) {
 	}
 	configContent := `
 api_key: "key_with_stale_field"
+cache:
+  ttl: 120s
+  max_entries: 5000
 mount:
   allow_other: true
 log:
@@ -291,7 +277,7 @@ log:
 
 	cfg, err := LoadWithEnv(mockEnv(map[string]string{"XDG_CONFIG_HOME": tmpDir}))
 	if err != nil {
-		t.Fatalf("LoadWithEnv() error with stale api_stats key: %v", err)
+		t.Fatalf("LoadWithEnv() error with stale keys: %v", err)
 	}
 	if cfg.APIKey != "key_with_stale_field" {
 		t.Errorf("APIKey = %q, want %q", cfg.APIKey, "key_with_stale_field")
@@ -403,9 +389,6 @@ func TestLoadNoConfigFile(t *testing.T) {
 	}
 
 	// Should get defaults
-	if cfg.Cache.TTL != 60*time.Second {
-		t.Errorf("LoadWithEnv() without file should use default Cache.TTL, got %v", cfg.Cache.TTL)
-	}
 	if cfg.Log.Level != "info" {
 		t.Errorf("LoadWithEnv() without file should use default Log.Level, got %q", cfg.Log.Level)
 	}
@@ -422,8 +405,8 @@ func TestLoadInvalidYAML(t *testing.T) {
 	configPath := filepath.Join(configDir, "config.yaml")
 	invalidContent := `
 api_key: [this is invalid yaml
-cache:
-  ttl: not a duration
+log:
+  level: debug
 `
 	if err := os.WriteFile(configPath, []byte(invalidContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -476,11 +459,13 @@ func TestLoadPartialConfig(t *testing.T) {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
 
-	// Only set cache TTL, leave everything else to defaults
+	// Set one nested key only; everything else must keep its default. The
+	// point is that yaml.Unmarshal writes into a pre-initialised DefaultConfig,
+	// so an absent key is not a zero value.
 	configPath := filepath.Join(configDir, "config.yaml")
 	configContent := `
-cache:
-  ttl: 5m
+log:
+  level: debug
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -497,18 +482,24 @@ cache:
 	}
 
 	// Explicitly set value
-	if cfg.Cache.TTL != 5*time.Minute {
-		t.Errorf("LoadWithEnv() Cache.TTL = %v, want %v", cfg.Cache.TTL, 5*time.Minute)
+	if cfg.Log.Level != "debug" {
+		t.Errorf("LoadWithEnv() Log.Level = %q, want %q", cfg.Log.Level, "debug")
 	}
 
-	// Default value preserved (this is how YAML unmarshaling works with pre-initialized structs)
-	if cfg.Cache.MaxEntries != 10000 {
-		t.Errorf("LoadWithEnv() Cache.MaxEntries = %d, want 10000 (default)", cfg.Cache.MaxEntries)
+	// Sibling in the same struct keeps its zero default rather than being
+	// clobbered by the partial log: block.
+	if cfg.Log.File != "" {
+		t.Errorf("LoadWithEnv() Log.File = %q, want empty", cfg.Log.File)
 	}
 
-	// Log level should still be default
-	if cfg.Log.Level != "info" {
-		t.Errorf("LoadWithEnv() Log.Level = %q, want %q (default)", cfg.Log.Level, "info")
+	// A whole untouched struct keeps its defaults.
+	if cfg.Telemetry.File.Interval != 60*time.Second {
+		t.Errorf("LoadWithEnv() Telemetry.File.Interval = %v, want %v (default)",
+			cfg.Telemetry.File.Interval, 60*time.Second)
+	}
+	if cfg.Telemetry.File.MaxSizeMB != 50 {
+		t.Errorf("LoadWithEnv() Telemetry.File.MaxSizeMB = %d, want 50 (default)",
+			cfg.Telemetry.File.MaxSizeMB)
 	}
 }
 

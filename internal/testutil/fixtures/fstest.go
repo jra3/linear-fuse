@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/jra3/linear-fuse/internal/api"
 	"github.com/jra3/linear-fuse/internal/config"
@@ -294,10 +293,6 @@ func PopulateParentChildIssues(ctx context.Context, store *db.Store, parentID, c
 func TestConfig() *config.Config {
 	return &config.Config{
 		APIKey: "test-key",
-		Cache: config.CacheConfig{
-			TTL:        100 * time.Millisecond,
-			MaxEntries: 100,
-		},
 	}
 }
 

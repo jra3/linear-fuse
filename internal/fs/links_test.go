@@ -19,7 +19,7 @@ import (
 // the harness the links create-path tests drive.
 func linkTestLFS(t *testing.T) (*LinearFS, *db.Store) {
 	t.Helper()
-	cfg := &config.Config{APIKey: "test-key", Cache: config.CacheConfig{TTL: 100 * time.Millisecond, MaxEntries: 100}}
+	cfg := &config.Config{APIKey: "test-key"}
 	lfs, err := NewLinearFS(cfg, true)
 	if err != nil {
 		t.Fatalf("NewLinearFS: %v", err)

@@ -157,8 +157,6 @@ Or simply use the config.yaml file (recommended):
 mkdir -p ~/.config/linearfs
 cat > ~/.config/linearfs/config.yaml << 'EOF'
 api_key: "lin_api_YOUR_KEY_HERE"
-cache:
-  ttl: 60s
 EOF
 chmod 600 ~/.config/linearfs/config.yaml
 ```

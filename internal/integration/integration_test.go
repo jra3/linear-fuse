@@ -115,9 +115,6 @@ func setupLiveAPI(apiKey string) error {
 
 	cfg := &config.Config{
 		APIKey: apiKey,
-		Cache: config.CacheConfig{
-			TTL: 100 * time.Millisecond, // Short TTL for fast tests
-		},
 	}
 
 	lfs, err = fs.NewLinearFS(cfg, false)
@@ -507,9 +504,6 @@ func setupSQLiteFixtures() error {
 	// Create LinearFS with a dummy API key (won't be used for mutations in fixture mode)
 	cfg := &config.Config{
 		APIKey: "fixture-mode-key",
-		Cache: config.CacheConfig{
-			TTL: 100 * time.Millisecond,
-		},
 	}
 
 	lfs, err = fs.NewLinearFS(cfg, false)

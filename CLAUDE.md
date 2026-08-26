@@ -423,8 +423,6 @@ lfs.InvalidateKernelEntry(docsDirIno(issueID), filename)
 API key via `LINEAR_API_KEY` env var or `~/.config/linearfs/config.yaml`:
 ```yaml
 api_key: "lin_api_xxxxx"
-cache:
-  ttl: 60s
 user_feedback: false   # or USER_FEEDBACK=1
 ```
 

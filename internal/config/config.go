@@ -11,8 +11,12 @@ import (
 )
 
 type Config struct {
-	APIKey    string          `yaml:"api_key"`
-	Cache     CacheConfig     `yaml:"cache"`
+	APIKey string `yaml:"api_key"`
+	// The cache.ttl and cache.max_entries keys that used to live here were
+	// dead knobs: they configured internal/cache, the generic TTL cache that
+	// stopped being imported when SQLite became the store, and no non-test
+	// code ever read either field (#482). They are gone; yaml.v3 ignores
+	// unknown keys, so old config files carrying them still parse.
 	Mount     MountConfig     `yaml:"mount"`
 	Log       LogConfig       `yaml:"log"`
 	Telemetry TelemetryConfig `yaml:"telemetry"`
@@ -23,11 +27,6 @@ type Config struct {
 	// contracts as issues on linearfs itself. Dogfooding only: with it unset
 	// the generated README is byte-for-byte the normal one.
 	UserFeedback bool `yaml:"user_feedback"`
-}
-
-type CacheConfig struct {
-	TTL        time.Duration `yaml:"ttl"`
-	MaxEntries int           `yaml:"max_entries"`
 }
 
 // MountConfig configures the mount. The allow_other key that used to live
@@ -77,10 +76,6 @@ type TelemetryRequestsConfig struct {
 
 func DefaultConfig() *Config {
 	return &Config{
-		Cache: CacheConfig{
-			TTL:        60 * time.Second,
-			MaxEntries: 10000,
-		},
 		Mount: MountConfig{
 			DefaultPath: "",
 		},

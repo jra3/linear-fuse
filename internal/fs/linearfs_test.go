@@ -17,10 +17,6 @@ func TestSQLiteFilteredQueries(t *testing.T) {
 	// Create a LinearFS with SQLite enabled
 	cfg := &config.Config{
 		APIKey: "test-key",
-		Cache: config.CacheConfig{
-			TTL:        100 * time.Millisecond,
-			MaxEntries: 100,
-		},
 	}
 
 	lfs, err := NewLinearFS(cfg, true)
@@ -246,10 +242,6 @@ func TestFetchIssueByIdentifier(t *testing.T) {
 	// Create a LinearFS with SQLite enabled
 	cfg := &config.Config{
 		APIKey: "test-key",
-		Cache: config.CacheConfig{
-			TTL:        100 * time.Millisecond,
-			MaxEntries: 100,
-		},
 	}
 
 	lfs, err := NewLinearFS(cfg, true)
