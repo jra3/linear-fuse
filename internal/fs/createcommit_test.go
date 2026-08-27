@@ -298,6 +298,110 @@ func TestClassifyMutationErr_NotFoundJoin(t *testing.T) {
 	}
 }
 
+// TestClassifyMutationErr_HTTPStatus pins #447: the HTTP status survives as a
+// typed fact, and the three classes it settles no longer land on the EIO
+// fallthrough that told a caller to stop.
+func TestClassifyMutationErr_HTTPStatus(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantErrno syscall.Errno
+		wantIn    []string
+		wantNotIn []string
+	}{
+		{
+			// EACCES, not EIO: no retry clears a revoked key, and reported as a
+			// backend fault it sends an agent into an unbounded loop against a
+			// wall only a human can remove.
+			name:      "401 is EACCES naming the key, not the response body",
+			err:       &api.HTTPError{StatusCode: 401, Body: "<html><title>401 Unauthorized</title></html>"},
+			wantErrno: syscall.EACCES,
+			wantIn:    []string{"CREDENTIALS", "LINEAR_API_KEY", "will NOT help"},
+			// The body at this layer is usually a proxy's HTML, not a Linear
+			// message, so .error must not echo it.
+			wantNotIn: []string{"<html>", "401 Unauthorized</title>"},
+		},
+		{
+			name:      "403 is EACCES too",
+			err:       &api.HTTPError{StatusCode: 403, Body: "forbidden"},
+			wantErrno: syscall.EACCES,
+			wantIn:    []string{"CREDENTIALS", "403"},
+		},
+		{
+			// EAGAIN, but WITHOUT the no-effect promise: a 500 is the application
+			// failing and may have applied the mutation before losing the
+			// response. #399's asymmetry decides the default.
+			name:      "500 is EAGAIN with an UNKNOWN outcome",
+			err:       &api.HTTPError{StatusCode: 500, Body: "internal error"},
+			wantErrno: syscall.EAGAIN,
+			wantIn:    []string{"UNKNOWN", "duplicate", "500"},
+			wantNotIn: []string{"did not take effect"},
+		},
+		{
+			name:      "503 is EAGAIN and also does not promise no-effect",
+			err:       &api.HTTPError{StatusCode: 503, Body: "unavailable"},
+			wantErrno: syscall.EAGAIN,
+			wantIn:    []string{"UNKNOWN"},
+			wantNotIn: []string{"did not take effect"},
+		},
+		{
+			// A bare 429 reaches retryableCreateErr through the now
+			// status-aware api.IsRateLimited, so it gets the STRONGER promise —
+			// correct, because a 429 is refused at admission and never reaches a
+			// mutation handler.
+			name:      "bare 429 is EAGAIN and DOES promise no-effect",
+			err:       &api.HTTPError{StatusCode: 429, Body: "<html>Too Many Requests</html>"},
+			wantErrno: syscall.EAGAIN,
+			wantIn:    []string{"did not take effect"},
+			wantNotIn: []string{"UNKNOWN"},
+		},
+		{
+			// Structure outranks text. This body would satisfy api.IsNotFound,
+			// whose arm sits below — and the doctrine comment above
+			// classifyMutationErr already argues the case for the 429 twin:
+			// reporting a throttled request as permanently unfixable is wrong
+			// when waiting is exactly what fixes it.
+			name:      "a 503 whose body also names a missing entity is still EAGAIN",
+			err:       &api.HTTPError{StatusCode: 503, Body: `{"errors":[{"message":"Entity not found: Issue - Could not find referenced Issue."}]}`},
+			wantErrno: syscall.EAGAIN,
+		},
+		{
+			// The status arms must not swallow what the text arms already own:
+			// Linear reports a workspace over its plan limit as HTTP 400, which
+			// is in neither status set, so EDQUOT still wins.
+			name:      "a 400 usage-limit envelope is still EDQUOT",
+			err:       &api.HTTPError{StatusCode: 400, Body: `{"errors":[{"message":"usage limit exceeded"}]}`},
+			wantErrno: syscall.EDQUOT,
+			wantIn:    []string{"plan/usage limit"},
+		},
+		{
+			name:      "a 400 length-cap envelope is still EMSGSIZE",
+			err:       &api.HTTPError{StatusCode: 400, Body: `{"errors":[{"message":"title must be shorter than or equal to 255 characters."}]}`},
+			wantErrno: syscall.EMSGSIZE,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, errno := classifyMutationErr("create issue", tc.err)
+
+			if errno != tc.wantErrno {
+				t.Fatalf("errno = %v, want %v (.error = %q)", errno, tc.wantErrno, msg)
+			}
+			for _, want := range tc.wantIn {
+				if !strings.Contains(msg, want) {
+					t.Errorf(".error = %q, want it to contain %q", msg, want)
+				}
+			}
+			for _, notWant := range tc.wantNotIn {
+				if strings.Contains(msg, notWant) {
+					t.Errorf(".error = %q, want it NOT to contain %q", msg, notWant)
+				}
+			}
+		})
+	}
+}
+
 // TestClassifyMutationErr_EIODetail pins #446 part 1: the EIO fallthrough
 // renders the server's user-presentable message when it sent one, whether or
 // not Linear tagged the rejection userError. #409's lesson is the reason —

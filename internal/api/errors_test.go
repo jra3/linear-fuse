@@ -34,6 +34,22 @@ func TestIsRateLimited(t *testing.T) {
 			true,
 		},
 		{
+			// #447: a 429 whose body says neither "RATELIMITED" nor "rate limit"
+			// used to miss every branch of this predicate and reach the fs
+			// layer's EIO fallthrough — while the client's own admission ladder
+			// had already backed off on that same response. The status settles it.
+			"bare 429 with a body naming neither phrase",
+			&HTTPError{StatusCode: 429, Body: "<html><body>Too Many Requests</body></html>"},
+			true,
+		},
+		{
+			// The status check must not outrank the deferral exclusion: a local
+			// budget defer is not a server 429 and carries no status at all.
+			"a 4xx that is not 429 stays out",
+			&HTTPError{StatusCode: 400, Body: "nothing rate-related here"},
+			false,
+		},
+		{
 			// A local budget deferral (typed ErrDeferred) is NOT a server rate
 			// limit — the whole point of #257. The typed exclusion must win even
 			// when the message literally says "rate limit" (the historical
@@ -72,6 +88,104 @@ func TestIsRateLimited(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := IsRateLimited(tc.err); got != tc.want {
 				t.Errorf("IsRateLimited(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHTTPErrorRendersTheHistoricalString is the compatibility guard for #447.
+// HTTPError replaced two fmt.Errorf sites whose exact text three message
+// predicates are documented to tolerate as a wrapper. If Error() ever stops
+// reproducing it byte-for-byte, IsNotFound / IsUsageLimited / IsFieldTooLong
+// silently stop matching through it — a failure that shows up as errno drift in
+// unrelated surfaces, nowhere near this type.
+func TestHTTPErrorRendersTheHistoricalString(t *testing.T) {
+	body := `{"errors":[{"message":"Entity not found: Issue - Could not find referenced Issue."}]}`
+	err := &HTTPError{StatusCode: 400, Body: body}
+
+	want := "API error (status 400): " + body
+	if got := err.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+
+	// The predicates that tolerate this prefix must still see through the type.
+	if !IsNotFound(err) {
+		t.Error("IsNotFound(*HTTPError) = false, want true — the wrapped matcher no longer sees the envelope")
+	}
+	tooLong := &HTTPError{StatusCode: 400, Body: `{"errors":[{"message":"title must be shorter than or equal to 255 characters."}]}`}
+	if !IsFieldTooLong(tooLong) {
+		t.Error("IsFieldTooLong(*HTTPError) = false, want true")
+	}
+	usage := &HTTPError{StatusCode: 400, Body: `{"errors":[{"message":"usage limit exceeded"}]}`}
+	if !IsUsageLimited(usage) {
+		t.Error("IsUsageLimited(*HTTPError) = false, want true")
+	}
+}
+
+func TestHTTPStatus(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantOK     bool
+	}{
+		{"nil", nil, 0, false},
+		{"typed", &HTTPError{StatusCode: 503}, 503, true},
+		{"wrapped via %w", fmt.Errorf("create issue: %w", &HTTPError{StatusCode: 502}), 502, true},
+		{
+			// The text alone is not enough, and that is the point of the type:
+			// the old fmt.Errorf rendering is indistinguishable from any other
+			// error whose message happens to look like it.
+			"a plain error with the same text carries no status",
+			errors.New("API error (status 503): gateway"),
+			0, false,
+		},
+		{"an unrelated typed error", &GraphQLError{Message: "x"}, 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status, ok := HTTPStatus(tc.err)
+			if ok != tc.wantOK || status != tc.wantStatus {
+				t.Errorf("HTTPStatus() = (%d, %v), want (%d, %v)", status, ok, tc.wantStatus, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestIsAuthFailureAndServerTransient(t *testing.T) {
+	cases := []struct {
+		name          string
+		err           error
+		wantAuth      bool
+		wantTransient bool
+	}{
+		{"nil", nil, false, false},
+		{"401 unauthorized", &HTTPError{StatusCode: 401}, true, false},
+		{"403 forbidden", &HTTPError{StatusCode: 403}, true, false},
+		{"500 internal", &HTTPError{StatusCode: 500}, false, true},
+		{"502 bad gateway", &HTTPError{StatusCode: 502}, false, true},
+		{"503 unavailable", &HTTPError{StatusCode: 503}, false, true},
+		{"504 timeout", &HTTPError{StatusCode: 504}, false, true},
+		{
+			// 429 belongs to IsRateLimited, which owns the longer wait. Grouping
+			// it under IsServerTransient would give it the 5xx arm's weaker
+			// "outcome unknown" wording when a 429 is provably refused at
+			// admission.
+			"429 is neither — IsRateLimited owns it",
+			&HTTPError{StatusCode: 429}, false, false,
+		},
+		{"400 is neither", &HTTPError{StatusCode: 400}, false, false},
+		{"404 is neither", &HTTPError{StatusCode: 404}, false, false},
+		{"wrapped 401 still matches", fmt.Errorf("update issue: %w", &HTTPError{StatusCode: 401}), true, false},
+		{"a non-HTTP error", &GraphQLError{Message: "x"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsAuthFailure(tc.err); got != tc.wantAuth {
+				t.Errorf("IsAuthFailure() = %v, want %v", got, tc.wantAuth)
+			}
+			if got := IsServerTransient(tc.err); got != tc.wantTransient {
+				t.Errorf("IsServerTransient() = %v, want %v", got, tc.wantTransient)
 			}
 		})
 	}

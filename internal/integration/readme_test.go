@@ -174,6 +174,18 @@ func TestGeneratedReadmeMatchesBehavior(t *testing.T) {
 			t.Errorf("README failure model does not mention %q", want)
 		}
 	}
+	// #447's EACCES is deliberately NOT in the list above. The bare token already
+	// appears in this README describing _create reads, so asserting it would pass
+	// whether or not the failure model documents the errno at all — a check that
+	// tests nothing (#480). Pin the bullet's DISTINGUISHING content instead, the
+	// same way the EDQUOT check below does: what makes EACCES worth a separate
+	// errno is that only a human can clear it, and that the .error says which key
+	// to fix rather than echoing a proxy's error page.
+	for _, want := range []string{"needs a HUMAN to replace the key", "LINEAR_API_KEY"} {
+		if !strings.Contains(readme, want) {
+			t.Errorf("README documents EACCES without its next action: missing %q", want)
+		}
+	}
 	// #409: EDQUOT is only worth a new errno if the bullet says what to DO. A bare
 	// "-> EDQUOT" would leave an agent exactly where "invalid argument" left it,
 	// and the one thing that distinguishes it from the EAGAIN above is that

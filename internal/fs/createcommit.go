@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -201,9 +202,17 @@ func unconfirmedReflectionMsg(op string, r WriteResult, err error) string {
 // Linear does not reliably tag (not-found, usage limit, length cap) sit above
 // the userError gate, so their errno does not depend on a server-set bit (#409).
 // And the three of them, which answer on message TEXT, sit below the arms that
-// answer on error STRUCTURE (*notFoundError, *FieldError, retryableCreateErr) —
-// text can be the caller's own echoed input, so a structural answer outranks a
-// textual one. See #409, #445.
+// answer on error STRUCTURE (*notFoundError, *FieldError, the HTTP-status arms,
+// retryableCreateErr) — text can be the caller's own echoed input, so a
+// structural answer outranks a textual one. See #409, #445, #447.
+//
+// The HTTP-status arms (api.IsAuthFailure, api.IsServerTransient) are the
+// newest members of that structural tier and sit at its end, just above
+// retryableCreateErr. A status code is the least ambiguous thing in a failed
+// response — it is not the caller's echoed input and not a server-set label —
+// so nothing that answers on text should outrank it. A 429 is deliberately
+// absent: api.IsRateLimited recognises it by status now, so it lands on
+// retryableCreateErr with that arm's stronger "did not take effect" promise.
 func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var nferr *notFoundError
 	if errors.As(err, &nferr) {
@@ -212,6 +221,40 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	var ferr *FieldError
 	if errors.As(err, &ferr) {
 		return ferr.Detail(), syscall.EINVAL
+	}
+	// The two arms an HTTP STATUS answers, both above retryableCreateErr because
+	// a status is structure and its message fallbacks are text — the same
+	// structure-outranks-text rule the arms below follow (#447).
+	//
+	// A 429 is NOT handled here: api.IsRateLimited now recognises it by status,
+	// so it reaches the retryableCreateErr arm below and gets that arm's
+	// "did not take effect" wording, which is correct — a 429 is refused at
+	// admission and never reaches a mutation handler.
+	if api.IsAuthFailure(err) {
+		status, _ := api.HTTPStatus(err)
+		return "Operation: " + op + "\nError: Linear rejected this request's CREDENTIALS (HTTP " + strconv.Itoa(status) +
+			"), so the operation did NOT take effect. Retrying will NOT help: the API key is missing, revoked, mistyped, or lacks the scope for this operation. " +
+			"Fix the key — LINEAR_API_KEY in the environment, or api_key in ~/.config/linearfs/config.yaml — and retry. " +
+			"The response body is deliberately not echoed here: a rejection at this layer is often an HTML page from a proxy rather than anything Linear wrote.", syscall.EACCES
+	}
+	// A 5xx is Linear's own side failing, not a rejection of what we sent, so
+	// EAGAIN — EIO told the caller to stop when waiting is the fix.
+	//
+	// The wording deliberately does NOT promise the operation had no effect,
+	// which is where this departs from #447's sketch. That issue grouped 5xx with
+	// 429 as "never reached a mutation handler"; that holds for a 503 turned away
+	// at an edge proxy, but a 500 is the application itself failing and may have
+	// applied the mutation before losing the response. Nothing in the status
+	// separates the two. #399 settled which way to guess when the outcome is
+	// unknowable: a false "did not take effect" costs a duplicated entity on
+	// retry, a false "unknown" costs one existence check, so the conservative
+	// claim is the correct default.
+	if api.IsServerTransient(err) {
+		status, _ := api.HTTPStatus(err)
+		return "Operation: " + op + "\nError: Linear returned HTTP " + strconv.Itoa(status) +
+			" — a fault on Linear's side, not a rejection of what you sent. Wait a few seconds and retry. " +
+			"Whether it took effect is UNKNOWN: the request did reach Linear, so it may have been applied and the response lost. " +
+			"CHECK whether the entity exists (read the directory listing, or .last) before retrying a create, or a blind retry can create a duplicate.", syscall.EAGAIN
 	}
 	if retryableCreateErr(err) {
 		// Both are EAGAIN — retry is the right move either way — but they cannot

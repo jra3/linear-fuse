@@ -2,6 +2,8 @@ package api
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 )
@@ -54,6 +56,75 @@ func IsOutcomeUnknown(err error) bool { return errors.Is(err, ErrInFlight) }
 // fallbacks for errors that never carried the type: HTTP-level failures are
 // plain fmt.Errorf strings carrying Linear's error envelope verbatim.
 
+// HTTPError is a non-200 HTTP response from Linear's GraphQL endpoint. It
+// exists so the STATUS CODE survives as a typed fact: the client used to render
+// it with fmt.Errorf, which turned the one unambiguous signal in the response
+// into prose that only a substring match could recover, so every non-200 not
+// caught by a message predicate reached classifyMutationErr's EIO fallthrough
+// (#447).
+//
+// Error() reproduces that historical string EXACTLY — "API error (status N):
+// <body>" — and that is a contract, not nostalgia. IsNotFound, IsUsageLimited
+// and IsFieldTooLong all judge the FLATTENED error text and document this
+// prefix as one of the wrappers their loose matchers must tolerate; changing
+// the rendering would silently unhook all three.
+//
+// Body is Linear's own error envelope on a 4xx, but on a 5xx or a 401 it can be
+// whatever a proxy emitted, including HTML. It is kept raw because
+// IsUsageLimited parses the envelope out of exactly this text, and callers that
+// surface it to a user are expected to decide for themselves whether to echo it
+// — the EACCES arm in classifyMutationErr deliberately does not.
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("API error (status %d): %s", e.StatusCode, e.Body)
+}
+
+// HTTPStatus reports the HTTP status code err carries, and whether it carried
+// one at all. It is the primitive the named predicates below are built from;
+// prefer them where one fits, and reach for this only when the caller needs to
+// distinguish statuses those predicates deliberately group together.
+func HTTPStatus(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode, true
+	}
+	return 0, false
+}
+
+// IsAuthFailure reports whether Linear refused the request's CREDENTIALS — a
+// revoked, mistyped or under-scoped API key (401) or one lacking the scope for
+// this operation (403).
+//
+// It is deliberately not lumped in with the transient predicates: no amount of
+// retrying clears it, and it is the one failure class here that only a human
+// can fix. Reported as a backend fault it sends an agent into an unbounded
+// retry loop against a wall.
+func IsAuthFailure(err error) bool {
+	status, ok := HTTPStatus(err)
+	return ok && (status == http.StatusUnauthorized || status == http.StatusForbidden)
+}
+
+// IsServerTransient reports whether err is a 5xx — Linear's own side failing,
+// not a rejection of what we sent.
+//
+// Note what this does NOT promise. A 429 is excluded because IsRateLimited
+// already owns it and the two warrant different waits. And a 5xx says nothing
+// about whether the mutation took effect: a 503 from an edge proxy never
+// reached the application, while a 500 may have applied a mutation and lost the
+// response. Callers must not turn this into a "did not take effect" claim — see
+// #399 and the arm in classifyMutationErr.
+func IsServerTransient(err error) bool {
+	status, ok := HTTPStatus(err)
+	return ok && status >= 500 && status <= 599
+}
+
 // IsRateLimited reports whether err is Linear telling us the account's
 // request or complexity budget is exhausted. Structured check first: Linear
 // tags budget exhaustion with extensions {code: "RATELIMITED"}. The message
@@ -74,6 +145,17 @@ func IsRateLimited(err error) bool {
 	// fallback below.
 	if IsDeferred(err) {
 		return false
+	}
+	// Status first, matching the structured-first layering the rest of this file
+	// documents. A 429 IS the rate limit, whatever the body says — and Linear
+	// sends some whose body carries neither "RATELIMITED" nor "rate limit", so
+	// the message fallback below misses them. The client has already settled its
+	// admission ladder as rate-limited on that same response
+	// (adm.rateLimited(resp.Header)), so without this the two layers disagreed
+	// about one error: the ladder backed off while the fs layer called it a
+	// backend fault and told the caller to stop (#447).
+	if status, ok := HTTPStatus(err); ok && status == http.StatusTooManyRequests {
+		return true
 	}
 	var gqlErr *GraphQLError
 	if errors.As(err, &gqlErr) && gqlErr.Code == "RATELIMITED" {

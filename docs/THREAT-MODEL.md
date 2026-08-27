@@ -212,6 +212,19 @@ would otherwise write one line the rotating writer lets through whole (it never
 splits a single oversize write) and no downstream reader can hold. Journald
 applies its own limits to the process-log side.
 
+**A third sink, and one body it no longer echoes (#447).** `.error` is the other
+place a failure's text surfaces, and unlike the two log sinks it exists to be
+read by the agent driving the mount. A non-GraphQL failure's error string embeds
+the entire response body, so an authentication rejection used to put whatever
+answered the request — at that layer often a proxy's HTML error page rather than
+Linear's own envelope, and so remote content of unknown provenance — verbatim
+into a file an agent reads and acts on. The `EACCES` arm now names the API key
+and its config location instead, and withholds the body entirely. Note the scope
+honestly: this narrows what reaches `.error`, not what reaches `requests.jsonl`,
+where `HTTPError.Error()` still renders the body under the 2 KB cap above. The
+key itself stays unreachable from all three sinks — it lives only in the
+`Authorization` header, which nothing in the process renders.
+
 **At-rest posture (enforced).** Every on-disk artifact LinearFS writes is
 owner-only: `0700` directories, `0600` files. The mode constants and the
 best-effort `Chmod` self-heal live in one place, `internal/atrest`, and every

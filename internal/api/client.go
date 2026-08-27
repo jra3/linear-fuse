@@ -367,9 +367,14 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 	// a second line in a line-oriented log. The ERROR STRINGS keep it raw on
 	// purpose: IsUsageLimited parses Linear's envelope out of exactly this text
 	// (envelopeMessageRe), and quoting would escape the JSON it reads.
+	//
+	// Both non-200 sites return *HTTPError rather than fmt.Errorf so the status
+	// survives as a typed fact (#447). HTTPError.Error() renders the identical
+	// "API error (status N): <body>" string these sites used to build, which the
+	// message predicates depend on — see the type's doc comment.
 	if resp.StatusCode == http.StatusTooManyRequests {
 		adm.rateLimited(resp.Header)
-		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		queryErr = &HTTPError{StatusCode: resp.StatusCode, Body: string(respBody)}
 		log.Printf("[ratelimit] ERROR: %s rate limited by Linear API (HTTP 429): %q", opName, string(respBody))
 		return queryErr
 	}
@@ -385,7 +390,7 @@ func (c *Client) query(ctx context.Context, query string, variables map[string]a
 		} else {
 			adm.observe(resp.Header)
 		}
-		queryErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		queryErr = &HTTPError{StatusCode: resp.StatusCode, Body: string(respBody)}
 		return queryErr
 	}
 

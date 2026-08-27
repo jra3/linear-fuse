@@ -270,8 +270,18 @@ Operational guards:
   `[api]` prefix rather than `ERROR`, because a delete of an entity already gone
   is success and a 404 on refresh is the routine orphan signal (#448).
 - **Error predicates** (`errors.go`): `IsRateLimited`, `IsNotFound`,
-  `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred` — the vocabulary the fs
-  layer's error classifier maps to errnos. `IsUsageLimited` (the workspace is
+  `IsFieldTooLong`, `IsUsageLimited`, `IsDeferred`, `IsAuthFailure`,
+  `IsServerTransient` — the vocabulary the fs layer's error classifier maps to
+  errnos. The last two answer on a typed `*HTTPError` carrying the response's
+  `StatusCode`, which the client's two non-200 sites return in place of a
+  `fmt.Errorf` that flattened the status into prose (#447); `HTTPStatus` is the
+  accessor they are built from. `HTTPError.Error()` reproduces that historical
+  `"API error (status N): <body>"` string byte-for-byte, because the three
+  text-matching predicates above document that prefix as a wrapper their loose
+  matchers must tolerate — a rendering change would silently unhook all three.
+  `IsRateLimited` consults the status FIRST, so a 429 whose body names neither
+  `RATELIMITED` nor "rate limit" is still a rate limit; without that the client's
+  admission ladder and the fs classifier disagreed about one response. `IsUsageLimited` (the workspace is
   over a plan/usage limit) is likewise disjoint from `IsRateLimited`: a request
   budget clears when the window resets, so waiting is the fix, whereas no wait
   clears a plan wall — which is why it maps to `EDQUOT` rather than the
@@ -878,15 +888,21 @@ a layer above the commit-tail primitives) and no telemetry (matching
 3. On valid input, calls the `MutationClient`. `classifyMutationErr`
    (`createcommit.go`) is the single owner of the failure model: bad input →
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,
-   rate-limit/timeout/interruption → `EAGAIN`, workspace over its plan limit →
-   `EDQUOT`, backend failure → `EIO` — reason always written to `.error`. Arm
+   rate-limit/timeout/interruption/5xx → `EAGAIN`, workspace over its plan limit →
+   `EDQUOT`, rejected API key → `EACCES`, backend failure → `EIO` — reason always
+   written to `.error`. Arm
    ORDER is load-bearing in two directions: the arms keyed on a condition Linear
    does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit ABOVE the
    `userError` gate, so their errno does not depend on a server-set bit (#409);
    and those same arms, which answer on message TEXT, sit BELOW the arms that
-   answer on error STRUCTURE (`*notFoundError`, `*FieldError`,
-   `retryableCreateErr`), because the text can be the caller's own echoed input
-   or a throttle's envelope. Missing reference covers both the fs-local
+   answer on error STRUCTURE (`*notFoundError`, `*FieldError`, the HTTP-status
+   arms, `retryableCreateErr`), because the text can be the caller's own echoed
+   input or a throttle's envelope. The HTTP-status arms (`api.IsAuthFailure` →
+   `EACCES`, `api.IsServerTransient` → `EAGAIN`) close that structural tier: a
+   status code is neither caller-echoed input nor a server-set label, so nothing
+   answering on text outranks it (#447). `EACCES` is the one failure here only a
+   HUMAN can clear, and its `.error` deliberately does NOT echo the response
+   body — at that layer it is usually a proxy's HTML, not a Linear message. Missing reference covers both the fs-local
    `notFoundError` and Linear's own "Entity not found" (`api.IsNotFound`, #445);
    only the delete tail's *mutate* step reads that rejection differently, as
    idempotent success — a delete whose *find* fails that way classifies here

@@ -464,11 +464,18 @@ Failure model (every writable surface follows this contract):
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
   the workspace has room: archive or delete entities, or raise the plan limit.
   .error carries what Linear reported.
-- Rate-limited, deferred, or interrupted -> EAGAIN, retry shortly. Read .error to
-  see WHICH: a request refused before it was sent "did not take effect" and is
-  safe to retry blindly; one "interrupted after it was sent" has an UNKNOWN
-  outcome — check whether the entity exists (listing, or .last) before retrying,
-  or you may create a duplicate.
+- Rate-limited, deferred, interrupted, or Linear returning a 5xx -> EAGAIN, retry
+  shortly. Read .error to see WHICH, because the outcomes differ: a request refused
+  before it was sent (rate limit, deferral) "did not take effect" and is safe to
+  retry blindly; one "interrupted after it was sent", and any 5xx, has an UNKNOWN
+  outcome — the request reached Linear, so it may have been applied and the response
+  lost. Check whether the entity exists (listing, or .last) before retrying, or you
+  may create a duplicate.
+- The API key is rejected (revoked, mistyped, or missing the scope) -> EACCES. The
+  write did NOT take effect, and like EDQUOT and unlike EAGAIN, retrying will NOT
+  help — this one needs a HUMAN to replace the key (LINEAR_API_KEY, or api_key in
+  the config file). .error says so and deliberately does NOT echo the response body,
+  which at this layer is often an HTML page from a proxy rather than a Linear message.
 - Backend/API failure -> EIO
 - A mutation Linear accepted but whose local reflection fails after retries ->
   EIO, and the .error names the SAFE RECOVERY. For a create it NAMES the entity
