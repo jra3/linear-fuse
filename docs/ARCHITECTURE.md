@@ -1134,26 +1134,31 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
   link-changes are full-cycle-bounded.
 - **Error surfacing contract:** every writable surface has a `.error` sibling
   (and `.last` where entities are minted). Bad input → `EINVAL`, over-length →
-  `EMSGSIZE`, missing reference → `ENOENT`, rate-limited/timeout/interrupted →
-  `EAGAIN`, workspace over its plan limit → `EDQUOT`, backend failure → `EIO`;
-  the reason always lands in `.error`,
+  `EMSGSIZE`, missing reference → `ENOENT`, rate-limited/timeout/interrupted/5xx
+  → `EAGAIN`, workspace over its plan limit → `EDQUOT`, rejected API key →
+  `EACCES`, backend failure → `EIO`; the reason always lands in `.error`,
   cleared on success. A stale local catalog self-heals with one refresh-and-retry
   before any of that surfaces. Three refinements the errno alone cannot carry, so
   the `.error` text is load-bearing: an `EAGAIN` says whether the request was
-  refused before it was sent (safe to retry blindly) or interrupted in flight
-  (outcome unknown — check first, or duplicate); an `EIO` from the
-  read-your-writes check means retry, so the one divergence that retrying can
-  never fix — a declined body-clear — is `EINVAL` instead (#398/#399); and the
-  two arms whose failure retrying cannot fix, `EDQUOT` and a Linear-side
-  not-found `ENOENT`, both have to SAY so, since no errno carries that
-  next-action. They share the phrasing and differ in why it is futile: `EDQUOT`
-  is a capacity wall that clears once the workspace has room (archive, delete, or
-  raise the plan limit, then retry), while the `ENOENT` reference is gone for
-  good, so the only action left is to drop or repoint the reference. The text
-  names no reconciling read, deliberately: the failed write prunes nothing, and
-  the reads an agent reaches for first do not prune either (`issue.md` renders
-  from the dir manifest's captured value, `issue.meta` is a plain
-  `GetIssueByIdentifier`). Sibling reads that *do* — `history.md` and the
+  refused before it was sent (safe to retry blindly) or reached Linear —
+  interrupted in flight, or answered with a 5xx — which leaves the outcome
+  unknown (check first, or duplicate); an `EIO` from the read-your-writes check
+  means retry, so the one divergence that retrying can never fix — a declined
+  body-clear — is `EINVAL` instead (#398/#399); and the three arms whose failure
+  retrying cannot fix, `EDQUOT`, a Linear-side not-found `ENOENT`, and a rejected
+  key's `EACCES`, all have to SAY so, since no errno carries that next-action.
+  They share the phrasing and differ in why it is futile: `EDQUOT` is a capacity
+  wall that clears once the workspace has room (archive, delete, or raise the
+  plan limit, then retry), the `ENOENT` reference is gone for good, so the only
+  action left is to drop or repoint the reference, and the `EACCES` key is dead —
+  no agent action revives it, so the text names the one that does: a HUMAN
+  replacing `LINEAR_API_KEY` (or `api_key` in the config file). That arm's
+  `.error` is also the only one that WITHHOLDS the response body, which at this
+  layer is usually a proxy's HTML rather than a Linear message (#447). The
+  not-found text names no reconciling read, deliberately: the failed write
+  prunes nothing, and the reads an agent reaches for first do not prune either
+  (`issue.md` renders from the dir manifest's captured value, `issue.meta` is a
+  plain `GetIssueByIdentifier`). Sibling reads that *do* — `history.md` and the
   `comments/`/`docs/`/`attachments/` listings route through orphan-carrying SWR
   specs (`historySpec` and `MaybeRefreshIssueDetails`, both classifying to
   `deleteOrphanIssue`) — prune as a background side effect, which is not a
