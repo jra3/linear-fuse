@@ -737,12 +737,14 @@ inconsistency is erased; they are on stable inos with the seam like everyone
 else. Because dirty-buffer-wins means the kept node can refuse a refresh,
 `newFileInode` reports the KEPT node's size in the Lookup answer (an
 `interface{ size() int }` probe after `refreshExisting`), not the fresh
-render's — a fresh-twin size would clamp kernel reads of longer dirty content
-(a real truncation: project.md read back "unclosed" after a rejected save;
-`TestRejectedSaveKeepsDirtyContentReadable` pins it). Guarded end-to-end by
-`TestRemoteUpdateVisibleAfterKernelRevalidation` (remote upsert → pinned
-inode chain so the kernel cannot FORGET → a real entry-timeout expiry (the
-fixture's ~1s since #414, not the production 30s) →
+render's — a fresh-twin size would clamp kernel reads of longer in-flight
+content (a real truncation: project.md read back "unclosed" after a rejected
+save, back when a rejection left its buffer dirty; since #494 it clears dirty
+and restores the entity's render, so a rejection converges the two, and
+`TestRejectedSaveRestoresReadableContent` pins what one leaves behind now).
+Guarded end-to-end by `TestRemoteUpdateVisibleAfterKernelRevalidation`
+(remote upsert → pinned inode chain so the kernel cannot FORGET → a real
+entry-timeout expiry (the fixture's ~1s since #414, not the production 30s) →
 fresh content and mtime; the pin is what forces the reuse path — without it
 the kernel may forget everything and the test passes vacuously) and its
 `TestRemoteTeamUpdateVisibleAfterKernelRevalidation` twin on the busiest
