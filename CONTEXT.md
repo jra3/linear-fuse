@@ -240,9 +240,9 @@ unit-tested with a recording sink — no FUSE mount, inode tree, SQLite, or API.
 The **deep module** that owns the invariant tail of every create (`_create` writes and
 `mkdir`), the create path's counterpart to the WriteBack tail: run the caller's
 `mutate` closure (parse → build input → call the mutation seam) → classify failure
-(**`FieldError`** → `EINVAL`, unknown reference → `ENOENT`, retryable/rate-limited →
-`EAGAIN`, workspace over plan limit → `EDQUOT`, other API failure → `EIO`; the
-reason renders to `.error`) → on success
+(**`FieldError`** → `EINVAL`, unknown reference → `ENOENT`, retryable/rate-limited/5xx
+→ `EAGAIN`, workspace over plan limit → `EDQUOT`, rejected API key → `EACCES`, other
+API failure → `EIO`; the reason renders to `.error`) → on success
 clear `.error`, record the new identity in `.last`, persist to SQLite (non-fatal),
 and apply the kernel-cache coherence policy. `InvalidateCreated` on the collection
 dir is guaranteed by the module — a spec cannot forget it; per-entity internal-cache
@@ -258,28 +258,38 @@ model, shared by the create and delete tails **and every edit-mutation site**
 (issue/comment/label/document/milestone flushes and renames, the project/
 initiative scalar+reconcile paths — the flushes/renames used to bypass it with
 a flat `EIO`, violating the README's documented contract). Rate-limit,
-not-found and usage-limit detection are the api package's predicates
-(`api.IsRateLimited` — structural `GraphQLError.Code == "RATELIMITED"` plus
-message fallbacks, and deliberately excluding the client-side "circuit breaker"
-transient, which stays a `retryableCreateErr` concern; `api.IsNotFound` — the
-"Entity not found" rejection; `api.IsUsageLimited` — a workspace over its plan
-limit, disjoint from `IsRateLimited` because no wait clears it), the single
-owners the client's GraphQL-errors branch, the sync worker's backoff, and the
-repo's orphan defense also delegate to. `IsNotFound` carries opposite verdicts
-by tail: a server-side not-found on a create/edit/rename is `ENOENT` (the
-reference is gone, and retrying earns the same rejection — it used to fall to
-the retryable-sounding `EIO`, #445), while the delete tail's *mutate* step
-claims it first via `remoteAlreadyGone`, where already-gone is idempotent
-success — a delete whose *find* fails that way is not behind that gate and does
-classify. Arm order matters twice over: the arms keyed on a condition Linear
-does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit above the `userError`
-gate so their errno never depends on a server-set bit (#409, #445); and those
-same three, which answer on message TEXT, sit below the arms that answer on
-error STRUCTURE (`*notFoundError`, `*FieldError`, `retryableCreateErr`), because
-the text can be the caller's own echoed input. `IsNotFound` is anchored for the
-same reason `IsUsageLimited` is — the phrase must open a message, not merely
-appear inside one — so a `status: Entity not found` typo cannot pick its own
-errno, and a throttle never reads as permanently gone.
+not-found, usage-limit, credential-rejection and 5xx detection are the api
+package's predicates (`api.IsRateLimited` — the response's HTTP status first,
+then structural `GraphQLError.Code == "RATELIMITED"`, then message fallbacks,
+and deliberately excluding the client-side "circuit breaker" transient, which
+stays a `retryableCreateErr` concern; `api.IsNotFound` — the "Entity not found"
+rejection; `api.IsUsageLimited` — a workspace over its plan limit, disjoint
+from `IsRateLimited` because no wait clears it; `api.IsAuthFailure` — a 401/403
+rejecting the key itself; `api.IsServerTransient` — a 5xx, Linear's own side
+failing), the single owners the client's GraphQL-errors branch, the sync
+worker's backoff, and the repo's orphan defense also delegate to. The last two
+answer on a typed `api.HTTPError` (`StatusCode` + `Body`) the client's two
+non-200 sites return instead of flattening the status into `fmt.Errorf` prose,
+which is also what lets `IsRateLimited` settle a bare 429 whose body names no
+rate limit (#447); rationale and the `Error()` rendering contract:
+`docs/ARCHITECTURE.md`. `IsNotFound` carries opposite verdicts by tail: a
+server-side not-found on a create/edit/rename is `ENOENT` (the reference is
+gone, and retrying earns the same rejection — it used to fall to the
+retryable-sounding `EIO`, #445), while the delete tail's *mutate* step claims
+it first via `remoteAlreadyGone`, where already-gone is idempotent success — a
+delete whose *find* fails that way is not behind that gate and does classify.
+Arm order matters twice over: the arms keyed on a condition Linear does not
+reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit above the `userError` gate so
+their errno never depends on a server-set bit (#409, #445); and those same
+three, which answer on message TEXT, sit below the arms that answer on error
+STRUCTURE (`*notFoundError`, `*FieldError`, the HTTP-status arms,
+`retryableCreateErr`), because the text can be the caller's own echoed input.
+The status arms (`IsAuthFailure` → `EACCES`, `IsServerTransient` → `EAGAIN`)
+close that structural tier: a status code is neither echoed input nor a
+server-set label, so nothing answering on text outranks it (#447). `IsNotFound`
+is anchored for the same reason `IsUsageLimited` is — the phrase must open a
+message, not merely appear inside one — so a `status: Entity not found` typo
+cannot pick its own errno, and a throttle never reads as permanently gone.
 
 `IsUsageLimited` is message-shaped because Linear's `extensions.code` for that
 rejection has never been *observed* — and could not be, after the fact, because

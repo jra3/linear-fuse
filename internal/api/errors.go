@@ -53,8 +53,9 @@ func IsOutcomeUnknown(err error) bool { return errors.Is(err, ErrInFlight) }
 // single owner of its question, and layers above the client delegate to it
 // rather than sniffing substrings themselves. All of them prefer the structured
 // *GraphQLError (errors.As, so wrapping is transparent) and keep the message
-// fallbacks for errors that never carried the type: HTTP-level failures are
-// plain fmt.Errorf strings carrying Linear's error envelope verbatim.
+// fallbacks for errors that never carried the type: an HTTP-level failure is an
+// *HTTPError, whose status is typed but whose message is Linear's error envelope
+// verbatim.
 
 // HTTPError is a non-200 HTTP response from Linear's GraphQL endpoint. It
 // exists so the STATUS CODE survives as a typed fact: the client used to render
@@ -126,11 +127,12 @@ func IsServerTransient(err error) bool {
 }
 
 // IsRateLimited reports whether err is Linear telling us the account's
-// request or complexity budget is exhausted. Structured check first: Linear
-// tags budget exhaustion with extensions {code: "RATELIMITED"}. The message
-// fallbacks cover HTTP 429/400 failures that surface as plain strings
-// ("RATELIMITED" in Linear's error envelope, or a "rate limit ..." message,
-// case-insensitive).
+// request or complexity budget is exhausted. Status first: an HTTP 429 IS the
+// rate limit whatever its body says (see the arm below). Then the structured
+// check: Linear tags budget exhaustion with extensions {code: "RATELIMITED"}.
+// The message fallbacks cover the failures that surface as text alone (a 400
+// carrying "RATELIMITED" in Linear's error envelope, or a "rate limit ..."
+// message, case-insensitive).
 //
 // Deliberately NOT absorbed: the client's "circuit breaker" connectivity
 // error. That is a client-side transient, not the server rate limiting us —

@@ -183,20 +183,20 @@ LinearFS never sets `fuse.MountOptions.AllowOther` (the `allow_other` config
 key that once suggested otherwise was a dead knob, removed in #355).
 
 **What the request log carries (answered).** Not the key: it lives only in the
-`Authorization` header and nothing in the process renders headers, so neither
-sink below can reach it. What both sinks *do* carry is workspace-derived and
-remote-controlled. `requests.jsonl` already logged the full `vars` map (entity
-IDs, and on a mutation the content being written); since #448 a failed line also
-carries an `error` object — `message`, `code`, `type`, `user_error`,
-`user_presentable_message` — every string of it server-authored, and Linear
-routinely echoes user-supplied entity names back inside them ("The label 'X' is
-a group …"). The same decoded rejection lands in the **process log** (journald)
-on an always-on `<op> … by Linear API: <fields>` line (the prefix carries the
-severity verdict; `docs/ARCHITECTURE.md` owns that shape), which is new reach:
-server text now appears in the operator's log without the request log being
-enabled at all. So the artifact's sensitivity is unchanged in *kind* — it
-was already a workspace trace — but a rejection now quotes back the content that
-provoked it, and one sink is no longer opt-in.
+`Authorization` header and nothing in the process renders headers, so none of
+the sinks below can reach it. What the two log sinks *do* carry is
+workspace-derived and remote-controlled. `requests.jsonl` already logged the
+full `vars` map (entity IDs, and on a mutation the content being written);
+since #448 a failed line also carries an `error` object — `message`, `code`,
+`type`, `user_error`, `user_presentable_message` — every string of it
+server-authored, and Linear routinely echoes user-supplied entity names back
+inside them ("The label 'X' is a group …"). The same decoded rejection lands in
+the **process log** (journald) on an always-on `<op> … by Linear API: <fields>`
+line (the prefix carries the severity verdict; `docs/ARCHITECTURE.md` owns that
+shape), which is new reach: server text now appears in the operator's log
+without the request log being enabled at all. So the artifact's sensitivity is
+unchanged in *kind* — it was already a workspace trace — but a rejection now
+quotes back the content that provoked it, and one sink is no longer opt-in.
 
 Three containments. `requests.jsonl` stays off by default and is `0600` inside a
 `0700` directory like every other artifact (below). Every remote string reaching

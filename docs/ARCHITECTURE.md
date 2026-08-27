@@ -280,24 +280,25 @@ Operational guards:
   text-matching predicates above document that prefix as a wrapper their loose
   matchers must tolerate — a rendering change would silently unhook all three.
   `IsRateLimited` consults the status FIRST, so a 429 whose body names neither
-  `RATELIMITED` nor "rate limit" is still a rate limit; without that the client's
-  admission ladder and the fs classifier disagreed about one response. `IsUsageLimited` (the workspace is
-  over a plan/usage limit) is likewise disjoint from `IsRateLimited`: a request
-  budget clears when the window resets, so waiting is the fix, whereas no wait
-  clears a plan wall — which is why it maps to `EDQUOT` rather than the
-  retryable `EAGAIN` (#409). `IsNotFound` is disjoint from `IsRateLimited` for a
-  sharper reason: a throttled rejection is not proof the entity is gone, and the
-  delete tail reads not-found as idempotent success, so without that precedence a
-  throttled delete forgets the local row for an entity Linear still has (#445).
-  `IsNotFound` and `IsUsageLimited` are both anchored against Linear's own text —
-  the phrase must CONSTITUTE the server's message, not merely appear inside it —
-  because Linear echoes caller-supplied names back in its rejections (#445).
-  `IsDeferred` (a local budget deferral: `ErrDeferred` or the
-  pagination `ErrBudget`) is deliberately *excluded* from `IsRateLimited`: a
-  server rate limit warrants a long pause until the window resets, but a local
-  admission-ladder defer clears next cycle, so the sync worker skips-this-cycle
-  on a defer instead of entering the hour-long rate-limit backoff (#257 — now
-  structural: the worker holds no backoff of its own to enter).
+  `RATELIMITED` nor "rate limit" is still a rate limit; without that the
+  client's admission ladder and the fs classifier disagreed about one response.
+  `IsUsageLimited` (the workspace is over a plan/usage limit) is likewise
+  disjoint from `IsRateLimited`: a request budget clears when the window resets,
+  so waiting is the fix, whereas no wait clears a plan wall — which is why it
+  maps to `EDQUOT` rather than the retryable `EAGAIN` (#409). `IsNotFound` is
+  disjoint from `IsRateLimited` for a sharper reason: a throttled rejection is
+  not proof the entity is gone, and the delete tail reads not-found as
+  idempotent success, so without that precedence a throttled delete forgets the
+  local row for an entity Linear still has (#445). `IsNotFound` and
+  `IsUsageLimited` are both anchored against Linear's own text — the phrase must
+  CONSTITUTE the server's message, not merely appear inside it — because Linear
+  echoes caller-supplied names back in its rejections (#445). `IsDeferred` (a
+  local budget deferral: `ErrDeferred` or the pagination `ErrBudget`) is
+  deliberately *excluded* from `IsRateLimited`: a server rate limit warrants a
+  long pause until the window resets, but a local admission-ladder defer clears
+  next cycle, so the sync worker skips-this-cycle on a defer instead of entering
+  the hour-long rate-limit backoff (#257 — now structural: the worker holds no
+  backoff of its own to enter).
 
 **Consumed by:** Sync Worker (reads), Repository (SWR refreshes and its
 reconcile pass), LinearFS (mutations plus the interactive-tier synchronous
@@ -909,31 +910,33 @@ a layer above the commit-tail primitives) and no telemetry (matching
 3. On valid input, calls the `MutationClient`. `classifyMutationErr`
    (`createcommit.go`) is the single owner of the failure model: bad input →
    `EINVAL`, over-length field → `EMSGSIZE`, missing reference → `ENOENT`,
-   rate-limit/timeout/interruption/5xx → `EAGAIN`, workspace over its plan limit →
-   `EDQUOT`, rejected API key → `EACCES`, backend failure → `EIO` — reason always
-   written to `.error`. Arm
-   ORDER is load-bearing in two directions: the arms keyed on a condition Linear
-   does not reliably tag (`ENOENT`, `EDQUOT`, `EMSGSIZE`) sit ABOVE the
-   `userError` gate, so their errno does not depend on a server-set bit (#409);
-   and those same arms, which answer on message TEXT, sit BELOW the arms that
-   answer on error STRUCTURE (`*notFoundError`, `*FieldError`, the HTTP-status
-   arms, `retryableCreateErr`), because the text can be the caller's own echoed
-   input or a throttle's envelope. The HTTP-status arms (`api.IsAuthFailure` →
-   `EACCES`, `api.IsServerTransient` → `EAGAIN`) close that structural tier: a
-   status code is neither caller-echoed input nor a server-set label, so nothing
-   answering on text outranks it (#447). `EACCES` is the one failure here only a
-   HUMAN can clear, and its `.error` deliberately does NOT echo the response
-   body — at that layer it is usually a proxy's HTML, not a Linear message. Missing reference covers both the fs-local
-   `notFoundError` and Linear's own "Entity not found" (`api.IsNotFound`, #445);
-   only the delete tail's *mutate* step reads that rejection differently, as
-   idempotent success — a delete whose *find* fails that way classifies here
-   like any other tail. The `EAGAIN` branch splits its *message* on
-   `api.IsOutcomeUnknown`: a request refused before it was sent (budget
-   deferral, cancelled pre-send wait, tripped breaker) provably had no effect,
-   while one whose POST was already on the wire (`api.ErrInFlight`, set in the
-   client's transport-error path) may have been applied with the response lost,
-   so its `.error` tells the caller to CHECK before retrying rather than
-   promising a no-op (#399).
+   rate-limit/timeout/interruption/5xx → `EAGAIN`, workspace over its plan limit
+   → `EDQUOT`, rejected API key → `EACCES`, backend failure → `EIO` — reason
+   always written to `.error`. Arm ORDER is load-bearing in two directions: the
+   arms keyed on a condition Linear does not reliably tag (`ENOENT`, `EDQUOT`,
+   `EMSGSIZE`) sit ABOVE the `userError` gate, so their errno does not depend on
+   a server-set bit (#409); and those same arms, which answer on message TEXT,
+   sit BELOW the arms that answer on error STRUCTURE (`*notFoundError`,
+   `*FieldError`, the HTTP-status arms, `retryableCreateErr`), because the text
+   can be the caller's own echoed input or a throttle's envelope. The
+   HTTP-status arms (`api.IsAuthFailure` → `EACCES`, `api.IsServerTransient` →
+   `EAGAIN`) close that structural tier: a status code is neither caller-echoed
+   input nor a server-set label, so nothing answering on text outranks it
+   (#447). `EACCES` is the one failure here only a HUMAN can clear, and its
+   `.error` deliberately does NOT echo the response body — at that layer it is
+   usually a proxy's HTML, not a Linear message. Missing reference covers both
+   the fs-local `notFoundError` and Linear's own "Entity not found"
+   (`api.IsNotFound`, #445); only the delete tail's *mutate* step reads that
+   rejection differently, as idempotent success — a delete whose *find* fails
+   that way classifies here like any other tail. The `retryableCreateErr` `EAGAIN`
+   branch splits its *message* on `api.IsOutcomeUnknown`: a request refused
+   before it was sent (budget deferral, cancelled pre-send wait, tripped
+   breaker) provably had no effect, while one whose POST was already on the wire
+   (`api.ErrInFlight`, set in the client's transport-error path) may have been
+   applied with the response lost, so its `.error` tells the caller to CHECK
+   before retrying rather than promising a no-op (#399). The 5xx arm makes that
+   same unknown-outcome claim, since a 500 may have applied the mutation before
+   losing the response.
 4. **Read-your-writes** (`editcommit.go`): re-derives what persisted — an
    independent refetch where a single-entity getter exists (issues, projects,
    initiatives), otherwise the mutation's echoed response — normalizes benign
