@@ -519,7 +519,9 @@ incompatible cache and **deletes cache.db**, skipping the migration and costing
 the user a full workspace resync. Nothing else catches it — a fresh database
 (CI, every `openTestStore`) has the column and passes.
 `TestSchemaIndexesAvoidMigratedColumns` extracts the `ALTER`s from
-`migrateSchema`'s own source and fails if `schema.sql` indexes one of them.
+`migrateSchema`'s own source and fails if `schema.sql` indexes one of them. It
+holds the split both ways: an index in `migrateSchema` that covers no
+`ALTER`-added column belongs back in `schema.sql`, next to its table.
 
 ## Development Notes
 
