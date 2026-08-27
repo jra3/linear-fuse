@@ -169,6 +169,7 @@ func TestRecheckPrunesOnLinearNotFound(t *testing.T) {
 		defer cleanup()
 		var calls atomic.Int32
 		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, gone("Issue")))
+		defer repo.Close()
 		seedIssueRow(t, store, "issue-gone")
 
 		repo.RecheckIssue("issue-gone")
@@ -187,6 +188,7 @@ func TestRecheckPrunesOnLinearNotFound(t *testing.T) {
 		defer cleanup()
 		var calls atomic.Int32
 		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, gone("Project")))
+		defer repo.Close()
 		seedProjectRow(t, store, "project-gone")
 
 		repo.RecheckProject("project-gone")
@@ -202,6 +204,7 @@ func TestRecheckPrunesOnLinearNotFound(t *testing.T) {
 		defer cleanup()
 		var calls atomic.Int32
 		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, gone("Initiative")))
+		defer repo.Close()
 		seedInitiativeRow(t, store, "initiative-gone")
 
 		repo.RecheckInitiative("initiative-gone")
@@ -226,6 +229,7 @@ func TestRecheckKeepsRowsOnOtherFailures(t *testing.T) {
 		defer cleanup()
 		var calls atomic.Int32
 		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, backendFaultMessage))
+		defer repo.Close()
 		seedIssueRow(t, store, "issue-live")
 
 		repo.RecheckIssue("issue-live")
@@ -245,6 +249,7 @@ func TestRecheckKeepsRowsOnOtherFailures(t *testing.T) {
 		defer cleanup()
 		var calls atomic.Int32
 		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, backendFaultMessage))
+		defer repo.Close()
 		seedProjectRow(t, store, "project-live")
 
 		repo.RecheckProject("project-live")
@@ -264,6 +269,7 @@ func TestRecheckKeepsRowsOnOtherFailures(t *testing.T) {
 		defer cleanup()
 		var calls atomic.Int32
 		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, backendFaultMessage))
+		defer repo.Close()
 		seedInitiativeRow(t, store, "initiative-live")
 
 		repo.RecheckInitiative("initiative-live")
@@ -286,6 +292,7 @@ func TestRecheckWithoutClientIsInert(t *testing.T) {
 	store, cleanup := setupTestDB(t)
 	defer cleanup()
 	repo := NewSQLiteRepository(store, nil)
+	defer repo.Close()
 	seedIssueRow(t, store, "issue-offline")
 
 	repo.RecheckIssue("issue-offline")

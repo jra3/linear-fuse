@@ -308,13 +308,17 @@ type editFlushSpec[T any] struct {
 	// Linear rather than trusting a not-found that api.IsNotFound matched on
 	// message text.
 	//
-	// Optional, and wired on five of the seven editable files today: issue.md
-	// (recheckIssue, issues.go), project.md (recheckProject, projects.go),
-	// initiative.md (recheckInitiative, initiatives.go), and comments/*.md and
-	// docs/*.md, which recheck the issue or project that owns them. It is nil
-	// only for labels/*.md and milestones/*.md, which have no SWR surface to
-	// trigger; their clean buffer converges on the sync worker's schedule
-	// instead.
+	// Optional: an editable file wires it iff the entity it writes has an SWR
+	// spec to trigger. issue.md, project.md and initiative.md recheck themselves
+	// (recheckIssue / recheckProject / recheckInitiative, in issues.go,
+	// projects.go and initiatives.go); comments/*.md and docs/*.md recheck the
+	// entity that OWNS them — the issue for a comment, and for a document the
+	// issue, project or initiative recheckOwner dispatches on (documents.go).
+	// It is nil for labels/*.md and milestones/*.md. A team-owned document is
+	// that same case wearing a non-nil refresh: it falls through all three of
+	// recheckOwner's arms, because a team is the sync root and its docs spec
+	// carries no orphan handler to reach. All of them converge on the sync
+	// worker's schedule instead.
 	refresh func()
 	// pinIno is the inode of the canonical file whose Lookup seeds from
 	// authoredPins. A committed clean write pins its bytes there, which is what

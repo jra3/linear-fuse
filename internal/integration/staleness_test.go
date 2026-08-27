@@ -185,8 +185,9 @@ func TestRejectedSaveRestoresReadableContent(t *testing.T) {
 		t.Fatalf("read project.md: %v", err)
 	}
 
-	// A save that validation rejects: an unknown label name. The flush returns
-	// EINVAL and the buffer stays dirty with exactly this content.
+	// A save that validation rejects: an unknown label name. The name resolves
+	// nowhere, so the front half never reaches Linear — the flush returns EINVAL
+	// and this content is dropped for the entity's current render.
 	rejected := strings.Replace(string(orig), "name:", "labels: [__no_such_project_label__]\nname:", 1)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -201,8 +202,8 @@ func TestRejectedSaveRestoresReadableContent(t *testing.T) {
 	}
 
 	// Force fresh Lookups through the whole chain (project children run a 0
-	// entry timeout, so every walk re-Lookups), then read back: the stat size
-	// and the read must both cover the FULL dirty content.
+	// entry timeout, so every walk re-Lookups), then read back: the stat size and
+	// the read must agree, and both must be the RESTORED render.
 	if _, err := os.ReadDir(mountPoint + "/teams/" + testTeamKey + "/projects/dirty-project"); err != nil {
 		t.Fatalf("readdir: %v", err)
 	}
