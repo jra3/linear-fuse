@@ -308,9 +308,13 @@ type editFlushSpec[T any] struct {
 	// Linear rather than trusting a not-found that api.IsNotFound matched on
 	// message text.
 	//
-	// Optional. Nil where the entity has no SWR surface to trigger — project.md,
-	// initiative.md, labels/*.md and milestones/*.md today — and the clean buffer
-	// then converges on the sync worker's schedule instead.
+	// Optional, and wired on five of the seven editable files today: issue.md
+	// (recheckIssue, issues.go), project.md (recheckProject, projects.go),
+	// initiative.md (recheckInitiative, initiatives.go), and comments/*.md and
+	// docs/*.md, which recheck the issue or project that owns them. It is nil
+	// only for labels/*.md and milestones/*.md, which have no SWR surface to
+	// trigger; their clean buffer converges on the sync worker's schedule
+	// instead.
 	refresh func()
 	// pinIno is the inode of the canonical file whose Lookup seeds from
 	// authoredPins. A committed clean write pins its bytes there, which is what
@@ -366,14 +370,13 @@ func editFlush[T any](ctx context.Context, sink editFlushSink, eb *editBuffer, f
 	// the body while keeping the frontmatter. What is no longer expressible is
 	// "clear everything by accident".
 	//
-	// Unlike a parse failure, the buffer is then RESTORED rather than left dirty.
-	// A parse failure holds text the writer meant and a corrected re-save needs
-	// it; an emptied file holds nothing, and on the in-place path (`> issue.md`,
-	// or collectiondir.go's O_TRUNC Create) that buffer belongs to the CANONICAL
-	// node, which would then serve zero bytes for the rest of its life — nothing
-	// clears dirty but a successful flush, and refresh refuses a dirty buffer. The
-	// .error tells the writer to re-read the file to recover its contents, so the
-	// re-read has to actually return them.
+	// The buffer is then cleared and RESTORED from the entity's current render.
+	// Since #494 that is what every failure which never reached Linear does, but
+	// this is the arm that cannot do without it: on the in-place path
+	// (`> issue.md`, or collectiondir.go's O_TRUNC Create) the emptied buffer
+	// belongs to the CANONICAL node, so leaving it would serve zero bytes for the
+	// rest of that node's life. The .error tells the writer to re-read the file to
+	// recover its contents, so the re-read has to actually return them.
 	//
 	// This subsumes the old `eb.content == nil` half of the guard above, and that
 	// is the point: a nil buffer is not a third state, it is how the ATOMIC-SAVE

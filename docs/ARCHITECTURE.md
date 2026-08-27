@@ -1107,6 +1107,7 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 | Repository ← SQLite | read | sqlc queries + hydrate-then-overlay converters → `api.*` types |
 | Repository → Linear | background | SWR refreshes via `maybeRefreshSWR`, semaphore-bounded, never blocking; persists via `reconcile` |
 | LinearFS ← Repository | read | ~48 concrete methods, every FUSE read |
+| LinearFS → Repository | write path | `Recheck{Issue,Project,Initiative}` after a mutation Linear rejected: triggers that entity's SWR spec, so the `orphanOnNotFound` prune stays repo-owned |
 | LinearFS ↔ marshal | both | `api.*` ↔ markdown; fs resolves names→IDs |
 | LinearFS → Linear | write | `MutationClient` mutations on `Flush`/`_create`/`Mkdir`/`rm` (+ a few interactive-tier reads) |
 | LinearFS → SQLite | write | commit tails upsert fresh results / forget deleted rows directly (`store.Queries()`) |

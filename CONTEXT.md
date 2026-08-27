@@ -141,7 +141,7 @@ the trap: the mark then outlives the writer, and the next ordinary `>>` — whic
 truncated nothing — is written into a cleared buffer, sending Linear a NUL-padded
 document whose absent frontmatter also nils every removable field. Projects/initiatives
 put their whole multi-mutation front half (labels + links-reconcile + scalar) in
-`mutate` and always return `proceed=true` (they re-fetch to catch link changes);
+`mutate` and always end it `mutateWrote()` (they re-fetch to catch link changes);
 the front-half result reaches the commit-tail `compare` through a method-local
 var the two closures share (mutate runs first). **Invalidate-after-persist is
 uniform by construction** — the shell invalidates only after the tail upserts,
@@ -991,10 +991,12 @@ zero. `editFlush` marks that on the handle its flush arrived on; that handle's
 next `Write` or `Setattr` empties the buffer again first, so the restored image
 never shows through — neither as a surviving tail nor as a zero-filled hole's
 contents — and a resize sizes the emptied file rather than the resurrected one.
-Both arms of the rejection arm it, the zero-filled one included (#472): its
-`.error` prescribes writing the whole document back **from offset 0**, and on the
-same descriptor a document shorter than the restored render would otherwise keep
-that render's tail — #454's splice, reached by following the instructions.
+Every restoring flush arms it: both arms of the refused-write rejection, the
+zero-filled one included (#472) — whose `.error` prescribes writing the whole
+document back **from offset 0**, so on the same descriptor a document shorter than
+the restored render would otherwise keep that render's tail, #454's splice reached
+by following the instructions — and, since #494, every other failure that never
+reached Linear, which now restores on the same terms.
 **Scoping it to the handle is the contract.** A mark on the buffer outlives its
 writer and clips the next unrelated write; clearing one on `Open` or `refresh`
 hands it to any concurrent `cat` in the restore→write window and reopens #454.

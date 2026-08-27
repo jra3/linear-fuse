@@ -179,10 +179,11 @@ func (b *BaseNode) newFileInode(ctx context.Context, out *fuse.EntryOut, name st
 	// When the bridge keeps an already-known node, the Lookup answer must
 	// report THAT node's size, not the fresh render's. The two can differ in
 	// exactly one case: a dirty edit buffer refused the refresh (the user's
-	// in-flight or rejected-flush content always wins), and a size taken from
-	// the fresh twin would clamp kernel reads of the longer dirty content —
-	// observed as a truncated project.md ("unclosed frontmatter") after a
-	// rejected save.
+	// in-flight content always wins), and a size taken from the fresh twin would
+	// clamp kernel reads of the longer dirty content — observed as a truncated
+	// project.md ("unclosed frontmatter") after a rejected save, back when a
+	// rejection left its buffer dirty. It no longer does (#494 clears dirty and
+	// restores the entity's render), so a rejection now converges the two.
 	if existing := b.EmbeddedInode().GetChild(name); existing != nil {
 		ops := existing.Operations()
 		if s, ok := ops.(interface{ size() int }); ok && ops != fs.InodeEmbedder(child) {

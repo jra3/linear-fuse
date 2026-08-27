@@ -78,14 +78,19 @@ type editBuffer struct {
 // the same mark: the recovery its .error prescribes is "write the WHOLE document
 // back from offset 0", and on the same open fd a document SHORTER than the
 // restored render would otherwise keep the render's tail — the original splice,
-// reached by following the instructions.
+// reached by following the instructions. Since #494 every OTHER failure that
+// never reached Linear restores too (a parse failure, an unknown key, a name that
+// resolved nowhere), and restoreBuffer arms the mark for all of them on the rule
+// that matters here: whatever puts bytes nobody wrote into the buffer owes the
+// next write on that handle its truncation back.
 type editHandle struct {
 	// truncatedRestore says a refused flush on THIS handle put the entity's render
-	// back into the buffer this handle had emptied (or, on the zero-fill arm, left
-	// refused), so what content holds is bytes NOBODY WROTE and the file this
-	// handle writes next starts empty again. Guarded by the owning editBuffer's mu,
-	// not by the handle: every reader and writer of it (Write, Setattr, editFlush)
-	// already runs under that lock, and a handle belongs to exactly one buffer.
+	// into the buffer in place of what the handle had written — an emptied buffer,
+	// a zero-filled one, or a document Linear never saw — so what content holds is
+	// bytes NOBODY WROTE and the file this handle writes next starts empty again.
+	// Guarded by the owning editBuffer's mu, not by the handle: every reader and
+	// writer of it (Write, Setattr, editFlush) already runs under that lock, and a
+	// handle belongs to exactly one buffer.
 	truncatedRestore bool
 }
 
