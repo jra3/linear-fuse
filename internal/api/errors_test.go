@@ -43,8 +43,9 @@ func TestIsRateLimited(t *testing.T) {
 			true,
 		},
 		{
-			// The status check must not outrank the deferral exclusion: a local
-			// budget defer is not a server 429 and carries no status at all.
+			// The status arm answers only 429. Every other 4xx falls through to
+			// the code and message checks, so a 400 whose body says nothing
+			// rate-related is still not a rate limit.
 			"a 4xx that is not 429 stays out",
 			&HTTPError{StatusCode: 400, Body: "nothing rate-related here"},
 			false,
