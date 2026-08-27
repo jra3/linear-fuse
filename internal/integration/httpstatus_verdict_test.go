@@ -59,6 +59,67 @@ func injectStatusMutator(t *testing.T, status int, body string) {
 	t.Cleanup(func() { lfs.InjectTestMutationClient(nil) })
 }
 
+// spuriousInterrupt is the .error wording a create earns when the FUSE
+// request's context was cancelled while its POST was already on the wire
+// (#399). That verdict is CORRECT — for a real request the cancellation is
+// real, which is why the API layer honors it — but in this harness the event
+// itself is noise: the test process is both the FUSE client and the FUSE
+// server, so a signal delivered to the thread blocked in mkdir(2) makes the
+// kernel interrupt the request and cancel the handler's context. It is the same
+// spurious interrupt the SQLite layer detaches from (#296, and see
+// internal/db/ctxdetach.go), reaching a surface that cannot detach from it.
+//
+// When it lands, the POST dies before the stub server's status is ever read, so
+// the probe measures the interrupt instead of the verdict under test and the
+// subtest fails on wording that has nothing to do with #447 — which is what CI
+// saw on the bare-429 case.
+const spuriousInterrupt = "interrupted after it was sent"
+
+// statusProbeAttempts bounds the retry below. The signal has to land inside the
+// microseconds the POST is in flight, so a single retry is already generous;
+// four keeps a run that loses that race twice in a row deterministic.
+const statusProbeAttempts = 4
+
+// mkdirStatusProbe drives one create against the stub server and returns the
+// issues/.error it left together with the mkdir errno, retrying ONLY the
+// spurious interrupt above.
+//
+// Retrying is safe here in a way it is not for a real create — the ambiguity
+// #399 documents does not apply: this stub answers every request with a fixed
+// status and creates nothing, so no second attempt can duplicate an entity.
+// Every other outcome, including a genuine EAGAIN verdict, is returned from the
+// first attempt, so the retry cannot paper over the behavior under test.
+func mkdirStatusProbe(t *testing.T, dir string) (reason string, err error) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		err = os.Mkdir(dir, 0o755)
+		raw, rerr := os.ReadFile(issuesErrorPath(testTeamKey))
+		if rerr != nil {
+			t.Fatalf("read issues/.error: %v", rerr)
+		}
+		reason = string(raw)
+		if !strings.Contains(reason, spuriousInterrupt) || attempt == statusProbeAttempts {
+			return reason, err
+		}
+		t.Logf("attempt %d: the kernel interrupted the FUSE request before the stub's status could be classified; retrying", attempt)
+	}
+}
+
+// shellStatusProbe is the shell-driven twin of mkdirStatusProbe, retrying the
+// same spurious interrupt for the same reason: here the transcript IS the
+// assertion, and an interrupted POST writes the interrupt's wording into it in
+// place of the status verdict.
+func shellStatusProbe(t *testing.T, script string) string {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		out, _ := exec.Command("/bin/sh", "-c", script).CombinedOutput()
+		if !strings.Contains(string(out), spuriousInterrupt) || attempt == statusProbeAttempts {
+			return string(out)
+		}
+		t.Logf("attempt %d: the kernel interrupted the FUSE request before the stub's status could be classified; retrying", attempt)
+	}
+}
+
 // TestOffline_HTTPStatusVerdictsReachTheMount asserts the three verdicts #447
 // settles, each through a real mkdir against the mount.
 func TestOffline_HTTPStatusVerdictsReachTheMount(t *testing.T) {
@@ -161,7 +222,7 @@ func TestOffline_HTTPStatusVerdictsReachTheMount(t *testing.T) {
 			injectStatusMutator(t, tc.status, tc.body)
 
 			dir := filepath.Join(issuesPath(testTeamKey), fmt.Sprintf("HTTP Status Probe %d", i))
-			err := os.Mkdir(dir, 0o755)
+			reason, err := mkdirStatusProbe(t, dir)
 			if !errors.Is(err, tc.wantErrno) {
 				t.Fatalf("mkdir under HTTP %d = %v, want %v (%q)", tc.status, err, tc.wantErrno, tc.wantErrno)
 			}
@@ -170,19 +231,15 @@ func TestOffline_HTTPStatusVerdictsReachTheMount(t *testing.T) {
 				t.Errorf("rejected create left %s in the listing", dir)
 			}
 
-			reason, rerr := os.ReadFile(issuesErrorPath(testTeamKey))
-			if rerr != nil {
-				t.Fatalf("read issues/.error: %v", rerr)
-			}
 			t.Logf("mkdir %q -> %v\nissues/.error:\n%s", filepath.Base(dir), err, reason)
 
 			for _, want := range tc.wantIn {
-				if !strings.Contains(string(reason), want) {
+				if !strings.Contains(reason, want) {
 					t.Errorf(".error = %q, missing %q", reason, want)
 				}
 			}
 			for _, notWant := range tc.wantNotIn {
-				if strings.Contains(string(reason), notWant) {
+				if strings.Contains(reason, notWant) {
 					t.Errorf(".error = %q, must not contain %q", reason, notWant)
 				}
 			}
@@ -222,16 +279,16 @@ func TestOffline_HTTPStatusVerdictsReadableFromAShell(t *testing.T) {
 			script := fmt.Sprintf(
 				"export LC_ALL=C; cd %q; mkdir %q; echo \"exit=$?\"; echo '--- .error ---'; cat .error",
 				issues, title)
-			out, _ := exec.Command("/bin/sh", "-c", script).CombinedOutput()
+			out := shellStatusProbe(t, script)
 			t.Logf("$ mkdir %q   # Linear answers HTTP %d\n%s", title, tc.status, out)
 
-			if !strings.Contains(string(out), tc.wantMsg) {
+			if !strings.Contains(out, tc.wantMsg) {
 				t.Errorf("mkdir under HTTP %d did not report %q to the shell:\n%s", tc.status, tc.wantMsg, out)
 			}
-			if strings.Contains(string(out), "Input/output error") {
+			if strings.Contains(out, "Input/output error") {
 				t.Errorf("HTTP %d still surfaces as the EIO fallthrough:\n%s", tc.status, out)
 			}
-			if strings.Contains(string(out), "exit=0") {
+			if strings.Contains(out, "exit=0") {
 				t.Errorf("mkdir reported success under HTTP %d:\n%s", tc.status, out)
 			}
 		})
