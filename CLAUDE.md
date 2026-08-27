@@ -506,6 +506,21 @@ After schema changes:
 3. Add conversion functions to `internal/db/convert.go`
 4. Add repository methods to `internal/repo/sqlite.go`
 
+### Adding a column to an EXISTING table
+
+A new column on a table users already have on disk needs a bootstrap `ALTER` in
+`migrateSchema` as well as its place in `schema.sql` — `CREATE TABLE IF NOT
+EXISTS` leaves an existing table untouched.
+
+**Its index goes in `migrateSchema` too, never in `schema.sql`.** `schema.sql`
+runs first, so on an upgraded cache the index references a column that does not
+exist yet; the exec fails "no such column", and `Open` reads that as an
+incompatible cache and **deletes cache.db**, skipping the migration and costing
+the user a full workspace resync. Nothing else catches it — a fresh database
+(CI, every `openTestStore`) has the column and passes.
+`TestSchemaIndexesAvoidMigratedColumns` extracts the `ALTER`s from
+`migrateSchema`'s own source and fails if `schema.sql` indexes one of them.
+
 ## Development Notes
 
 - Breaking changes are acceptable - this is a prototype

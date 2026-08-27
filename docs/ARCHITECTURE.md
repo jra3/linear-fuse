@@ -508,7 +508,10 @@ Design conventions:
   created in `migrateSchema` too, never in `schema.sql`**, which runs first and
   would fail "no such column" on an upgraded database, tripping the
   drop-and-recreate fallback below and discarding the user's cache instead of
-  migrating it (#432 tracks the missing guard).
+  migrating it. `TestSchemaIndexesAvoidMigratedColumns` reads the `ALTER`s out
+  of `migrateSchema`'s source and fails the moment such an index lands in
+  `schema.sql`, because a fresh database has the column and nothing else
+  notices (#432).
 - **Hydrate-then-overlay:** for entities with extracted columns (states,
   labels, users, cycles, teams, milestones, …), reverse converters unmarshal the
   `data` blob first, then overlay the columns — so no field is silently
@@ -568,7 +571,12 @@ Design conventions:
 - **Migrations:** `migrateSchema` applies targeted, idempotent `ALTER TABLE`
   migrations (probe via `PRAGMA table_info`, add if missing); the blunt fallback
   — drop and recreate from the embedded schema on "no such column/table" — still
-  exists because the DB is a disposable cache.
+  exists because the DB is a disposable cache. It is **loud**: deleting the
+  cache costs the user a full resync, so `Open` logs the path, the size, and the
+  error that condemned it. And it applies only to a cache that already existed —
+  the same error on a path with no cache is this binary's `schema.sql` failing
+  on an empty database, so `Open` returns it (removing the half-built file)
+  rather than deleting nothing and retrying into an identical second failure.
 
 **Consumed by:** Sync Worker and reconcile (writes), Repository (reads),
 LinearFS handlers (direct upserts/forgets after mutations).

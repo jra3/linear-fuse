@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,27 +33,91 @@ type Store struct {
 }
 
 // Open opens or creates a SQLite database at the given path.
-// If the existing database has an incompatible schema, it is deleted and recreated.
+//
+// A schema error against a PRE-EXISTING cache is answered by deleting and
+// recreating it: the file was written by an older schema.sql that this build
+// cannot apply in place. That costs the user their entire local copy — the
+// next sync re-fetches the workspace from Linear — so it is logged with the
+// path and the error that caused it rather than done silently (#432). The
+// fallback cannot tell a genuinely incompatible cache from a linear-fuse bug
+// (an index over an ALTER-added column reaches it as the same "no such
+// column"), which is why the log line is the only thing standing between that
+// bug class and an unexplained resync; TestSchemaIndexesAvoidMigratedColumns
+// guards the known cause at authoring time.
+//
+// The same error on a path that did NOT exist means the embedded schema.sql is
+// broken in this binary. There is no stale cache to blame and no retry that can
+// help, so the error is returned instead of being masked by a second identical
+// failure, and the half-built file is removed so the next start does not
+// misdiagnose it as an incompatible cache.
 func Open(dbPath string) (*Store, error) {
+	preexisting, size := cacheStat(dbPath)
+
 	store, err := openDB(dbPath)
-	if err != nil {
-		// Check if this is a schema error (e.g., missing column)
-		if strings.Contains(err.Error(), "no such column") ||
-			strings.Contains(err.Error(), "no such table") ||
-			strings.Contains(err.Error(), "SQL logic error") {
-			// Schema mismatch - delete and recreate
-			if removeErr := os.Remove(dbPath); removeErr != nil && !os.IsNotExist(removeErr) {
-				return nil, fmt.Errorf("remove incompatible cache: %w", removeErr)
-			}
-			// Also remove WAL and SHM files
-			os.Remove(dbPath + "-wal")
-			os.Remove(dbPath + "-shm")
-			// Retry with fresh database
-			return openDB(dbPath)
-		}
+	if err == nil {
+		return store, nil
+	}
+	if !isSchemaError(err) {
 		return nil, err
 	}
-	return store, nil
+
+	if !preexisting {
+		_ = removeCacheFiles(dbPath)
+		return nil, fmt.Errorf("initialize a new cache at %s: %w", dbPath, err)
+	}
+
+	discarding := ""
+	if size >= 0 {
+		discarding = fmt.Sprintf(" (discarding %d bytes)", size)
+	}
+	log.Printf("[db] cache %s is incompatible with this build's schema%s: %v — deleting and rebuilding it; "+
+		"the next sync re-fetches the workspace from Linear", dbPath, discarding, err)
+
+	if removeErr := removeCacheFiles(dbPath); removeErr != nil {
+		return nil, fmt.Errorf("remove incompatible cache: %w", removeErr)
+	}
+	fresh, freshErr := openDB(dbPath)
+	if freshErr != nil {
+		return nil, fmt.Errorf("recreate cache after deleting the incompatible one (%v): %w", err, freshErr)
+	}
+	return fresh, nil
+}
+
+// isSchemaError reports whether err is SQLite objecting to the SHAPE of the
+// database rather than to its contents or availability — the errors a cache
+// written by a different schema.sql produces.
+func isSchemaError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no such column") ||
+		strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "SQL logic error")
+}
+
+// cacheStat reports whether the cache file exists and how large it is (-1 when
+// it exists but cannot be measured). A stat failure other than "not found"
+// counts as EXISTING: not being able to see a file is no licence to treat it
+// as absent, since the caller answers "absent" by overwriting it.
+func cacheStat(dbPath string) (exists bool, size int64) {
+	info, err := os.Stat(dbPath)
+	switch {
+	case err == nil:
+		return true, info.Size()
+	case os.IsNotExist(err):
+		return false, 0
+	default:
+		return true, -1
+	}
+}
+
+// removeCacheFiles deletes the database and its WAL/SHM sidecars. Only the
+// database itself is worth an error: the sidecars are meaningless without it.
+func removeCacheFiles(dbPath string) error {
+	if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	os.Remove(dbPath + "-wal")
+	os.Remove(dbPath + "-shm")
+	return nil
 }
 
 // openDB is the internal function that opens the database
