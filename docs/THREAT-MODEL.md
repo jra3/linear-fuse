@@ -222,8 +222,23 @@ into a file an agent reads and acts on. The `EACCES` arm now names the API key
 and its config location instead, and withholds the body entirely. Note the scope
 honestly: this narrows what reaches `.error`, not what reaches `requests.jsonl`,
 where `HTTPError.Error()` still renders the body under the 2 KB cap above. The
-key itself stays unreachable from all three sinks — it lives only in the
+key itself stays unreachable from all four sinks — it lives only in the
 `Authorization` header, which nothing in the process renders.
+
+**What the metrics file carries (answered).** The fourth sink is the quietest, and
+deliberately so. Metric attributes are closed vocabularies by construction, not
+free text: outcomes, decisions, budget tiers, instrument kinds, the four DBTX
+methods, an `in_tx` boolean. None is a remote string, so `metrics.jsonl` — and
+the journald summary line sharing its provider — holds aggregate counts and
+durations rather than workspace content, which is why it needs none of
+`requests.jsonl`'s escaping and truncation machinery. The one attribute sourced
+from outside a hand-written enum is `linearfs.db.write_burst{caller}` (#490), a
+Go function name read from the running binary's own symbol table: build-path
+data, identical for every user of a given build, and bounded by the number of
+unbatched write sites in the tree. **An attribute derived from a remote string
+would change this answer** — it would make the metrics sink a workspace trace
+with none of the containments the request log has — so that is the thing to
+refuse when adding an instrument.
 
 **At-rest posture (enforced).** Every on-disk artifact LinearFS writes is
 owner-only: `0700` directories, `0600` files. The mode constants and the
