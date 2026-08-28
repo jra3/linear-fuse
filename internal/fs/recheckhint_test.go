@@ -46,8 +46,8 @@ var notGoneCases = []struct {
 		"ENOENT, but nothing upstream was asked: the caller named something the local catalog does not have, so there is no stale row to prune",
 	},
 	{
-		"throttled envelope that also names a missing entity",
-		fmt.Errorf("rate limit exceeded: %w", errors.New("Entity not found: Issue")),
+		"throttled rejection that also names a missing entity",
+		fmt.Errorf("rate limit exceeded: %w", &api.GraphQLError{Message: "Entity not found: Issue"}),
 		"EAGAIN — waiting is what fixes it, and a recheck here adds a fetch during the window Linear is asking us to back off",
 	},
 	{
