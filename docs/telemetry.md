@@ -61,8 +61,10 @@ documented in its own section below.
 
 Naming: `linearfs.<layer>.<what>`; meter scopes are `linearfs/process`,
 `linearfs/fuse`, `linearfs/api`, `linearfs/cdn`, `linearfs/budget`,
-`linearfs/sync`, `linearfs/swr`, `linearfs/atrest`. Histograms use the SDK
-default buckets; durations are in **seconds**.
+`linearfs/sync`, `linearfs/swr`, `linearfs/atrest`, `linearfs/db`. Histograms
+use the SDK default buckets — except `linearfs.db.op_duration`, which carries
+explicit sub-millisecond boundaries (see its section); durations are in
+**seconds**.
 
 ### Process heartbeats — `internal/telemetry/heartbeat.go`
 
@@ -188,6 +190,18 @@ failure and is constructed against the bare otel API — `internal/telemetry`
 imports `atrest` (rotate.go tightens the log files), so the shared `Must*`
 helpers would cycle.
 
+### Persistence layer — `internal/db/metrics.go` (`dbMetrics`, bound once at `Store` open, copied by value into every `ctxDetachDBTX`)
+
+| Instrument | Kind | Attributes | Recorded |
+|---|---|---|---|
+| `linearfs.db.ops` | counter | `op` = `exec` \| `query` \| `query_row` \| `prepare`; `in_tx` | one per SQLite operation at the `ctxDetachDBTX` chokepoint (#490) — every `Queries` in the process is built on that wrapper, so its four methods cover the layer with no call-site changes. `op` is the DBTX method, bounded by the interface rather than by the query catalog (sqlc routes every `:exec` write through `ExecContext`, so `op=exec` IS "a write"); `in_tx` is true only for the wrapper `Store.WithTx` builds, so the share of batched writes — #489's headline number — is directly readable |
+| `linearfs.db.op_duration` | histogram (s) | `op`, `in_tx` | same site, wall time of one operation. **The one histogram off the SDK default buckets**: explicit boundaries from 1 µs to 5 s (`opDurationBoundaries`), attached as an OTEL advisory (`WithExplicitBucketBoundaries`, so any provider gets it — a View reaches only the provider that registered it), because the default ladder puts a ~3 µs in-transaction write and a ~667 µs autocommit fsync in the same bucket; the 5 s tail is `busy_timeout`, the lock-wait ceiling. For `query` the duration is statement execution, not the caller's row scan |
+| `linearfs.db.write_burst` | counter | `caller` | one per burst of unbatched autocommit writes: `burstThreshold` (64) `op=exec, in_tx=false` operations inside `burstWindow` (1 s) — the defect is volume, not latency (WAL inherits `synchronous=FULL`, so each autocommit statement fsyncs). Only a trip walks the stack; `caller` is the first frame outside `internal/db` — the logical operation, not sqlc's generated method. A trip resets the window rather than latching, so a long unbatched run keeps counting (magnitude ≈ writes/64) |
+
+`caller` is a Go function name read from the binary's own symbol table —
+build-path data, never a remote string (`docs/THREAT-MODEL.md`), bounded by
+the number of unbatched write sites in the tree.
+
 ## The journald summary line
 
 Format: `metrics: name{k=v,...}=value ...` — counters/gauges as plain values
@@ -196,10 +210,13 @@ Format: `metrics: name{k=v,...}=value ...` — counters/gauges as plain values
 
 To stay one readable line, attribute sets are **projected onto a keep-list**
 (`summaryAttrKeys`): `outcome`, `decision`, `tier`, `axis`, `kind`,
-`collection`, `version`, `commit`, `artifact`. Keys not in the list (notably the ~30-value
-`op`) are dropped and the collided series **merged** (values and
-count/sum summed). Full cardinality is only in the JSONL export — the summary
-is deliberately the compact projection.
+`collection`, `version`, `commit`, `artifact`, `in_tx`, `caller`. Keys not in
+the list are dropped and the collided series **merged** (values and count/sum
+summed) — notably `op`, deliberately absent even though the db layer's four
+DBTX methods are bounded, because the key is shared with the api layer's ~30
+operation names (the rationale lives on the keep-list in `summary.go`). Full
+cardinality is only in the JSONL export — the summary is deliberately the
+compact projection.
 
 **journald rate-limiting caveat:** the summary is one `log.Printf` line every 5
 minutes, but journald rate-limits per service, so a cold-start burst of sync
