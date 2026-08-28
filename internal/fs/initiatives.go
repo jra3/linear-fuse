@@ -563,7 +563,8 @@ func (n *InitiativeUpdatesNode) createUpdate(ctx context.Context, content []byte
 		persist: func(ctx context.Context, u *api.InitiativeUpdate) error {
 			return n.lfs.UpsertInitiativeUpdate(ctx, n.initiativeID, *u)
 		},
-		dir: initiativeUpdatesDirIno(n.initiativeID),
+		dir:     initiativeUpdatesDirIno(n.initiativeID),
+		recheck: func() { n.lfs.recheckInitiative(n.initiativeID) },
 	})
 	return errno
 }

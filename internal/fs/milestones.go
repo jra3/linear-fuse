@@ -260,6 +260,7 @@ func (n *MilestonesNode) createMilestone(ctx context.Context, content []byte) sy
 		},
 		dir:       milestonesDirIno(n.projectID),
 		entryName: func(m *api.ProjectMilestone) string { return milestoneFilename(*m) },
+		recheck:   func() { n.lfs.recheckProject(n.projectID) },
 	})
 	return errno
 }

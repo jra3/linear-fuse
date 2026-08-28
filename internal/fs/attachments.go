@@ -372,6 +372,7 @@ func (n *AttachmentsNode) createAttachment(ctx context.Context, raw []byte) sysc
 		},
 		dir:       attachmentsDirIno(n.issueID),
 		entryName: func(a *api.Attachment) string { return nameFor(a) },
+		recheck:   func() { n.lfs.recheckIssue(n.issueID) },
 	})
 	return errno
 }

@@ -247,7 +247,8 @@ func (n *CommentsNode) createComment(ctx context.Context, content []byte) syscal
 		persist: func(ctx context.Context, c *api.Comment) error {
 			return n.lfs.UpsertComment(ctx, n.issueID, *c)
 		},
-		dir: commentsDirIno(n.issueID),
+		dir:     commentsDirIno(n.issueID),
+		recheck: func() { n.lfs.recheckIssue(n.issueID) },
 	})
 	return errno
 }

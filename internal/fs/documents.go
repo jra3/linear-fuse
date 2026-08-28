@@ -141,6 +141,7 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		persist: func(ctx context.Context, fresh *api.Document) error {
 			return n.lfs.UpsertDocument(ctx, *fresh)
 		},
+		recheck: n.recheckOwner,
 	})
 }
 
@@ -234,6 +235,22 @@ func (n *DocumentFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 // recheck (a team is the sync root, not a sub-resource, so its docs spec
 // carries no orphan handler) and converges on the sync worker instead.
 func (n *DocumentFileNode) recheckOwner() {
+	switch {
+	case n.issueID != "":
+		n.lfs.recheckIssue(n.issueID)
+	case n.projectID != "":
+		n.lfs.recheckProject(n.projectID)
+	case n.initiativeID != "":
+		n.lfs.recheckInitiative(n.initiativeID)
+	}
+}
+
+// recheckOwner is the same dispatch for the DIRECTORY node, which owns the two
+// mutation tails a document file never runs: the create and the retitle. Both
+// call it when Linear answers "entity not found", where the owner named in the
+// path is the row that has gone stale (#477). Same four owners, same team
+// exception.
+func (n *DocsNode) recheckOwner() {
 	switch {
 	case n.issueID != "":
 		n.lfs.recheckIssue(n.issueID)
@@ -365,6 +382,7 @@ func (n *DocsNode) createDocument(filename string) func(ctx context.Context, con
 			},
 			dir:       docsDirIno(parentID),
 			entryName: func(d *api.Document) string { return documentFilename(*d) },
+			recheck:   n.recheckOwner,
 		})
 		return errno
 	}

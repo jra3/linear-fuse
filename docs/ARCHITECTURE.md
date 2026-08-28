@@ -632,6 +632,13 @@ appears.
   `api.IsNotFound` that answers on message text and could drop a live entity's
   rows (#477). No recheck exists for a label or a milestone: nothing is scoped to
   either, and those buffers converge on the sync worker instead.
+  **Every mutation tail supplies the hint, not just the edit flush**: `editFlush`
+  on its sent-failure arm, and `commitCreate` / `commitRename` on the one verdict
+  that names the collection's OWNER as gone (`serverSaysGone` — Linear's own
+  "entity not found", never the local `*notFoundError` that wears the same
+  `ENOENT`, and never a throttled envelope that merely mentions one). The delete
+  tail needs none: an already-gone entity is idempotent success there, and it
+  forgets the row itself.
 - **Orphan handling:** a refresh that hits Linear's "Entity not found"
   cascade-deletes the local rows (issue → its comments/docs/attachments/
   relations/history; likewise projects and initiatives) and schedules a
@@ -1107,7 +1114,7 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 | Repository ← SQLite | read | sqlc queries + hydrate-then-overlay converters → `api.*` types |
 | Repository → Linear | background | SWR refreshes via `maybeRefreshSWR`, semaphore-bounded, never blocking; persists via `reconcile` |
 | LinearFS ← Repository | read | ~48 concrete methods, every FUSE read |
-| LinearFS → Repository | write path | `Recheck{Issue,Project,Initiative}` after a mutation Linear rejected: triggers that entity's SWR spec, so the `orphanOnNotFound` prune stays repo-owned |
+| LinearFS → Repository | write path | `Recheck{Issue,Project,Initiative}` after a mutation Linear rejected — the edit flush's sent arm, and the create/rename tails on `serverSaysGone`: triggers that entity's SWR spec, so the `orphanOnNotFound` prune stays repo-owned |
 | LinearFS ↔ marshal | both | `api.*` ↔ markdown; fs resolves names→IDs |
 | LinearFS → Linear | write | `MutationClient` mutations on `Flush`/`_create`/`Mkdir`/`rm` (+ a few interactive-tier reads) |
 | LinearFS → SQLite | write | commit tails upsert fresh results / forget deleted rows directly (`store.Queries()`) |

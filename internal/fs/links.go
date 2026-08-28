@@ -37,6 +37,18 @@ func (n *LinksNode) parentID() string {
 	return n.initiativeID
 }
 
+// recheckOwner re-asks Linear about whichever parent this links/ directory
+// hangs off. The create tail calls it when Linear answers "entity not found":
+// the project or initiative named in the path is the row that has gone stale,
+// and the hint reaches its SWR spec's orphan prune (#477).
+func (n *LinksNode) recheckOwner() {
+	if n.projectID != "" {
+		n.lfs.recheckProject(n.projectID)
+		return
+	}
+	n.lfs.recheckInitiative(n.initiativeID)
+}
+
 // getLinks fetches the external links for whichever parent is set.
 func (n *LinksNode) getLinks(ctx context.Context) ([]api.EntityExternalLink, error) {
 	if n.projectID != "" {
@@ -288,6 +300,7 @@ func (n *LinksNode) createLink(ctx context.Context, raw []byte) syscall.Errno {
 		},
 		dir:       linksDirIno(n.parentID()),
 		entryName: func(l *api.EntityExternalLink) string { return nameFor(l) },
+		recheck:   n.recheckOwner,
 	})
 	return errno
 }

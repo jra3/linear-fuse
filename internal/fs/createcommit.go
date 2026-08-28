@@ -91,6 +91,27 @@ type createSpec[T any] struct {
 	// invalidateExtra covers per-entity internal caches and dependent views
 	// (team/my/filtered issue caches, recent/). nil when the collection has none.
 	invalidateExtra func(created *T)
+	// recheck re-asks Linear about the entity that OWNS this collection — the
+	// issue a comment is filed on, the project a milestone belongs to — and the
+	// tail calls it on exactly one verdict: Linear itself answering "entity not
+	// found" (serverSaysGone). That rejection says the local row the caller
+	// walked through is an orphan, and without the hint the mount keeps listing
+	// it, keeps accepting a create into it, and keeps failing identically until
+	// an unrelated read or a sync cycle rediscovers the truth (#477).
+	//
+	// It is the same seam editFlush's refresh hook uses, and for the same
+	// reason: the failed write supplies a HINT, it does not mutate the cache.
+	// The closure triggers the owner's existing SWR spec, so the prune stays
+	// behind orphanOnNotFound in the repo layer, which re-asks Linear before
+	// deleting anything — api.IsNotFound answers on message text, and a
+	// misclassified rejection acted on directly would delete a live entity's
+	// row.
+	//
+	// Optional: wired iff the owner has an SWR spec to trigger. A collection
+	// owned by a TEAM (issues/, labels/, projects/) leaves it nil — a team is
+	// the sync root and its specs carry no orphan handler — exactly as
+	// editFlush's refresh is nil for labels/*.md and milestones/*.md.
+	recheck func()
 }
 
 // commitCreate runs a create: the spec's mutate closure inside the create
@@ -128,6 +149,12 @@ func commitCreate[T any](ctx context.Context, sink createSink, spec createSpec[T
 		// Linear and is only unconfirmed locally, so logging it as a .last
 		// failure would misreport a live entity as failed (#276).
 		sink.AppendWriteFailure(spec.key, msg)
+		// Linear said the owner is gone: hand the repo layer the hint (#477).
+		// After the .error and .last records, because the recheck is a
+		// background trigger and the caller's feedback must not wait on it.
+		if spec.recheck != nil && serverSaysGone(err) {
+			spec.recheck()
+		}
 		return nil, errno
 	}
 
@@ -336,6 +363,37 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 	// and reclassifying untagged validation phrasings as EINVAL is deliberately
 	// NOT done here (#446 part 2, which needs its own judgement).
 	return "Operation: " + op + "\nError: " + serverDetail(err), syscall.EIO
+}
+
+// serverSaysGone reports whether LINEAR answered "entity not found" — the one
+// verdict that says a local row is an orphan, and the trigger for the mutation
+// tails' recheck hint (#477).
+//
+// It is deliberately not "errno == ENOENT". Two other things wear that errno
+// and neither means the cache is stale:
+//
+//   - a *notFoundError is a LOCAL resolution failure — the caller named a
+//     relation target or a parent the catalog does not have. Nothing upstream
+//     was asked, so there is nothing to prune and nothing to re-ask about.
+//   - a delete or rename whose find step returns no entry answers ENOENT
+//     without an error at all, and commitDelete already self-heals that row.
+//
+// The retryable exclusion mirrors classifyMutationErr's arm ORDER rather than
+// repeating its reasoning: a throttled envelope that also names a missing
+// entity is EAGAIN there, because waiting is what fixes it. Firing a recheck on
+// it would add a fetch during the exact window Linear is asking us to back off.
+//
+// TestServerSaysGoneAgreesWithTheClassifier pins the agreement, so the two
+// cannot drift apart.
+func serverSaysGone(err error) bool {
+	var local *notFoundError
+	if errors.As(err, &local) {
+		return false
+	}
+	if retryableCreateErr(err) {
+		return false
+	}
+	return api.IsNotFound(err)
 }
 
 // serverDetail renders the most caller-useful text Linear supplied: its

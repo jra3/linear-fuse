@@ -645,7 +645,8 @@ func (n *UpdatesNode) createUpdate(ctx context.Context, content []byte) syscall.
 		persist: func(ctx context.Context, u *api.ProjectUpdate) error {
 			return n.lfs.UpsertProjectUpdate(ctx, n.projectID, *u)
 		},
-		dir: updatesDirIno(n.projectID),
+		dir:     updatesDirIno(n.projectID),
+		recheck: func() { n.lfs.recheckProject(n.projectID) },
 	})
 	return errno
 }

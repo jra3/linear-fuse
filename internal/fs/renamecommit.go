@@ -66,6 +66,16 @@ type renameSpec[T any] struct {
 	// to persistOrEIO: a reflection the local cache can't serve fails loud (retry,
 	// then EIO) rather than swallowing the divergence (#278).
 	persist func(ctx context.Context, fresh *T) error
+	// recheck re-asks Linear about the entity that owns this collection, on the
+	// one verdict that says the local row is an orphan: Linear itself answering
+	// "entity not found" (serverSaysGone). Same hint, same seam and same
+	// ownership rule as createSpec.recheck — the failed write supplies the
+	// evidence, the repo layer keeps the prune (#477).
+	//
+	// Both failure arms below call it, because a rename reaches Linear twice: a
+	// find that fetches, and the mutation itself. Optional, and nil where the
+	// owner has no SWR spec (a team's labels/).
+	recheck func()
 }
 
 // commitRename runs a collection item rename: reject special names and
@@ -125,6 +135,9 @@ func commitRename[T any](ctx context.Context, sink renameSink, name string, newP
 		msg, errno = classifyMutationErr(op, err)
 		log.Printf("Failed to %s: %v", op, err)
 		sink.SetWriteError(spec.errKey, msg)
+		if spec.recheck != nil && serverSaysGone(err) {
+			spec.recheck()
+		}
 		return errno
 	}
 	if target == nil {
@@ -138,6 +151,9 @@ func commitRename[T any](ctx context.Context, sink renameSink, name string, newP
 		msg, errno = classifyMutationErr(op, err)
 		log.Printf("Failed to %s: %v", op, err)
 		sink.SetWriteError(spec.errKey, msg)
+		if spec.recheck != nil && serverSaysGone(err) {
+			spec.recheck()
+		}
 		return errno
 	}
 

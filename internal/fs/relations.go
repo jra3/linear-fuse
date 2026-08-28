@@ -235,6 +235,12 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 		entryName: func(*api.IssueRelation) string {
 			return relationFileName(relationType, relatedIdentifier)
 		},
+		// The OWNING issue only. A relation names a second entity, and Linear's
+		// rejection does not say which of the two it means — rechecking the
+		// target on that ambiguity would re-ask about an issue the caller merely
+		// typed, and a target that resolved nowhere LOCALLY is a *notFoundError,
+		// which serverSaysGone excludes anyway.
+		recheck: func() { n.lfs.recheckIssue(n.issueID) },
 	})
 	return errno
 }

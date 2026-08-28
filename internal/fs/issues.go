@@ -735,7 +735,7 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 	// (issues/{ID}/.error), the nearest writable feedback files; the spec's
 	// invalidateExtra also refreshes the team's issues/ listing since a
 	// sub-issue lands in both children/ and issues/.
-	issue, errno := commitCreate(ctx, n.lfs, n.lfs.issueCreateSpec(
+	spec := n.lfs.issueCreateSpec(
 		teamID,
 		`create sub-issue "`+name+`"`,
 		n.issue.ID,
@@ -747,7 +747,14 @@ func (n *ChildrenNode) Mkdir(ctx context.Context, name string, mode uint32, out 
 				"parentId": n.issue.ID,
 			})
 		},
-	))
+	)
+	// Set here rather than in the shared assembler: this is the one issue-create
+	// surface whose owner is an ISSUE. The other two create into a team, which
+	// has no SWR spec to recheck (#477), so a parameter would be nil at both
+	// other call sites.
+	spec.recheck = func() { n.lfs.recheckIssue(n.issue.ID) }
+
+	issue, errno := commitCreate(ctx, n.lfs, spec)
 	if errno != 0 {
 		return nil, errno
 	}
