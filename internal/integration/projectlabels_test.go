@@ -238,7 +238,7 @@ func TestProjectLabelsRetiredNewlyApplied(t *testing.T) {
 		// newly-applied), which used to fail silently and leave the node's
 		// buffer permanently dirty with a size the next Lookup contradicted,
 		// poisoning later reads of project.md for the rest of the suite. So:
-		// first clear the dirty buffer with a save the validator ACCEPTS (the
+		// first put the DATA back with a save the validator ACCEPTS (the
 		// labels-free content — matches the mock's current cleared state),
 		// then restore the store row; the now-clean buffer adopts the
 		// restored labels on the next lookup's refresh.

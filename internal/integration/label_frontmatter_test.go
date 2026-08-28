@@ -17,8 +17,13 @@ import (
 // modes_test.go) and run against the mock mutator only.
 //
 // They assert against the STORE-facing readback of a fresh label, never the
-// mount's readback of the file they wrote: a refused write leaves the edit
-// buffer dirty, and a dirty buffer serves the caller's own bytes back (#439).
+// mount's readback of the file they wrote. Since #494 the file readback looks
+// like it would do: all three rejections here fail the parse, so the flush never
+// reaches Linear, restores the label's pre-write render, and the file reads back
+// unchanged. It is still not evidence. That render is rebuilt from the node's own
+// cached label, which no failing write updates, so the file reads unchanged
+// whether or not a mutation went out — only the catalog, which renders from the
+// store, distinguishes the two.
 
 // seedGuardLabel creates a label through labels/_create and returns its filename
 // (discovered from .last) and its generated name. The name carries a nanosecond

@@ -73,7 +73,9 @@ type issueProbe struct {
 // test left it; title and body are what the seeded issue starts with. Cleanup
 // deletes the row, so a probe never colours the next test — which is why a
 // test driving several sequences seeds one probe per subtest rather than
-// sharing a row whose buffer a previous rejection may have left dirty.
+// sharing a row, where a buffer one rejection restored carries into the next.
+// The sharper reason is updatesFor above: the audit log keys on the issue ID,
+// so a shared row hands one subtest's update calls to the other's assertions.
 //
 // The identifier comes from ONE monotone allocator, not a per-file range: the
 // hand-rolled `fmt.Sprintf("TST-%d", 30000+time.Now().UnixNano()%10000)` idiom

@@ -54,11 +54,11 @@ func (r *refreshCalls) snapshot() []string {
 
 // createRefreshTestIssue creates a fresh fixture issue via issues/_create (so
 // the shared fixture issues stay untouched) and returns its identifier. The
-// title is made UNIQUE per call so a later in-process rerun (-count) creates a
-// distinct issue with a fresh node — reusing the same identifier would inherit
-// the prior run's leftover dirty edit buffer (a failed validation write keeps
-// the buffer dirty), which re-flushes on the next write and double-counts
-// resolution/refresh attempts.
+// title is made UNIQUE per call so a later in-process rerun (-count) gets a
+// distinct issue and a fresh node, rather than writing again to the row the
+// previous run already left in a post-write state. What these tests measure is
+// per-entity — the refresh calls recorded for one write, and that issue's
+// .error — so a private row per run is what keeps a rerun's tallies its own.
 func createRefreshTestIssue(t *testing.T, title string) string {
 	t.Helper()
 	title = fmt.Sprintf("%s %d", title, time.Now().UnixNano())
