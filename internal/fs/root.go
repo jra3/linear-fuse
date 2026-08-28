@@ -459,7 +459,11 @@ Failure model (every writable surface follows this contract):
   referenced: it was archived or deleted after this listing was read, so like
   EDQUOT below and unlike EAGAIN, retrying will NOT help -- drop or repoint the
   reference. The listing is served from the local store, so it may keep showing the
-  entity until a sync cycle or a background refresh reconciles it away.
+  entity for a moment -- but the rejection ITSELF asks Linear about that entity and
+  drops the local rows once Linear confirms it is gone, so re-listing shortly is
+  usually enough; waiting for a sync cycle is only needed where the write was into a
+  team-owned collection (issues/, labels/, projects/), which has nothing to re-ask
+  about.
 - The workspace is over a plan/usage limit -> EDQUOT ("disk quota exceeded"). The
   write did NOT take effect, and unlike EAGAIN below, retrying will NOT help until
   the workspace has room: archive or delete entities, or raise the plan limit.
