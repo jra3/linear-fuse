@@ -141,6 +141,13 @@ func (n *DocsNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		persist: func(ctx context.Context, fresh *api.Document) error {
 			return n.lfs.UpsertDocument(ctx, *fresh)
 		},
+		// Known residual gap: the entity Linear reports gone on a documentUpdate
+		// is most often the DOCUMENT, and only an issue-owned one is reachable
+		// this way — refreshIssueDetails reconciles with a prune cutoff, while
+		// refreshProjectDocuments/refreshInitiativeDocuments are upsert-only, so a
+		// project- or initiative-owned doc deleted upstream stays listed and the
+		// retitle keeps failing. Widening those refreshes into prune semantics is
+		// its own change; the owner hint is what this one supplies.
 		recheck: n.recheckOwner,
 	})
 }
@@ -230,35 +237,18 @@ func (n *DocumentFileNode) refreshFrom(fresh fs.InodeEmbedder) {
 // recheckOwner is editFlush's refresh hook for a document: a write Linear
 // rejected AFTER the request went out re-asks Linear about the entity the
 // document hangs off, rather than restoring a local render that may already be
-// wrong upstream. docs/ is the one editable collection with four possible
-// owners, so the dispatch lives here; a team document has no team-scoped
-// recheck (a team is the sync root, not a sub-resource, so its docs spec
-// carries no orphan handler) and converges on the sync worker instead.
+// wrong upstream. The four-owner dispatch itself is shared with the directory
+// node below (recheck.go).
 func (n *DocumentFileNode) recheckOwner() {
-	switch {
-	case n.issueID != "":
-		n.lfs.recheckIssue(n.issueID)
-	case n.projectID != "":
-		n.lfs.recheckProject(n.projectID)
-	case n.initiativeID != "":
-		n.lfs.recheckInitiative(n.initiativeID)
-	}
+	n.lfs.recheckDocOwner(n.issueID, n.projectID, n.initiativeID)
 }
 
 // recheckOwner is the same dispatch for the DIRECTORY node, which owns the two
 // mutation tails a document file never runs: the create and the retitle. Both
 // call it when Linear answers "entity not found", where the owner named in the
-// path is the row that has gone stale (#477). Same four owners, same team
-// exception.
+// path is the row that has gone stale (#477).
 func (n *DocsNode) recheckOwner() {
-	switch {
-	case n.issueID != "":
-		n.lfs.recheckIssue(n.issueID)
-	case n.projectID != "":
-		n.lfs.recheckProject(n.projectID)
-	case n.initiativeID != "":
-		n.lfs.recheckInitiative(n.initiativeID)
-	}
+	n.lfs.recheckDocOwner(n.issueID, n.projectID, n.initiativeID)
 }
 
 func (n *DocumentFileNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {

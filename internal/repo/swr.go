@@ -1,12 +1,17 @@
 package repo
 
 // swrRefresh coordinator: the one owner of the repo's stale-while-revalidate
-// policy. EVERY SWR surface routes through maybeRefreshSWR with a swrSpec —
-// that is the invariant, not the tally, which drifts every time a surface is
-// added (this comment and its twin in metrics.go both still said "six" long
-// after they weren't). The module owns the staleness decision (both flavors),
-// the typed dedup key, and the orphan-on-not-found classification that the
-// individual refresh tails used to each restate by hand.
+// policy. EVERY SWR surface routes through this module with a swrSpec — that is
+// the invariant, not the tally, which drifts every time a surface is added (this
+// comment and its twin in metrics.go both still said "six" long after they
+// weren't). The module owns the staleness decision (both flavors), the typed
+// dedup key, and the orphan-on-not-found classification that the individual
+// refresh tails used to each restate by hand.
+//
+// There are two entry points and the split is by QUESTION, not by caller: every
+// READ asks maybeRefreshSWR "has this fallen behind?", and only the write path's
+// recheck asks forceRefreshSWR "does this still exist?" — see forceRefreshSWR
+// for why staleness cannot answer the second.
 
 import (
 	"context"
@@ -142,6 +147,28 @@ func (r *SQLiteRepository) maybeRefreshSWR(spec swrSpec) {
 	r.triggerBackgroundRefresh(spec.kind, spec.id, orphanOnNotFound(spec.refresh, spec.orphan))
 }
 
+// forceRefreshSWR triggers a spec's refresh WITHOUT asking whether the entity is
+// stale. It is maybeRefreshSWR minus the one decision maybeRefreshSWR exists to
+// make, and only the recheck entry points below may use it.
+//
+// Staleness is the wrong question for a recheck. "Serve stale while
+// revalidating" asks whether the cache has fallen behind a moving entity; a
+// recheck starts from Linear having just REJECTED a write against this row, so
+// what is being tested is whether the entity exists at all. An entity deleted
+// upstream never gets a new updated_at and never grows a newer doc, so the
+// event-driven gate reports it fresh forever (its detail_synced_at is stamped by
+// the browse that discovered the orphan) — the hint would be dropped by exactly
+// the surfaces #477 is about.
+//
+// Everything else the trigger provides is kept, because none of it is a
+// staleness judgement: the nil-client inertness (fixture mode never fetches),
+// the in-flight dedup and the semaphore bound both live in
+// triggerBackgroundRefresh, and the prune still runs only behind
+// orphanOnNotFound — the refresh re-asks Linear and deletes on Linear's answer.
+func (r *SQLiteRepository) forceRefreshSWR(spec swrSpec) {
+	r.triggerBackgroundRefresh(spec.kind, spec.id, orphanOnNotFound(spec.refresh, spec.orphan))
+}
+
 // issueChangedAt is the event source for issue-scoped surfaces (details,
 // history): the issue's updated_at column. ok=false when the issue isn't in
 // the DB yet — the sync worker owns discovery, so no refresh fires.
@@ -168,6 +195,11 @@ func (r *SQLiteRepository) issueChangedAt(issueID string) func() (time.Time, boo
 // Linear and prunes only on what Linear says, where deleting the row directly
 // off the fs-layer verdict would delete a live entity's cache.
 //
+// Each one goes through forceRefreshSWR, NOT maybeRefreshSWR: a recheck is not
+// "serve stale while revalidating", it is "Linear just told me this row may be
+// dead", and a dead entity is fresh forever by every staleness measure the specs
+// have. See forceRefreshSWR for the full argument.
+//
 // Each recheck reaches for the entity-scoped spec that carries the entity's
 // orphan classification. There is no recheck for a label or a milestone: no
 // SWR surface is scoped to either, and inventing one to serve a failure arm
@@ -177,17 +209,17 @@ func (r *SQLiteRepository) issueChangedAt(issueID string) func() (time.Time, boo
 // RecheckIssue re-asks Linear about an issue (the issue-details spec, whose
 // orphan handler is deleteOrphanIssue).
 func (r *SQLiteRepository) RecheckIssue(issueID string) {
-	r.MaybeRefreshIssueDetails(issueID)
+	r.forceRefreshSWR(r.issueDetailsSpec(issueID))
 }
 
 // RecheckProject re-asks Linear about a project (the project-docs spec, whose
 // orphan handler is deleteOrphanProject).
 func (r *SQLiteRepository) RecheckProject(projectID string) {
-	r.maybeRefreshSWR(r.projectDocsSpec(projectID))
+	r.forceRefreshSWR(r.projectDocsSpec(projectID))
 }
 
 // RecheckInitiative re-asks Linear about an initiative (the initiative-docs
 // spec, whose orphan handler is deleteOrphanInitiative).
 func (r *SQLiteRepository) RecheckInitiative(initiativeID string) {
-	r.maybeRefreshSWR(r.initiativeDocsSpec(initiativeID))
+	r.forceRefreshSWR(r.initiativeDocsSpec(initiativeID))
 }

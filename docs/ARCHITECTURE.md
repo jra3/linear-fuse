@@ -594,11 +594,12 @@ appears.
 - **`queryOne[R, T]`** (`queryone.go`) canonicalizes single-row getters:
   not-found → `(nil, nil)`, fetch errors labeled with the op, convert errors
   propagated.
-- **Stale-while-revalidate** (`swr.go`): `maybeRefreshSWR` is the single owner
-  of refresh policy — every refreshed surface routes through it with an
-  `swrSpec` (staleness rule, refresh func, orphan classification). Refreshes are
-  non-blocking, bounded by a 10-slot semaphore and a 30s timeout, and persist
-  through the `reconcile` tails. Staleness is either TTL-based (5 min; 30 min
+- **Stale-while-revalidate** (`swr.go`): the single owner of refresh policy —
+  every refreshed surface routes through it with an `swrSpec` (staleness rule,
+  refresh func, orphan classification), and every READ enters at
+  `maybeRefreshSWR` (the write path's recheck is the one other entry point; see
+  below). Refreshes are non-blocking, bounded by a 10-slot semaphore and a 30s
+  timeout, and persist through the `reconcile` tails. Staleness is either TTL-based (5 min; 30 min
   in catch-up mode) or event-driven (`detail_synced_at` older than the entity's
   `updatedAt`).
   Most surfaces are entity sub-resources; the **team label catalog**
@@ -632,6 +633,15 @@ appears.
   `api.IsNotFound` that answers on message text and could drop a live entity's
   rows (#477). No recheck exists for a label or a milestone: nothing is scoped to
   either, and those buffers converge on the sync worker instead.
+  A recheck triggers its spec through `forceRefreshSWR`, **bypassing the
+  staleness gate** every read goes through: the two entry points split by
+  question, not by caller. A read asks "has this fallen behind?"; a recheck asks
+  "does this still exist?", and staleness cannot answer that — a deleted entity
+  never gets a new `updatedAt` and grows no newer docs, so the event-driven gate
+  calls it fresh forever (the browse that walked into the collection stamped
+  `detail_synced_at` itself). Everything else the trigger provides is kept, none
+  of it being a staleness judgement: nil-client inertness, in-flight dedup, the
+  semaphore bound, and the `orphanOnNotFound` prune.
   **Every mutation tail supplies the hint, not just the edit flush**: `editFlush`
   on its sent-failure arm, and `commitCreate` / `commitRename` on the one verdict
   that names the collection's OWNER as gone (`serverSaysGone` — Linear's own
@@ -1114,7 +1124,7 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 | Repository ← SQLite | read | sqlc queries + hydrate-then-overlay converters → `api.*` types |
 | Repository → Linear | background | SWR refreshes via `maybeRefreshSWR`, semaphore-bounded, never blocking; persists via `reconcile` |
 | LinearFS ← Repository | read | ~48 concrete methods, every FUSE read |
-| LinearFS → Repository | write path | `Recheck{Issue,Project,Initiative}` after a mutation Linear rejected — the edit flush's sent arm, and the create/rename tails on `serverSaysGone`: triggers that entity's SWR spec, so the `orphanOnNotFound` prune stays repo-owned |
+| LinearFS → Repository | write path | `Recheck{Issue,Project,Initiative}` after a mutation Linear rejected — the edit flush's sent arm, and the create/rename tails on `serverSaysGone`: triggers that entity's SWR spec past the staleness gate, so the `orphanOnNotFound` prune stays repo-owned |
 | LinearFS ↔ marshal | both | `api.*` ↔ markdown; fs resolves names→IDs |
 | LinearFS → Linear | write | `MutationClient` mutations on `Flush`/`_create`/`Mkdir`/`rm` (+ a few interactive-tier reads) |
 | LinearFS → SQLite | write | commit tails upsert fresh results / forget deleted rows directly (`store.Queries()`) |

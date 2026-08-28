@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -284,9 +285,116 @@ func TestRecheckKeepsRowsOnOtherFailures(t *testing.T) {
 	})
 }
 
+// TestRecheckIgnoresStaleness is the case the SWR gate suppressed. A recheck
+// does not ask "has this fallen behind?" — it asks "does this still exist?",
+// and an entity deleted upstream looks FRESH forever by every staleness measure
+// the specs have: its updated_at stops moving, its doc rows stop arriving, and
+// the very browse that walked into the collection stamps the sync instant. Route
+// the recheck through maybeRefreshSWR and the hint is dropped without a single
+// request, so the mount keeps listing the dead row and keeps failing the same
+// write — exactly #477's symptom, on the surfaces #477 is about.
+//
+// Each subtest seeds the "fresh" shape for its spec's own flavor: the issue's
+// detail_synced_at AFTER its updated_at (event-driven), and a just-synced
+// document row for the project and initiative (TTL).
+func TestRecheckIgnoresStaleness(t *testing.T) {
+	t.Parallel()
+
+	t.Run("issue detail-synced after its last change", func(t *testing.T) {
+		t.Parallel()
+		store, cleanup := setupTestDB(t)
+		defer cleanup()
+		var calls atomic.Int32
+		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, gone("Issue")))
+		defer repo.Close()
+		seedIssueRow(t, store, "issue-fresh")
+		stampIssueDetailsFresh(t, store, "issue-fresh")
+
+		repo.RecheckIssue("issue-fresh")
+
+		if !waitFor(func() bool { return !issueRowExists(t, store, "issue-fresh") }) {
+			t.Errorf("a detail-fresh issue survived Linear's not-found: the staleness gate ate the recheck (api calls=%d)", calls.Load())
+		}
+	})
+
+	t.Run("project with just-synced docs", func(t *testing.T) {
+		t.Parallel()
+		store, cleanup := setupTestDB(t)
+		defer cleanup()
+		var calls atomic.Int32
+		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, gone("Project")))
+		defer repo.Close()
+		seedProjectRow(t, store, "project-fresh")
+		seedSyncedDocument(t, store, "doc-project-fresh", "project_id", "project-fresh")
+
+		repo.RecheckProject("project-fresh")
+
+		if !waitFor(func() bool { return !projectRowExists(t, store, "project-fresh") }) {
+			t.Errorf("a docs-fresh project survived Linear's not-found: the staleness gate ate the recheck (api calls=%d)", calls.Load())
+		}
+	})
+
+	t.Run("initiative with just-synced docs", func(t *testing.T) {
+		t.Parallel()
+		store, cleanup := setupTestDB(t)
+		defer cleanup()
+		var calls atomic.Int32
+		repo := NewSQLiteRepository(store, rejectingServer(t, &calls, gone("Initiative")))
+		defer repo.Close()
+		seedInitiativeRow(t, store, "initiative-fresh")
+		seedSyncedDocument(t, store, "doc-initiative-fresh", "initiative_id", "initiative-fresh")
+
+		repo.RecheckInitiative("initiative-fresh")
+
+		if !waitFor(func() bool { return !initiativeRowExists(t, store, "initiative-fresh") }) {
+			t.Errorf("a docs-fresh initiative survived Linear's not-found: the staleness gate ate the recheck (api calls=%d)", calls.Load())
+		}
+	})
+}
+
+// stampIssueDetailsFresh makes an issue look fully detail-synced: the stamp
+// lands AFTER updated_at, which is what swrStale's event-driven flavor reads as
+// fresh. Any prior browse of comments/, docs/ or attachments/ leaves exactly
+// this shape behind.
+func stampIssueDetailsFresh(t *testing.T, store *db.Store, issueID string) {
+	t.Helper()
+	if err := store.Queries().StampIssueDetailSynced(context.Background(), db.StampIssueDetailSyncedParams{
+		DetailSyncedAt: db.ToNullTime(time.Now().Add(time.Minute)), ID: issueID,
+	}); err != nil {
+		t.Fatalf("stamp issue detail synced: %v", err)
+	}
+}
+
+// seedSyncedDocument gives a project or initiative a document row synced just
+// now, which is what the TTL flavor reads as fresh (the docs specs derive their
+// staleness from MAX(synced_at) over these rows).
+func seedSyncedDocument(t *testing.T, store *db.Store, docID, ownerColumn, ownerID string) {
+	t.Helper()
+	now := time.Now()
+	params := db.UpsertDocumentParams{
+		ID: docID, SlugID: docID, Title: "Doc",
+		CreatedAt: sql.NullTime{Time: now, Valid: true},
+		UpdatedAt: sql.NullTime{Time: now, Valid: true},
+		SyncedAt:  now, Data: []byte("{}"),
+	}
+	owner := sql.NullString{String: ownerID, Valid: true}
+	switch ownerColumn {
+	case "project_id":
+		params.ProjectID = owner
+	case "initiative_id":
+		params.InitiativeID = owner
+	default:
+		t.Fatalf("unknown owner column %q", ownerColumn)
+	}
+	if err := store.Queries().UpsertDocument(context.Background(), params); err != nil {
+		t.Fatalf("seed document: %v", err)
+	}
+}
+
 // TestRecheckWithoutClientIsInert: fixture mode (and any repo built without an
-// API client) must not panic or prune. maybeRefreshSWR returns before it even
-// queries, so a recheck there is a no-op by construction.
+// API client) must not panic or prune. Bypassing the staleness gate does not
+// bypass this — triggerBackgroundRefresh returns on a nil client before it
+// starts anything, so a recheck there is still a no-op by construction.
 func TestRecheckWithoutClientIsInert(t *testing.T) {
 	t.Parallel()
 	store, cleanup := setupTestDB(t)

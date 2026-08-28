@@ -378,16 +378,37 @@ func classifyMutationErr(op string, err error) (string, syscall.Errno) {
 //   - a delete or rename whose find step returns no entry answers ENOENT
 //     without an error at all, and commitDelete already self-heals that row.
 //
-// The retryable exclusion mirrors classifyMutationErr's arm ORDER rather than
-// repeating its reasoning: a throttled envelope that also names a missing
-// entity is EAGAIN there, because waiting is what fixes it. Firing a recheck on
-// it would add a fetch during the exact window Linear is asking us to back off.
+// Everything else here mirrors classifyMutationErr's arm ORDER rather than
+// repeating each arm's reasoning: api.IsNotFound answers on message TEXT, so
+// EVERY arm the classifier places above it wins over a not-found reading of the
+// same error, and this predicate must reach the same conclusion or the hint
+// fires on a verdict the classifier does not call not-found. That is four arms,
+// each excluded for its own reason and none of them optional:
 //
-// TestServerSaysGoneAgreesWithTheClassifier pins the agreement, so the two
-// cannot drift apart.
+//   - *FieldError renders the caller's own frontmatter value verbatim, so its
+//     text is not Linear speaking about an entity at all.
+//   - an auth failure (401/403) is a statement about our CREDENTIALS; whatever
+//     body rode along — often a proxy's page, not Linear's envelope — says
+//     nothing about whether the entity exists.
+//   - a 5xx is Linear's own side failing, and the classifier calls it EAGAIN;
+//     a recheck there fetches during the backoff, and the background refresh's
+//     own orphanOnNotFound would then weigh the same 5xx text.
+//   - a throttled or deferred request is EAGAIN because waiting is what fixes
+//     it — a recheck adds a fetch during the exact window Linear is asking us
+//     to back off.
+//
+// TestServerSaysGoneAgreesWithTheClassifier pins the agreement in both
+// directions, so the two cannot drift apart.
 func serverSaysGone(err error) bool {
 	var local *notFoundError
 	if errors.As(err, &local) {
+		return false
+	}
+	var field *FieldError
+	if errors.As(err, &field) {
+		return false
+	}
+	if api.IsAuthFailure(err) || api.IsServerTransient(err) {
 		return false
 	}
 	if retryableCreateErr(err) {

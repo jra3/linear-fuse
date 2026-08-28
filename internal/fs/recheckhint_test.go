@@ -32,7 +32,9 @@ var serverGoneCases = []struct {
 }
 
 // notGoneCases are rejections that must NOT trigger a recheck, each for its own
-// reason — two of them wearing the same ENOENT the real thing does.
+// reason: one wears the same ENOENT the real thing does, and the rest carry
+// Linear's not-found PHRASE while the classifier answers something else
+// entirely — every arm it places above its not-found arm.
 var notGoneCases = []struct {
 	name string
 	err  error
@@ -47,6 +49,21 @@ var notGoneCases = []struct {
 		"throttled envelope that also names a missing entity",
 		fmt.Errorf("rate limit exceeded: %w", errors.New("Entity not found: Issue")),
 		"EAGAIN — waiting is what fixes it, and a recheck here adds a fetch during the window Linear is asking us to back off",
+	},
+	{
+		"5xx envelope that also names a missing entity",
+		&api.HTTPError{StatusCode: 500, Body: `{"errors":[{"message":"Entity not found: Issue - Could not find referenced Issue."}]}`},
+		"EAGAIN: a 5xx is Linear's own side failing, not a statement about the entity — a recheck fetches during the backoff, and the background refresh would then weigh this same text through its own orphanOnNotFound",
+	},
+	{
+		"credentials rejection whose body names a missing entity",
+		&api.HTTPError{StatusCode: 401, Body: `{"errors":[{"message":"Entity not found: Issue"}]}`},
+		"EACCES: Linear refused the KEY, so nothing it returned is an answer about the entity — and the body at this layer is often a proxy's, not Linear's envelope",
+	},
+	{
+		"field error echoing the phrase from the caller's own input",
+		&FieldError{Field: "status", Message: "Entity not found: Issue"},
+		"EINVAL: the text is our rendering of the caller's frontmatter, not Linear speaking about an entity",
 	},
 	{
 		"field error",
@@ -70,8 +87,8 @@ var notGoneCases = []struct {
 // two different questions off the same error, and they can only stay consistent
 // if the agreement is asserted: a hint that fires where the classifier does not
 // say ENOENT would be rechecking on a verdict that says nothing about the
-// entity, and the exclusions below are the two ways ENOENT arrives without
-// meaning "the cached row is stale".
+// entity, and the exclusions below are the ways an error carrying the phrase
+// arrives without meaning "the cached row is stale".
 func TestServerSaysGoneAgreesWithTheClassifier(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +110,31 @@ func TestServerSaysGoneAgreesWithTheClassifier(t *testing.T) {
 			}
 		})
 	}
+
+	// The implication, asserted over BOTH tables, is the guard the per-case
+	// checks above are not. Asserting ENOENT for two hand-picked gone cases says
+	// nothing about an error the classifier answers some OTHER way, which is
+	// exactly where the predicate drifted: a 5xx or a 401 whose body also names
+	// a missing entity classifies EAGAIN/EACCES, while a text-only reading of
+	// the same bytes calls it gone. Every arm classifyMutationErr places above
+	// its not-found arm has to reach the same verdict here, and stating it as an
+	// implication means a case added to either table is checked for free.
+	t.Run("a hint never fires on a non-ENOENT verdict", func(t *testing.T) {
+		agrees := func(name string, err error) {
+			if !serverSaysGone(err) {
+				return
+			}
+			if _, errno := classifyMutationErr("op", err); errno != syscall.ENOENT {
+				t.Errorf("%s: serverSaysGone = true but the classifier said %v — the hint is rechecking on a verdict that is not \"the entity is gone\"", name, errno)
+			}
+		}
+		for _, tc := range serverGoneCases {
+			agrees(tc.name, tc.err)
+		}
+		for _, tc := range notGoneCases {
+			agrees(tc.name, tc.err)
+		}
+	})
 }
 
 // TestCommitCreate_RechecksOnlyWhenLinearSaysGone: the create tail supplies the

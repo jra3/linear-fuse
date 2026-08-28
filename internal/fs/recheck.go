@@ -42,3 +42,23 @@ func (lfs *LinearFS) recheckInitiative(initiativeID string) {
 		lfs.repo.RecheckInitiative(initiativeID)
 	}
 }
+
+// recheckDocOwner is the one dispatch for docs/, the only collection with four
+// possible owners. Both document nodes call it — the file, whose edit flush
+// hooks it as refresh, and the directory, which owns the create and the retitle
+// — so the four owners are enumerated once and a fifth cannot be added to one
+// and missed by the other.
+//
+// A TEAM document is the silent arm and that is deliberate: a team is the sync
+// root, not a sub-resource, so its docs spec carries no orphan handler and there
+// is nothing to recheck. Those rows converge on the sync worker instead.
+func (lfs *LinearFS) recheckDocOwner(issueID, projectID, initiativeID string) {
+	switch {
+	case issueID != "":
+		lfs.recheckIssue(issueID)
+	case projectID != "":
+		lfs.recheckProject(projectID)
+	case initiativeID != "":
+		lfs.recheckInitiative(initiativeID)
+	}
+}

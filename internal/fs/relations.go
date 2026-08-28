@@ -235,12 +235,21 @@ func (n *RelationsNode) createRelation(ctx context.Context, raw []byte) syscall.
 		entryName: func(*api.IssueRelation) string {
 			return relationFileName(relationType, relatedIdentifier)
 		},
-		// The OWNING issue only. A relation names a second entity, and Linear's
-		// rejection does not say which of the two it means — rechecking the
-		// target on that ambiguity would re-ask about an issue the caller merely
-		// typed, and a target that resolved nowhere LOCALLY is a *notFoundError,
-		// which serverSaysGone excludes anyway.
-		recheck: func() { n.lfs.recheckIssue(n.issueID) },
+		// BOTH ends of the relation. Linear's rejection does not say which of the
+		// two entities it means, and either can be the stale one: a create whose
+		// target resolved out of the local catalog and was deleted upstream is
+		// precisely #477's case (the locally UNRESOLVABLE target is a different
+		// thing — a *notFoundError, which serverSaysGone excludes, and relatedID
+		// is still empty there because mutate never got that far). Rechecking the
+		// live one costs a fetch that re-asks Linear and prunes only on Linear's
+		// answer, which is safe by construction; not rechecking the dead one
+		// leaves the row the caller will fail against again.
+		recheck: func() {
+			n.lfs.recheckIssue(n.issueID)
+			if relatedID != "" && relatedID != n.issueID {
+				n.lfs.recheckIssue(relatedID)
+			}
+		},
 	})
 	return errno
 }

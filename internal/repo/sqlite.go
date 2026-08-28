@@ -909,6 +909,13 @@ func (r *SQLiteRepository) GetIssueComments(ctx context.Context, issueID string)
 // attachments/ directories. This avoids triggering API calls when reading
 // issue.md (which calls GetIssueAttachments for the links: frontmatter field).
 func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
+	r.maybeRefreshSWR(r.issueDetailsSpec(issueID))
+}
+
+// issueDetailsSpec is the single constructor behind the issue-details refresh —
+// the browse above, and RecheckIssue, which reaches for this spec because it is
+// the issue-scoped one carrying deleteOrphanIssue.
+func (r *SQLiteRepository) issueDetailsSpec(issueID string) swrSpec {
 	// Both staleness inputs come from ONE fetch of the issues row:
 	// detail_synced_at (the one per-issue detail-freshness fact, stamped
 	// clean-gated by syncDetails and refreshIssueDetails) and updated_at (the
@@ -920,7 +927,8 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 	//
 	// The fetch is memoized across the two spec closures (changedAt runs
 	// first, then syncedAt, sequentially in maybeRefreshSWR) and stays lazy so
-	// the module's nil-client check still precedes any query.
+	// the module's nil-client check still precedes any query — and so a recheck,
+	// which consults neither closure, queries nothing at all.
 	var fresh db.GetIssueDetailFreshnessRow
 	var freshErr error
 	loaded := false
@@ -930,7 +938,7 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 			loaded = true
 		}
 	}
-	r.maybeRefreshSWR(swrSpec{
+	return swrSpec{
 		kind: kindIssueDetails,
 		id:   issueID,
 		syncedAt: func() (interface{}, error) {
@@ -950,7 +958,7 @@ func (r *SQLiteRepository) MaybeRefreshIssueDetails(issueID string) {
 			return r.refreshIssueDetails(ctx, issueID)
 		},
 		orphan: func(ctx context.Context) { r.deleteOrphanIssue(ctx, issueID) },
-	})
+	}
 }
 
 // deleteOrphanIssue removes an issue and all its sub-resources from SQLite.
