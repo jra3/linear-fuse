@@ -239,7 +239,8 @@ network is reached, and what blocks. Read it before reasoning about the data pat
   reasons not to re-suggest one.
   - `sqlite.go` - the SQLite-backed implementation
   - `swr.go` - the stale-while-revalidate refreshes; every SWR surface routes
-    through `maybeRefreshSWR`
+    through it with a `swrSpec` — reads via `maybeRefreshSWR`, the write path's
+    recheck via `forceRefreshSWR`
   - `queryone.go` - the shared single-row read contract: not-found is `(nil, nil)`
   - `metrics.go` - OTEL instruments for the SWR layer
 - **internal/sync**: Background sync worker for Linear → SQLite

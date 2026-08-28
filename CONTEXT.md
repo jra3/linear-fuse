@@ -242,7 +242,9 @@ The **deep module** that owns the invariant tail of every create (`_create` writ
 `mutate` closure (parse → build input → call the mutation seam) → classify failure
 (**`FieldError`** → `EINVAL`, unknown reference → `ENOENT`, retryable/rate-limited/5xx
 → `EAGAIN`, workspace over plan limit → `EDQUOT`, rejected API key → `EACCES`, other
-API failure → `EIO`; the reason renders to `.error`) → on success
+API failure → `EIO`; the reason renders to `.error`, and where Linear named the
+collection's owner as gone the spec's optional [[entity-recheck]] hint fires
+once that failure is recorded) → on success
 clear `.error`, record the new identity in `.last`, persist to SQLite (non-fatal),
 and apply the kernel-cache coherence policy. `InvalidateCreated` on the collection
 dir is guaranteed by the module — a spec cannot forget it; per-entity internal-cache
@@ -357,7 +359,10 @@ reflection through `persistOrEIO` (see [[persist-gate]]; a wedge fails loud with
 `unconfirmedEditMsg` and skips invalidation) → on success clear `.error` and
 fire **both** `InvalidateRenamed` calls, the `.md` pair and its `.meta` twin
 (the sidecar names are computed by the tail via `metaSidecarName`, not a spec
-field). It **persists the API-returned entity, not the requested name**, so
+field). BOTH failure arms — the `find` and the `mutate` — fire the spec's
+optional [[entity-recheck]] hint when Linear named the owner as gone, though
+only `mutate` can carry that verdict while `find` resolves through the local
+store. It **persists the API-returned entity, not the requested name**, so
 server-side name normalization is captured for free. It reuses the existing
 `renameSink` seam (ErrorSink + `InvalidateRenamed`, satisfied by `*LinearFS`) —
 no new sink — and carries **no read-your-writes compare and no telemetry**
@@ -1693,10 +1698,13 @@ none of which its old hand-rolled upsert loops carried.
 
 ### SWR refresh coordinator (`swrRefresh`)
 EVERY stale-while-revalidate surface the repo has routes through one
-coordinator, `maybeRefreshSWR(swrSpec)` in `internal/repo/swr.go` — that is
+coordinator module, `internal/repo/swr.go`, carrying a `swrSpec` — that is
 the invariant, and it is stated rather than tallied because the tally drifts
 each time a surface is added (this paragraph and the two code comments all
-still said "six" long after they weren't).
+still said "six" long after they weren't). It has **two entry points, split by
+question rather than by caller**: every read enters at `maybeRefreshSWR` ("has
+this fallen behind?"), and only [[entity-recheck]] enters at `forceRefreshSWR`
+("does this still exist?").
 
 Before it, two staleness policies lived in three
 implementations (the TTL `staleSince`/`maybeRefresh` pair; the event-driven
@@ -1767,21 +1775,39 @@ and mints the dedup key itself — and
 
 ### Entity recheck (`RecheckIssue`/`RecheckProject`/`RecheckInitiative`)
 The one entry point the **write** path may use to tell the cache something
-Linear just said. [[edit-flush-shell]]'s failure arm calls it when a mutation
-reached Linear and came back a failure; each method triggers the entity's
-existing [[swr-refresh-coordinator]] spec — issue details, project docs,
-initiative docs, the entity-scoped specs that carry the orphan classification —
-rather than touching a row.
+Linear just said, and every mutation tail supplies the hint:
+[[edit-flush-shell]]'s failure arm when a mutation reached Linear and came back
+a failure, and the [[create-tail]] and [[rename-tail]] when Linear names the
+collection's OWNER as gone. The tails wire the hint only where that owner HAS a
+spec to trigger: a collection owned by a TEAM (`issues/`, `labels/`, `projects/`)
+leaves it nil, a team being the sync root and carrying no orphan handler. Each
+method triggers the entity's existing [[swr-refresh-coordinator]] spec — issue
+details, project docs, initiative docs, the entity-scoped specs that carry the
+orphan classification — rather than touching a row. The [[delete-tail]] needs no hint: `remoteAlreadyGone` claims
+that rejection as idempotent success and forgets the row itself.
 
-That indirection is the contract (#477). The rejection that matters is `ENOENT`:
-Linear has said the entity does not exist, so the local row is an orphan, and
-before this the mount kept listing it, kept opening it, and kept failing the same
-write until an unrelated read or a sync cycle rediscovered the truth. Letting
-`internal/fs` delete the row instead would add a second owner for an invariant
-the read/refresh and sync seams own — and `api.IsNotFound` answers on message
-TEXT, so a misclassified not-found would delete a *live* entity's cache. A
-recheck re-asks Linear and prunes only on what Linear says, behind
-`orphanOnNotFound`.
+That indirection is the contract (#477). The rejection that matters is Linear's
+own "Entity not found": Linear has said the entity does not exist, so the local
+row is an orphan, and before this the mount kept listing it, kept opening it, and
+kept failing the same write until an unrelated read or a sync cycle rediscovered
+the truth. Letting `internal/fs` delete the row instead would add a second owner
+for an invariant the read/refresh and sync seams own — and `api.IsNotFound`
+answers on message TEXT, so a misclassified not-found would delete a *live*
+entity's cache. A recheck re-asks Linear and prunes only on what Linear says,
+behind `orphanOnNotFound` — and it asks past the staleness gate
+(`forceRefreshSWR`), because an entity deleted upstream never gets a new
+`updated_at` and grows no newer docs, so every staleness measure the specs have
+calls it fresh forever.
+
+The tails' trigger is the predicate `serverSaysGone`, not `errno == ENOENT`: a
+local `*notFoundError` and a rename whose find returns no entry both wear that
+errno without anything upstream having been asked, and a throttled envelope that
+merely mentions a missing entity is `EAGAIN`. It mirrors `classifyMutationErr`'s
+arm ORDER rather than restating that classifier's reasoning, and
+`TestServerSaysGoneAgreesWithTheClassifier` pins the agreement so the two cannot
+drift apart. The hint fires after the `.error` and `.last` records, so a caller's
+feedback never waits on a background trigger. Full argument for the predicate and
+the gate bypass: `docs/ARCHITECTURE.md`.
 
 There is deliberately no recheck for a label or a milestone: no SWR surface is
 scoped to either, and inventing one to serve a failure arm would add a refresh

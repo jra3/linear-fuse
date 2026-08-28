@@ -72,9 +72,11 @@ type renameSpec[T any] struct {
 	// ownership rule as createSpec.recheck — the failed write supplies the
 	// evidence, the repo layer keeps the prune (#477).
 	//
-	// Both failure arms below call it, because a rename reaches Linear twice: a
-	// find that fetches, and the mutation itself. Optional, and nil where the
-	// owner has no SWR spec (a team's labels/).
+	// Both failure arms below call it, uniformly rather than by which step can
+	// carry Linear's verdict: today both rename surfaces resolve their find
+	// through the repository's local store, so the mutation is the arm that
+	// fires in practice. Optional, and nil where the owner has no SWR spec (a
+	// team's labels/).
 	recheck func()
 }
 

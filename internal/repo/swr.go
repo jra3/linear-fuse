@@ -119,10 +119,10 @@ func orphanOnNotFound(refresh func(context.Context) error, orphan func(context.C
 	}
 }
 
-// maybeRefreshSWR is the one entry point for stale-while-revalidate: decide
-// staleness per the spec's flavor and, if stale, trigger the deduplicated
-// background refresh (wrapped with the orphan classification). In fixture
-// mode (nil client) it never fires — before even querying syncedAt.
+// maybeRefreshSWR is the READ path's entry point for stale-while-revalidate:
+// decide staleness per the spec's flavor and, if stale, trigger the
+// deduplicated background refresh (wrapped with the orphan classification). In
+// fixture mode (nil client) it never fires — before even querying syncedAt.
 func (r *SQLiteRepository) maybeRefreshSWR(spec swrSpec) {
 	if r.client == nil {
 		return

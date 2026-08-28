@@ -1,12 +1,15 @@
 package fs
 
-// Entity recheck — editFlush's refresh hook, wired to the repository.
+// Entity recheck — the write path's hint hook, wired to the repository.
 //
-// A front half whose mutation REACHED Linear and came back a failure must not
-// restore the buffer from the entity it holds in memory: that render is local,
-// never fetched, and would confidently show pre-write content that may already
-// be wrong upstream. The shell clears dirty and calls the spec's refresh hook
-// instead, and these are what the hook resolves to.
+// editFlush reaches it as `refresh`: a front half whose mutation REACHED Linear
+// and came back a failure must not restore the buffer from the entity it holds
+// in memory, because that render is local, never fetched, and would confidently
+// show pre-write content that may already be wrong upstream. The shell clears
+// dirty and calls the spec's refresh hook instead, and these are what the hook
+// resolves to. The create and rename tails reach the same functions as
+// `recheck`, on the narrower serverSaysGone verdict — Linear itself answering
+// "entity not found" about the entity that owns the collection written into.
 //
 // Each one triggers an EXISTING SWR spec on the repository rather than touching
 // the cache here. That is the whole of #477's answer to "may a failed write
@@ -19,24 +22,24 @@ package fs
 // A nil repository is tolerated. The node-seam unit tests build a LinearFS
 // without one, and a refresh nobody can serve is a no-op, not a crash.
 
-// recheckIssue re-asks Linear about an issue (issue.md, comments/*.md, and an
-// issue's docs/*.md).
+// recheckIssue re-asks Linear about an issue: the entity behind issue.md and
+// every collection under issues/{ID}/.
 func (lfs *LinearFS) recheckIssue(issueID string) {
 	if lfs.repo != nil {
 		lfs.repo.RecheckIssue(issueID)
 	}
 }
 
-// recheckProject re-asks Linear about a project (project.md and a project's
-// docs/*.md).
+// recheckProject re-asks Linear about a project: the entity behind project.md
+// and every collection under the project directory.
 func (lfs *LinearFS) recheckProject(projectID string) {
 	if lfs.repo != nil {
 		lfs.repo.RecheckProject(projectID)
 	}
 }
 
-// recheckInitiative re-asks Linear about an initiative (initiative.md and an
-// initiative's docs/*.md).
+// recheckInitiative re-asks Linear about an initiative: the entity behind
+// initiative.md and every collection under the initiative directory.
 func (lfs *LinearFS) recheckInitiative(initiativeID string) {
 	if lfs.repo != nil {
 		lfs.repo.RecheckInitiative(initiativeID)

@@ -1122,7 +1122,7 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 | Sync Worker → SQLite | write | `store.Queries().Upsert*` + `reconcile.Collection` tail (not via repo) |
 | Sync Worker → kernel | *nothing* | deliberate: no invalidation from ingest; remote-change freshness is timeout-bounded (60s/30s) + `nodeRefresher` on re-Lookup |
 | Repository ← SQLite | read | sqlc queries + hydrate-then-overlay converters → `api.*` types |
-| Repository → Linear | background | SWR refreshes via `maybeRefreshSWR`, semaphore-bounded, never blocking; persists via `reconcile` |
+| Repository → Linear | background | SWR refreshes via the coordinator (`maybeRefreshSWR` for reads, `forceRefreshSWR` for a recheck), semaphore-bounded, never blocking; persists via `reconcile` |
 | LinearFS ← Repository | read | ~48 concrete methods, every FUSE read |
 | LinearFS → Repository | write path | `Recheck{Issue,Project,Initiative}` after a mutation Linear rejected — the edit flush's sent arm, and the create/rename tails on `serverSaysGone`: triggers that entity's SWR spec past the staleness gate, so the `orphanOnNotFound` prune stays repo-owned |
 | LinearFS ↔ marshal | both | `api.*` ↔ markdown; fs resolves names→IDs |
