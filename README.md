@@ -67,7 +67,7 @@ make install
 
 ### Requirements
 
-- **Go 1.25+**
+- **Go 1.26+**
 - **FUSE filesystem:**
   - **macOS:** macFUSE (`brew install --cask macfuse`)
     - ⚠️ Apple Silicon requires enabling kernel extensions in Recovery Mode
@@ -117,7 +117,7 @@ running:
 
 ```bash
 $ linearfs status
-linearfs v0.1.0 (abc1234), built 2026-07-18T…, go1.25 linux/amd64
+linearfs v0.1.0 (abc1234), built 2026-07-18T…, go1.26 linux/amd64
 
 Mount:
   /home/you/linear  [live]
