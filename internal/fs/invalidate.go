@@ -2,6 +2,7 @@ package fs
 
 import (
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -54,24 +55,27 @@ func boundedNotify(intent string, run func()) {
 // the server dependency. LinearFS embeds one, so lfs.InvalidateCreated /
 // lfs.InvalidateUpdated / … keep working by promotion, and it satisfies
 // kernelNotifier itself.
+//
+// server is atomic because MountFS can only set it after fs.Mount returns, and
+// by then the serve loop is already dispatching requests whose handlers read it.
 type kernelNotify struct {
-	server *fuse.Server
+	server atomic.Pointer[fuse.Server]
 }
 
 // SetServer wires the FUSE server (known only after mount).
-func (k *kernelNotify) SetServer(server *fuse.Server) { k.server = server }
+func (k *kernelNotify) SetServer(server *fuse.Server) { k.server.Store(server) }
 
 // InvalidateKernelInode tells the kernel to drop cached data for an inode.
 func (k *kernelNotify) InvalidateKernelInode(ino uint64) {
-	if k.server != nil {
-		k.server.InodeNotify(ino, 0, -1) // -1 = entire file
+	if s := k.server.Load(); s != nil {
+		s.InodeNotify(ino, 0, -1) // -1 = entire file
 	}
 }
 
 // InvalidateKernelEntry tells the kernel to drop a cached directory entry.
 func (k *kernelNotify) InvalidateKernelEntry(parent uint64, name string) {
-	if k.server != nil {
-		k.server.EntryNotify(parent, name)
+	if s := k.server.Load(); s != nil {
+		s.EntryNotify(parent, name)
 	}
 }
 
@@ -82,25 +86,25 @@ func (k *kernelNotify) InvalidateKernelEntry(parent uint64, name string) {
 // (#277). The nil-server short-circuit keeps the pre-mount / fixture no-op AND
 // avoids spawning a guard goroutine when there is nothing to notify.
 func (k *kernelNotify) InvalidateCreated(dirIno uint64, name string) {
-	if k.server == nil {
+	if k.server.Load() == nil {
 		return
 	}
 	boundedNotify("created", func() { invalidateCreated(k, dirIno, name) })
 }
 func (k *kernelNotify) InvalidateDeleted(dirIno uint64, name string) {
-	if k.server == nil {
+	if k.server.Load() == nil {
 		return
 	}
 	boundedNotify("deleted", func() { invalidateDeleted(k, dirIno, name) })
 }
 func (k *kernelNotify) InvalidateUpdated(fileIno uint64) {
-	if k.server == nil {
+	if k.server.Load() == nil {
 		return
 	}
 	boundedNotify("updated", func() { invalidateUpdated(k, fileIno) })
 }
 func (k *kernelNotify) InvalidateRenamed(dirIno uint64, oldName, newName string, fileIno uint64) {
-	if k.server == nil {
+	if k.server.Load() == nil {
 		return
 	}
 	boundedNotify("renamed", func() { invalidateRenamed(k, dirIno, oldName, newName, fileIno) })

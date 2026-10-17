@@ -30,7 +30,7 @@ func TestSetServer(t *testing.T) {
 	lfs := &LinearFS{}
 
 	// Initially nil
-	if lfs.server != nil {
+	if lfs.server.Load() != nil {
 		t.Error("server should initially be nil")
 	}
 
@@ -39,7 +39,7 @@ func TestSetServer(t *testing.T) {
 	lfs.SetServer(server)
 
 	// Verify it was set (even though both are nil, this tests the method works)
-	if lfs.server != server {
+	if lfs.server.Load() != server {
 		t.Error("SetServer should set the server field")
 	}
 }
