@@ -77,7 +77,7 @@ flowchart LR
 
     %% ---- cross-cutting: wiring in, telemetry out ----
     CMD -.->|constructs & injects| LFS
-    CLIENT & WORKER & REPO & RECON -.-> TEL
+    CLIENT & WORKER & REPO & RECON & DB -.-> TEL
     TEL --> METRICS
 
     %% ===================== lane styling =====================
@@ -540,6 +540,27 @@ Design conventions:
   sub-millisecond and a committed mutation MUST reflect, so neither hinges on the
   liveness of the request that triggered it; the worker still checks its own
   context between operations, so cooperative shutdown is unaffected.
+  Detachment is a **per-statement** property, not a per-operation one, and the
+  wrapper's comment used to over-generalize it into "there are no long-running
+  SQLite operations" — false when written: the #427 team rebuild was ~40,000
+  statements and ~27 s on a 5,000-issue team before `Store.WithTx` batched it.
+  A long loop stays abortable only if the loop checks `ctx` itself between
+  statements (`rebuildTeamIssues` does, and its transaction turns that into a
+  deterministic rollback).
+- **Instrumented at that same chokepoint:** because every `Queries` in the
+  process is built on `ctxDetachDBTX`, its four methods are also where the
+  persistence layer is measured (`metrics.go`, meter `linearfs/db`) — no call
+  site anywhere records. `linearfs.db.ops` and `linearfs.db.op_duration` carry
+  `{op, in_tx}`, where `op` is the DBTX method (four values, bounded by the
+  interface rather than by the query catalog) and `in_tx` is set only by the
+  wrapper `Store.WithTx` builds, making the share of batched writes directly
+  readable. `linearfs.db.write_burst{caller}` is the pattern detector for the
+  defect class #489 exists to price: it trips when 64 autocommit writes land
+  within one second and walks the stack **only then**, naming the first frame
+  outside `internal/db` — the logical operation, not sqlc's generated method.
+  The duration histogram carries explicit sub-millisecond bucket boundaries as
+  an OTEL advisory, because the SDK's default ladder puts an in-transaction
+  write and an fsync-bound autocommit write in the same bucket.
 - **Transactions are the exception, not the default:** ordinary multi-table
   writes are *not* transactional — durability is `busy_timeout` plus
   single-statement upserts, with the reconcile clean-guard providing prune
@@ -1057,7 +1078,7 @@ gate above.
 ### `internal/telemetry` — OTEL metrics pipeline
 
 Owns the meter provider the recording packages (api, sync, repo, reconcile,
-fs) record into. `internal/fs` records serving-layer instruments (`metrics.go`,
+fs, db) record into. `internal/fs` records serving-layer instruments (`metrics.go`,
 meter `linearfs/fuse`): `linearfs.fuse.ops {op, outcome}` and
 `linearfs.fuse.duration {op}` at the four commit tails (create/delete/flush/rename)
 and the editBuffer/renderFile read/write entry points, plus
@@ -1069,6 +1090,16 @@ journald/logs, and a config-gated file export writing one compact JSON line per
 interval to `~/.config/linearfs/metrics.jsonl` through a rotating writer
 (diagnosis = `jq` over that file). There is no OTLP exporter. Exporter failure
 degrades to summary-only — telemetry must never take the mount down.
+
+The two renderings are not equal, and that asymmetry is a contract, not an
+oversight: `summaryAttrKeys` is an **allowlist**, so an attribute reaches the
+always-on line only if it is listed there, and datapoints that collide after
+the projection are merged. `op` is deliberately absent — the key is shared
+between `internal/api`'s ~30 operation names and `internal/db`'s four DBTX
+methods, and admitting it for the second would un-bound the first. Full
+cardinality always survives in the JSONL export. Adding an instrument whose
+attributes matter operationally means deciding, explicitly, whether they earn
+a place in the bounded line.
 
 ### `internal/cmd` + `cmd/linearfs` + `internal/config` — wiring
 
@@ -1130,7 +1161,7 @@ and `mockmutation`, the in-memory fake behind the `MutationClient` seam.
 | LinearFS → SQLite | write | commit tails upsert fresh results / forget deleted rows directly (`store.Queries()`) |
 | LinearFS → Sync Worker | write path | one targeted catalog refresh on a local name miss, then one retry |
 | LinearFS → kernel | invalidate | `kernelNotify` intent methods: `InvalidateCreated`/`Updated`/`Deleted`/`Renamed` |
-| api/sync/repo/reconcile → telemetry | record | OTEL instruments → summary log + config-gated `metrics.jsonl` |
+| api/sync/repo/reconcile/db/fs → telemetry | record | OTEL instruments → summary log + config-gated `metrics.jsonl` |
 | cmd → everything | wiring | constructs and injects in startup order |
 
 ## Cross-cutting concerns

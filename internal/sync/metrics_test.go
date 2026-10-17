@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -394,5 +395,138 @@ func TestPendingDepthGauge(t *testing.T) {
 	g = m.Data.(metricdata.Gauge[int64])
 	if len(g.DataPoints) != 1 || g.DataPoints[0].Value != 0 {
 		t.Errorf("pending_depth after clear = %+v, want 0", g.DataPoints)
+	}
+}
+
+// =============================================================================
+// Write-burst wiring (#490)
+// =============================================================================
+
+// The burst detector itself lives in internal/db and its window arithmetic is
+// unit-tested there. The pair that matters is here, because this is where both
+// shapes exist: the per-issue cascade loop #427 shipped, and the single
+// transaction PR #488 replaced it with. Same statements, same count — one
+// alarm.
+//
+// Both depend on the real clock: the detector trips on 64 autocommit writes
+// inside one second, so the loop has to average under ~15 ms per write. A
+// measured autocommit write is ~667 µs, so there is 20x of headroom. A failure
+// here means the disk got two orders of magnitude slower, not that the
+// threshold is wrong.
+
+// burstCounts returns linearfs.db.write_burst keyed by its caller attribute.
+func burstCounts(t *testing.T, rm metricdata.ResourceMetrics) map[string]int64 {
+	t.Helper()
+	out := map[string]int64{}
+	m, ok := findMetric(rm, "linearfs.db.write_burst")
+	if !ok {
+		return out
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("write_burst is %T, want Sum[int64]", m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		caller, _ := dp.Attributes.Value("caller")
+		out[caller.AsString()] = dp.Value
+	}
+	return out
+}
+
+// dbExecCount returns linearfs.db.ops for {op=exec, in_tx}.
+func dbExecCount(t *testing.T, rm metricdata.ResourceMetrics, inTx bool) int64 {
+	t.Helper()
+	m, ok := findMetric(rm, "linearfs.db.ops")
+	if !ok {
+		return -1
+	}
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("db.ops is %T, want Sum[int64]", m.Data)
+	}
+	for _, dp := range sum.DataPoints {
+		op, _ := dp.Attributes.Value("op")
+		tx, _ := dp.Attributes.Value("in_tx")
+		if op.AsString() == "exec" && tx.AsBool() == inTx {
+			return dp.Value
+		}
+	}
+	return -1
+}
+
+const burstTestIssues = 40 // x8 statements per cascade = 320 writes
+
+// seedIssuesForBurst seeds burstTestIssues cached issues and returns their IDs.
+// The seeding itself is 40-ish autocommit writes, deliberately under the
+// detector's threshold of 64, so neither test trips before the part it is
+// measuring.
+func seedIssuesForBurst(t *testing.T, store *db.Store, at time.Time) []string {
+	t.Helper()
+	ids := make([]string, 0, burstTestIssues)
+	for i := 1; i <= burstTestIssues; i++ {
+		id := fmt.Sprintf("issue-%d", i)
+		seedCachedIssue(t, store, "team-1", "TST", id, fmt.Sprintf("TST-%d", i), at)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// TestWriteBurstFiresOnAnUnbatchedCascade is the defect's shape: a per-issue
+// DeleteIssueCascade loop in autocommit, which is what the #427 repair did
+// before review caught it. The instrument has to see it, and has to name the
+// function running the loop rather than sqlc's generated delete.
+func TestWriteBurstFiresOnAnUnbatchedCascade(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t) // after withTestMeter: instruments bind at Open
+	defer store.Close()
+	ctx := context.Background()
+
+	ids := seedIssuesForBurst(t, store, rekeyTime(t))
+	for _, id := range ids {
+		db.DeleteIssueCascade(ctx, store.Queries(), id, func(family string, err error) {
+			t.Errorf("cascade %s for %s: %v", family, id, err)
+		})
+	}
+
+	rm := collectMetrics(t, reader)
+	bursts := burstCounts(t, rm)
+	if len(bursts) == 0 {
+		t.Fatalf("write_burst recorded nothing for %d autocommit writes", burstTestIssues*8)
+	}
+	for caller, n := range bursts {
+		if !strings.HasPrefix(caller, "internal/sync.") {
+			t.Errorf("burst attributed to %q, want the internal/sync frame running the loop", caller)
+		}
+		t.Logf("write_burst{caller=%s} = %d", caller, n)
+	}
+	if got := dbExecCount(t, rm, true); got != -1 {
+		t.Errorf("db.ops{op=exec,in_tx=true} = %d, want no such series: nothing here is transactional", got)
+	}
+}
+
+// TestWriteBurstStaysSilentOnTheRebuildTransaction is the fix's shape: the
+// same cascades, same count, inside Store.WithTx. The detector must not fire —
+// an alarm that flagged the batched form as the defect would make the in_tx
+// ratio unreadable.
+func TestWriteBurstStaysSilentOnTheRebuildTransaction(t *testing.T) {
+	reader := withTestMeter(t)
+	store := openTestStore(t) // after withTestMeter: instruments bind at Open
+	defer store.Close()
+	at := rekeyTime(t)
+
+	seedTeamRow(t, store, "team-1", "QA", "Quality")
+	seedIssuesForBurst(t, store, at)
+	seedWatermark(t, store, "team-1", at)
+
+	worker := NewWorker(newMockAPIClient(), store, Config{Interval: time.Hour})
+	worker.rebuildTeamIssues(context.Background(), api.Team{ID: "team-1", Key: "QA", Name: "Quality"})
+
+	rm := collectMetrics(t, reader)
+	if bursts := burstCounts(t, rm); len(bursts) > 0 {
+		t.Errorf("write_burst fired on the batched rebuild: %v", bursts)
+	}
+	// Not vacuous: the statements really ran, and ran transaction-bound.
+	if got := dbExecCount(t, rm, true); got < burstTestIssues*8 {
+		t.Errorf("db.ops{op=exec,in_tx=true} = %d, want >= %d", got, burstTestIssues*8)
 	}
 }

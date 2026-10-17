@@ -162,3 +162,53 @@ func TestSummaryExporterLogsOneLinePerExport(t *testing.T) {
 		t.Errorf("Shutdown: %v", err)
 	}
 }
+
+// TestRenderSummaryCarriesDBBatchingAttrs: the persistence-layer instruments
+// (#490) have to reach the always-on line, because the JSONL export is opt-in
+// and off by default. in_tx is the batching ratio and caller names whoever
+// wrote unbatched; op is deliberately dropped — the key is shared with the api
+// layer's ~30 operation names, so admitting it here would un-bound three
+// instruments the projection exists to keep out.
+func TestRenderSummaryCarriesDBBatchingAttrs(t *testing.T) {
+	t.Parallel()
+	rm := &metricdata.ResourceMetrics{
+		ScopeMetrics: []metricdata.ScopeMetrics{
+			{
+				Metrics: []metricdata.Metrics{
+					{
+						Name: "linearfs.db.ops",
+						Data: metricdata.Sum[int64]{
+							DataPoints: []metricdata.DataPoint[int64]{
+								{Attributes: attribute.NewSet(attribute.String("op", "exec"), attribute.Bool("in_tx", false)), Value: 900},
+								{Attributes: attribute.NewSet(attribute.String("op", "query"), attribute.Bool("in_tx", false)), Value: 100},
+								{Attributes: attribute.NewSet(attribute.String("op", "exec"), attribute.Bool("in_tx", true)), Value: 40},
+							},
+						},
+					},
+					{
+						Name: "linearfs.db.write_burst",
+						Data: metricdata.Sum[int64]{
+							DataPoints: []metricdata.DataPoint[int64]{
+								{Attributes: attribute.NewSet(attribute.String("caller", "internal/sync.(*Worker).syncTeamIssues")), Value: 12},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	line := renderSummary(rm)
+	if strings.Contains(line, "op=exec") {
+		t.Errorf("summary %q leaked the op attribute", line)
+	}
+	for _, want := range []string{
+		"linearfs.db.ops{in_tx=false}=1000", // exec+query merged after projection
+		"linearfs.db.ops{in_tx=true}=40",
+		"linearfs.db.write_burst{caller=internal/sync.(*Worker).syncTeamIssues}=12",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("summary %q missing %q", line, want)
+		}
+	}
+}
